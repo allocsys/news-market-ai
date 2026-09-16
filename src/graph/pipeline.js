@@ -4,21 +4,46 @@
 // sequencing and checkpointing, not agent logic -- it should stay a
 // relatively thin "call things in order, save progress" layer.
 //
-// STATE: runScheduledIngestion below pulls real GDELT articles (see
-// ingestion/sources/gdelt.js), one query per config.watchlist ticker.
-// runPipelineForTicker itself does not depend on GDELT specifically, only
-// on the normalized shape from schemas/index.js -- any future ingestion
-// source can feed it the same way. NOT yet exercised against live traffic;
-// GDELT DOC API's actual response shape should be spot-checked against a
-// real request before trusting this in production (see gdelt.js's own
-// header for the known body-text gap). The analyst stage now also runs a
-// technical analyst (agents/analysts/technicalAnalyst.js) alongside
-// news/sentiment -- it self-skips (returns null, filtered out below) when
-// price_bars has no data for this ticker, which is the case for every
-// ticker until yfinance ingestion is separately wired in here too.
+// STATE: runScheduledIngestion below now pulls from every ingestion adapter
+// that exists (gdelt, rss, html_scrape for news items; yfinance for price
+// bars; edgar_fundamentals for XBRL facts), not just GDELT. NOT yet
+// exercised against LIVE vendor traffic -- see each adapter's own header
+// for the specific unverified risk (GDELT's empty-body gap, yfinance's
+// cookie/crumb gap, etc). This session's change is the WIRING half only
+// (calling adapters from here, feeding their output into storage, fully
+// covered by mocked-fetch tests in test/ingestion_wiring.test.js); the
+// LIVE spot-check half is blocked from this sandbox's network egress
+// (confirmed 403/host_not_allowed against api.gdeltproject.org,
+// query1.finance.yahoo.com, data.sec.gov) and remains an open item -- see
+// plan.md.
+//
+// FAILURE ISOLATION (Adopted Pattern #11 read literally: "surface a typed
+// error and follow an explicit configured fallback order -- never silently
+// serve thinner data without logging that a source was skipped"): each
+// source below is its own failure domain. A VendorError from any one
+// source (news or price/fundamentals) is logged with full vendor/transient
+// detail and that source is skipped -- it does NOT abort the others. This
+// is a deliberate change from the old GDELT-only behavior (which rethrew
+// and killed the entire scheduled run on any GDELT failure); with five
+// independent vendors now in play, one flaky/misconfigured source (e.g.
+// EDGAR with no edgarUserAgent set) killing every other source's ingestion
+// would be a worse failure mode than degrading to fewer items with a clear
+// log line. A non-VendorError (an actual bug, not a vendor failure) still
+// propagates immediately, same as before.
 
-import { fetchLatest } from "../ingestion/sources/gdelt.js";
-import { insertNewsItem, openPosition, getOpenPositionsRiskPctAsOf, getPriceBarsAsOf } from "../storage/d1.js";
+import { fetchLatest as fetchGdeltLatest } from "../ingestion/sources/gdelt.js";
+import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
+import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
+import { fetchDailyBars } from "../ingestion/sources/yfinance.js";
+import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
+import {
+  insertNewsItem,
+  openPosition,
+  getOpenPositionsRiskPctAsOf,
+  getPriceBarsAsOf,
+  insertPriceBar,
+  insertFundamentalFact,
+} from "../storage/d1.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
 import { runTechnicalAnalyst } from "../agents/analysts/technicalAnalyst.js";
@@ -144,24 +169,127 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
   return state.portfolioDecision;
 }
 
+/** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. */
+function logSkippedSource(stage, source, err) {
+  console.error(`${stage} vendor failure -- skipping source`, { source, vendor: err.vendor, transient: err.transient, message: err.message });
+}
+
 /**
- * Entry point for the cron trigger (src/index.js#scheduled). Pulls fresh
- * news, normalizes it (ingestion/normalize.js), and runs the pipeline above
- * per ticker per item. Explicit try/catch per Adopted Pattern #11 (surface
- * vendor failures, never silently skip) -- logs and re-throws rather than
- * swallowing, since a cron-triggered failure needs to be visible in Workers
- * logs, not just dropped.
+ * Collects normalized news items from every news source (gdelt, rss,
+ * html_scrape). Each source is attempted independently -- a VendorError
+ * from one is logged and that source's items are simply absent from the
+ * result, rather than aborting the others (see header's Failure Isolation
+ * note). html_scrape's fetchLatest already isolates failures per-page
+ * internally and returns `{items, errors}` rather than throwing, so its
+ * per-page errors are logged here too, for the same "never silently skip"
+ * reason, even though they don't hit the try/catch below.
  */
-export async function runScheduledIngestion(env, config, db) {
-  let items;
+export async function collectNewsItems(config) {
+  const items = [];
+
+  const sources = [
+    { name: "gdelt", run: () => fetchGdeltLatest(config) },
+    { name: "rss", run: () => fetchRssLatest(config) },
+    {
+      name: "scrape",
+      run: async () => {
+        const { items: scraped, errors } = await fetchScrapeLatest(config);
+        for (const { url, error } of errors) {
+          console.error("scrape vendor failure -- skipping page", { url, message: error.message });
+        }
+        return scraped;
+      },
+    },
+  ];
+
+  for (const { name, run } of sources) {
+    try {
+      items.push(...(await run()));
+    } catch (err) {
+      if (err instanceof VendorError) {
+        logSkippedSource("news ingestion", name, err);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Fetches fresh daily price bars (yfinance) and upserts every bar via
+ * storage/d1.js#insertPriceBar. This is what makes the technical analyst
+ * (agents/analysts/technicalAnalyst.js) actually have data to work with
+ * instead of permanently self-skipping on an empty price_bars table -- see
+ * that agent's header for the hasData gate this feeds. A VendorError here
+ * (including yfinance's documented cookie/crumb risk, see that adapter's
+ * header) is logged and swallowed -- price data is a strict enhancement to
+ * the pipeline, not a hard dependency (runPipelineForTicker already
+ * tolerates an empty getPriceBarsAsOf result), so one bad yfinance request
+ * should not block news ingestion or the pipeline run.
+ */
+export async function ingestPriceBars(config, db) {
+  let bars;
   try {
-    items = await fetchLatest(config);
+    bars = await fetchDailyBars(config);
   } catch (err) {
     if (err instanceof VendorError) {
-      console.error("ingestion vendor failure", { vendor: err.vendor, transient: err.transient, message: err.message });
+      logSkippedSource("price bar ingestion", "yfinance", err);
+      return { count: 0 };
     }
     throw err;
   }
+
+  for (const bar of bars) {
+    await insertPriceBar(db, bar);
+  }
+  return { count: bars.length };
+}
+
+/**
+ * Fetches fresh EDGAR XBRL facts for every ticker in config.edgarCikMap and
+ * upserts them via storage/d1.js#insertFundamentalFact. A no-op (returns
+ * `{count: 0}` without ever calling fetch) when edgarCikMap is empty --
+ * config.js ships no default map or User-Agent on purpose (see that file's
+ * header), so an unconfigured deployment should not error here, only a
+ * misconfigured one (map set, User-Agent missing) should, and even that is
+ * caught and logged rather than aborting the run -- same "strict
+ * enhancement, not a hard dependency" reasoning as ingestPriceBars.
+ */
+export async function ingestFundamentals(config, db) {
+  let facts;
+  try {
+    facts = await fetchEdgarFactsLatest(config);
+  } catch (err) {
+    if (err instanceof VendorError) {
+      logSkippedSource("fundamentals ingestion", "edgar", err);
+      return { count: 0 };
+    }
+    throw err;
+  }
+
+  for (const fact of facts) {
+    await insertFundamentalFact(db, fact);
+  }
+  return { count: facts.length };
+}
+
+/**
+ * Entry point for the cron trigger (src/index.js#scheduled). Pulls fresh
+ * news (collectNewsItems) and price/fundamentals data (ingestPriceBars,
+ * ingestFundamentals) from every wired adapter, then runs the pipeline
+ * above per ticker per news item. Price/fundamentals ingestion happens
+ * before the news loop so a same-run technical analyst call already has
+ * whatever fresh bars just landed. See header for the failure-isolation
+ * model -- a single source's VendorError no longer aborts this whole
+ * function, it's logged and that source is skipped.
+ */
+export async function runScheduledIngestion(env, config, db) {
+  await ingestPriceBars(config, db);
+  await ingestFundamentals(config, db);
+
+  const items = await collectNewsItems(config);
 
   const results = [];
   for (const item of items) {

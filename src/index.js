@@ -1,10 +1,13 @@
 // Worker entry point. `fetch` is a placeholder health check for now.
 // `scheduled` calls graph/pipeline.js#runScheduledIngestion, which is fully
-// wired end to end: GDELT ingestion -> analysts -> debate -> trader -> risk
-// -> portfolio (see that file's header for current caveats, notably GDELT's
-// metadata-only articles). Any remaining failure (network, malformed vendor
-// response, LLM cascade exhausted) is caught and logged here rather than
-// left to crash the Worker invocation silently (Adopted Pattern #11).
+// wired end to end: gdelt/rss/html_scrape news ingestion + yfinance price
+// bars + edgar_fundamentals facts -> analysts (incl. technical, now
+// actually fed by the price bars above) -> debate -> trader -> risk ->
+// portfolio (see that file's header for current caveats and the
+// per-source failure isolation model). Any remaining failure (network,
+// malformed vendor response, LLM cascade exhausted) is caught and logged
+// here rather than left to crash the Worker invocation silently (Adopted
+// Pattern #11).
 
 import { loadConfig } from "./config.js";
 import { runScheduledIngestion } from "./graph/pipeline.js";

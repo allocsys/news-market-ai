@@ -580,3 +580,64 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       text, against a minimal in-memory fake `decision_memory` table -- same
       honest, narrow-fake convention as `checkpoint_resume.test.js`. Does
       NOT exercise `recordAndReflect` (the write path, calls live Gemini).
+- [x] Wire GDELT/yfinance/rss/html_scrape/edgar_fundamentals into
+      `graph/pipeline.js` end-to-end -- the WIRING half only (see below for
+      why the LIVE half is separate). `graph/pipeline.js#runScheduledIngestion`
+      now calls every adapter, not just GDELT:
+      `collectNewsItems(config)` fetches gdelt + rss + html_scrape and
+      merges their items into one list; `ingestPriceBars(config, db)` calls
+      `yfinance.js#fetchDailyBars` and upserts every bar via
+      `insertPriceBar`; `ingestFundamentals(config, db)` calls
+      `edgar_fundamentals.js#fetchLatest` and upserts every fact via
+      `insertFundamentalFact`. All three are now exported from
+      `pipeline.js` (previously only `runPipelineForTicker`/
+      `runScheduledIngestion` were). `runScheduledIngestion` calls
+      `ingestPriceBars`/`ingestFundamentals` before the news loop, so a
+      same-run technical analyst call already sees freshly-landed bars.
+      FAILURE ISOLATION CHANGE (worth flagging explicitly): the old
+      GDELT-only `runScheduledIngestion` rethrew on any GDELT VendorError,
+      aborting the whole scheduled run. With five independent vendors now
+      in play that would mean one flaky source (e.g. EDGAR with no
+      `edgarUserAgent` configured) kills ingestion for all the others --
+      changed to per-source isolation instead: each source's VendorError is
+      logged (vendor/transient/message) and that source alone is skipped,
+      everything else still runs. Read literally, this is actually closer
+      to Adopted Pattern #11's own wording ("follow an explicit configured
+      fallback order -- never silently serve thinner data without logging
+      that a source was skipped") than the old all-or-nothing behavior was.
+      A non-VendorError (an actual bug) still propagates immediately,
+      unchanged.
+      Covered by `test/ingestion_wiring.test.js` (10 tests: collectNewsItems
+      merging gdelt+rss+scrape and isolating a failing source, the
+      unconfigured-sources-are-a-silent-no-op case, ingestPriceBars/
+      ingestFundamentals against mocked fetch + a fake price_bars/
+      fundamental_facts store, the edgarCikMap-empty no-op case
+      distinguished from the map-set-but-no-User-Agent misconfiguration
+      case, and one non-VendorError-still-throws test per helper; 131 tests
+      total in the suite now). Does NOT exercise `runScheduledIngestion`
+      end-to-end, since the news-item loop inside it still calls
+      `runPipelineForTicker` -> six agent modules needing live Gemini calls
+      -- same documented scope limit as `checkpoint_resume.test.js`.
+      IMPORTANT ENVIRONMENT FINDING, reconfirm each fresh session: this
+      sandbox's `bash_tool` network egress is BLOCKED from reaching GDELT
+      (`api.gdeltproject.org`), Yahoo Finance (`query1.finance.yahoo.com`),
+      and SEC EDGAR (`data.sec.gov`) -- confirmed via curl, HTTP 403 with
+      `x-deny-reason: host_not_allowed`. That means the wiring above is
+      real and tested against mocked responses, but has NOT been -- and
+      currently CANNOT be, from this sandbox -- spot-checked against actual
+      live vendor traffic. Every adapter's own header already flags its
+      specific unverified risk (GDELT's empty-body gap, yfinance's
+      cookie/crumb gap, etc); this item doesn't resolve any of those, it
+      only makes the adapters reachable from the pipeline once a real
+      network path exists.
+      KNOWN GAPS: (1) the live-spot-check gap above; (2) real ticker->CIK
+      resolution (SEC's `company_tickers.json`) still doesn't exist --
+      `edgarCikMap` is still the hand-maintained list, same as before, and
+      fetching/caching that file is separately blocked on the same
+      `data.sec.gov` restriction; (3) no throttling/backoff across the five
+      sources when several are configured at once -- each adapter still
+      makes its own unthrottled per-ticker/per-feed requests, sequentially,
+      with no shared rate limiter; (4) `ingestPriceBars`/`ingestFundamentals`
+      always fetch for the FULL watchlist/edgarCikMap on every scheduled
+      run (no incremental/delta fetching) -- fine at current scale, would
+      waste quota at a larger watchlist size.
