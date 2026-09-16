@@ -70,6 +70,24 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
 }
 
 /**
+ * Write path for the reflection/memory log (plan.md Adopted Pattern #8).
+ * Called once a trade decision's outcome is known -- realizedReturn/
+ * alphaReturn are only meaningful after `resolvedAt` has actually passed,
+ * which is exactly why getDecisionMemoryAsOf requires callers to filter by
+ * asOf on read rather than trusting this table to only contain "past" rows.
+ */
+export async function recordDecisionOutcome(db, { id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt }) {
+  await db
+    .prepare(
+      `INSERT INTO decision_memory (id, decision_id, ticker, realized_return, alpha_return, reflection, resolved_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING`
+    )
+    .bind(id, decisionId, ticker, realizedReturn ?? null, alphaReturn ?? null, reflection ?? null, resolvedAt, new Date().toISOString())
+    .run();
+}
+
+/**
  * Point-in-time read of the reflection/memory log for `ticker` -- decisions
  * resolved strictly before `asOf`. Deliberately mirrors getNewsAsOf's
  * required-asOf shape: plan.md Backtesting Integrity point 4 calls this out
