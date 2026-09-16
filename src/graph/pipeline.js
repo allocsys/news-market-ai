@@ -20,7 +20,7 @@ import { runResearchManager } from "../agents/managers/research_manager.js";
 import { runTrader } from "../agents/trader/trader.js";
 import { evaluateRisk } from "../agents/risk_mgmt/risk.js";
 import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
-import { checkpoint, resumeFrom, nextStage } from "./checkpointer.js";
+import { checkpoint, resumeFrom } from "./checkpointer.js";
 import { shouldContinueDebate } from "./conditional_logic.js";
 import { loadLessonsForDebate } from "./reflection.js";
 import { VendorError } from "../shared/errors.js";
