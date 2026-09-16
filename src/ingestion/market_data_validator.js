@@ -4,12 +4,10 @@
 // module is where that check lives structurally; TradingAgents has the
 // equivalent as dataflows/market_data_validator.py.
 //
-// HONEST STATE: there is no price/volume ingestion adapter yet (only GDELT
-// news, itself still a stub -- see ingestion/sources/gdelt.js), so there is
-// nothing to validate yet. validateNormalizedNewsItem below covers what we
-// DO ingest today; validatePriceBar is a placeholder signature for when a
-// price/volume adapter (yfinance, per plan.md) exists, left unimplemented
-// rather than faking a check against data we don't have.
+// UPDATE: a price/volume adapter now exists (ingestion/sources/yfinance.js,
+// schemas/index.js#PriceBar), so validatePriceBar below is a real check,
+// not a placeholder anymore. validateNormalizedNewsItem still covers the
+// GDELT news path.
 
 import { VendorError } from "../shared/errors.js";
 
@@ -38,10 +36,42 @@ export function isStale(item, { now = new Date() } = {}) {
 }
 
 /**
- * NOT YET IMPLEMENTED -- placeholder for once a price/volume adapter
- * (yfinance, per plan.md ingestion section) exists. Throwing explicitly
- * rather than silently no-op'ing, matching gdelt.js's own stub convention.
+ * Rejects a price bar with internally inconsistent OHLC values, negative
+ * volume, or a date in the future relative to `now` -- the same "grounded,
+ * not free-associated" principle (plan.md Adopted Pattern #9) as
+ * validateNormalizedNewsItem, applied to price data instead of news.
+ * Does NOT check staleness (an old bar is still a valid historical bar);
+ * callers needing "is this bar current" should check `date` themselves,
+ * same division of responsibility as isStale for news.
  */
-export function validatePriceBar() {
-  throw new Error("market_data_validator.validatePriceBar: not yet implemented -- no price/volume adapter exists yet, see plan.md next steps");
+export function validatePriceBar(bar, { now = new Date(), source } = {}) {
+  const vendor = source ?? bar.source;
+  const date = new Date(bar.date);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new VendorError(vendor, `unparseable date: ${JSON.stringify(bar.date)}`);
+  }
+  if (date.getTime() > now.getTime()) {
+    throw new VendorError(vendor, `date ${bar.date} is in the future relative to ${now.toISOString()}`);
+  }
+
+  for (const field of ["open", "high", "low", "close", "volume"]) {
+    if (typeof bar[field] !== "number" || Number.isNaN(bar[field])) {
+      throw new VendorError(vendor, `${field} is not a valid number: ${JSON.stringify(bar[field])}`);
+    }
+  }
+  if (bar.volume < 0) {
+    throw new VendorError(vendor, `volume ${bar.volume} is negative`);
+  }
+  if (bar.high < bar.low) {
+    throw new VendorError(vendor, `high ${bar.high} is less than low ${bar.low}`);
+  }
+  if (bar.high < bar.open || bar.high < bar.close) {
+    throw new VendorError(vendor, `high ${bar.high} is less than open (${bar.open}) or close (${bar.close})`);
+  }
+  if (bar.low > bar.open || bar.low > bar.close) {
+    throw new VendorError(vendor, `low ${bar.low} is greater than open (${bar.open}) or close (${bar.close})`);
+  }
+
+  return bar;
 }
