@@ -6,7 +6,7 @@
 // Runs on the deep model, same tier as bull/bear -- this is the step where
 // debate quality actually pays off.
 
-import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { callStructured } from "../utils/structured.js";
 import { DebateVerdict } from "../../schemas/index.js";
 
 export async function runResearchManager(env, config, { ticker, asOf, bull, bear }) {
@@ -21,8 +21,8 @@ Respond as JSON only, matching exactly:
 Bull case: ${JSON.stringify(bull)}
 Bear case: ${JSON.stringify(bear)}`;
 
-  const text = await geminiGenerateText(env, config, prompt, { model: config.geminiDeepModel });
-  const parsed = JSON.parse(stripJsonFence(text));
-
-  return DebateVerdict.parse({ ticker, asOf, bull, bear, ...parsed });
+  return callStructured(env, config, DebateVerdict, prompt, {
+    model: config.geminiDeepModel,
+    extraFields: { ticker, asOf, bull, bear },
+  });
 }
