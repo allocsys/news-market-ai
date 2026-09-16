@@ -141,3 +141,68 @@ export async function getCheckpoint(db, { runId, ticker }) {
   if (!row) return null;
   return { stage: row.stage, state: row.state ? JSON.parse(row.state) : null, updatedAt: row.updated_at };
 }
+
+/**
+ * Positions ledger (plan.md open item: real portfolio/positions store so
+ * agents/managers/portfolio_manager.js's openPositionsRiskPct placeholder
+ * becomes a real read instead of a hardcoded 0). `id` should be the trade
+ * thesis id (ticker|asOf, see risk_mgmt/risk.js) so a checkpoint-resumed
+ * run re-executing the portfolio_checked stage can't double-open the same
+ * position -- ON CONFLICT DO NOTHING makes this idempotent the same way
+ * insertNewsItem is.
+ *
+ * HONEST SCOPE: this is a signal-generation pipeline, not a broker
+ * integration -- there is no fill confirmation, so `openedAt` is the
+ * timestamp portfolio_manager approved the trade, not a real fill time.
+ */
+export async function openPosition(db, { id, ticker, tradeThesisId, positionSizePct, openedAt }) {
+  await db
+    .prepare(
+      `INSERT INTO positions (id, ticker, trade_thesis_id, position_size_pct, opened_at, closed_at)
+       VALUES (?, ?, ?, ?, ?, NULL)
+       ON CONFLICT(id) DO NOTHING`
+    )
+    .bind(id, ticker, tradeThesisId, positionSizePct, openedAt)
+    .run();
+}
+
+/**
+ * Write path for exiting a position (stop-loss/take-profit/time-based exit).
+ * NOT YET CALLED ANYWHERE -- exit logic itself is a separate open item (see
+ * plan.md), same honest-gap convention as trade_decisions/debates/
+ * analyst_opinions, which also have no write path wired yet. Exists now so
+ * getOpenPositionsRiskPctAsOf below has a real closed_at to filter on once
+ * exit logic lands, rather than every position being open forever.
+ */
+export async function closePosition(db, { id, closedAt }) {
+  await db
+    .prepare(`UPDATE positions SET closed_at = ? WHERE id = ? AND closed_at IS NULL`)
+    .bind(closedAt, id)
+    .run();
+}
+
+/**
+ * Point-in-time sum of position_size_pct across every position open AS OF
+ * `asOf` (opened_at <= asOf AND (closed_at IS NULL OR closed_at > asOf)) --
+ * same required-asOf, no-"give me everything" convention as getNewsAsOf and
+ * getDecisionMemoryAsOf, for the same Backtesting Integrity reason.
+ *
+ * KNOWN LIMITATION: does not exclude/net out an already-open position on
+ * the SAME ticker being re-evaluated for a new thesis -- portfolio_manager
+ * would see that ticker's existing exposure twice-counted toward the
+ * portfolio ceiling in that edge case. Flagged rather than silently wrong;
+ * fixing it needs a real "is this thesis replacing an existing position"
+ * concept that doesn't exist yet.
+ */
+export async function getOpenPositionsRiskPctAsOf(db, { asOf }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getOpenPositionsRiskPctAsOf requires an explicit asOf timestamp");
+  }
+
+  const { results } = await db
+    .prepare(`SELECT position_size_pct FROM positions WHERE opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`)
+    .bind(asOf, asOf)
+    .all();
+
+  return results.reduce((sum, r) => sum + r.position_size_pct, 0);
+}
