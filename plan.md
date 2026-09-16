@@ -1014,3 +1014,102 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       assumption as the existing `list`-based lookups' own defensive
       multi-key JSON parsing, worth re-checking if a wrangler upgrade ever
       changes that output shape.
+
+- [x] Live-verified GDELT/yfinance/SEC EDGAR/RSS/HTML-scrape against REAL
+      vendor traffic for the first time -- previously only possible against
+      mocked fetch (see the "IMPORTANT ENVIRONMENT FINDING" note above,
+      updated in place today rather than left stale). Key unlock:
+      `mcp__Madmcp__web_fetch` reaches the internet through Madmcp's own
+      server-side infra, NOT through the sandbox's `bash_tool` egress proxy
+      -- the latter is domain-allowlisted and does block
+      api.gdeltproject.org/query1.finance.yahoo.com/data.sec.gov, but the
+      former isn't subject to that allowlist at all. USAGE GOTCHA worth
+      remembering: `web_fetch`'s default behavior returns pre-extracted/
+      stripped plain text for an HTML page, not raw markup -- irrelevant for
+      JSON API endpoints, but you MUST pass `raw_html: true` to actually
+      test regex-based HTML parsing (jsonify.js's `stripHtml`/
+      `extractPageTitle`/`extractPublishedAt`) against something real.
+      FINDINGS, by vendor:
+      - **GDELT** (api.gdeltproject.org/api/v2/doc/doc): reachable, but got
+        a real HTTP 429 ("please limit requests to one every 5 seconds")
+        on every attempt (3 tries, different queries, spaced apart across
+        the session) -- never obtained a live articles[] body. This confirms
+        gdelt.js's `429 -> transient: true` VendorError handling is exactly
+        correct vendor behavior, and gives a REAL number (GDELT's own
+        documented "5 seconds" pacing) where `config.gdeltMinRequestIntervalMs`
+        currently defaults to 0 -- worth reconsidering that default now,
+        though repeated 429s even after spacing suggest this may be a
+        persistent/shared-IP rate limit on the fetch infra rather than pure
+        request-cadence, so pacing alone might not fully fix it.
+      - **yfinance** (query1.finance.yahoo.com/v8/finance/chart/AAPL): HTTP
+        200, real data, plain fetch, NO cookie/crumb handshake needed right
+        now. Response shape is an exact match for `fetchDailyBars`'s parsing
+        assumptions. This CORRECTS a previously-documented claim (both here
+        and in yfinance.js's own header, both now updated) that Yahoo had
+        started requiring a cookie+crumb handshake -- not true for this
+        request pattern as of this check. Risk kept flagged, not deleted:
+        Yahoo is unofficial/undocumented and could change this without notice.
+      - **SEC EDGAR companyfacts** (data.sec.gov/api/xbrl/companyfacts/
+        CIK0000320193.json, with a real descriptive User-Agent) and the
+        companyconcept endpoint for us-gaap/Revenues specifically: both HTTP
+        200, real Apple Inc. data, exact shape match for
+        `edgar_fundamentals.js#fetchFacts`'s parsing
+        (`units.<UNIT>[].{val,fy,fp,form,filed,accn}`) -- confirms the
+        "Revenues" tag `fetchLatest` defaults to is real and populated, not
+        just assumed to exist.
+      - **SEC company_tickers.json** (www.sec.gov/files/company_tickers.json,
+        with UA header): HTTP 200, real data, exact shape match for
+        `edgar_cik_lookup.js#fetchTickerCikMap`'s parsing (object keyed by
+        arbitrary numeric-string index, each value `{cik_str, ticker,
+        title}`) -- confirmed real AAPL/NVDA/MSFT/GOOGL/AMZN/TSLA entries,
+        uppercase tickers, numeric cik_str, no mismatch found.
+      - **RSS** (feeds.a.dj.com/rss/RSSMarketsMain.xml -- WSJ Markets feed,
+        picked arbitrarily since `config.rssFeeds` has no default and is
+        100% env-configured): HTTP 200, real standard RSS 2.0 XML --
+        `<item>` blocks with `<title>`, `<link>text</link>` (plain-text
+        link, not an href attribute -- correctly handled by
+        `jsonify.js#extractTag`, not `extractLinkHref`), `<description>`
+        CDATA-wrapped, `<pubDate>` in RFC822 format, confirmed by inspection
+        to match `parseFeedItems`'s regex logic exactly, including the
+        "callers run pubDate through `new Date()` themselves" convention.
+        Atom format (`<entry>` blocks) remains UNTESTED against a real feed
+        -- only against mocked fixtures so far.
+      - **HTML-scrape** -- MIXED, with one real newly-discovered gap: two
+        major finance-publisher pages (`reuters.com/technology/`, and a real
+        WSJ article URL pulled from the RSS feed above) both returned HTTP
+        401 with a bot-challenge page body ("Please enable JS and disable
+        any ad blocker") -- real Cloudflare/PerimeterX-style bot blocking,
+        not a sandbox artifact. `html_scrape.js#fetchArticle`'s plain
+        `fetch()` will hit exactly this 401 VendorError against the kind of
+        major finance-publisher pages someone would most want to point it
+        at -- matches the code's own non-ok-response handling correctly,
+        but is a genuinely new, previously-undocumented practical limitation
+        (not previously listed in html_scrape.js's KNOWN GAPS). A Wikipedia
+        page (`en.wikipedia.org/wiki/Apple_Inc.`) and a Yahoo Finance news
+        article page both returned HTTP 200 (not bot-blocked) with real
+        HTML confirming `extractPageTitle`'s `<title>` fallback path works
+        against real markup -- but neither page exposes a genuine
+        `article:published_time`/`datePublished` meta tag, so
+        `extractPublishedAt`'s pattern list is STILL untested against a real
+        positive match (only against mocked fixtures) -- this remains open.
+        Also worth noting as its own finding: the Yahoo Finance article page
+        is a heavy SPA with tens of KB of inline `<script>`/`<style>` before
+        any content-bearing meta tags appear -- not a correctness problem
+        for the regex-based extraction (it will still find tags wherever
+        they are), but a real illustration of how much boilerplate
+        `stripHtml`'s script/style stripping has to wade through on a
+        modern page.
+      KNOWN GAPS: (1) `extractPublishedAt`'s meta-tag patterns are still
+      untested against a real page that actually has one of the four
+      patterns present -- need to find a scrapeable (non-bot-blocked) page
+      that exposes `article:published_time`, `datePublished`, or a
+      `<time datetime=...>` tag; (2) Atom-format RSS (`<entry>` blocks) is
+      still untested against a real feed; (3) GDELT's actual `articles[]`
+      JSON body shape was never obtained live (every attempt 429'd) -- the
+      shape assumption in `gdelt.js` remains verified only against mocked
+      fixtures, unlike every other vendor here; (4) none of this changes
+      any adapter's actual behavior/code (aside from the two header-comment
+      corrections) -- it's verification only, confirming existing parsing
+      logic against real responses rather than finding bugs to fix (the
+      html_scrape bot-blocking finding is the one exception: a real,
+      previously-undocumented practical limitation, not just a confirmation).
