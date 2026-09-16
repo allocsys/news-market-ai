@@ -20,6 +20,7 @@ import { resolveTickers } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { parseFeedItems, stripHtml } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
+import { createThrottle } from "../../shared/throttle.js";
 
 /**
  * Fetches and normalizes every item from each `{ ticker, url }` pair in
@@ -31,8 +32,15 @@ import { VendorError } from "../../shared/errors.js";
  */
 export async function fetchLatest(config, { feeds = config.rssFeeds } = {}) {
   const items = [];
+  // No documented per-feed rate limit -- config.rssMinRequestIntervalMs
+  // defaults to 0, a true no-op, same convention as gdelt.js/yfinance.js.
+  // Feeds are third-party sites of wildly varying tolerance, so this is
+  // here mainly so an operator hitting 429s from a specific set of feeds
+  // can pace requests via env var without a code change.
+  const throttle = createThrottle({ minIntervalMs: config.rssMinRequestIntervalMs ?? 0 });
 
   for (const { ticker, url } of feeds) {
+    await throttle.wait();
     let response;
     try {
       response = await fetch(url);
