@@ -61,12 +61,22 @@ export function loadConfig(env) {
     gdeltFormat: env.GDELT_FORMAT || "json",
     gdeltSort: env.GDELT_SORT || "DateDesc",
     gdeltMaxRecords: Number(env.GDELT_MAX_RECORDS) || 50,
-    // Paces gdelt.js#fetchLatest's per-query loop (shared/throttle.js). No
-    // documented GDELT rate limit exists (unlike EDGAR's ~10 req/sec), so
-    // unlike edgarMinRequestIntervalMs this defaults to 0 -- a true no-op --
-    // rather than a fabricated number. Exists so pacing can be dialed in via
-    // env var if a live deployment starts seeing 429s.
-    gdeltMinRequestIntervalMs: Number(env.GDELT_MIN_REQUEST_INTERVAL_MS) || 0,
+    // Paces gdelt.js#fetchLatest's per-query loop (shared/throttle.js).
+    // UPDATE (2026-09-17): DOES now ship a real default, like
+    // edgarMinRequestIntervalMs -- previously this was 0 because no
+    // documented limit was known, but a live 429 response body this session
+    // gave GDELT's actual own published pacing requirement verbatim
+    // ("please limit requests to one every 5 seconds"), so 0 was a stale
+    // "no info yet" placeholder, not a considered no-op. 5000ms is that
+    // number directly, no safety-margin padding added since GDELT stated it
+    // exactly rather than us deriving it from a req/sec rate the way
+    // EDGAR's 110ms padding over its 100ms=10/sec figure does. NOTE this
+    // does NOT necessarily fix the observed live 429s alone -- see plan.md,
+    // the repeated 429 even with spacing between attempts suggests a
+    // possible shared/rate-limited egress IP on the fetch infra used for
+    // live-verification, which per-Worker-instance pacing wouldn't address
+    // -- but it's still the correct, now-documented default regardless.
+    gdeltMinRequestIntervalMs: Number(env.GDELT_MIN_REQUEST_INTERVAL_MS) || 5000,
     // yfinance's unofficial chart API (ingestion/sources/yfinance.js) --
     // see that file's header for the real risk that this endpoint now often
     // requires a cookie+crumb handshake this adapter does not perform.
