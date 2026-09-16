@@ -23,6 +23,7 @@ import { buildNormalizedItem } from "../normalize.js";
 import { resolveTickers } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
+import { createThrottle } from "../../shared/throttle.js";
 
 /** GDELT's seendate is "YYYYMMDDTHHMMSSZ" -- reformat to real ISO8601, or null if malformed. */
 function parseGdeltDate(seendate) {
@@ -44,8 +45,15 @@ function parseGdeltDate(seendate) {
  */
 export async function fetchLatest(config, { queries = config.watchlist } = {}) {
   const items = [];
+  // No documented GDELT rate limit exists (unlike EDGAR's ~10 req/sec fair-
+  // use guidance) -- config.gdeltMinRequestIntervalMs defaults to 0, a true
+  // no-op, same "no default without an explicit reason" convention as
+  // rssFeeds/scrapePages. Reusable if GDELT ever documents a real limit or
+  // a live deployment starts getting rate-limited in practice.
+  const throttle = createThrottle({ minIntervalMs: config.gdeltMinRequestIntervalMs ?? 0 });
 
   for (const { ticker, query } of queries) {
+    await throttle.wait();
     const url = `${config.gdeltApiBase}?query=${encodeURIComponent(query)}&mode=${config.gdeltMode}&maxrecords=${config.gdeltMaxRecords}&format=${config.gdeltFormat}&sort=${config.gdeltSort}`;
 
     let response;
