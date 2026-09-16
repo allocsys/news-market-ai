@@ -23,5 +23,12 @@ export function loadConfig(env) {
     // stop regardless of confidence" -- start conservative given the free
     // model-quota budget this is meant to protect.
     maxDebateRounds: Number(env.MAX_DEBATE_ROUNDS) || 1,
+    // Watchlist for GDELT ingestion (ingestion/sources/gdelt.js) -- one
+    // GDELT query per ticker, since the DOC API has no "everything" mode.
+    // v1: the ticker symbol itself is the search query, a blunt but fully
+    // deterministic starting point (Adopted Pattern #10 territory -- no LLM
+    // guessing). Refine per-ticker queries as false-positive/negative rates
+    // from real runs justify it.
+    watchlist: parseList(env.WATCHLIST_TICKERS || "AAPL,MSFT,TSLA").map((ticker) => ({ ticker, query: ticker })),
   };
 }
