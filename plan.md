@@ -372,6 +372,9 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       since that needs live Gemini calls across six agent modules -- true
       integration-level resume testing is blocked on `agents/utils/
       structured.js` exposing a way to inject a fake model response.
-- [ ] `memory_pointintime`-style test mirroring TradingAgents' naming --
-      verifies `getDecisionMemoryAsOf`'s cutoff (Backtesting Integrity #4)
-      the same way `backtest.leakcheck.test.js` verifies `assertNoLookahead`
+- [x] `memory_pointintime` test added (`test/memory_pointintime.test.js`):
+      verifies `getDecisionMemoryAsOf`'s strictly-before-asOf cutoff
+      (Backtesting Integrity #4) and `fetchPriorLessons`'s formatted prompt
+      text, against a minimal in-memory fake `decision_memory` table -- same
+      honest, narrow-fake convention as `checkpoint_resume.test.js`. Does
+      NOT exercise `recordAndReflect` (the write path, calls live Gemini).
