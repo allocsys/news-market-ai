@@ -3,7 +3,7 @@
 // pos/neg/neutral, following the pattern from rkaravangelis/llm-news-
 // sentiment-agent (see plan.md Prior Art).
 
-import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { callStructured } from "../utils/structured.js";
 import { AnalystOpinion, SentimentBand } from "../../schemas/index.js";
 
 export async function runSentimentAnalyst(env, config, newsItem) {
@@ -17,13 +17,8 @@ Respond as JSON only, matching exactly:
 Title: ${newsItem.title}
 Body: ${newsItem.body}`;
 
-  const text = await geminiGenerateText(env, config, prompt, { model: config.geminiQuickModel });
-  const parsed = JSON.parse(stripJsonFence(text));
-
-  return AnalystOpinion.parse({
-    agent: "sentiment",
-    newsItemId: newsItem.id,
-    ...parsed,
-    modelUsed: config.geminiQuickModel,
+  return callStructured(env, config, AnalystOpinion, prompt, {
+    model: config.geminiQuickModel,
+    extraFields: { agent: "sentiment", newsItemId: newsItem.id, modelUsed: config.geminiQuickModel },
   });
 }
