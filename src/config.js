@@ -17,5 +17,11 @@ export function loadConfig(env) {
     geminiFallbackModels: parseList(env.GEMINI_FALLBACK_MODELS),
     geminiApiBase: "https://generativelanguage.googleapis.com/v1beta",
     geminiRequestTimeoutMs: Number(env.GEMINI_REQUEST_TIMEOUT_MS) || 30000,
+    // Depth-vs-cost knob (plan.md Adopted Pattern #7): how many extra
+    // bull/bear/judge rounds graph/conditional_logic.js may run when the
+    // judge's confidence is too low to act on. 1 means "debate once, then
+    // stop regardless of confidence" -- start conservative given the free
+    // model-quota budget this is meant to protect.
+    maxDebateRounds: Number(env.MAX_DEBATE_ROUNDS) || 1,
   };
 }
