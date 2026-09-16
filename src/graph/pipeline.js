@@ -4,12 +4,14 @@
 // sequencing and checkpointing, not agent logic -- it should stay a
 // relatively thin "call things in order, save progress" layer.
 //
-// HONEST STATE: runScheduledIngestion below will currently fail at the
-// ingestion step, because src/ingestion/sources/gdelt.js#fetchLatest is
-// still a stub that throws "not yet implemented". runPipelineForNewsItem is
-// written and wired regardless, so it's ready to run the moment ingestion
-// produces real NormalizedNewsItem objects -- it does not depend on GDELT
-// specifically, only on the normalized shape from schemas/index.js.
+// STATE: runScheduledIngestion below pulls real GDELT articles (see
+// ingestion/sources/gdelt.js), one query per config.watchlist ticker.
+// runPipelineForTicker itself does not depend on GDELT specifically, only
+// on the normalized shape from schemas/index.js -- any future ingestion
+// source can feed it the same way. NOT yet exercised against live traffic;
+// GDELT DOC API's actual response shape should be spot-checked against a
+// real request before trusting this in production (see gdelt.js's own
+// header for the known body-text gap).
 
 import { fetchLatest } from "../ingestion/sources/gdelt.js";
 import { insertNewsItem } from "../storage/d1.js";
