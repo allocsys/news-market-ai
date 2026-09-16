@@ -1,0 +1,74 @@
+name: 'Ensure D1 database exists'
+description: >
+  Idempotently ensures the Cloudflare D1 database exists and patches this
+  job's own (uncommitted) checkout of wrangler.toml with the real
+  database_id, so wrangler commands in the SAME job run against the real
+  database instead of the placeholder committed to the repo.
+
+  Ported from allocsys/ai-campaign-builder's
+  .github/actions/ensure-d1-database (verified working there 2026-09-10+).
+  Only difference: that repo's wrangler.toml lives at apps/backend/, this
+  repo's lives at the repo root, so working-directory is '.' instead.
+
+  GUARD AGAINST RECREATION ON REDEPLOY: looks the database up by name via
+  `wrangler d1 list --json` first and only calls `wrangler d1 create` if
+  that lookup finds nothing. Every run after the first reuses the existing
+  id.
+
+  NOT COMMITTED BACK TO THE REPO: the wrangler.toml edit only exists in this
+  job's own checkout. The committed database_id stays a placeholder forever;
+  every job run resolves the real id fresh via this same idempotent lookup.
+
+inputs:
+  database-name:
+    description: 'Name of the D1 database (must match wrangler.toml database_name)'
+    required: true
+    default: 'news_market_ai'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Look up or create the D1 database, then patch this checkout's wrangler.toml
+      shell: bash
+      run: |
+        set -euo pipefail
+        DB_NAME="${{ inputs.database-name }}"
+
+        # Defensive JSON parsing: wrangler's --json output shape has varied
+        # across versions/subcommands (bare array vs {"result": [...]}, and
+        # id key seen as "uuid"/"id"/"database_id"). Check known variants
+        # rather than assuming one exact shape; fail loudly if none match
+        # rather than silently deploying against a wrong/missing id.
+        EXISTING_ID=$(npx wrangler d1 list --json | node -e "
+          const raw = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+          const list = Array.isArray(raw) ? raw : (raw.result || []);
+          const match = list.find(d => d.name === process.argv[1] || d.database_name === process.argv[1]);
+          process.stdout.write(match ? (match.uuid || match.id || match.database_id || '') : '');
+        " "$DB_NAME")
+
+        if [ -n "$EXISTING_ID" ]; then
+          echo "::add-mask::$EXISTING_ID"
+          echo "D1 database '$DB_NAME' already exists (id: [masked]) -- skipping creation."
+          DB_ID="$EXISTING_ID"
+        else
+          echo "D1 database '$DB_NAME' not found for this account -- creating it now. This should only happen once, on the very first deploy."
+          # 'wrangler d1 create' may not support --json on the pinned
+          # version (seen on ai-campaign-builder) -- re-run the list-based
+          # lookup afterward instead of parsing create's own output.
+          npx wrangler d1 create "$DB_NAME"
+          DB_ID=$(npx wrangler d1 list --json | node -e "
+            const raw = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+            const list = Array.isArray(raw) ? raw : (raw.result || []);
+            const match = list.find(d => d.name === process.argv[1] || d.database_name === process.argv[1]);
+            process.stdout.write(match ? (match.uuid || match.id || match.database_id || '') : '');
+          " "$DB_NAME")
+          if [ -z "$DB_ID" ]; then
+            echo "::error::Created the D1 database via 'wrangler d1 create' but couldn't find it afterward via a 'wrangler d1 list --json' lookup by name '$DB_NAME'. The database now exists in Cloudflare -- check manually before retrying (the lookup branch above should find it and skip recreation on the next run)."
+            exit 1
+          fi
+          echo "::add-mask::$DB_ID"
+          echo "Created D1 database '$DB_NAME' (id: [masked])."
+        fi
+
+        sed -i "s/database_id = \".*\"/database_id = \"$DB_ID\"/" wrangler.toml
+        echo "This job's local wrangler.toml now points at the real database_id (not committed back to the repo -- see this action's description)."

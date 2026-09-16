@@ -249,6 +249,83 @@ Verified against current Cloudflare free-tier limits (Sept 2026):
 - KV as the cooldown/rate-limit-state store for the LLM cascade (see below), and for lightweight config/flags. Not used for high-write-volume data.
 - R2 (10GB free) as the raw/immutable article archive layer if we outgrow storing raw payloads directly in D1.
 
+### CI/CD (added 2026-09-17)
+
+Previously no automation at all — deploys were manual `wrangler deploy` runs.
+`.github/workflows/deploy.yml` now handles this, adapted from
+`allocsys/ai-campaign-builder`'s `deploy.yml` pattern (that repo confirmed
+working in production there) but scaled DOWN: this repo is a single Worker
+with one `package.json` and no npm workspaces, so none of that repo's
+per-app `dorny/paths-filter` gating or lockfile-sync job apply — just three
+jobs: `test` (all triggers) → `migrate` (push/`workflow_dispatch` only) →
+`deploy` (same, needs both, `always()` + result-check so a skipped `migrate`
+on a PR run doesn't skip `deploy` too — `deploy` is separately gated to
+push/dispatch anyway, so this only matters for keeping the `needs` graph
+correct).
+
+What WAS carried over from ai-campaign-builder because it solves a real
+problem here too: the idempotent "look up by name, create only if missing,
+patch this job's own uncommitted `wrangler.toml` checkout, never commit the
+real id back to the repo" pattern, as two composite actions —
+`.github/actions/ensure-d1-database` and `.github/actions/ensure-kv-namespace`
+— ported near-verbatim (only the working-directory changed, since this
+repo's `wrangler.toml` lives at the repo root, not `apps/backend/`). This
+means no manual one-time `wrangler d1 create` / `wrangler kv namespace
+create` is needed before the first deploy, and `wrangler.toml`'s committed
+`database_id`/KV `id` stay permanent placeholders — real ids are resolved
+fresh every job run. Ported `ensure-kv-namespace`'s hard-won fix intact too:
+`wrangler kv namespace list` returns JSON by default on the pinned wrangler
+version and has NO `--json` flag — passing one silently breaks JSON
+parsing by making wrangler print usage text instead (this cost
+ai-campaign-builder two failed debugging attempts before the root cause was
+found; don't reintroduce `--json` here).
+
+Two real pre-existing bugs fixed as part of adding this (found while wiring
+the `migrate` job, not something CI itself caused):
+- `package.json`'s `"test"` script was `node --test test/` — the bare-directory
+  form, which throws `MODULE_NOT_FOUND` on this repo's Node version (see the
+  MANDATORY WORKFLOW note elsewhere in this doc). Fixed to the glob form
+  `node --test 'test/**/*.test.js'`, matching what every session's own
+  manual verification already had to use.
+- `db:migrate:local`/`db:migrate:remote` were hardcoded to
+  `wrangler d1 execute ... --file=migrations/0001_init.sql` — i.e. only ever
+  applied the FIRST migration file, regardless of the other five
+  (`0002_checkpoints.sql` through `0006_positions_exit_fields.sql`) that
+  have been added since. Any real remote D1 database migrated only through
+  this script would be missing five migrations' worth of schema. Fixed to
+  `wrangler d1 migrations apply news_market_ai --local`/`--remote`, which
+  uses wrangler's own migrations-directory convention (already satisfied —
+  the numbered-prefix filenames in `migrations/` match what it expects) and
+  tracks which migrations have already run, so it's safe to call on every
+  deploy rather than needing to be extended by hand each time a migration
+  file is added.
+
+Required repo secrets (Settings → Secrets and variables → Actions):
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` — hard requirement, `migrate`
+and `deploy` both fail fast with a clear error if either is missing, before
+touching Cloudflare. `GEMINI_API_KEYS` — optional at the deploy-success
+level (a first deploy that stands up the Worker/D1/KV/cron trigger but
+hasn't configured a Gemini key yet still succeeds), but pushed via
+`wrangler secret put` (idempotent on repeat runs) whenever it IS set; the
+pipeline can't do anything useful without it since every LLM call goes
+through `src/llm/gemini/client.js`'s cascade.
+
+KNOWN GAPS: (1) no lockfile-sync job — fine for now since this repo has a
+single `package.json` and no workspaces to hoist across, but if that
+changes revisit whether ai-campaign-builder's `sync-lockfile` job is worth
+porting too; (2) unlike ai-campaign-builder's backend job, there's no
+narrower `migrations/**`-only path filter gating the `migrate` job separately
+from general code changes — every push runs `wrangler d1 migrations apply`,
+which is a deliberate simplification (the command is itself idempotent/
+no-op when nothing new needs applying, so the extra invocation costs a
+few seconds, not correctness) rather than an oversight; (3) not yet verified
+against a real GitHub Actions run — `CLOUDFLARE_API_TOKEN`/
+`CLOUDFLARE_ACCOUNT_ID`/`GEMINI_API_KEYS` need to be added as repo secrets
+and a push to `main` (or a manual `workflow_dispatch`) watched end-to-end
+before this can be called confirmed-working, same "wiring vs. live-verify"
+caveat as EDGAR/GDELT/yfinance's own sandbox network block elsewhere in
+this doc.
+
 ## LLM Calling Layer: Multi-Key Gemini Cascade (ported from our `madmcp` repo)
 
 Our `madmcp` repo (`connectors/gemini/client.js`) already has a production-tested

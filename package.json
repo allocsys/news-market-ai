@@ -7,9 +7,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test test/",
-    "db:migrate:local": "wrangler d1 execute news_market_ai --local --file=migrations/0001_init.sql",
-    "db:migrate:remote": "wrangler d1 execute news_market_ai --remote --file=migrations/0001_init.sql"
+    "test": "node --test 'test/**/*.test.js'",
+    "db:migrate:local": "wrangler d1 migrations apply news_market_ai --local",
+    "db:migrate:remote": "wrangler d1 migrations apply news_market_ai --remote"
   },
   "dependencies": {
     "zod": "^3.23.8"
