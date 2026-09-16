@@ -112,7 +112,7 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
 export async function runScheduledIngestion(env, config, db) {
   let items;
   try {
-    items = await fetchLatest({ queries: config.watchlist });
+    items = await fetchLatest(config);
   } catch (err) {
     if (err instanceof VendorError) {
       console.error("ingestion vendor failure", { vendor: err.vendor, transient: err.transient, message: err.message });
