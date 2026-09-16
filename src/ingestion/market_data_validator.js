@@ -75,3 +75,33 @@ export function validatePriceBar(bar, { now = new Date(), source } = {}) {
 
   return bar;
 }
+
+/**
+ * Sanity-checks a fundamental fact before insertion -- same "grounded, not
+ * free-associated" principle (Adopted Pattern #9) as validateNormalizedNewsItem
+ * and validatePriceBar, applied to XBRL data. Checks `filedAt` (the public
+ * timestamp), NOT the fiscal period end -- a fact describing a period that
+ * ended in the future would be a legitimate forward-looking estimate in some
+ * contexts, but `filedAt` being in the future relative to `now` is always a
+ * vendor clock/parsing bug, exactly like validateNormalizedNewsItem's
+ * publishedAt check.
+ */
+export function validateFundamentalFact(fact, { now = new Date(), source } = {}) {
+  const vendor = source ?? fact.source;
+  const filedAt = new Date(fact.filedAt);
+
+  if (Number.isNaN(filedAt.getTime())) {
+    throw new VendorError(vendor, `unparseable filedAt: ${JSON.stringify(fact.filedAt)}`);
+  }
+  if (filedAt.getTime() > now.getTime()) {
+    throw new VendorError(vendor, `filedAt ${fact.filedAt} is in the future relative to ${now.toISOString()}`);
+  }
+  if (typeof fact.val !== "number" || Number.isNaN(fact.val)) {
+    throw new VendorError(vendor, `val is not a valid number: ${JSON.stringify(fact.val)}`);
+  }
+  if (!fact.ticker || !fact.tag) {
+    throw new VendorError(vendor, `missing ticker or tag: ${JSON.stringify({ ticker: fact.ticker, tag: fact.tag })}`);
+  }
+
+  return fact;
+}

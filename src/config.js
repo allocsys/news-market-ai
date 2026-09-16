@@ -68,5 +68,21 @@ export function loadConfig(env) {
     // behalf the moment this code runs, which should be an explicit choice.
     rssFeeds: parseTickerUrlList(env.RSS_FEED_URLS),
     scrapePages: parseTickerUrlList(env.SCRAPE_PAGE_URLS),
+    // SEC EDGAR XBRL companyfacts API (ingestion/sources/edgar_fundamentals.js)
+    // -- see that file's header for why this is our free point-in-time
+    // fundamentals source. SEC REQUIRES a descriptive User-Agent identifying
+    // the requester on every request (https://www.sec.gov/os/webmaster-faq#developers)
+    // or it returns 403 -- no default here on purpose, same reasoning as
+    // rss.js/html_scrape.js not shipping default URLs: a made-up default
+    // User-Agent would misrepresent who's actually making the request.
+    edgarUserAgent: env.EDGAR_USER_AGENT || "",
+    edgarApiBase: env.EDGAR_API_BASE || "https://data.sec.gov/api/xbrl/companyfacts",
+    // Hand-maintained ticker -> CIK map, same honest-narrow-scope convention
+    // as ingestion/entity_resolution.js's COMPANY_DOMAIN_MAP -- SEC does
+    // publish a free ticker->CIK lookup file (company_tickers.json) but
+    // fetching+caching+refreshing that is a separate task, not attempted
+    // here. "TICKER|cik" pairs, cik as SEC reports it (may or may not be
+    // zero-padded in the source file -- edgar_fundamentals.js normalizes it).
+    edgarCikMap: Object.fromEntries(parseTickerUrlList(env.EDGAR_CIK_MAP).map(({ ticker, url: cik }) => [ticker, cik])),
   };
 }

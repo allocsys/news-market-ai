@@ -37,6 +37,27 @@ export const PriceBar = z.object({
   source: z.string(),
 });
 
+// Point-in-time fundamental fact, produced by
+// ingestion/sources/edgar_fundamentals.js (SEC EDGAR XBRL companyfacts API)
+// -- see that file's header and plan.md's "Backtesting Integrity" point 3
+// for how `filedAt` (not `fiscalYear`/`fiscalPeriod`) is what makes this
+// genuinely point-in-time: the fact wasn't PUBLICLY KNOWN until the filing
+// date, regardless of which fiscal period it describes, and a later 10-K/A
+// restating an earlier period shows up as a second row with the same
+// (ticker, tag, fiscalYear, fiscalPeriod) but a later filedAt.
+export const FundamentalFact = z.object({
+  ticker: z.string(),
+  cik: z.string(), // SEC's zero-padded Central Index Key, e.g. "0000320193"
+  tag: z.string(), // XBRL us-gaap concept, e.g. "Revenues", "EarningsPerShareDiluted"
+  val: z.number(),
+  unit: z.string(), // XBRL unit, e.g. "USD", "USD/shares", "shares"
+  fiscalYear: z.number(),
+  fiscalPeriod: z.string(), // "FY", "Q1", "Q2", "Q3", "Q4" as EDGAR reports it
+  form: z.string(), // "10-K", "10-Q", "10-K/A", ... -- an "/A" suffix is a restatement
+  filedAt: z.string(), // ISO8601 UTC -- when this fact became PUBLIC, not the fiscal period it describes
+  source: z.string(),
+});
+
 export const SentimentBand = z.enum([
   "strongly_negative",
   "negative",

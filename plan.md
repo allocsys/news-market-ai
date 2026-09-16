@@ -203,8 +203,17 @@ someone adds a feature (see point 4 below).
    scrape — this is a common, easy-to-miss leak.
 3. **Point-in-time fundamentals, not "as reported today."** Financials get
    restated after the fact. yfinance and most free sources only give current
-   data, not point-in-time — document this as a known limitation rather than
-   silently ignoring it; don't claim point-in-time fidelity we don't have.
+   data, not point-in-time. **UPDATE: addressed, not just documented, for
+   XBRL-filing US-listed companies** — see `src/ingestion/sources/
+   edgar_fundamentals.js` and the matching checklist entry below: SEC EDGAR's
+   companyfacts API tags every fact with its actual filing date, separately
+   from the fiscal period it describes, so a restatement is a distinct
+   later-dated row rather than an overwrite — `storage/d1.js#
+   getFundamentalFactsAsOf` reconstructs "what was known as of T" from that
+   for real. Residual gap, still real: everything free/current-only
+   (yfinance, price data in general) still isn't point-in-time, and EDGAR
+   itself only covers US-listed XBRL filers — international/private/small
+   non-XBRL companies have no point-in-time fundamentals source here at all.
 4. **The reflection/memory loop is the easiest place to leak the future.**
    Adopted Pattern #8 (persistent reflection) depends on a realized outcome,
    which requires later price data to "have happened." In backtest, the memory
@@ -355,8 +364,42 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       a tiny hand-maintained domain map, real coverage TBD; (3) not yet
       exercised against a live GDELT request, so the actual JSON shape
       should be spot-checked before relying on this in production
-- [ ] Set up D1 schema for point-in-time fundamentals (or document the free-
-      data limitation more concretely per Backtesting Integrity #3)
+- [x] Set up D1 schema for point-in-time fundamentals (or document the free-
+      data limitation more concretely per Backtesting Integrity #3): built
+      the schema AND made point-in-time fundamentals real for US-listed XBRL
+      filers, not just documented the gap. `src/schemas/index.js#
+      FundamentalFact` (adds `filedAt` alongside `fiscalYear`/`fiscalPeriod`
+      -- the field that makes this genuinely point-in-time, see its own
+      comment for why), `migrations/0005_fundamental_facts.sql`
+      (`fundamental_facts` table, one row per (ticker, tag, fiscalYear,
+      fiscalPeriod, form) so a restatement is a new row, not an overwrite),
+      `storage/d1.js#insertFundamentalFact/getFundamentalFactsAsOf`
+      (point-in-time read: latest-filed-as-of-`asOf` fact PER fiscal period,
+      via a `ROW_NUMBER() OVER (PARTITION BY fiscal_year, fiscal_period
+      ORDER BY filed_at DESC)` window query -- same required-asOf convention
+      as every other `*AsOf` reader), `market_data_validator.js#
+      validateFundamentalFact`, and `ingestion/sources/
+      edgar_fundamentals.js#fetchFacts/fetchLatest` (SEC EDGAR XBRL
+      companyfacts API, requires `config.edgarUserAgent` per SEC's terms,
+      ticker->CIK via a small hand-maintained `config.edgarCikMap` --
+      same honest convention as `entity_resolution.js`'s domain map). See
+      also the updated Backtesting Integrity point 3 above.
+      Covered by `test/fundamentals_pointintime.test.js` (18 tests,
+      including the core point-in-time guarantee: a restated value is
+      invisible to an `asOf` before its own filing date, and visible
+      afterward, replacing the original for that period; 85 tests total in
+      the suite now).
+      KNOWN GAPS carried forward: (1) US-listed XBRL filers only -- no
+      international/private/non-XBRL-small-cap coverage; (2) ticker->CIK
+      resolution is hand-maintained, not a real lookup (SEC does publish a
+      free `company_tickers.json` mapping file -- fetching/caching that is a
+      separate future task); (3) only whatever XBRL `us-gaap` tags a filer
+      actually reports are available, no non-GAAP/adjusted figures;
+      (4) `config.edgarUserAgent` has no default and MUST be set before live
+      use or SEC returns 403; (5) not wired into `graph/pipeline.js` or
+      consumed by any agent -- like `price_bars`, there is no fundamentals
+      analyst yet; (6) not rate-limited against SEC's own fair-use guidance,
+      a caller pulling many tickers/tags in a loop should throttle itself.
 - [x] Build "jsonify" adapters for non-JSON sources (RSS, scraped HTML):
       `src/ingestion/jsonify.js` (regex-based, no XML/DOM dependency --
       deliberate, see file header on why: `parseFeedItems` handles both

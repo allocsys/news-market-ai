@@ -252,3 +252,69 @@ export async function getPriceBarsAsOf(db, { ticker, asOf, limit = 200 }) {
 
   return results;
 }
+
+/**
+ * One row per (ticker, tag, fiscalYear, fiscalPeriod, form) -- a restated
+ * figure (10-K/A) for a period already covered by an earlier filing is a
+ * NEW row, not an overwrite. See migrations/0005_fundamental_facts.sql's
+ * header for why: this is what lets getFundamentalFactsAsOf reconstruct the
+ * value that was actually known at a given point in time, restatements
+ * included, instead of only ever storing today's (possibly since-corrected)
+ * figure.
+ */
+export async function insertFundamentalFact(db, fact) {
+  await db
+    .prepare(
+      `INSERT INTO fundamental_facts (ticker, cik, tag, val, unit, fiscal_year, fiscal_period, form, filed_at, source, ingested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ticker, tag, fiscal_year, fiscal_period, form) DO UPDATE SET
+         val = excluded.val, unit = excluded.unit, filed_at = excluded.filed_at,
+         source = excluded.source, ingested_at = excluded.ingested_at`
+    )
+    .bind(
+      fact.ticker, fact.cik, fact.tag, fact.val, fact.unit,
+      fact.fiscalYear, fact.fiscalPeriod, fact.form, fact.filedAt, fact.source, new Date().toISOString()
+    )
+    .run();
+}
+
+/**
+ * Point-in-time read (plan.md Backtesting Integrity, point 3): for
+ * `ticker`/`tag`, the latest-filed-as-of-`asOf` fact PER FISCAL PERIOD --
+ * i.e. whatever value an analyst reading at `asOf` would actually have
+ * seen, restatements included up to that point but never a later one. Same
+ * required-asOf, no-"give me everything" convention as
+ * getPriceBarsAsOf/getNewsAsOf. Ordered most-recent-fiscal-period first.
+ *
+ * HONEST LIMITATION (see plan.md + edgar_fundamentals.js): this reflects
+ * whatever this table has actually been populated with. EDGAR only covers
+ * US-listed XBRL filers, and this project's ticker->CIK map is currently a
+ * small hand-maintained list (same convention as
+ * ingestion/entity_resolution.js's domain map) -- a ticker with no rows
+ * here is NOT evidence the company has no fundamentals, only that we
+ * haven't ingested them.
+ */
+export async function getFundamentalFactsAsOf(db, { ticker, tag, asOf, limit = 20 }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getFundamentalFactsAsOf requires an explicit asOf timestamp");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT ticker, cik, tag, val, unit, fiscal_year, fiscal_period, form, filed_at, source
+       FROM (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY fiscal_year, fiscal_period ORDER BY filed_at DESC
+         ) AS rn
+         FROM fundamental_facts
+         WHERE ticker = ? AND tag = ? AND filed_at <= ?
+       )
+       WHERE rn = 1
+       ORDER BY fiscal_year DESC, fiscal_period DESC
+       LIMIT ?`
+    )
+    .bind(ticker, tag, asOf, limit)
+    .all();
+
+  return results;
+}
