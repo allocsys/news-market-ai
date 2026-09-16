@@ -937,3 +937,64 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       name-glob, not fragile like the broken pattern was), but it's still
       an assumption a future added test file needs to satisfy (name ending
       in `.test.js`, located somewhere under `test/`).
+
+- [x] User added the three repo secrets (`CLOUDFLARE_API_TOKEN`,
+      `CLOUDFLARE_ACCOUNT_ID`, `GEMINI_API_KEYS`), and asked for a secret-
+      leak audit of the resulting Actions logs. Triggered a real
+      `workflow_dispatch` run and read the raw job logs (not just the
+      error-filtered view) with targeted grep patterns for anything
+      secret-shaped. Result:
+      NO ACTUAL CREDENTIAL LEAKED -- `CLOUDFLARE_API_TOKEN`,
+      `CLOUDFLARE_ACCOUNT_ID`, and `GEMINI_API_KEYS` all show as `***`
+      everywhere in the logs (GitHub auto-masks registered secret values
+      wherever they appear), and the `wrangler secret put GEMINI_API_KEYS`
+      step never echoes the key itself -- only "Uploaded secret
+      GEMINI_API_KEYS".
+      REAL LEAK FOUND, THEN FIXED: both `.github/actions/ensure-d1-database`
+      and `.github/actions/ensure-kv-namespace` let `wrangler ... create`'s
+      own stdout print directly to the log -- and that output includes a
+      wrangler.toml snippet with the REAL resource id (D1 database UUID /
+      KV namespace id) in plaintext. Each action's own `::add-mask::` for
+      that id was only registered afterward, from a SEPARATE re-query via
+      `list` -- too late to redact `create`'s own already-printed output.
+      Confirmed by reading the actual raw log lines from run
+      https://github.com/allocsys/news-market-ai/actions/runs/35155406076:
+      a real D1 database UUID and a real KV namespace id both appeared in
+      plaintext, once each, exactly at the `create` step.
+      FIX (commits `da3c31c`, `5c0794c`): both actions now capture
+      `create`'s output into a variable instead of letting it print
+      directly, extract the id from that captured text via a regex, and
+      `echo "::add-mask::$ID"` on it BEFORE printing the captured output --
+      GitHub's add-mask retroactively redacts that literal string in any
+      log line emitted AFTER the mask is registered, so this keeps
+      `create`'s own diagnostic text (useful if creation ever fails) while
+      no longer showing the raw id anywhere. Failure handling preserved
+      explicitly (`set +e`/capture-exit-code/`set -e` around the capture,
+      then a real `exit 1` with the (now-masked) output already printed if
+      `create` failed) rather than letting `set -euo pipefail` silently
+      swallow the diagnostic on a failure path, which a naive
+      `X=$(cmd)`-under-`set -e` fix would have done.
+      NOT RETROACTIVELY FIXABLE: the two ids already printed in plaintext in
+      that one specific run's log (35155406076) stay visible in THAT run's
+      history -- GitHub's masking only ever applies going forward from
+      registration, never backfills already-emitted lines, and there's no
+      tool-based way to redact a historical run's log after the fact (only
+      a manual "delete this run" in the Actions UI, which the user hasn't
+      been asked to do and Claude can't do itself). Told the user this
+      directly. Practical severity is low regardless -- a bare D1 database
+      UUID or KV namespace id grants no access on its own without a valid
+      Cloudflare API token alongside it -- but the fix closes the actual
+      hole for every future first-time-creation run (a redeploy to a fresh
+      Cloudflare account, a renamed database/namespace, etc).
+      KNOWN GAPS: (1) not exercised against a REAL second creation event
+      this session (the D1 database and KV namespace now already exist from
+      run 35155406076, so the idempotent "already exists" branch runs on
+      every subsequent call, not the `create` branch this fix touches) --
+      the fix is code-reviewed and logically sound (mirrors the exact
+      capture-then-mask-then-print order needed) but not fire-tested against
+      a fresh Cloudflare account/renamed resource; (2) the `grep -oE`
+      extraction patterns (`database_id = "[^"]+"` / `id = "[^"]+"`) assume
+      wrangler's create-output snippet format stays stable -- same class of
+      assumption as the existing `list`-based lookups' own defensive
+      multi-key JSON parsing, worth re-checking if a wrangler upgrade ever
+      changes that output shape.
