@@ -24,8 +24,6 @@ import { resolveTickers } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
 
-const GDELT_DOC_API = "https://api.gdeltproject.org/api/v2/doc/doc";
-
 /** GDELT's seendate is "YYYYMMDDTHHMMSSZ" -- reformat to real ISO8601, or null if malformed. */
 function parseGdeltDate(seendate) {
   const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(seendate ?? "");
@@ -39,13 +37,16 @@ function parseGdeltDate(seendate) {
  * (see config.js#watchlist -- callers, typically graph/pipeline.js, pass
  * their configured watchlist here). One GDELT request per query, since the
  * DOC API requires an explicit search term -- there is no "everything"
- * endpoint to poll instead.
+ * endpoint to poll instead. Request params (base URL, mode, format, sort,
+ * maxrecords) all come from config.js's gdelt* fields, not hardcoded here,
+ * so they're tunable via env vars if the live API's behavior/shape needs
+ * adjusting without a code change.
  */
-export async function fetchLatest({ queries = [], maxRecords = 50 } = {}) {
+export async function fetchLatest(config, { queries = config.watchlist } = {}) {
   const items = [];
 
   for (const { ticker, query } of queries) {
-    const url = `${GDELT_DOC_API}?query=${encodeURIComponent(query)}&mode=artlist&maxrecords=${maxRecords}&format=json&sort=datedesc`;
+    const url = `${config.gdeltApiBase}?query=${encodeURIComponent(query)}&mode=${config.gdeltMode}&maxrecords=${config.gdeltMaxRecords}&format=${config.gdeltFormat}&sort=${config.gdeltSort}`;
 
     let response;
     try {
