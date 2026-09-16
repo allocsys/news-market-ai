@@ -358,8 +358,19 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
 - [ ] Set up D1 schema for point-in-time fundamentals (or document the free-
       data limitation more concretely per Backtesting Integrity #3)
 - [ ] Build "jsonify" adapters for non-JSON sources (RSS, scraped HTML)
-- [ ] Wire a real portfolio/positions store so `portfolio_manager.js`'s
-      `openPositionsRiskPct` placeholder becomes a real read instead of `0`
+- [x] Real positions store wired up: `migrations/0003_positions.sql`
+      (`positions` table), `storage/d1.js#openPosition/closePosition/
+      getOpenPositionsRiskPctAsOf` (point-in-time, same required-asOf
+      convention as `getNewsAsOf`/`getDecisionMemoryAsOf`), and
+      `graph/pipeline.js`'s `risk_checked` stage now reads live exposure and
+      opens a position on approval instead of passing a hardcoded `0`.
+      Covered by `test/positions_pointintime.test.js`.
+      KNOWN GAPS carried forward: (1) `closePosition` has no caller yet --
+      exit logic (stop-loss/take-profit/time-based) doesn't exist, so once
+      opened a position stays open forever; (2) re-evaluating a thesis on a
+      ticker that already has an open position double-counts that ticker's
+      exposure (no netting/replace concept yet); (3) `MAX_PORTFOLIO_RISK_PCT`
+      is still an untuned placeholder ceiling.
 - [ ] Source free historical price/volume data for backtesting (yfinance),
       then implement `market_data_validator.js#validatePriceBar`
 - [ ] Build signal on/off backtest comparison harness (walk-forward windows
