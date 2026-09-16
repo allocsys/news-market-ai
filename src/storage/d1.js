@@ -113,3 +113,31 @@ export async function getDecisionMemoryAsOf(db, { ticker, asOf, limit = 10 }) {
 
   return results;
 }
+
+/**
+ * Checkpoint/resume for multi-agent runs (plan.md Adopted Pattern #12,
+ * graph/checkpointer.js). One row per (runId, ticker) -- upsert on every
+ * completed stage rather than append-only, since resume only ever cares
+ * about the LATEST completed stage for that (run, ticker) pair.
+ */
+export async function saveCheckpoint(db, { runId, ticker, stage, state }) {
+  await db
+    .prepare(
+      `INSERT INTO pipeline_checkpoints (run_id, ticker, stage, state, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(run_id, ticker) DO UPDATE SET stage = excluded.stage, state = excluded.state, updated_at = excluded.updated_at`
+    )
+    .bind(runId, ticker, stage, state != null ? JSON.stringify(state) : null, new Date().toISOString())
+    .run();
+}
+
+/** Returns null if no checkpoint exists yet for this (runId, ticker) -- callers should start from stage 1. */
+export async function getCheckpoint(db, { runId, ticker }) {
+  const row = await db
+    .prepare(`SELECT stage, state, updated_at FROM pipeline_checkpoints WHERE run_id = ? AND ticker = ?`)
+    .bind(runId, ticker)
+    .first();
+
+  if (!row) return null;
+  return { stage: row.stage, state: row.state ? JSON.parse(row.state) : null, updatedAt: row.updated_at };
+}
