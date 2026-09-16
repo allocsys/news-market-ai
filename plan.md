@@ -717,6 +717,12 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       cookie/crumb gap, etc); this item doesn't resolve any of those, it
       only makes the adapters reachable from the pipeline once a real
       network path exists.
+      **UPDATE (2026-09-17): this block is bash_tool-specific, not absolute
+      -- see the "Live-verify against real vendor traffic" checklist item
+      below.** `mcp__Madmcp__web_fetch` reaches the internet through
+      Madmcp's own server-side infra, not through the sandbox's egress
+      proxy, and DOES reach all three of these hosts. Live-verification is
+      possible from this sandbox after all, just not via bash/curl.
       KNOWN GAPS: (1) the live-spot-check gap above; (2) ~~real ticker->CIK
       resolution (SEC's `company_tickers.json`) still doesn't exist~~ --
       CLOSED, see the "Real ticker -> CIK lookup" checklist item below;
