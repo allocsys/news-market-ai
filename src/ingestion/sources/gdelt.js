@@ -45,11 +45,18 @@ function parseGdeltDate(seendate) {
  */
 export async function fetchLatest(config, { queries = config.watchlist } = {}) {
   const items = [];
-  // No documented GDELT rate limit exists (unlike EDGAR's ~10 req/sec fair-
-  // use guidance) -- config.gdeltMinRequestIntervalMs defaults to 0, a true
-  // no-op, same "no default without an explicit reason" convention as
-  // rssFeeds/scrapePages. Reusable if GDELT ever documents a real limit or
-  // a live deployment starts getting rate-limited in practice.
+  // UPDATE (2026-09-17): GDELT DOES now have a known, live-confirmed limit
+  // -- a real 429 response body this session stated it verbatim ("please
+  // limit requests to one every 5 seconds"), so config.js's loadConfig now
+  // defaults gdeltMinRequestIntervalMs to 5000, same "real vendor-published
+  // number" treatment as edgarMinRequestIntervalMs. The `?? 0` fallback
+  // below only fires for a raw config object that bypasses loadConfig
+  // entirely (this file's own tests construct one directly) -- production
+  // callers (graph/pipeline.js) always go through loadConfig, so they get
+  // the real 5000ms default. Note pacing alone may not fully resolve the
+  // observed live 429s -- see plan.md, repeated 429s even with spacing
+  // suggest a possible shared/rate-limited egress IP on the fetch infra
+  // used for live-verification, not purely a per-instance cadence issue.
   const throttle = createThrottle({ minIntervalMs: config.gdeltMinRequestIntervalMs ?? 0 });
 
   for (const { ticker, query } of queries) {
