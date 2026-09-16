@@ -64,6 +64,38 @@ worse versions of solved problems.
 6. **Prove the signal helps before trusting it.** Backtest with the news
    signal on vs. off (e.g. Sharpe ratio comparison) rather than assuming the
    LLM analysis adds value.
+7. **Two-tier model strategy.** Split every stage into a cheap/fast model
+   (`quick_think`) for high-volume simple tasks (per-article analyst passes)
+   vs. a stronger model (`deep_think`) reserved for the parts where reasoning
+   quality actually matters (debate, judge/synthesis, final decision). Directly
+   solves our "free tier" budget problem: spend free-tier quota on the analyst
+   stage, save the best available free/cheap model for the debate stage.
+   `max_debate_rounds` / `max_risk_rounds` become explicit depth-vs-cost knobs.
+8. **Persistent decision log + reflection loop.** Every completed pipeline run
+   appends its decision + eventual realized outcome (raw return and return vs.
+   a benchmark) to a memory log. The next run for the same ticker fetches that
+   realized outcome, generates a short reflection on what worked/didn't, and
+   injects recent same-ticker + cross-ticker lessons into the next run's
+   prompt. This is a cheap substitute for actual fine-tuning and maps directly
+   onto our original "use old data to improve the system" goal — **but see the
+   Backtesting Integrity section below**, this loop is also the easiest place
+   to accidentally leak future information into a backtest.
+9. **Grounded, not free-associated, data claims.** The agent must not be
+   allowed to state a price, indicator value, or financial figure from its own
+   "knowledge" — every such claim must be grounded in a verified data snapshot
+   fetched at that step. Stale data should be rejected outright, not silently
+   reported as current.
+10. **Deterministic entity resolution before any LLM runs.** Resolve which
+    ticker/company/entity is being analyzed via a deterministic lookup step
+    *before* any agent sees the task, rather than letting an LLM infer it —
+    avoids a whole class of "analyzed the wrong company" bugs.
+11. **Explicit vendor fallback chain, no silent degradation.** When a data
+    source fails (GDELT down, rate-limited, etc.), surface a typed error and
+    follow an explicit configured fallback order — never silently serve
+    thinner data without logging that a source was skipped.
+12. **Checkpoint/resume for multi-agent runs.** Persist state after each
+    pipeline stage (per ticker/event) so a crashed run resumes from the last
+    completed step instead of restarting and re-spending LLM calls.
 
 ## Pipeline Stages
 
