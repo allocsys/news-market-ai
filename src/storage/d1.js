@@ -206,3 +206,49 @@ export async function getOpenPositionsRiskPctAsOf(db, { asOf }) {
 
   return results.reduce((sum, r) => sum + r.position_size_pct, 0);
 }
+
+/**
+ * Write path for daily OHLCV bars (ingestion/sources/yfinance.js). Upsert on
+ * (ticker, date) since re-ingesting the same trading day should overwrite
+ * rather than duplicate -- unlike news, a price bar has no meaningful
+ * "revision" concept to preserve.
+ */
+export async function insertPriceBar(db, bar) {
+  await db
+    .prepare(
+      `INSERT INTO price_bars (ticker, date, open, high, low, close, volume, source, ingested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ticker, date) DO UPDATE SET
+         open = excluded.open, high = excluded.high, low = excluded.low,
+         close = excluded.close, volume = excluded.volume,
+         source = excluded.source, ingested_at = excluded.ingested_at`
+    )
+    .bind(bar.ticker, bar.date, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source, new Date().toISOString())
+    .run();
+}
+
+/**
+ * Point-in-time read: bars for `ticker` dated at or before `asOf`. Same
+ * required-asOf, no-"give me everything" convention as getNewsAsOf and
+ * getDecisionMemoryAsOf (Backtesting Integrity, point 1) -- a technical
+ * analyst reading price history must not be able to see a bar from after
+ * the simulated "now" any more than a news analyst can.
+ */
+export async function getPriceBarsAsOf(db, { ticker, asOf, limit = 200 }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getPriceBarsAsOf requires an explicit asOf timestamp");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT ticker, date, open, high, low, close, volume, source
+       FROM price_bars
+       WHERE ticker = ? AND date <= ?
+       ORDER BY date DESC
+       LIMIT ?`
+    )
+    .bind(ticker, asOf, limit)
+    .all();
+
+  return results;
+}
