@@ -1,0 +1,140 @@
+# CI + deploy for this repo's single Cloudflare Worker.
+#
+# Pattern adapted from allocsys/ai-campaign-builder's deploy.yml (verified
+# working there as of 2026-09-11), scaled DOWN to fit this repo: that repo
+# is an npm-workspaces monorepo with five frontend apps + a backend, each
+# gated behind its own dorny/paths-filter entry and a lockfile-sync job to
+# keep a shared root package-lock.json in sync across workspaces. This repo
+# is a single Worker with one package.json and no workspaces, so none of
+# that machinery applies -- one test job, one migration job, one deploy job.
+#
+# What WAS carried over, because it solves a real problem this repo has too:
+#   - The idempotent "look up by name, create only if missing, patch this
+#     job's own uncommitted wrangler.toml checkout" pattern for D1 (see
+#     .github/actions/ensure-d1-database) and KV (ensure-kv-namespace) --
+#     avoids requiring a manual one-time `wrangler d1 create` /
+#     `wrangler kv namespace create` before first deploy, and avoids ever
+#     committing a real database/namespace id to the repo.
+#   - Fail-fast secret-presence checks before touching Cloudflare, so a
+#     misconfigured repo fails with a clear message instead of a confusing
+#     wrangler error deep in a deploy step.
+#   - GEMINI_API_KEYS pushed via `wrangler secret put` after a successful
+#     deploy, same idempotent-on-repeat-run shape as ai-campaign-builder's
+#     JWT_SECRET/VISION_*/B2_* secret-push steps.
+#
+# On pull_request: install + test only, as a CI gate -- no migrate, no deploy.
+# On push to main / workflow_dispatch: install + test, then migrate (D1
+# migrations apply, idempotent -- wrangler tracks which have already run),
+# then deploy.
+#
+# migrate before deploy, not the other way around: deploying code that
+# expects a column/table a pending migration hasn't created yet would break
+# the Worker immediately on the next request.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-news-market-ai-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+
+  migrate:
+    needs: test
+    # Only on an actual deploy trigger, never on a PR check.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Check required secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- cannot run D1 migrations. Aborting before touching the database."
+            exit 1
+          fi
+      - name: Ensure D1 database exists
+        uses: ./.github/actions/ensure-d1-database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Apply D1 migrations (remote)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run db:migrate:remote
+
+  deploy:
+    needs: [test, migrate]
+    # always() needed because `migrate` is skipped on pull_request -- without
+    # it, GitHub Actions' default "needs" behavior would skip this job too
+    # instead of treating a skip as "nothing to wait on, proceed" (this job
+    # itself is still gated to push/workflow_dispatch below, so a PR run
+    # never reaches the deploy steps regardless).
+    if: always() && needs.test.result == 'success' && (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Check required secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
+            exit 1
+          fi
+      - name: Ensure D1 database exists
+        uses: ./.github/actions/ensure-d1-database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Ensure CACHE_KV namespace exists
+        uses: ./.github/actions/ensure-kv-namespace
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy
+      - name: Set GEMINI_API_KEYS on the deployed Worker
+        # Required for the pipeline to do anything useful (every LLM call
+        # goes through src/llm/gemini/client.js's cascade), but pushing the
+        # secret is still kept out of the fail-fast check above: a first
+        # deploy that stands up the Worker/D1/KV/cron trigger but hasn't
+        # configured a Gemini key yet should still succeed rather than
+        # blocking on infra that's unrelated to whether a key is set.
+        # `wrangler secret put` is idempotent against a repeat run with the
+        # same value, same as ai-campaign-builder's equivalent steps.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+        run: |
+          if [ -z "$GEMINI_API_KEYS" ]; then
+            echo "GEMINI_API_KEYS repo secret not set -- skipping. The Worker is deployed but the Gemini cascade will fail until this is configured."
+            exit 0
+          fi
+          echo "$GEMINI_API_KEYS" | npx wrangler secret put GEMINI_API_KEYS
