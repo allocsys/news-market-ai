@@ -329,13 +329,35 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
 ```
 
 ## Open questions / next steps
-- [ ] Build GDELT ingestion script (first working prototype)
-- [ ] Define final normalized JSON schema + set up Neon Postgres schema
+- [x] Define shared structured I/O types (agents read/write against
+      `src/schemas/index.js`: NormalizedNewsItem, AnalystOpinion, DebateSide,
+      DebateVerdict, TradeThesis, RiskDecision, PortfolioDecision)
+- [x] Pick free LLM provider for the Analyst Team stage (Gemini, via the
+      multi-key cascade in `src/llm/gemini/client.js`)
+- [x] Prototype the Bull/Bear debate + judge step (`src/agents/researchers/
+      {bull,bear}.js` + `src/agents/managers/research_manager.js`)
+- [x] Build the deterministic risk/sizing layer (`src/agents/risk_mgmt/
+      risk.js`, plus final go/no-go in `src/agents/managers/
+      portfolio_manager.js`)
+- [x] Repo restructuring after diffing against TradingAgents' actual layout:
+      `graph/` (pipeline, conditional_logic, checkpointer, reflection),
+      `agents/managers/`, `agents/utils/` (structured.js, memory.js),
+      `ingestion/{date_window.js, market_data_validator.js}` all added and
+      wired into `src/index.js#scheduled`
+- [ ] Build GDELT ingestion script (first working prototype -- currently the
+      one real blocker: `src/ingestion/sources/gdelt.js#fetchLatest` still
+      throws "not yet implemented", so `graph/pipeline.js` can't run
+      end-to-end yet even though every downstream stage is wired)
+- [ ] Set up D1 schema for point-in-time fundamentals (or document the free-
+      data limitation more concretely per Backtesting Integrity #3)
 - [ ] Build "jsonify" adapters for non-JSON sources (RSS, scraped HTML)
-- [ ] Define shared `schemas.py` structured I/O types (analyst opinion, debate
-      output, trade thesis, risk decision)
-- [ ] Pick free LLM provider for the Analyst Team stage
-- [ ] Prototype the Bull/Bear debate + judge step
-- [ ] Build the deterministic risk/sizing layer (rules, not LLM)
-- [ ] Source free historical price/volume data for backtesting (yfinance)
-- [ ] Build signal on/off backtest comparison harness
+- [ ] Wire a real portfolio/positions store so `portfolio_manager.js`'s
+      `openPositionsRiskPct` placeholder becomes a real read instead of `0`
+- [ ] Source free historical price/volume data for backtesting (yfinance),
+      then implement `market_data_validator.js#validatePriceBar`
+- [ ] Build signal on/off backtest comparison harness (walk-forward windows
+      already exist in `src/backtest/pointInTime.js#walkForwardWindows`)
+- [ ] Expand `test/` beyond the one leak-check test -- add
+      `checkpoint_resume` and `memory_pointintime`-style tests mirroring
+      TradingAgents' naming, once GDELT ingestion gives us real data to test
+      the resumed pipeline against
