@@ -181,6 +181,48 @@ off and compare (e.g. Sharpe ratio, cumulative returns, max drawdown) —
 following the llm-rl-finance-trader approach — rather than assuming the LLM
 layer adds value.
 
+## Backtesting Integrity (no look-ahead)
+
+**Honest status: not yet built.** Tauric's own release notes claim look-ahead-safe
+news windows already, so we are not starting from a place where they got this
+wrong and we're fixing it — we just have a narrower focus (news specifically)
+and can afford to be stricter about it there. This needs to be true by
+construction, not by discipline, or it will quietly stop being true the moment
+someone adds a feature (see point 4 below).
+
+1. **Hard cutoff per simulated timestamp.** At simulated time `T`, every agent
+   may only read: news with `published_at <= T`, price/volume data timestamped
+   `<= T`, and memory/reflection entries from prior *backtest* decisions
+   strictly before `T`. Enforce this at the data-access layer (the query itself
+   filters by `T`), not by trusting the agent to behave — same principle as
+   Tauric's "verified data snapshot" grounding, applied to the time dimension.
+2. **Revision-aware storage.** Outlets edit articles after publishing
+   (corrected headlines, updated figures). Store every revision with its own
+   timestamp; at simulated time `T`, serve the version that existed at `T`,
+   never the current live version. Most hobby backtests only keep the latest
+   scrape — this is a common, easy-to-miss leak.
+3. **Point-in-time fundamentals, not "as reported today."** Financials get
+   restated after the fact. yfinance and most free sources only give current
+   data, not point-in-time — document this as a known limitation rather than
+   silently ignoring it; don't claim point-in-time fidelity we don't have.
+4. **The reflection/memory loop is the easiest place to leak the future.**
+   Adopted Pattern #8 (persistent reflection) depends on a realized outcome,
+   which requires later price data to "have happened." In backtest, the memory
+   log fed to the agent at simulated time `T` must only contain reflections
+   from decisions made before `T` — never later ones, even though in wall-clock
+   terms all of history is already sitting in our database. This has to be
+   enforced by the same timestamp filter as point 1, applied to the memory
+   store too, not treated as a separate system.
+5. **Walk-forward validation, not one static split.** Roll the cutoff forward
+   in fixed windows (train Jan–Mar, test Apr; then train Jan–Apr, test May, ...)
+   instead of a single train/test split, to catch a strategy that only worked
+   in one regime.
+6. **A leak-check test, not just a design doc.** Before trusting any backtest
+   result, run an automated check: for a sample of simulated timestamps,
+   assert that zero rows returned to the agent have a timestamp after `T`.
+   This is a real test we can write and run in CI, not just a principle we
+   promise to follow.
+
 ## Proposed Repo Structure
 Blending the TradingAgents role-based layout with the lighter
 Agentic-AI-Trading-Bot skeleton:
