@@ -62,7 +62,25 @@ runs:
           NS_ID="$EXISTING_ID"
         else
           echo "KV namespace matching '$NS_TITLE' not found for this account -- creating it now. This should only happen once, on the very first deploy."
-          npx wrangler kv namespace create "$NS_TITLE"
+          # SECURITY: same fix as ensure-d1-database's create step -- capture
+          # create's output instead of letting it print directly (it echoes
+          # the real namespace id in a wrangler.toml snippet), extract+mask
+          # the id from the captured text first, THEN print the captured
+          # output so create's own diagnostics (useful on failure) are kept
+          # without ever showing the raw id in plaintext.
+          set +e
+          CREATE_OUTPUT=$(npx wrangler kv namespace create "$NS_TITLE" 2>&1)
+          CREATE_STATUS=$?
+          set -e
+          CREATED_ID=$(printf '%s' "$CREATE_OUTPUT" | grep -oE 'id = "[^"]+"' | head -1 | cut -d'"' -f2)
+          if [ -n "$CREATED_ID" ]; then
+            echo "::add-mask::$CREATED_ID"
+          fi
+          echo "$CREATE_OUTPUT"
+          if [ "$CREATE_STATUS" -ne 0 ]; then
+            echo "::error::'wrangler kv namespace create $NS_TITLE' failed (exit $CREATE_STATUS) -- see output above."
+            exit 1
+          fi
           NS_ID=$(npx wrangler kv namespace list | node -e "
             const raw = require('fs').readFileSync(0, 'utf8');
             const candidates = [];
