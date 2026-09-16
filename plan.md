@@ -223,6 +223,72 @@ someone adds a feature (see point 4 below).
    This is a real test we can write and run in CI, not just a principle we
    promise to follow.
 
+## Deployment: Cloudflare Workers + D1 + KV (free tier)
+
+Verified against current Cloudflare free-tier limits (Sept 2026):
+
+| Resource | Free limit | Implication for us |
+|---|---|---|
+| Workers | 100K requests/day, 10ms CPU time/invocation | CPU time excludes time spent awaiting `fetch()`, so LLM-calling steps (mostly I/O wait) barely touch the budget |
+| D1 | 5GB storage, 5M rows read/day, **100K rows written/day** | As of Sept 1, 2026 this is now hard-enforced — queries over the limit fail outright, not just throttle. Treat "rows written/day" as a first-class ingestion constraint: batch inserts, dedupe before writing, don't write every raw field as its own row |
+| KV | 1GB storage, 100K reads/day, **1K writes/day** | Too tight for high-frequency per-request caching, but a great fit for low-frequency state like LLM key/model cooldown tracking (see below) — that only writes on a rate-limit event, not per request |
+| Bundle size | 64 MiB uncompressed (raised Sept 4, 2026) | Not a real constraint for us |
+
+**Architecture sketch:**
+- Cloudflare Workers as the orchestrator: Cron Triggers fire ingestion pulls (GDELT/EDGAR/RSS/yfinance) and drive the agent pipeline steps.
+- D1 as the structured layer (ticker + published_at indexed news/summaries/decisions), replacing the Postgres/Neon plan from earlier — keeps everything in one platform's free tier. Revisit Neon only if D1's write cap becomes a real bottleneck.
+- KV as the cooldown/rate-limit-state store for the LLM cascade (see below), and for lightweight config/flags. Not used for high-write-volume data.
+- R2 (10GB free) as the raw/immutable article archive layer if we outgrow storing raw payloads directly in D1.
+
+## LLM Calling Layer: Multi-Key Gemini Cascade (ported from our `madmcp` repo)
+
+Our `madmcp` repo (`connectors/gemini/client.js`) already has a production-tested
+cascade pattern for calling Gemini across multiple free API keys — reuse this
+design rather than rebuilding it from scratch.
+
+**Core shape: two-axis cascade, model-first.**
+- Outer loop: `[GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS]` — try the strongest
+  configured model across every available key before ever stepping down to a
+  weaker fallback model.
+- Inner loop: `GEMINI_API_KEYS` — for the current model, rotate through every
+  key on 401/403 (bad/revoked key, skip and continue), 429 (rate limit), 503
+  (overloaded), or a network-level transient failure (timeout/dropped
+  connection, explicitly marked `transient` since it carries no HTTP status).
+- Rationale for model-first ordering: a 429/503 is usually a per-model,
+  per-key quota signal, so exhaust all keys on the best model first rather
+  than dropping to a weaker model while unused quota still exists elsewhere.
+
+**Cooldown tracking, adapted for our stack:** madmcp namespaces cooldown state
+per `(model, keyIndex)` pair in Upstash Redis (their infra is Vercel-based),
+using native TTL so a recorded cooldown expires itself. On Cloudflare, **KV is
+the more natural fit than Redis** — same TTL-based "expires itself" semantics
+via `expirationTtl`, no external dependency, and the write pattern (only on a
+rate-limit event, not per request) sits comfortably inside KV's 1K writes/day
+free cap.
+- Key format: `gemini:cooldown:<model>:<keyIndex>`
+- On 429: parse the provider's "retry in Ns" hint if present, else fall back
+  to a default cooldown window; `kv.put(key, "1", { expirationTtl: seconds })`.
+- Before attempting a (model, key) pair: `kv.get(key)` — if present, skip
+  without spending a request.
+- **Fail open**: if KV is unreachable or unconfigured, treat every pair as not
+  cooling down rather than blocking the call — cross-call memory is a
+  nice-to-have, not a dependency for correctness.
+
+**Other behaviors worth keeping as-is:**
+- A bad/revoked key (401/403) is skipped (`continue`), never treated as fatal
+  for the whole cascade — only exhausting *every* key on *every* model is a
+  hard failure.
+- If a caller requests an explicit non-default model, honor it exactly (key
+  rotation still applies, but no silent model substitution) — relevant for our
+  two-tier `quick_think` / `deep_think` split (Adopted Pattern #7): a caller
+  asking specifically for the cheap model shouldn't silently get upgraded.
+- Tag which fallback model/key index actually served a given call (for
+  logging/debugging), without changing the shape of the normal return value.
+
+This cascade becomes the calling layer underneath every LLM-touching stage:
+Analyst Team, Researcher Team (bull/bear/judge), and Trader agent all call
+through it rather than hitting the Gemini API directly.
+
 ## Proposed Repo Structure
 Blending the TradingAgents role-based layout with the lighter
 Agentic-AI-Trading-Bot skeleton:
