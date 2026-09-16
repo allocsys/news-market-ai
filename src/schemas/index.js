@@ -21,6 +21,22 @@ export const NormalizedNewsItem = z.object({
   raw: z.unknown().optional(),
 });
 
+// OHLCV daily bar, produced by ingestion/sources/yfinance.js and validated
+// by market_data_validator.js#validatePriceBar before storage. `date` is the
+// trading day (YYYY-MM-DD, exchange-local as Yahoo reports it, not a full
+// timestamp) -- deliberately coarser than NormalizedNewsItem's publishedAt
+// since daily bars don't have a meaningful intraday "published" moment.
+export const PriceBar = z.object({
+  ticker: z.string(),
+  date: z.string(),
+  open: z.number(),
+  high: z.number(),
+  low: z.number(),
+  close: z.number(),
+  volume: z.number().min(0),
+  source: z.string(),
+});
+
 export const SentimentBand = z.enum([
   "strongly_negative",
   "negative",
