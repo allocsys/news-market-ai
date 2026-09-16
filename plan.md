@@ -1170,10 +1170,42 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       `migrate` since it touched no migration files.
       KNOWN GAPS: (1) GDELT's live `articles[]` shape is still unverified
       (every attempt still 429s) -- same gap as the parent item, not closed
-      here; (2) the dashboard UI/UX pass has not been screenshot-reviewed
-      (no screenshot tool available in this session) -- worth a visual
-      check in the browser; (3) the docs-only-skip filter's `code` path
-      list is a fixed set (`src/**`, `test/**`, `package*.json`,
-      `wrangler.toml`, `.github/**`) -- a new top-level file/dir added later
-      that should count as "code" (e.g. a future `scripts/` directory) would
-      silently NOT trigger CI until this filter list is updated to include it.
+      here, see the follow-up item directly below for why; (2) the
+      dashboard UI/UX pass has not been screenshot-reviewed (no screenshot
+      tool available in this session) -- worth a visual check in the
+      browser; (3) the docs-only-skip filter's `code` path list is a fixed
+      set (`src/**`, `test/**`, `package*.json`, `wrangler.toml`,
+      `.github/**`) -- a new top-level file/dir added later that should
+      count as "code" (e.g. a future `scripts/` directory) would silently
+      NOT trigger CI until this filter list is updated to include it.
+
+- [x] GDELT follow-up: gave `gdeltMinRequestIntervalMs` its real default
+      (was 0, now 5000ms) now that GDELT's own 429 body gave us its exact
+      published pacing requirement verbatim ("please limit requests to one
+      every 5 seconds") -- `config.js` and `gdelt.js`'s comments both
+      updated (commits `be26c9d`, `d83a373`). Then tried to actually get
+      past the live 429 by testing whether it was mode/format-specific:
+      tried `mode=TimelineVol` (still 429, identical message), then a
+      COMPLETELY DIFFERENT GDELT endpoint on the same host --
+      `api/v2/context/context` -- which returned a real HTTP 200 with a
+      valid (empty) `articles` JSON body immediately, no wait needed. A
+      fresh retry of `doc/doc` right after that success still 429'd.
+      CONCLUSION: the rate limit is specific to the `doc/doc` endpoint
+      itself, not a blanket block on GDELT's whole host and not something a
+      request-mode change avoids -- `doc/doc` is very likely GDELT's most
+      heavily-used public endpoint, plausibly rate-limited harder because
+      other traffic sharing Madmcp's egress IP is also hitting it, matching
+      the "persistent/shared-IP limit" theory from the parent live-verify
+      item. This is a real, useful finding (endpoint-specific, not
+      mode/format-specific) but does NOT unblock live-verifying `doc/doc`'s
+      actual `articles[]` response shape from this sandbox -- that gap
+      stays open, and isn't expected to close via further retries here.
+      KNOWN GAPS: (1) `gdelt.js`'s `articles[]` shape assumption remains
+      verified only against mocked fixtures, unlike every other adapter in
+      this doc -- unlikely to be closeable from this environment; (2) the
+      5000ms default is GDELT's stated number taken at face value, not
+      independently confirmed to actually prevent a 429 in production
+      (impossible to test from here for the reason above) -- if a real
+      deployment still gets rate-limited on `doc/doc` at this pacing, the
+      shared-egress-IP theory would be the likely explanation, not the
+      pacing value being wrong.
