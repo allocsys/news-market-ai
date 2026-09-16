@@ -57,12 +57,12 @@ function fmtTime(iso) {
 }
 
 function statusBadge(status) {
-  const cls = status === "approved" ? "badge-approved" : status === "rejected" ? "badge-rejected" : "badge-neutral";
-  return `<span class="badge ${cls}">${escapeHtml(status)}</span>`;
+  const cls = status === "approved" ? "status-approved" : status === "rejected" ? "status-rejected" : "status-neutral";
+  return `<span class="status ${cls}">[${escapeHtml(status)}]</span>`;
 }
 
 function healthRow(label, stat) {
-  return `<tr><td>${escapeHtml(label)}</td><td>${stat.count}</td><td>${fmtTime(stat.lastIngestedAt)}</td></tr>`;
+  return `<tr><td>${escapeHtml(label)}</td><td class="num">${stat.count}</td><td class="num">${fmtTime(stat.lastIngestedAt)}</td></tr>`;
 }
 
 function decisionsTable(decisions) {
@@ -70,12 +70,12 @@ function decisionsTable(decisions) {
   const rows = decisions
     .map(
       (d) => `<tr>
-        <td>${escapeHtml(d.ticker)}</td>
+        <td class="ticker">${escapeHtml(d.ticker)}</td>
         <td>${escapeHtml(d.thesis?.direction ?? "\u2014")}</td>
         <td>${statusBadge(d.status)}</td>
-        <td>${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
+        <td class="num">${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
         <td>${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</td>
-        <td>${fmtTime(d.createdAt)}</td>
+        <td class="num">${fmtTime(d.createdAt)}</td>
       </tr>`
     )
     .join("\n");
@@ -90,12 +90,12 @@ function positionsTable(positions, { closed = false } = {}) {
   const rows = positions
     .map(
       (p) => `<tr>
-        <td>${escapeHtml(p.ticker)}</td>
+        <td class="ticker">${escapeHtml(p.ticker)}</td>
         <td>${escapeHtml(p.direction ?? "\u2014")}</td>
-        <td>${(p.positionSizePct * 100).toFixed(1)}%</td>
-        <td>${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
-        <td>${fmtTime(p.openedAt)}</td>
-        ${closed ? `<td>${fmtTime(p.closedAt)}</td><td>${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
+        <td class="num">${(p.positionSizePct * 100).toFixed(1)}%</td>
+        <td class="num">${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
+        <td class="num">${fmtTime(p.openedAt)}</td>
+        ${closed ? `<td class="num">${fmtTime(p.closedAt)}</td><td>${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
       </tr>`
     )
     .join("\n");
@@ -108,7 +108,7 @@ function positionsTable(positions, { closed = false } = {}) {
 function checkpointsTable(checkpoints) {
   if (checkpoints.length === 0) return `<p class="empty">No pipeline activity recorded yet.</p>`;
   const rows = checkpoints
-    .map((c) => `<tr><td>${escapeHtml(c.ticker)}</td><td>${escapeHtml(c.stage)}</td><td>${fmtTime(c.updated_at)}</td></tr>`)
+    .map((c) => `<tr><td class="ticker">${escapeHtml(c.ticker)}</td><td>${escapeHtml(c.stage)}</td><td class="num">${fmtTime(c.updated_at)}</td></tr>`)
     .join("\n");
   return `<table>
     <thead><tr><th>Ticker</th><th>Last Stage</th><th>Updated</th></tr></thead>
@@ -117,23 +117,41 @@ function checkpointsTable(checkpoints) {
 }
 
 const STYLE = `
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 2rem; background: #0b0d10; color: #e6e8eb; }
-  h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
-  .subtitle { color: #9aa4af; margin-top: 0; margin-bottom: 2rem; font-size: 0.9rem; }
-  section { margin-bottom: 2.5rem; }
-  h2 { font-size: 1.05rem; border-bottom: 1px solid #2a2e33; padding-bottom: 0.4rem; margin-bottom: 0.75rem; }
-  .note { color: #9aa4af; font-size: 0.82rem; margin: 0.25rem 0 0.75rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-  th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid #23262b; }
-  th { color: #9aa4af; font-weight: 600; }
-  .empty { color: #6b7280; font-style: italic; }
-  .badge { padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
-  .badge-approved { background: #103a1e; color: #4ade80; }
-  .badge-rejected { background: #3a1010; color: #f87171; }
-  .badge-neutral { background: #2a2e33; color: #cbd5e1; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0; padding: 0 0 3rem;
+    background: #0d1210; color: #e8e4d9;
+  }
+  .ticker-strip {
+    display: flex; align-items: baseline; gap: 0.9rem;
+    padding: 0.85rem 2rem; margin-bottom: 2rem;
+    border-bottom: 1px solid #c9a24b;
+    background: #10160f;
+  }
+  .ticker-strip .mark { color: #c9a24b; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; letter-spacing: 0.02em; }
+  h1 { font-size: 1.15rem; font-weight: 600; margin: 0; }
+  .subtitle { color: #7d8a7f; margin: 0; font-size: 0.82rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  main { padding: 0 2rem; }
+  section { margin-bottom: 2.75rem; }
+  h2 { font-size: 0.98rem; font-weight: 600; border-bottom: 1px solid #263028; padding-bottom: 0.5rem; margin-bottom: 0.75rem; }
+  .note { color: #7d8a7f; font-size: 0.8rem; margin: 0.25rem 0 0.9rem; max-width: 62ch; line-height: 1.5; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  th, td {
+    text-align: left; padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid #1c231d;
+  }
+  th { color: #7d8a7f; font-weight: 500; font-size: 0.78rem; }
+  td.num, th:nth-child(n) ~ th { font-variant-numeric: tabular-nums; }
+  td.num { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #cfd6c8; font-size: 0.83rem; }
+  td.ticker { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; }
+  .empty { color: #55605a; font-style: italic; font-size: 0.86rem; }
+  .status { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.82rem; }
+  .status-approved { color: #6b8f71; }
+  .status-rejected { color: #a85c4a; }
+  .status-neutral { color: #8b9490; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } main { padding: 0 1.25rem; } .ticker-strip { padding: 0.85rem 1.25rem; flex-wrap: wrap; } }
 `;
 
 /**
@@ -160,8 +178,12 @@ export async function renderDashboardHtml(db) {
 <style>${STYLE}</style>
 </head>
 <body>
-  <h1>news-market-ai</h1>
-  <p class="subtitle">Live view, generated ${fmtTime(new Date().toISOString())}. Architecture and known gaps live in plan.md.</p>
+  <div class="ticker-strip">
+    <h1>news-market-ai</h1>
+    <span class="mark">&bull;</span>
+    <p class="subtitle">live &mdash; generated ${fmtTime(new Date().toISOString())} &mdash; architecture &amp; known gaps in plan.md</p>
+  </div>
+  <main>
 
   <section>
     <h2>Ingestion health</h2>
@@ -203,6 +225,7 @@ export async function renderDashboardHtml(db) {
     <h2>Backtest results</h2>
     <p class="note">Not shown -- no backtest run's output is persisted yet (src/backtest/*.js is a computation library, not a stored-results table). See plan.md.</p>
   </section>
+  </main>
 </body>
 </html>`;
 }
