@@ -43,6 +43,7 @@ import {
   getPriceBarsAsOf,
   insertPriceBar,
   insertFundamentalFact,
+  insertTradeDecision,
 } from "../storage/d1.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
@@ -162,6 +163,22 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
         openedAt: asOf,
       });
     }
+
+    // Persist the full decision chain as a real, queryable row -- see
+    // storage/d1.js#insertTradeDecision's header for why this previously
+    // didn't happen at all (only the opaque pipeline_checkpoints blob did).
+    // id = tradeThesisId, same value as the position's own id above, so
+    // this is idempotent across a checkpoint-resumed re-run of this stage.
+    await insertTradeDecision(db, {
+      id: state.riskDecision.tradeThesisId,
+      ticker,
+      asOf,
+      thesis: state.thesis,
+      riskDecision: state.riskDecision,
+      portfolioDecision: state.portfolioDecision,
+      status: state.portfolioDecision.approvedForExecution ? "approved" : "rejected",
+      createdAt: new Date().toISOString(),
+    });
 
     await checkpoint(db, { runId, ticker, stage: "portfolio_checked", state });
   }
