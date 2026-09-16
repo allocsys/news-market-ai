@@ -371,8 +371,25 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       ticker that already has an open position double-counts that ticker's
       exposure (no netting/replace concept yet); (3) `MAX_PORTFOLIO_RISK_PCT`
       is still an untuned placeholder ceiling.
-- [ ] Source free historical price/volume data for backtesting (yfinance),
-      then implement `market_data_validator.js#validatePriceBar`
+- [x] yfinance price/volume ingestion built: `schemas/index.js#PriceBar`,
+      `migrations/0004_price_bars.sql` (`price_bars` table),
+      `storage/d1.js#insertPriceBar/getPriceBarsAsOf` (point-in-time, same
+      required-asOf convention as news/memory reads), `market_data_validator
+      .js#validatePriceBar` now a real check (OHLC consistency, non-negative
+      volume, non-future date) instead of the old "not yet implemented"
+      stub, and `ingestion/sources/yfinance.js#fetchDailyBars` (mirrors
+      gdelt.js's structure/config pattern). Covered by
+      `test/price_bars_pointintime.test.js` (40 tests total in the suite
+      now), including response-parsing against a mocked fetch.
+      KNOWN GAPS carried forward: (1) UNVERIFIED against a live request --
+      Yahoo's chart API has reportedly started requiring a cookie+crumb
+      handshake for at least some requests (per recent yfinance library
+      issue reports); this adapter does a plain fetch() and does NOT
+      implement that handshake, so it may return 401/429 in production even
+      though the parsing logic itself is tested and correct; (2) not yet
+      wired into graph/pipeline.js or consumed by any agent -- there is no
+      technical analyst yet to read price_bars; (3) daily bars only, no
+      intraday.
 - [ ] Build signal on/off backtest comparison harness (walk-forward windows
       already exist in `src/backtest/pointInTime.js#walkForwardWindows`)
 - [x] `checkpoint_resume` test added (`test/checkpoint_resume.test.js`):
