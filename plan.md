@@ -364,7 +364,14 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       then implement `market_data_validator.js#validatePriceBar`
 - [ ] Build signal on/off backtest comparison harness (walk-forward windows
       already exist in `src/backtest/pointInTime.js#walkForwardWindows`)
-- [ ] Expand `test/` beyond the one leak-check test -- add
-      `checkpoint_resume` and `memory_pointintime`-style tests mirroring
-      TradingAgents' naming, once GDELT ingestion gives us real data to test
-      the resumed pipeline against
+- [x] `checkpoint_resume` test added (`test/checkpoint_resume.test.js`):
+      exercises `graph/checkpointer.js`'s stage ordering + resume/state
+      semantics against a minimal in-memory fake of the `pipeline_checkpoints`
+      D1 table (not a full D1 emulator -- honest, narrow scope, see the
+      file's header). Does NOT exercise `runPipelineForTicker` end-to-end,
+      since that needs live Gemini calls across six agent modules -- true
+      integration-level resume testing is blocked on `agents/utils/
+      structured.js` exposing a way to inject a fake model response.
+- [ ] `memory_pointintime`-style test mirroring TradingAgents' naming --
+      verifies `getDecisionMemoryAsOf`'s cutoff (Backtesting Integrity #4)
+      the same way `backtest.leakcheck.test.js` verifies `assertNoLookahead`
