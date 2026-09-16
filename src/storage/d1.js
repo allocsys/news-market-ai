@@ -154,31 +154,73 @@ export async function getCheckpoint(db, { runId, ticker }) {
  * HONEST SCOPE: this is a signal-generation pipeline, not a broker
  * integration -- there is no fill confirmation, so `openedAt` is the
  * timestamp portfolio_manager approved the trade, not a real fill time.
+ *
+ * `direction`/`stopLossPct`/`takeProfitPct` are copied straight from the
+ * TradeThesis/RiskDecision that authorized this position, and `entryPrice`
+ * (nullable -- see migrations/0006's header for why) lets
+ * agents/risk_mgmt/exit.js#evaluateExit later judge a stop-loss/take-profit
+ * without reaching back through trade_thesis_id to another table.
  */
-export async function openPosition(db, { id, ticker, tradeThesisId, positionSizePct, openedAt }) {
+export async function openPosition(db, { id, ticker, tradeThesisId, positionSizePct, direction = null, entryPrice = null, stopLossPct = null, takeProfitPct = null, openedAt }) {
   await db
     .prepare(
-      `INSERT INTO positions (id, ticker, trade_thesis_id, position_size_pct, opened_at, closed_at)
-       VALUES (?, ?, ?, ?, ?, NULL)
+      `INSERT INTO positions (id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
        ON CONFLICT(id) DO NOTHING`
     )
-    .bind(id, ticker, tradeThesisId, positionSizePct, openedAt)
+    .bind(id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, openedAt)
     .run();
 }
 
 /**
- * Write path for exiting a position (stop-loss/take-profit/time-based exit).
- * NOT YET CALLED ANYWHERE -- exit logic itself is a separate open item (see
- * plan.md), same honest-gap convention as trade_decisions/debates/
- * analyst_opinions, which also have no write path wired yet. Exists now so
- * getOpenPositionsRiskPctAsOf below has a real closed_at to filter on once
- * exit logic lands, rather than every position being open forever.
+ * Write path for exiting a position (stop-loss/take-profit/time-based
+ * exit). Now has a caller: src/graph/exit_check.js#checkOpenPositionExits,
+ * driven by agents/risk_mgmt/exit.js#evaluateExit's deterministic rules --
+ * closing the plan.md gap this function's old comment flagged ("exists now
+ * so getOpenPositionsRiskPctAsOf has a real closed_at to filter on once
+ * exit logic lands"). `closeReason` records which rule fired
+ * ('stop_loss' | 'take_profit' | 'time_based'), same "reason documents
+ * which rule fired" convention as RiskDecision.reason.
  */
-export async function closePosition(db, { id, closedAt }) {
+export async function closePosition(db, { id, closedAt, closeReason = null }) {
   await db
-    .prepare(`UPDATE positions SET closed_at = ? WHERE id = ? AND closed_at IS NULL`)
-    .bind(closedAt, id)
+    .prepare(`UPDATE positions SET closed_at = ?, close_reason = ? WHERE id = ? AND closed_at IS NULL`)
+    .bind(closedAt, closeReason, id)
     .run();
+}
+
+/**
+ * Point-in-time read of full position rows (not just the summed pct like
+ * getOpenPositionsRiskPctAsOf below) -- what
+ * graph/exit_check.js#checkOpenPositionExits iterates to evaluate each open
+ * position's own stop-loss/take-profit/time-based exit. Same required-asOf,
+ * still-open-as-of-asOf convention as getOpenPositionsRiskPctAsOf.
+ */
+export async function getOpenPositionsAsOf(db, { asOf }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getOpenPositionsAsOf requires an explicit asOf timestamp");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+       FROM positions
+       WHERE opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`
+    )
+    .bind(asOf, asOf)
+    .all();
+
+  return results.map((r) => ({
+    id: r.id,
+    ticker: r.ticker,
+    tradeThesisId: r.trade_thesis_id,
+    positionSizePct: r.position_size_pct,
+    direction: r.direction,
+    entryPrice: r.entry_price,
+    stopLossPct: r.stop_loss_pct,
+    takeProfitPct: r.take_profit_pct,
+    openedAt: r.opened_at,
+  }));
 }
 
 /**

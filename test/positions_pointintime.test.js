@@ -26,13 +26,18 @@ class FakePositionsDb {
         return {
           async run() {
             if (/INSERT INTO positions/.test(sql)) {
-              const [id, ticker, tradeThesisId, positionSizePct, openedAt] = args;
+              // Bind order now includes the exit-logic fields added by
+              // migrations/0006 (direction/entryPrice/stopLossPct/
+              // takeProfitPct) -- see test/exit_logic.test.js for coverage
+              // of those fields specifically. This fake only cares about
+              // the columns getOpenPositionsRiskPctAsOf below reads.
+              const [id, ticker, tradeThesisId, positionSizePct, , , , , openedAt] = args;
               if (db.rows.has(id)) return; // ON CONFLICT DO NOTHING
               db.rows.set(id, { id, ticker, trade_thesis_id: tradeThesisId, position_size_pct: positionSizePct, opened_at: openedAt, closed_at: null });
               return;
             }
             if (/UPDATE positions SET closed_at/.test(sql)) {
-              const [closedAt, id] = args;
+              const [closedAt, , id] = args; // closeReason (2nd bind) not modeled by this narrow fake
               const row = db.rows.get(id);
               if (row && row.closed_at === null) row.closed_at = closedAt;
               return;

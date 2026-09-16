@@ -8,6 +8,7 @@
 
 import { loadConfig } from "./config.js";
 import { runScheduledIngestion } from "./graph/pipeline.js";
+import { checkOpenPositionExits } from "./graph/exit_check.js";
 
 export default {
   async fetch() {
@@ -27,6 +28,17 @@ export default {
       // Expected for now -- see header comment. Logged, not silently dropped
       // (plan.md Adopted Pattern #11).
       console.error("scheduled run failed", { message: err.message });
+    }
+
+    // Separate try/catch: a failure evaluating exits on existing positions
+    // should never be conflated with (or block on) an ingestion failure
+    // above -- same Adopted Pattern #11 "surface, don't swallow" reasoning,
+    // applied independently to each concern.
+    try {
+      const closed = await checkOpenPositionExits(env.DB, config, { asOf: new Date().toISOString() });
+      console.log("exit check completed", { closed: closed.length, closed });
+    } catch (err) {
+      console.error("exit check failed", { message: err.message });
     }
   },
 };

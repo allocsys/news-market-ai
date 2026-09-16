@@ -437,12 +437,55 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       `graph/pipeline.js`'s `risk_checked` stage now reads live exposure and
       opens a position on approval instead of passing a hardcoded `0`.
       Covered by `test/positions_pointintime.test.js`.
-      KNOWN GAPS carried forward: (1) `closePosition` has no caller yet --
-      exit logic (stop-loss/take-profit/time-based) doesn't exist, so once
-      opened a position stays open forever; (2) re-evaluating a thesis on a
+      UPDATE: gap (1) below is now closed, see the new checklist item right
+      after this one -- `closePosition` has a real caller now.
+      KNOWN GAPS carried forward: (2) re-evaluating a thesis on a
       ticker that already has an open position double-counts that ticker's
       exposure (no netting/replace concept yet); (3) `MAX_PORTFOLIO_RISK_PCT`
       is still an untuned placeholder ceiling.
+- [x] Give `closePosition` a caller -- stop-loss/take-profit/time-based exit
+      logic: `migrations/0006_positions_exit_fields.sql` adds
+      `direction`/`entry_price`/`stop_loss_pct`/`take_profit_pct`/
+      `close_reason` to `positions` (copied from the TradeThesis/
+      RiskDecision that opened it, so exit evaluation never has to join back
+      out to another table). `agents/risk_mgmt/exit.js#evaluateExit` is the
+      new deterministic, non-LLM rule (same Adopted Pattern #3 convention as
+      `risk.js`): stop-loss beats take-profit beats time-based when more
+      than one condition is met at once (protect capital first), and a
+      position with no `entryPrice`/`currentPrice` available never gets a
+      fabricated price -- it can still exit on the `maxHoldDays` time-based
+      rule, just not on stop-loss/take-profit. `graph/exit_check.js#
+      checkOpenPositionExits` is the orchestration: reads every open
+      position via new `storage/d1.js#getOpenPositionsAsOf`, sources
+      `currentPrice` from `getPriceBarsAsOf`, and calls `closePosition` with
+      a `closeReason` when `evaluateExit` fires. `graph/pipeline.js`'s
+      `risk_checked` stage now also writes `direction`/`entryPrice` (from
+      the latest `price_bars` row at/before `asOf`, nullable)/
+      `stopLossPct`/`takeProfitPct` onto every opened position instead of
+      just `positionSizePct`. New `config.maxPositionHoldDays` (default 10,
+      untuned). `src/index.js#scheduled` calls `checkOpenPositionExits`
+      after ingestion, in its own try/catch (Adopted Pattern #11 -- an exit
+      check failure must never be conflated with an ingestion failure).
+      Covered by `test/exit_logic.test.js` (20 tests: pure `evaluateExit`
+      rule coverage including the stop-loss-beats-take-profit priority and
+      the null-price honest-degradation case, `d1.js`'s new fields/reads,
+      and `checkOpenPositionExits` orchestration against a fake positions +
+      price_bars store, including a re-run-safety test; 105 tests total in
+      the suite now).
+      KNOWN GAPS: (1) exit checks are correctly point-in-time (same
+      required-asOf convention as every other `*AsOf` reader) but in
+      practice will only ever fire time-based exits until yfinance
+      ingestion is wired into `graph/pipeline.js` (separate, already-listed
+      open item) -- `price_bars` has no real data yet, so stop-loss/
+      take-profit can't evaluate for any position opened before that lands;
+      (2) `config.maxPositionHoldDays` (10) is an untuned placeholder, same
+      caveat as `MAX_PORTFOLIO_RISK_PCT`; (3) `checkOpenPositionExits` is a
+      flat scan of every open position on every scheduled run -- fine at
+      current/expected watchlist scale, would need a smarter query (e.g.
+      only positions near a threshold) if the positions table grows large;
+      (4) not yet exercised against a live scheduled run end-to-end, only
+      against the fake-store tests -- consistent with every other
+      not-yet-live-traffic-tested item below.
 - [x] yfinance price/volume ingestion built: `schemas/index.js#PriceBar`,
       `migrations/0004_price_bars.sql` (`price_bars` table),
       `storage/d1.js#insertPriceBar/getPriceBarsAsOf` (point-in-time, same
@@ -477,12 +520,14 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       behavior; 70 tests total in the suite now).
       HONEST SCOPE (see `signalCompare.js`'s header): this is the windowing +
       comparison MATH only, not an end-to-end backtest run -- it does not fetch
-      or compute real trade returns itself. That's blocked on two separate
-      things neither attempted here: (1) `closePosition` still has no caller
-      (see positions known-gaps above), so there is no realized-return series
-      to feed in yet; (2) a real "signal on" run needs the full agent graph
-      wired end-to-end against live data (GDELT/yfinance/rss/html_scrape,
-      still not wired into `graph/pipeline.js`), and "signal off" needs a
+      or compute real trade returns itself. UPDATE: gap (1) below is now
+      closed (`closePosition` has a real caller, see the exit-logic
+      checklist item above) -- there IS now a realized-return series
+      *mechanism*, it just has no live price data to compute a real return
+      from yet, which is exactly gap (2)'s dependency. Still blocked on:
+      (2) a real "signal on" run needs the full agent graph wired
+      end-to-end against live data (GDELT/yfinance/rss/html_scrape, still
+      not wired into `graph/pipeline.js`), and "signal off" needs a
       comparable no-signal baseline strategy that doesn't exist yet either.
       `getOnReturns`/`getOffReturns` are the exact seam where that real data
       plugs in later -- this harness itself won't need to change.

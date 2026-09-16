@@ -37,6 +37,14 @@ export function loadConfig(env) {
     // stop regardless of confidence" -- start conservative given the free
     // model-quota budget this is meant to protect.
     maxDebateRounds: Number(env.MAX_DEBATE_ROUNDS) || 1,
+    // Time-based exit knob for graph/exit_check.js#checkOpenPositionExits --
+    // a position still open this many days after opened_at closes
+    // regardless of price, even if price_bars has no data for it (see that
+    // file's header). 10 trading days is a conservative default matching
+    // risk.js's "days" TradeThesis.timeHorizon band, not tuned against
+    // anything real yet -- same untuned-placeholder caveat as
+    // portfolio_manager.js's MAX_PORTFOLIO_RISK_PCT.
+    maxPositionHoldDays: Number(env.MAX_POSITION_HOLD_DAYS) || 10,
     // Watchlist for GDELT ingestion (ingestion/sources/gdelt.js) -- one
     // GDELT query per ticker, since the DOC API has no "everything" mode.
     // v1: the ticker symbol itself is the search query, a blunt but fully

@@ -14,7 +14,7 @@
 // header for the known body-text gap).
 
 import { fetchLatest } from "../ingestion/sources/gdelt.js";
-import { insertNewsItem, openPosition, getOpenPositionsRiskPctAsOf } from "../storage/d1.js";
+import { insertNewsItem, openPosition, getOpenPositionsRiskPctAsOf, getPriceBarsAsOf } from "../storage/d1.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
 import { runBullResearcher } from "../agents/researchers/bull.js";
@@ -101,6 +101,16 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
     state.portfolioDecision = evaluatePortfolio(state.riskDecision, { openPositionsRiskPct });
 
     if (state.portfolioDecision.approvedForExecution) {
+      // entryPrice comes from the most recent price_bars row at/before asOf
+      // -- may be null (yfinance ingestion isn't wired into this pipeline
+      // yet, a separate known gap), in which case the position still opens
+      // but agents/risk_mgmt/exit.js#evaluateExit can only apply a
+      // time-based exit to it later, never stop-loss/take-profit, until
+      // real price data exists for this ticker (see migrations/0006's
+      // header for the same honest-null convention).
+      const priceBars = await getPriceBarsAsOf(db, { ticker, asOf, limit: 1 });
+      const entryPrice = priceBars[0]?.close ?? null;
+
       // id = tradeThesisId (ticker|asOf) so a checkpoint-resumed re-run of
       // this stage can't double-open the same position (ON CONFLICT DO
       // NOTHING in openPosition).
@@ -109,6 +119,10 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
         ticker,
         tradeThesisId: state.riskDecision.tradeThesisId,
         positionSizePct: state.portfolioDecision.finalPositionSizePct,
+        direction: state.thesis.direction,
+        entryPrice,
+        stopLossPct: state.riskDecision.stopLossPct ?? null,
+        takeProfitPct: state.riskDecision.takeProfitPct ?? null,
         openedAt: asOf,
       });
     }
