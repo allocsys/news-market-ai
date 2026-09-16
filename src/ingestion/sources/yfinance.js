@@ -2,19 +2,24 @@
 // section) -- price/volume data for the technical analyst and backtesting.
 //
 // HONEST SCOPE / KNOWN RISK, read before relying on this in production:
-// This endpoint (query1.finance.yahoo.com/v8/finance/chart) is undocumented
-// and Yahoo has, as of recent yfinance library issue reports (2025), started
-// requiring a cookie+crumb handshake for at least some request patterns --
-// a plain unauthenticated fetch() like the one below can come back 401/429
-// even for a request that would have worked fine before that change. This
+// This endpoint (query1.finance.yahoo.com/v8/finance/chart) is undocumented,
+// and some yfinance library issue reports (2025) describe Yahoo requiring a
+// cookie+crumb handshake for at least some request patterns -- a plain
+// unauthenticated fetch() like the one below could in principle come back
+// 401/429 for a request that worked fine before such a change. This
 // adapter deliberately does NOT implement the cookie/crumb dance (it's a
 // stateful two-request flow needing a cookie jar, real infra beyond a
 // single stateless fetch) -- same "flag it, don't fake it" approach as
-// gdelt.js's empty-body gap. TREAT THIS AS UNVERIFIED until spot-checked
-// against a live request from wherever the Worker actually runs; see
-// gdelt.js's own header for the same caveat pattern (that one confirmed a
-// 429 from the sandbox environment specifically -- this one hasn't even
-// gotten that far).
+// gdelt.js's empty-body gap.
+// LIVE-VERIFIED 2026-09-17 (see plan.md's "Live-verify against real vendor
+// traffic" checklist item): a plain fetch() against this exact endpoint/URL
+// shape, no cookie/crumb, currently returns 200 with real, correctly-shaped
+// data (chart.result[0].{meta,timestamp,indicators}, chart.error: null) --
+// so the cookie+crumb requirement, if it exists at all right now, does NOT
+// apply to this request pattern. Risk kept documented rather than deleted:
+// Yahoo could tighten this at any time with no notice, since it's an
+// unofficial endpoint -- re-verify periodically, don't treat this as a
+// permanent guarantee.
 //
 // Every returned bar is run through market_data_validator.js#validatePriceBar
 // before being handed back, matching gdelt.js's validate-before-return
