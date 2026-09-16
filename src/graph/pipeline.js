@@ -12,6 +12,7 @@
 // specifically, only on the normalized shape from schemas/index.js.
 
 import { fetchLatest } from "../ingestion/sources/gdelt.js";
+import { insertNewsItem } from "../storage/d1.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
 import { runBullResearcher } from "../agents/researchers/bull.js";
@@ -109,7 +110,7 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
 export async function runScheduledIngestion(env, config, db) {
   let items;
   try {
-    items = await fetchLatest();
+    items = await fetchLatest({ queries: config.watchlist });
   } catch (err) {
     if (err instanceof VendorError) {
       console.error("ingestion vendor failure", { vendor: err.vendor, transient: err.transient, message: err.message });
@@ -119,6 +120,7 @@ export async function runScheduledIngestion(env, config, db) {
 
   const results = [];
   for (const item of items) {
+    await insertNewsItem(db, item); // persist before running agents, so a mid-pipeline crash doesn't lose the raw ingested article
     for (const ticker of item.tickers) {
       results.push(await runPipelineForTicker(env, config, db, { runId: item.id, ticker, newsItem: item, asOf: item.publishedAt }));
     }
