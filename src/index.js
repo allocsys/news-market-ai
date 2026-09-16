@@ -12,9 +12,20 @@
 import { loadConfig } from "./config.js";
 import { runScheduledIngestion } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
+import { renderDashboardHtml } from "./dashboard.js";
 
 export default {
-  async fetch() {
+  async fetch(request, env) {
+    const { pathname } = new URL(request.url);
+
+    if (pathname === "/dashboard") {
+      const html = await renderDashboardHtml(env.DB);
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
     return new Response(
       "news-market-ai worker is running. Architecture and design decisions live in plan.md.",
       { status: 200 }
