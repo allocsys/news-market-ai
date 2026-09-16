@@ -61,12 +61,22 @@ export function loadConfig(env) {
     gdeltFormat: env.GDELT_FORMAT || "json",
     gdeltSort: env.GDELT_SORT || "DateDesc",
     gdeltMaxRecords: Number(env.GDELT_MAX_RECORDS) || 50,
+    // Paces gdelt.js#fetchLatest's per-query loop (shared/throttle.js). No
+    // documented GDELT rate limit exists (unlike EDGAR's ~10 req/sec), so
+    // unlike edgarMinRequestIntervalMs this defaults to 0 -- a true no-op --
+    // rather than a fabricated number. Exists so pacing can be dialed in via
+    // env var if a live deployment starts seeing 429s.
+    gdeltMinRequestIntervalMs: Number(env.GDELT_MIN_REQUEST_INTERVAL_MS) || 0,
     // yfinance's unofficial chart API (ingestion/sources/yfinance.js) --
     // see that file's header for the real risk that this endpoint now often
     // requires a cookie+crumb handshake this adapter does not perform.
     yfinanceApiBase: env.YFINANCE_API_BASE || "https://query1.finance.yahoo.com/v8/finance/chart",
     yfinanceRange: env.YFINANCE_RANGE || "5d",
     yfinanceInterval: env.YFINANCE_INTERVAL || "1d",
+    // Paces yfinance.js#fetchDailyBars's per-ticker loop (shared/throttle.js).
+    // Same reasoning as gdeltMinRequestIntervalMs -- no documented rate limit
+    // on this unofficial endpoint, so this defaults to 0, not a guess.
+    yfinanceMinRequestIntervalMs: Number(env.YFINANCE_MIN_REQUEST_INTERVAL_MS) || 0,
     // RSS feeds (ingestion/sources/rss.js) and standalone article pages to
     // scrape (ingestion/sources/html_scrape.js) -- "TICKER|url" pairs, or a
     // bare url when the source isn't ticker-scoped (see parseTickerUrlList
@@ -76,6 +86,15 @@ export function loadConfig(env) {
     // behalf the moment this code runs, which should be an explicit choice.
     rssFeeds: parseTickerUrlList(env.RSS_FEED_URLS),
     scrapePages: parseTickerUrlList(env.SCRAPE_PAGE_URLS),
+    // Paces rss.js#fetchLatest's per-feed loop and html_scrape.js#fetchLatest's
+    // per-page loop (shared/throttle.js), respectively. Same reasoning as
+    // gdeltMinRequestIntervalMs/yfinanceMinRequestIntervalMs -- these are
+    // arbitrary third-party sites with no single documented rate limit to
+    // derive a real default from, so both default to 0 (true no-op) rather
+    // than a fabricated number; set per-deployment via env var if a
+    // specific feed/site needs pacing.
+    rssMinRequestIntervalMs: Number(env.RSS_MIN_REQUEST_INTERVAL_MS) || 0,
+    scrapeMinRequestIntervalMs: Number(env.SCRAPE_MIN_REQUEST_INTERVAL_MS) || 0,
     // SEC EDGAR XBRL companyfacts API (ingestion/sources/edgar_fundamentals.js)
     // -- see that file's header for why this is our free point-in-time
     // fundamentals source. SEC REQUIRES a descriptive User-Agent identifying
