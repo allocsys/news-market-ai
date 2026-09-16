@@ -9,7 +9,7 @@
 import { callStructured } from "../utils/structured.js";
 import { DebateVerdict } from "../../schemas/index.js";
 
-export async function runResearchManager(env, config, { ticker, asOf, bull, bear }) {
+export async function runResearchManager(env, config, { ticker, asOf, bull, bear, priorLessons = "" }) {
   const prompt = `You are the research desk judge for ${ticker}. Weigh the bull and bear cases \
 below and produce a single synthesized verdict. You MUST include a "justification" that \
 explains which side was more convincing and why -- never omit it.
@@ -19,7 +19,8 @@ Respond as JSON only, matching exactly:
 "timeHorizon": "intraday"|"days"|"weeks"|"months", "justification": string }
 
 Bull case: ${JSON.stringify(bull)}
-Bear case: ${JSON.stringify(bear)}`;
+Bear case: ${JSON.stringify(bear)}
+${priorLessons ? `\n${priorLessons}\n\nWeigh these past outcomes, but do not let them override clear evidence in the current bull/bear cases.` : ""}`;
 
   return callStructured(env, config, DebateVerdict, prompt, {
     model: config.geminiDeepModel,
