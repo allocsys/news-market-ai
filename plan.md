@@ -850,3 +850,90 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
     -- would self-correct within `edgarCikCacheTtlSeconds` (24h default),
     not immediately; not worth building a manual bust path for something
     this rare unless it actually happens.
+
+- [x] Extend `throttle.js`'s pacing (previously EDGAR-only, see the item
+      above it) to the four remaining ingestion adapters:
+      `ingestion/sources/gdelt.js#fetchLatest`, `yfinance.js#fetchDailyBars`,
+      `rss.js#fetchLatest`, `html_scrape.js#fetchLatest` -- same pattern in
+      each: one `createThrottle` instance created per call, shared across
+      that call's own loop (queries / tickers / feeds / pages
+      respectively), `await throttle.wait()` before each iteration's fetch.
+      `html_scrape.js` mirrors `edgar_fundamentals.js`'s split exactly:
+      `fetchArticle` (the single-page function, analogous to `fetchFacts`)
+      stays completely unthrottled -- only `fetchLatest`'s own loop paces.
+      New config fields: `gdeltMinRequestIntervalMs`,
+      `yfinanceMinRequestIntervalMs`, `rssMinRequestIntervalMs`,
+      `scrapeMinRequestIntervalMs` -- UNLIKE `edgarMinRequestIntervalMs`,
+      all four default to 0 (true no-op), because none of these vendors has
+      a documented rate limit the way SEC does for EDGAR; shipping a
+      nonzero default here would be fabricating a number, not deriving one
+      from a published source (same "technical default vs. no default"
+      distinction the config.js comments already draw for other fields).
+      Each is still fully wireable via its own env var if a live deployment
+      ever does start seeing 429s from one of these vendors.
+      Covered by `test/throttle_ingestion_wiring.test.js` (10 tests: an
+      unconfigured-stays-fast case + a configured-paces-at-~150ms-apart
+      case for each of the four adapters, same real-timer-for-real-wiring
+      convention as `throttle.test.js`'s own EDGAR wiring tests -- no
+      injection seam exists from these call sites into `createThrottle`'s
+      now/sleep, so these verify the actual production wiring path against
+      mocked fetch, not a mock of the timing itself).
+      IMPORTANT PROCESS NOTE: this session's sandbox had `bash_tool`
+      network egress fully disabled (a change from prior sessions, which
+      could `git clone`+`npm test` locally) -- all edits were made via the
+      GitHub API tools (`edit_file`/`create_repo_file`) with NO local test
+      run possible. Verification instead came from **CI actually passing
+      for real** (see the CI fix item directly below) -- run
+      https://github.com/allocsys/news-market-ai/actions/runs/35154079446's
+      `test` job, commit `4aea327`+`0c2da1c`, completed/success. This is
+      arguably a STRONGER verification than the usual sandbox `npm test`
+      run (real GitHub Actions runner, not the dev sandbox), not a weaker
+      one -- but flagging the changed workflow since every earlier
+      checklist item's "142/141/157 tests passing" claims were sandbox-
+      verified, not CI-verified, and future sessions should check which
+      verification path is actually available before assuming the old one
+      still is.
+      KNOWN GAPS: (1) same residual gap as before -- `fetchFacts` bypassed
+      directly, and now also `fetchArticle` bypassed directly, are still
+      unthrottled, by design (mirrors the caller's own explicit single-item
+      use case, not a loop); (2) all four new interval configs are 0 by
+      default, so in practice NOTHING is throttled for these four vendors
+      until an operator explicitly sets an env var -- this is a real
+      behavior difference from EDGAR and is intentional, not a bug, but
+      worth remembering if someone expects "throttle.js is wired in" to
+      mean "pacing happens by default" for every adapter now; (3) still
+      unverified against LIVE vendor traffic for the same reason as every
+      other network-touching adapter in this doc.
+
+- [x] Fixed a pre-existing, previously-undiscovered CI bug found while
+      trying to verify the throttle-extension work above: the `test` job
+      in `.github/workflows/deploy.yml` had been failing on EVERY run since
+      CI was first added (run #1 through #8, all `completed/failure` on the
+      `test` job, before any of today's changes) with
+      `Could not find '.../test/**/*.test.js'`. Root cause: `package.json`'s
+      `"test": "node --test 'test/**/*.test.js'"` single-quotes the glob,
+      so the shell never expands it (no `shopt -s globstar` in play either
+      way) and Node's own `--test` file-arg handling on the GitHub Actions
+      runner's Node version does not itself glob-expand `**` -- it looked
+      for one literal file named `test/**/*.test.js` and failed. This had
+      been silently broken since the CI-add session; nobody had watched a
+      run through to a real pass before now (see that session's own KNOWN
+      GAP 3, "not yet verified against a real GitHub Actions run").
+      FIX: `package.json`'s `test` script now reads
+      `"node --test $(find test -name '*.test.js')"` -- shell command
+      substitution enumerates the actual files first (portable POSIX `sh`,
+      no bash-specific globstar needed), then passes them to `node --test`
+      as literal file arguments, sidestepping Node-version-dependent glob
+      support entirely. Confirmed fixed for real: pushing this fix (commit
+      `0c2da1c`) produced a `test` job that completed `success` on the next
+      run (https://github.com/allocsys/news-market-ai/actions/runs/35154079446),
+      the first genuinely green CI test run this repo has ever had.
+      KNOWN GAPS: (1) this only fixes the `test` job -- `migrate`/`deploy`
+      still correctly fail-fast (by design) since `CLOUDFLARE_API_TOKEN`/
+      `CLOUDFLARE_ACCOUNT_ID` repo secrets aren't set yet, unchanged from
+      the CI-add session's own KNOWN GAP 3; (2) worth a periodic sanity
+      check that `find test -name '*.test.js'` keeps matching every real
+      test file as the suite grows -- low risk (it's a plain recursive
+      name-glob, not fragile like the broken pattern was), but it's still
+      an assumption a future added test file needs to satisfy (name ending
+      in `.test.js`, located somewhere under `test/`).
