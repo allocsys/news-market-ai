@@ -4,7 +4,7 @@
 // entities, and a factual summary -- it does not judge sentiment or market
 // direction, that's other analysts' and the Researcher Team's job.
 
-import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { callStructured } from "../utils/structured.js";
 import { AnalystOpinion } from "../../schemas/index.js";
 
 export async function runNewsEventAnalyst(env, config, newsItem) {
@@ -18,13 +18,8 @@ Respond as JSON only, matching exactly:
 Title: ${newsItem.title}
 Body: ${newsItem.body}`;
 
-  const text = await geminiGenerateText(env, config, prompt, { model: config.geminiQuickModel });
-  const parsed = JSON.parse(stripJsonFence(text));
-
-  return AnalystOpinion.parse({
-    agent: "news_event",
-    newsItemId: newsItem.id,
-    ...parsed,
-    modelUsed: config.geminiQuickModel,
+  return callStructured(env, config, AnalystOpinion, prompt, {
+    model: config.geminiQuickModel,
+    extraFields: { agent: "news_event", newsItemId: newsItem.id, modelUsed: config.geminiQuickModel },
   });
 }
