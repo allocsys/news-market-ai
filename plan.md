@@ -344,10 +344,17 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       `agents/managers/`, `agents/utils/` (structured.js, memory.js),
       `ingestion/{date_window.js, market_data_validator.js}` all added and
       wired into `src/index.js#scheduled`
-- [ ] Build GDELT ingestion script (first working prototype -- currently the
-      one real blocker: `src/ingestion/sources/gdelt.js#fetchLatest` still
-      throws "not yet implemented", so `graph/pipeline.js` can't run
-      end-to-end yet even though every downstream stage is wired)
+- [x] Build GDELT ingestion script (`src/ingestion/sources/gdelt.js`,
+      DOC 2.0 API, one query per `config.watchlist` ticker, deterministic
+      entity resolution via new `src/ingestion/entity_resolution.js`).
+      `graph/pipeline.js#runScheduledIngestion` now calls it, persists via
+      `insertNewsItem`, and runs the full agent pipeline end to end.
+      KNOWN GAPS carried forward, not yet fixed: (1) GDELT DOC API returns
+      metadata only, so `body` is empty -- analysts are effectively
+      headline-only until full-text fetch is added; (2) entity resolution is
+      a tiny hand-maintained domain map, real coverage TBD; (3) not yet
+      exercised against a live GDELT request, so the actual JSON shape
+      should be spot-checked before relying on this in production
 - [ ] Set up D1 schema for point-in-time fundamentals (or document the free-
       data limitation more concretely per Backtesting Integrity #3)
 - [ ] Build "jsonify" adapters for non-JSON sources (RSS, scraped HTML)
