@@ -30,5 +30,14 @@ export function loadConfig(env) {
     // guessing). Refine per-ticker queries as false-positive/negative rates
     // from real runs justify it.
     watchlist: parseList(env.WATCHLIST_TICKERS || "AAPL,MSFT,TSLA").map((ticker) => ({ ticker, query: ticker })),
+    // GDELT DOC 2.0 request params (ingestion/sources/gdelt.js) -- pulled
+    // out to config rather than hardcoded so a rate-limit/shape issue found
+    // against the live API (see plan.md known gaps) can be tuned via env
+    // vars without a code change.
+    gdeltApiBase: env.GDELT_API_BASE || "https://api.gdeltproject.org/api/v2/doc/doc",
+    gdeltMode: env.GDELT_MODE || "ArtList",
+    gdeltFormat: env.GDELT_FORMAT || "json",
+    gdeltSort: env.GDELT_SORT || "DateDesc",
+    gdeltMaxRecords: Number(env.GDELT_MAX_RECORDS) || 50,
   };
 }
