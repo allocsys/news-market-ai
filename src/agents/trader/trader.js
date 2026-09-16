@@ -3,7 +3,7 @@
 // src/agents/risk_mgmt/risk.js, which is deliberately NOT an LLM call --
 // never merge that logic back into this file.
 
-import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { callStructured } from "../utils/structured.js";
 import { TradeThesis } from "../../schemas/index.js";
 
 export async function runTrader(env, config, verdict) {
@@ -16,13 +16,8 @@ Respond as JSON only, matching exactly:
 
 Verdict: ${JSON.stringify(verdict)}`;
 
-  const text = await geminiGenerateText(env, config, prompt, { model: config.geminiDeepModel });
-  const parsed = JSON.parse(stripJsonFence(text));
-
-  return TradeThesis.parse({
-    ticker: verdict.ticker,
-    asOf: verdict.asOf,
-    direction: verdict.direction,
-    ...parsed,
+  return callStructured(env, config, TradeThesis, prompt, {
+    model: config.geminiDeepModel,
+    extraFields: { ticker: verdict.ticker, asOf: verdict.asOf, direction: verdict.direction },
   });
 }
