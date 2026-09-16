@@ -326,6 +326,16 @@ before this can be called confirmed-working, same "wiring vs. live-verify"
 caveat as EDGAR/GDELT/yfinance's own sandbox network block elsewhere in
 this doc.
 
+**UPDATE (2026-09-17):** gap 3 above is now closed, see the CI-fix and
+secret-leak checklist items further down -- CI has run green end-to-end for
+real, against real Cloudflare infra. Also added this session: none of the
+three `actions/setup-node@v4` steps (test/migrate/deploy jobs) used
+`cache: 'npm'`, so every job did a full cold dependency download
+independently even within the same workflow run. Fixed (commit `e772eb9`)
+by adding `cache: 'npm'` to all three -- keys automatically off the root
+`package-lock.json`, no `cache-dependency-path` override needed since this
+repo has a single lockfile at the repo root.
+
 ## LLM Calling Layer: Multi-Key Gemini Cascade (ported from our `madmcp` repo)
 
 Our `madmcp` repo (`connectors/gemini/client.js`) already has a production-tested
