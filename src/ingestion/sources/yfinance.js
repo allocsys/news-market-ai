@@ -24,6 +24,7 @@
 import { PriceBar } from "../../schemas/index.js";
 import { validatePriceBar } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
+import { createThrottle } from "../../shared/throttle.js";
 
 /** Yahoo's chart timestamps are Unix seconds -- convert to YYYY-MM-DD (UTC). */
 function timestampToDate(unixSeconds) {
@@ -37,8 +38,15 @@ function timestampToDate(unixSeconds) {
  */
 export async function fetchDailyBars(config, { tickers = config.watchlist.map((w) => w.ticker) } = {}) {
   const bars = [];
+  // No documented Yahoo rate limit (this is an unofficial endpoint to begin
+  // with, see this file's header) -- config.yfinanceMinRequestIntervalMs
+  // defaults to 0, a true no-op, same convention as gdelt.js/rss.js. Exists
+  // so pacing can be dialed in via env var if live traffic starts getting
+  // 429s, without a code change.
+  const throttle = createThrottle({ minIntervalMs: config.yfinanceMinRequestIntervalMs ?? 0 });
 
   for (const ticker of tickers) {
+    await throttle.wait();
     const url = `${config.yfinanceApiBase}/${encodeURIComponent(ticker)}?interval=${config.yfinanceInterval}&range=${config.yfinanceRange}`;
 
     let response;
