@@ -360,3 +360,160 @@ export async function getFundamentalFactsAsOf(db, { ticker, tag, asOf, limit = 2
 
   return results;
 }
+
+/**
+ * Persists a completed pipeline run's full decision chain --
+ * TradeThesis + RiskDecision + PortfolioDecision -- as one row in
+ * trade_decisions (migrations/0001_init.sql, extended by
+ * migrations/0007_trade_decisions_portfolio.sql for the portfolio_decision
+ * column). Previously nothing wrote to this table at all: the only
+ * persisted record of a decision was graph/checkpointer.js's opaque JSON
+ * blob in pipeline_checkpoints, keyed by (run_id, ticker), not queryable by
+ * ticker/time the way this table is (see idx_decisions_ticker_as_of).
+ *
+ * `id` should be the trade thesis id (ticker|asOf, same value used as
+ * positions.id in openPosition) so this is idempotent across a
+ * checkpoint-resumed re-run of the final stage -- ON CONFLICT DO NOTHING,
+ * same convention as insertNewsItem/openPosition.
+ *
+ * `debateId` is nullable and, as of this function's own introduction,
+ * ALWAYS null in practice -- the `debates` table (migrations/0001_init.sql)
+ * has no write path either, same previously-undiscovered gap as this
+ * table had. Not fixed here (out of scope for wiring up decisions
+ * specifically); flagged in plan.md.
+ */
+export async function insertTradeDecision(db, { id, ticker, asOf, debateId = null, thesis, riskDecision, portfolioDecision, status, createdAt }) {
+  await db
+    .prepare(
+      `INSERT INTO trade_decisions (id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING`
+    )
+    .bind(id, ticker, asOf, debateId, JSON.stringify(thesis), JSON.stringify(riskDecision), JSON.stringify(portfolioDecision), status, createdAt)
+    .run();
+}
+
+// ---------------------------------------------------------------------
+// Dashboard-only reads below. See this section's own header note above
+// insertTradeDecision: these are unrestricted "give me the current state"
+// queries for a live human-facing dashboard (src/dashboard.js), not agent
+// inputs -- the required-asOf convention on every read above this point
+// exists specifically to prevent an AGENT from seeing future data during a
+// simulated backtest, which has no bearing on a dashboard showing what's
+// actually true right now. Do not reuse these for anything that feeds an
+// agent prompt.
+// ---------------------------------------------------------------------
+
+/** Most recent trade_decisions rows, newest first. Dashboard-only, see section header. */
+export async function getRecentTradeDecisions(db, { limit = 20 } = {}) {
+  const { results } = await db
+    .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions ORDER BY created_at DESC LIMIT ?`)
+    .bind(limit)
+    .all();
+
+  return results.map((r) => ({
+    id: r.id,
+    ticker: r.ticker,
+    asOf: r.as_of,
+    debateId: r.debate_id,
+    thesis: JSON.parse(r.thesis),
+    riskDecision: JSON.parse(r.risk_decision),
+    portfolioDecision: r.portfolio_decision ? JSON.parse(r.portfolio_decision) : null,
+    status: r.status,
+    createdAt: r.created_at,
+  }));
+}
+
+/** Every position currently open (closed_at IS NULL), newest first. Dashboard-only, see section header. */
+export async function getAllOpenPositions(db, { limit = 50 } = {}) {
+  const { results } = await db
+    .prepare(
+      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+       FROM positions WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT ?`
+    )
+    .bind(limit)
+    .all();
+
+  return results.map((r) => ({
+    id: r.id,
+    ticker: r.ticker,
+    tradeThesisId: r.trade_thesis_id,
+    positionSizePct: r.position_size_pct,
+    direction: r.direction,
+    entryPrice: r.entry_price,
+    stopLossPct: r.stop_loss_pct,
+    takeProfitPct: r.take_profit_pct,
+    openedAt: r.opened_at,
+  }));
+}
+
+/**
+ * Most recently closed positions. Dashboard-only, see section header.
+ * HONEST GAP (surfaced while building this, not fixed here): closePosition
+ * never records an exit price, only closed_at/close_reason -- so realized
+ * P&L cannot actually be computed from this table today, only direction/
+ * entry price/close reason/timing. Flagged in plan.md rather than silently
+ * shown as if a return figure existed.
+ */
+export async function getRecentlyClosedPositions(db, { limit = 20 } = {}) {
+  const { results } = await db
+    .prepare(
+      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, opened_at, closed_at, close_reason
+       FROM positions WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT ?`
+    )
+    .bind(limit)
+    .all();
+
+  return results.map((r) => ({
+    id: r.id,
+    ticker: r.ticker,
+    tradeThesisId: r.trade_thesis_id,
+    positionSizePct: r.position_size_pct,
+    direction: r.direction,
+    entryPrice: r.entry_price,
+    openedAt: r.opened_at,
+    closedAt: r.closed_at,
+    closeReason: r.close_reason,
+  }));
+}
+
+/**
+ * Most recently updated pipeline_checkpoints rows, across every
+ * (run_id, ticker). Dashboard-only, see section header. This is a proxy
+ * for "recent pipeline activity", not a strict health signal -- a
+ * genuinely stuck/crashed run just stops appearing here rather than
+ * showing an explicit failure state, since checkpointer.js has no
+ * separate "failed" status, only whichever stage last completed.
+ */
+export async function getRecentCheckpoints(db, { limit = 30 } = {}) {
+  const { results } = await db
+    .prepare(`SELECT run_id, ticker, stage, updated_at FROM pipeline_checkpoints ORDER BY updated_at DESC LIMIT ?`)
+    .bind(limit)
+    .all();
+
+  return results;
+}
+
+/**
+ * Last-ingested timestamp + row count per ingestion table (news_items,
+ * price_bars, fundamental_facts). Dashboard-only, see section header. This
+ * is the closest thing to "ingestion health" this project can show today --
+ * there is no persisted per-source vendor-error log (graph/pipeline.js's
+ * per-source failure isolation only console.error()s, which isn't
+ * queryable from D1); a stale lastIngestedAt is the only real signal
+ * available without adding that logging table (flagged in plan.md as a
+ * future gap, not built here).
+ */
+export async function getIngestionHealth(db) {
+  const [news, bars, facts] = await Promise.all([
+    db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM news_items`).first(),
+    db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM price_bars`).first(),
+    db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM fundamental_facts`).first(),
+  ]);
+
+  return {
+    news: { count: news?.count ?? 0, lastIngestedAt: news?.last ?? null },
+    priceBars: { count: bars?.count ?? 0, lastIngestedAt: bars?.last ?? null },
+    fundamentals: { count: facts?.count ?? 0, lastIngestedAt: facts?.last ?? null },
+  };
+}
