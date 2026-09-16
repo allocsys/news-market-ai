@@ -1,0 +1,13 @@
+# Copy to .dev.vars for local `wrangler dev` runs. Never commit the real file
+# (it's gitignored). In production these are set with `wrangler secret put`.
+
+# Comma-separated -- the Gemini cascade (src/llm/gemini/client.js) rotates
+# through all of these on 429/503/network errors before dropping to a
+# fallback model. Free-tier keys from separate Google accounts work well here.
+GEMINI_API_KEYS=key1,key2,key3
+
+# Optional overrides -- see wrangler.toml [vars] for defaults.
+# GEMINI_QUICK_MODEL=gemini-2.5-flash-lite
+# GEMINI_DEEP_MODEL=gemini-2.5-flash
+# GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
+# GEMINI_REQUEST_TIMEOUT_MS=30000

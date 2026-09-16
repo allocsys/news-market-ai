@@ -1,0 +1,25 @@
+// Synthesis step of the Researcher Team (plan.md Adopted Pattern #2):
+// reconciles the bull and bear arguments into one verdict. Runs on the deep
+// model, same tier as bull/bear -- this is the step where debate quality
+// actually pays off.
+
+import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { DebateVerdict } from "../../schemas/index.js";
+
+export async function runJudge(env, config, { ticker, asOf, bull, bear }) {
+  const prompt = `You are the research desk judge for ${ticker}. Weigh the bull and bear cases \
+below and produce a single synthesized verdict. You MUST include a "justification" that \
+explains which side was more convincing and why -- never omit it.
+
+Respond as JSON only, matching exactly:
+{ "direction": "long"|"short"|"flat", "confidence": number (0-1), \
+"timeHorizon": "intraday"|"days"|"weeks"|"months", "justification": string }
+
+Bull case: ${JSON.stringify(bull)}
+Bear case: ${JSON.stringify(bear)}`;
+
+  const text = await geminiGenerateText(env, config, prompt, { model: config.geminiDeepModel });
+  const parsed = JSON.parse(stripJsonFence(text));
+
+  return DebateVerdict.parse({ ticker, asOf, bull, bear, ...parsed });
+}
