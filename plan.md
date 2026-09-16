@@ -501,10 +501,45 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       handshake for at least some requests (per recent yfinance library
       issue reports); this adapter does a plain fetch() and does NOT
       implement that handshake, so it may return 401/429 in production even
-      though the parsing logic itself is tested and correct; (2) not yet
-      wired into graph/pipeline.js or consumed by any agent -- there is no
-      technical analyst yet to read price_bars; (3) daily bars only, no
-      intraday.
+      though the parsing logic itself is tested and correct; (2) UPDATE: no
+      longer true, see the technical analyst checklist item below --
+      price_bars now has a real consumer; (3) daily bars only, no intraday.
+- [x] Build a technical analyst agent to consume price_bars:
+      `src/agents/analysts/technicalIndicators.js` (pure, no DB/LLM --
+      `computeSMA`/`computePriceChangePct`/`computeVolumeRatio`/
+      `computeTechnicalSnapshot`, same grounded-numbers convention as
+      Adopted Pattern #9: every figure the LLM sees is a real computed value
+      off `getPriceBarsAsOf` rows, never invented, and a `null` indicator
+      means "not enough bars for that window", not zero) and
+      `src/agents/analysts/technicalAnalyst.js` (the LLM-facing agent,
+      parallel tier/shape to `newsEventAnalyst.js`/`sentimentAnalyst.js` --
+      `agent: "technical"` was already anticipated in `schemas/index.js#
+      AnalystOpinion`'s enum from an earlier session). Self-skips: when
+      `computeTechnicalSnapshot` returns `{ hasData: false }` (no price bars
+      at all for this ticker), `runTechnicalAnalyst` returns `null` WITHOUT
+      calling the LLM, rather than asking a model to analyze nothing --
+      proven directly in tests via a mocked `fetch` asserting it's never
+      invoked in that case. `graph/pipeline.js`'s analyst stage now fetches
+      `priceBars` via `getPriceBarsAsOf` and runs the technical analyst in
+      parallel with news/sentiment, filtering the `null` out of
+      `state.opinions` when there's no data.
+      Covered by `test/technical_analyst.test.js` (16 tests: indicator math
+      incl. null-when-insufficient-bars and divide-by-zero guards,
+      `computeTechnicalSnapshot`'s `hasData` gate, the no-LLM-call
+      guarantee via mocked fetch, and a grounding check proving the real
+      computed close value -- not a placeholder -- ends up in the actual
+      prompt sent to the model; 121 tests total in the suite now).
+      KNOWN GAPS: (1) same as every other analyst here (news_event,
+      sentiment) -- no unit test exercises the real "has data" LLM-call
+      path end-to-end against a live model, only against mocked fetch, and
+      structured.js still has no fake-model injection point for that; (2)
+      in practice this agent will return `null` for every ticker until
+      yfinance ingestion is wired into `graph/pipeline.js` (price_bars stays
+      empty otherwise) -- same live-traffic-pipeline-wiring dependency as
+      the exit-logic and signalCompare items above; (3) indicator windows
+      (`smaWindow`/`momentumWindow`/`volumeWindow`, all default 5) are
+      hardcoded defaults in `computeTechnicalSnapshot`, not yet exposed via
+      `config.js` or tuned against anything real.
 - [x] Build signal on/off backtest comparison harness (walk-forward windows
       already exist in `src/backtest/pointInTime.js#walkForwardWindows`):
       `src/backtest/metrics.js` (pure return-series stats -- cumulativeReturn,

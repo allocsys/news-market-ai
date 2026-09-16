@@ -11,12 +11,17 @@
 // source can feed it the same way. NOT yet exercised against live traffic;
 // GDELT DOC API's actual response shape should be spot-checked against a
 // real request before trusting this in production (see gdelt.js's own
-// header for the known body-text gap).
+// header for the known body-text gap). The analyst stage now also runs a
+// technical analyst (agents/analysts/technicalAnalyst.js) alongside
+// news/sentiment -- it self-skips (returns null, filtered out below) when
+// price_bars has no data for this ticker, which is the case for every
+// ticker until yfinance ingestion is separately wired in here too.
 
 import { fetchLatest } from "../ingestion/sources/gdelt.js";
 import { insertNewsItem, openPosition, getOpenPositionsRiskPctAsOf, getPriceBarsAsOf } from "../storage/d1.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
+import { runTechnicalAnalyst } from "../agents/analysts/technicalAnalyst.js";
 import { runBullResearcher } from "../agents/researchers/bull.js";
 import { runBearResearcher } from "../agents/researchers/bear.js";
 import { runResearchManager } from "../agents/managers/research_manager.js";
@@ -52,11 +57,17 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
   }
 
   if (stage === null || stage === "ingested") {
-    const [newsOpinion, sentimentOpinion] = await Promise.all([
+    // priceBars feeds the technical analyst only -- see that agent's own
+    // header for why an empty result (yfinance not wired into this
+    // pipeline yet, a separate known gap) makes it return null rather than
+    // asking the LLM to analyze nothing.
+    const priceBars = await getPriceBarsAsOf(db, { ticker, asOf });
+    const [newsOpinion, sentimentOpinion, technicalOpinion] = await Promise.all([
       runNewsEventAnalyst(env, config, newsItem),
       runSentimentAnalyst(env, config, newsItem),
+      runTechnicalAnalyst(env, config, { ticker, newsItem, bars: priceBars }),
     ]);
-    state.opinions = [newsOpinion, sentimentOpinion];
+    state.opinions = [newsOpinion, sentimentOpinion, technicalOpinion].filter(Boolean);
     await checkpoint(db, { runId, ticker, stage: "analyzed", state });
     stage = "analyzed";
   }
