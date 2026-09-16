@@ -39,5 +39,11 @@ export function loadConfig(env) {
     gdeltFormat: env.GDELT_FORMAT || "json",
     gdeltSort: env.GDELT_SORT || "DateDesc",
     gdeltMaxRecords: Number(env.GDELT_MAX_RECORDS) || 50,
+    // yfinance's unofficial chart API (ingestion/sources/yfinance.js) --
+    // see that file's header for the real risk that this endpoint now often
+    // requires a cookie+crumb handshake this adapter does not perform.
+    yfinanceApiBase: env.YFINANCE_API_BASE || "https://query1.finance.yahoo.com/v8/finance/chart",
+    yfinanceRange: env.YFINANCE_RANGE || "5d",
+    yfinanceInterval: env.YFINANCE_INTERVAL || "1d",
   };
 }
