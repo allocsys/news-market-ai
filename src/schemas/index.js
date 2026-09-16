@@ -78,3 +78,16 @@ export const RiskDecision = z.object({
   takeProfitPct: z.number().min(0).optional(),
   reason: z.string(),
 });
+
+// Final sign-off, produced by src/agents/managers/portfolio_manager.js.
+// Deliberately separate from RiskDecision: risk.js decides per-thesis
+// sizing in isolation, this decides whether to actually place the order
+// given account-level state (other open positions, correlation, total
+// exposure). No `justification` field for the same reason as RiskDecision
+// -- deterministic rules, not an LLM call.
+export const PortfolioDecision = z.object({
+  tradeThesisId: z.string(),
+  approvedForExecution: z.boolean(),
+  finalPositionSizePct: z.number().min(0).max(1),
+  reason: z.string(),
+});
