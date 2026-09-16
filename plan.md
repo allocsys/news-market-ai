@@ -357,7 +357,36 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       should be spot-checked before relying on this in production
 - [ ] Set up D1 schema for point-in-time fundamentals (or document the free-
       data limitation more concretely per Backtesting Integrity #3)
-- [ ] Build "jsonify" adapters for non-JSON sources (RSS, scraped HTML)
+- [x] Build "jsonify" adapters for non-JSON sources (RSS, scraped HTML):
+      `src/ingestion/jsonify.js` (regex-based, no XML/DOM dependency --
+      deliberate, see file header on why: `parseFeedItems` handles both
+      RSS 2.0 `<item>` and Atom `<entry>`, `stripHtml` drops
+      script/style/nav/header/footer and returns plain text, `decodeEntities`
+      / `extractPageTitle` support both). Two new source adapters mirroring
+      gdelt.js's conventions (typed VendorError, buildNormalizedItem +
+      validateNormalizedNewsItem): `src/ingestion/sources/rss.js#fetchLatest`
+      over `config.rssFeeds`, and `src/ingestion/sources/html_scrape.js`
+      (`fetchArticle` single-page + `fetchLatest` batch). `config.js` gained
+      `rssFeeds`/`scrapePages`, parsed from `RSS_FEED_URLS`/`SCRAPE_PAGE_URLS`
+      env vars as `TICKER|url` pairs -- no hardcoded defaults (see inline
+      comment: shipping default third-party URLs would silently start
+      scraping sites the moment this code runs). Covered by
+      `test/jsonify_adapters.test.js` (16 tests: pure parsing/stripping
+      helpers + mocked-fetch response handling for both adapters; 56 tests
+      total in the suite now).
+      KNOWN GAPS carried forward: (1) `html_scrape.js`'s body extraction is
+      tag-stripping, not readability/boilerplate-removal -- nav/sidebar text
+      that survives the strip list ends up mixed into `body`; (2) when a
+      page has no recognized published-time meta tag, the item falls back to
+      fetch-time and is flagged `raw.publishedAtIsFetchTime: true` -- such
+      items are NOT safe for point-in-time backtesting (Backtesting
+      Integrity) until a better timestamp source exists for that
+      ticker/domain; (3) neither adapter is wired into
+      `graph/pipeline.js`/`runScheduledIngestion` yet, same as yfinance;
+      (4) `rss.js` general (non-ticker-hinted) feed items rely on
+      `entity_resolution.js`'s thin domain map for tickers -- expect many
+      empty `tickers` arrays until that map grows; (5) neither has been
+      spot-checked against a real live feed/page, only mocked-fetch tests.
 - [x] Real positions store wired up: `migrations/0003_positions.sql`
       (`positions` table), `storage/d1.js#openPosition/closePosition/
       getOpenPositionsRiskPctAsOf` (point-in-time, same required-asOf
