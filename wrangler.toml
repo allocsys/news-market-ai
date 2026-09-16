@@ -28,5 +28,10 @@ GEMINI_QUICK_MODEL = "gemini-2.5-flash-lite"
 GEMINI_DEEP_MODEL = "gemini-2.5-flash"
 GEMINI_FALLBACK_MODELS = "gemini-2.5-flash-lite"
 
+# Watchlist for GDELT ingestion (src/ingestion/sources/gdelt.js) -- one
+# GDELT DOC API query per ticker, comma-separated. See src/config.js for
+# why this is ticker-symbol-as-query for now (v1, deliberately blunt).
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+
 # Secrets -- set via `wrangler secret put GEMINI_API_KEYS`, never committed:
 #   GEMINI_API_KEYS = comma-separated list of Gemini API keys (cascade rotates through all of them)
