@@ -1099,17 +1099,81 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
         they are), but a real illustration of how much boilerplate
         `stripHtml`'s script/style stripping has to wade through on a
         modern page.
-      KNOWN GAPS: (1) `extractPublishedAt`'s meta-tag patterns are still
-      untested against a real page that actually has one of the four
-      patterns present -- need to find a scrapeable (non-bot-blocked) page
-      that exposes `article:published_time`, `datePublished`, or a
-      `<time datetime=...>` tag; (2) Atom-format RSS (`<entry>` blocks) is
-      still untested against a real feed; (3) GDELT's actual `articles[]`
-      JSON body shape was never obtained live (every attempt 429'd) -- the
-      shape assumption in `gdelt.js` remains verified only against mocked
-      fixtures, unlike every other vendor here; (4) none of this changes
-      any adapter's actual behavior/code (aside from the two header-comment
-      corrections) -- it's verification only, confirming existing parsing
-      logic against real responses rather than finding bugs to fix (the
-      html_scrape bot-blocking finding is the one exception: a real,
-      previously-undocumented practical limitation, not just a confirmation).
+      KNOWN GAPS: (1) ~~`extractPublishedAt`'s meta-tag patterns untested
+      against a real positive match~~ -- CLOSED, see the follow-up checklist
+      item below (github.blog's `article:published_time` tag); (2)
+      ~~Atom-format RSS untested against a real feed~~ -- CLOSED, see the
+      same follow-up item (SEC EDGAR's own Atom filing feed); (3) GDELT's
+      actual `articles[]` JSON body shape was never obtained live (every
+      attempt 429'd) -- the shape assumption in `gdelt.js` remains verified
+      only against mocked fixtures, unlike every other vendor here; (4) none
+      of this changes any adapter's actual behavior/code (aside from the two
+      header-comment corrections) -- it's verification only, confirming
+      existing parsing logic against real responses rather than finding bugs
+      to fix (the html_scrape bot-blocking finding is the one exception: a
+      real, previously-undocumented practical limitation, not just a
+      confirmation).
+
+- [x] Follow-up live-verify pass, closing gaps (1) and (2) from the item
+      above, plus three unrelated fixes/additions from the same session:
+      **`extractPublishedAt` positive-match test:** github.blog (a WordPress/
+      Yoast site, fetched via its own public RSS feed to find a real article
+      URL, then fetched that URL with `raw_html: true`) emits
+      `<meta property="article:published_time" content="2026-09-11T18:26:10+00:00" />`
+      -- matches `PUBLISHED_META_PATTERNS[0]` exactly and `new Date(...)`
+      parses it cleanly. First real confirmation of `extractPublishedAt`'s
+      positive path (previously only its null-fallback path had been
+      verified live, against Wikipedia/Apple-newsroom pages that have no
+      such tag). Apple's own newsroom (apple.com/newsroom) was also checked
+      and confirmed to have NO `article:published_time`/`datePublished`/
+      `<time datetime>` tag anywhere -- a real, legitimate finance source
+      that still falls onto the fetch-time fallback path, worth remembering
+      if this adapter is ever pointed at Apple's newsroom specifically.
+      **Real Atom feed test:** SEC EDGAR's own filing-history feed
+      (`sec.gov/cgi-bin/browse-edgar?...&output=atom` for CIK0000320193)
+      is real Atom XML. Every field `rss.js`'s Atom branch actually reads is
+      present and correctly shaped: `<link href=... rel="alternate"/>`
+      matches `extractLinkHref`, `<updated>` supplies `publishedAt` (no
+      `<published>` tag on this feed), `<summary type="html">` supplies the
+      body with HTML-entity-escaped tags (`&lt;b&gt;`) that `decodeEntities`
+      correctly unescapes. EDGAR's feed structure is atypical for Atom (a
+      nested EDGAR-specific `<content type="text/xml">` payload alongside
+      the standard fields) but doesn't affect what this codebase parses out
+      of it.
+      **Dashboard route bug found and fixed:** the operational dashboard
+      (`src/dashboard.js`, added in a prior session) was never actually
+      wired up -- `src/index.js#fetch` was still the original placeholder
+      health check, unconditionally returning the same static string for
+      every path including `/dashboard`. Fixed (commit `4c912c8`):
+      `fetch` now checks `pathname === "/dashboard"` and calls
+      `renderDashboardHtml(env.DB)` with a proper `text/html` content-type;
+      every other path keeps the original placeholder response.
+      **Dashboard UI/UX pass** (commit `f906c91`, done before the routing
+      fix above was discovered): replaced the dashboard's generic dark-
+      theme defaults with a design grounded in the actual subject matter
+      (an operator's console for an automated trading pipeline) --
+      ink-green background instead of near-black grey, a muted brass accent
+      instead of neon/terracotta, monospace tabular-nums for all numeric/
+      ticker/timestamp cells (real market-data-terminal convention, not
+      decoration), and plain bracketed status text (`[approved]`) instead
+      of pill-shaped SaaS badges. No data or behavior changes.
+      **CI: dorny/paths-filter added** (commit `0bbf9da`): a new `changes`
+      job gates two things -- test/migrate/deploy skip entirely on a
+      docs-only diff (plan.md/README.md), and `migrate` only runs when
+      `migrations/**` itself changed (a code-only push no longer re-runs
+      the idempotent-but-pointless remote D1 migration step).
+      `workflow_dispatch` bypasses the filter and always runs everything,
+      since it has no base ref to diff against and a manual trigger is an
+      explicit ask for the full job. Confirmed working for real: pushing
+      the CI-workflow-file change itself correctly ran `test` (workflow
+      files count as "code"), and a later commit correctly skipped
+      `migrate` since it touched no migration files.
+      KNOWN GAPS: (1) GDELT's live `articles[]` shape is still unverified
+      (every attempt still 429s) -- same gap as the parent item, not closed
+      here; (2) the dashboard UI/UX pass has not been screenshot-reviewed
+      (no screenshot tool available in this session) -- worth a visual
+      check in the browser; (3) the docs-only-skip filter's `code` path
+      list is a fixed set (`src/**`, `test/**`, `package*.json`,
+      `wrangler.toml`, `.github/**`) -- a new top-level file/dir added later
+      that should count as "code" (e.g. a future `scripts/` directory) would
+      silently NOT trigger CI until this filter list is updated to include it.
