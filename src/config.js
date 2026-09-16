@@ -7,6 +7,20 @@ function parseList(value) {
   return (value || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+/**
+ * Parses "TICKER|url,TICKER|url,..." into `[{ ticker, url }]`, same shape
+ * as watchlist's `{ ticker, query }` pairs. An entry with no "|" (just a
+ * bare url) is allowed -- ticker comes back as "" -- for feeds/pages that
+ * aren't scoped to one company (see rss.js / html_scrape.js headers on why
+ * that's an honest, expected case, not an error).
+ */
+function parseTickerUrlList(value) {
+  return parseList(value).map((entry) => {
+    const i = entry.indexOf("|");
+    return i === -1 ? { ticker: "", url: entry } : { ticker: entry.slice(0, i).trim(), url: entry.slice(i + 1).trim() };
+  });
+}
+
 export function loadConfig(env) {
   return {
     geminiApiKeys: parseList(env.GEMINI_API_KEYS),
@@ -45,5 +59,14 @@ export function loadConfig(env) {
     yfinanceApiBase: env.YFINANCE_API_BASE || "https://query1.finance.yahoo.com/v8/finance/chart",
     yfinanceRange: env.YFINANCE_RANGE || "5d",
     yfinanceInterval: env.YFINANCE_INTERVAL || "1d",
+    // RSS feeds (ingestion/sources/rss.js) and standalone article pages to
+    // scrape (ingestion/sources/html_scrape.js) -- "TICKER|url" pairs, or a
+    // bare url when the source isn't ticker-scoped (see parseTickerUrlList
+    // above). No defaults: unlike watchlist/GDELT, these are 100%
+    // env-configured -- shipping a hardcoded list of third-party feed/page
+    // URLs here would silently start scraping sites on someone else's
+    // behalf the moment this code runs, which should be an explicit choice.
+    rssFeeds: parseTickerUrlList(env.RSS_FEED_URLS),
+    scrapePages: parseTickerUrlList(env.SCRAPE_PAGE_URLS),
   };
 }
