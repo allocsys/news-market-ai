@@ -290,21 +290,42 @@ Analyst Team, Researcher Team (bull/bear/judge), and Trader agent all call
 through it rather than hitting the Gemini API directly.
 
 ## Proposed Repo Structure
-Blending the TradingAgents role-based layout with the lighter
-Agentic-AI-Trading-Bot skeleton:
+Revised after diffing our original skeleton against TradingAgents' actual repo
+(not just its README description). Their real layout separates *orchestration*,
+*decision arbitration*, and *shared agent tooling* into their own modules
+instead of burying that logic inside analyst/trader/risk folders — we were
+missing all three. Adopted `graph/`, `agents/managers/`, and `agents/utils/`
+from them; kept our lighter ingestion/storage naming since we're on
+Cloudflare (D1/KV/R2), not their Postgres-oriented `dataflows/`.
 ```
-ingestion/          # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
-storage/             # Postgres schema, raw archive access
+ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
+  errors.py           # typed vendor error taxonomy (Pattern 11: explicit fallback, no silent degradation)
+  date_window.py       # point-in-time cutoff/boundary helpers (shared by ingestion + backtest)
+  market_data_validator.py  # sanity-check vendor data before it reaches agents (Pattern 9: grounded claims)
+storage/             # D1 schema access, R2 raw archive access
+llm/                 # multi-key Gemini cascade (ported from madmcp), KV-backed cooldown
 agents/
   analysts/          # news/event analyst, sentiment analyst, technical analyst
-  researchers/        # bull researcher, bear researcher, judge/synthesis
-  trader/             # trade thesis agent
+  researchers/        # bull researcher, bear researcher
+  managers/            # NEW: research_manager (arbitrates bull/bear debate -> thesis),
+                       #      portfolio_manager (final go/no-go, separate from trader's thesis)
+  trader/             # trade thesis agent (direction/reasoning only, no sizing)
   risk_mgmt/          # deterministic sizing/risk rules (not LLM)
+  utils/               # NEW: shared agent tooling -- memory.py (reflection log), structured.py
+                       #      (schema-enforced LLM calls), rating.py, tool wrappers
   schemas.py           # shared structured I/O types for all agents
-backtest/            # point-in-time backtesting harness, signal on/off comparison
+graph/               # NEW: orchestration layer, previously missing entirely
+  pipeline.py          # wires stages together (their trading_graph.py equivalent)
+  conditional_logic.py # routing between stages (e.g. debate round limits)
+  checkpointer.py       # Pattern 12: persist/resume state per pipeline stage
+  reflection.py         # Pattern 8: decision log + reflection loop (time-filtered per Backtesting Integrity #4)
+backtest/            # point-in-time backtesting harness, walk-forward validation,
+                     # signal on/off comparison, leak-check test
 dashboard/           # optional visualization
 config/
-tests/
+tests/               # mirror TradingAgents' naming for the integrity-critical ones,
+                     # e.g. test_news_lookahead.py, test_memory_pointintime.py,
+                     # test_checkpoint_resume.py -- copy the pattern, not just the idea
 ```
 
 ## Open questions / next steps
