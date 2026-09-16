@@ -30,12 +30,18 @@
 // 4. SEC requires a descriptive User-Agent (contact info) on every request
 //    or returns 403 -- config.edgarUserAgent has no default (see config.js)
 //    and MUST be set before this is used against the live API.
-// 5. SEC's fair-use rate limit (documented as ~10 req/sec) is not
-//    separately rate-limited by this adapter -- a caller pulling many
-//    tickers/tags in a tight loop should add its own throttling.
+// 5. SEC's fair-use rate limit (documented as ~10 req/sec) IS paced by this
+//    adapter now, via shared/throttle.js -- `fetchLatest`'s per-ticker/
+//    per-tag loop waits at least `config.edgarMinRequestIntervalMs`
+//    between `fetchFacts` calls (default 110ms, just over the 100ms that
+//    exactly 10 req/sec implies, as a small safety margin). NOTE: this
+//    only paces calls made THROUGH `fetchLatest`'s own loop -- a caller
+//    invoking `fetchFacts` directly, repeatedly, itself (bypassing
+//    `fetchLatest`) is not throttled by this, same as before.
 
 import { validateFundamentalFact } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
+import { createThrottle } from "../../shared/throttle.js";
 
 function normalizeCik(cik) {
   return String(cik).replace(/\D/g, "").padStart(10, "0");
@@ -108,11 +114,21 @@ export async function fetchFacts(config, { ticker, tag }) {
   return facts;
 }
 
-/** Convenience wrapper: fetches `tags` (default: a small starter set of common concepts) for every ticker in config.edgarCikMap. */
+/**
+ * Convenience wrapper: fetches `tags` (default: a small starter set of
+ * common concepts) for every ticker in config.edgarCikMap. Paces
+ * successive `fetchFacts` calls at least `config.edgarMinRequestIntervalMs`
+ * apart (default 110ms -- see this file's header, point 5) via a throttle
+ * shared across the WHOLE tickers x tags loop, not one throttle per call --
+ * a fresh throttle per call would have no "last call" memory and pace
+ * nothing.
+ */
 export async function fetchLatest(config, { tickers = Object.keys(config.edgarCikMap ?? {}), tags = ["Revenues", "EarningsPerShareDiluted", "NetIncomeLoss"] } = {}) {
+  const throttle = createThrottle({ minIntervalMs: config.edgarMinRequestIntervalMs ?? 0 });
   const facts = [];
   for (const ticker of tickers) {
     for (const tag of tags) {
+      await throttle.wait();
       facts.push(...(await fetchFacts(config, { ticker, tag })));
     }
   }

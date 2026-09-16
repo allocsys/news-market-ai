@@ -641,3 +641,52 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       always fetch for the FULL watchlist/edgarCikMap on every scheduled
       run (no incremental/delta fetching) -- fine at current scale, would
       waste quota at a larger watchlist size.
+- [x] Shared rate-limit pacer for the ingestion adapters (was KNOWN GAP 3 on
+      the item above): `src/shared/throttle.js#createThrottle` -- a small,
+      dependency-free, in-process pacer enforcing a minimum interval
+      between successive `wait()` calls on ONE shared throttler instance.
+      Deliberately NOT the same thing as `shared/cooldown.js`: cooldown.js
+      is reactive (record + check a backoff *after* a real 429, KV-backed
+      so it survives across separate Worker invocations -- fits Gemini's
+      long-lived rate-limit windows); throttle.js is proactive in-run
+      pacing only, no persistence, no vendor-response awareness at all --
+      it just spaces calls apart. `minIntervalMs: 0` (the default) is a
+      true no-op, same "no default without an explicit reason" convention
+      as `rssFeeds`/`edgarUserAgent`.
+      Wired into the one adapter that actually documents a rate limit:
+      `ingestion/sources/edgar_fundamentals.js#fetchLatest`'s tickers x tags
+      loop now creates ONE throttle (shared across the whole loop -- a
+      fresh throttle per call would have no "last call" memory and pace
+      nothing) and awaits `throttle.wait()` before every `fetchFacts` call.
+      New `config.edgarMinRequestIntervalMs` (default 110ms, just over the
+      100ms that exactly SEC's documented ~10 req/sec implies) -- UNLIKE
+      `edgarUserAgent`/`rssFeeds`/`scrapePages`, this DOES ship a real
+      default: it's a technical pacing value derived from SEC's own
+      published number, not third-party identity/URL data that would be
+      fabricated by defaulting it. `fetchFacts` itself (a single call, not
+      the loop) is unaffected -- throttling only applies to calls made
+      THROUGH `fetchLatest`'s own loop.
+      Covered by `test/throttle.test.js` (10 tests: `createThrottle`'s
+      first-call-never-waits/paces-off-previous-call/negative-interval-
+      throws behavior against an injected fake clock+sleep (no real
+      timers, no `node:test` mock.timers dependency), a test proving two
+      fresh throttlers don't pace each other -- documenting why callers
+      must share one instance -- and two `fetchLatest` wiring tests: a
+      no-real-delay case when `edgarMinRequestIntervalMs` is unset, and a
+      real ~150ms-apart-calls case when it is set, both against mocked
+      fetch; 141 tests total in the suite now).
+      KNOWN GAPS: (1) only EDGAR is throttled -- GDELT/yfinance/rss/
+      html_scrape each still make one unthrottled request per
+      ticker/feed/page with no shared pacing between them; this was a
+      deliberate choice (EDGAR is the only adapter with a documented rate
+      limit today) rather than an oversight, but if a real deployment hits
+      rate limits on another vendor, `createThrottle` is already there to
+      reuse, just needs wiring into that adapter's loop the same way; (2)
+      `fetchFacts` called directly (bypassing `fetchLatest`) is still
+      completely unthrottled -- fine today since nothing in this codebase
+      calls it that way outside tests, but worth remembering if that
+      changes; (3) like everything else touching SEC EDGAR, the actual
+      pacing behavior is unverified against live traffic -- the sandbox's
+      `data.sec.gov` network block (see the item above) means this can
+      only be proven against mocked fetch, not confirmed to actually avoid
+      a real 429 in production.

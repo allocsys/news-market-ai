@@ -85,6 +85,14 @@ export function loadConfig(env) {
     // User-Agent would misrepresent who's actually making the request.
     edgarUserAgent: env.EDGAR_USER_AGENT || "",
     edgarApiBase: env.EDGAR_API_BASE || "https://data.sec.gov/api/xbrl/companyfacts",
+    // Paces edgar_fundamentals.js#fetchLatest's per-ticker/per-tag loop
+    // (shared/throttle.js) to respect SEC's documented ~10 req/sec fair-use
+    // guidance -- 100ms is exactly 10/sec, 110ms default leaves a small
+    // safety margin. Unlike edgarUserAgent/rssFeeds/scrapePages this DOES
+    // ship a real default: it's a technical pacing value derived from
+    // SEC's own published number, not third-party identity/URL data we'd
+    // be fabricating on someone's behalf by defaulting it.
+    edgarMinRequestIntervalMs: Number(env.EDGAR_MIN_REQUEST_INTERVAL_MS) || 110,
     // Hand-maintained ticker -> CIK map, same honest-narrow-scope convention
     // as ingestion/entity_resolution.js's COMPANY_DOMAIN_MAP -- SEC does
     // publish a free ticker->CIK lookup file (company_tickers.json) but
