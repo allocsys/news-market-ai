@@ -19,11 +19,17 @@
 // HONEST SCOPE -- what this does NOT solve:
 // 1. US-listed XBRL filers only. No international companies, no non-XBRL
 //    small-cap filers, no private companies.
-// 2. Ticker -> CIK resolution is a small hand-maintained map
-//    (config.edgarCikMap), same convention/limitation as
-//    entity_resolution.js's domain map -- NOT a general lookup. A ticker
-//    missing from the map throws rather than silently skipping (Adopted
-//    Pattern #11: no silent degradation).
+// 2. Ticker -> CIK resolution (as of this session) is a REAL lookup against
+//    SEC's public company_tickers.json (edgar_cik_lookup.js#resolveCik),
+//    KV-cached, with config.edgarCikMap kept as an explicit per-ticker
+//    override rather than the sole source -- see that file's header for
+//    the caching/fails-open details. `fetchFacts` below still only
+//    understands `config.edgarCikMap` directly (or an explicitly-passed
+//    `cik`) -- it does NOT itself do a live lookup; that's `fetchLatest`'s
+//    job (per-ticker resolveCik call, passing the resolved cik in), so
+//    calling `fetchFacts` directly with a ticker absent from edgarCikMap
+//    still throws immediately rather than triggering a network call, same
+//    as before this session.
 // 3. Only whatever XBRL "concepts" (tags) the filer actually reports under
 //    us-gaap are available -- no non-GAAP/adjusted figures, and taxonomy
 //    tag names occasionally change between filers or over time.
@@ -42,6 +48,7 @@
 import { validateFundamentalFact } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
+import { resolveCik } from "./edgar_cik_lookup.js";
 
 function normalizeCik(cik) {
   return String(cik).replace(/\D/g, "").padStart(10, "0");
@@ -50,19 +57,32 @@ function normalizeCik(cik) {
 /**
  * Fetches every fact EDGAR has for `tag` (an XBRL us-gaap concept, e.g.
  * "Revenues") for one ticker, across every unit EDGAR reports it in.
- * Requires `config.edgarUserAgent` and a `config.edgarCikMap[ticker]`
- * entry -- both throw a (non-transient) VendorError if missing, since
- * neither is a vendor-side failure to retry, they're a config gap.
+ * Requires `config.edgarUserAgent` -- throws a (non-transient) VendorError
+ * if missing, since that's a config gap, not a vendor-side failure to
+ * retry.
+ *
+ * CIK resolution: pass `cik` explicitly to skip lookup entirely (this is
+ * what `fetchLatest` below does, after its own resolveCik call against
+ * config.edgarCikMap + the live SEC map). With no `cik` passed, falls back
+ * to `config.edgarCikMap[ticker]` ONLY -- this does NOT trigger a live SEC
+ * lookup itself, so a direct `fetchFacts` call for a ticker absent from
+ * edgarCikMap still throws immediately with no network call, same
+ * behavior as before edgar_cik_lookup.js existed.
  */
-export async function fetchFacts(config, { ticker, tag }) {
+export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
   if (!config.edgarUserAgent) {
     throw new VendorError("edgar", "config.edgarUserAgent is not set -- SEC EDGAR requires a descriptive User-Agent (contact info) on every request, see edgar_fundamentals.js header");
   }
-  const rawCik = config.edgarCikMap?.[ticker];
-  if (!rawCik) {
-    throw new VendorError("edgar", `no CIK configured for ticker ${ticker} in config.edgarCikMap`);
+  let cik;
+  if (explicitCik) {
+    cik = normalizeCik(explicitCik);
+  } else {
+    const rawCik = config.edgarCikMap?.[ticker];
+    if (!rawCik) {
+      throw new VendorError("edgar", `no CIK configured for ticker ${ticker} in config.edgarCikMap`);
+    }
+    cik = normalizeCik(rawCik);
   }
-  const cik = normalizeCik(rawCik);
 
   const url = `${config.edgarApiBase}/CIK${cik}.json`;
   let response;
@@ -116,20 +136,52 @@ export async function fetchFacts(config, { ticker, tag }) {
 
 /**
  * Convenience wrapper: fetches `tags` (default: a small starter set of
- * common concepts) for every ticker in config.edgarCikMap. Paces
- * successive `fetchFacts` calls at least `config.edgarMinRequestIntervalMs`
- * apart (default 110ms -- see this file's header, point 5) via a throttle
- * shared across the WHOLE tickers x tags loop, not one throttle per call --
- * a fresh throttle per call would have no "last call" memory and pace
- * nothing.
+ * common concepts) for every ticker. Paces successive `fetchFacts` calls
+ * at least `config.edgarMinRequestIntervalMs` apart (default 110ms -- see
+ * this file's header, point 5) via a throttle shared across the WHOLE
+ * tickers x tags loop, not one throttle per call -- a fresh throttle per
+ * call would have no "last call" memory and pace nothing.
+ *
+ * Default ticker list (when `tickers` isn't passed explicitly): prefers
+ * `Object.keys(config.edgarCikMap)` when non-empty (an explicit override
+ * map still wins as the ticker source too, not just per-ticker CIK
+ * values), otherwise falls back to `config.watchlist`'s tickers -- this is
+ * what lets a deployment with NO edgarCikMap at all still pull
+ * fundamentals for its whole watchlist, resolving each ticker's CIK live
+ * against SEC (see edgar_cik_lookup.js). Both empty (or unset) means an
+ * empty ticker list, same "no-op, not an error" behavior as before this
+ * session's change.
+ *
+ * Per-ticker CIK resolution goes through resolveCik (override, then
+ * live/KV-cached SEC lookup) BEFORE the throttled fetchFacts call, so an
+ * override hit or a cache hit costs no throttle wait at all -- only an
+ * actual `fetchFacts` call (a real EDGAR request) is paced. A ticker that
+ * resolves to no CIK anywhere (not in edgarCikMap, not in SEC's file --
+ * e.g. a typo or a delisted symbol) is logged and SKIPPED, not thrown --
+ * unlike fetchFacts's own edgarCikMap-only miss (a config-gap throw, see
+ * that function's header), a live-lookup miss here is "no such ticker"
+ * information about one entry in a larger batch, not a reason to abort
+ * the whole run (Adopted Pattern #11 still honored via the log, just not
+ * via a throw).
  */
-export async function fetchLatest(config, { tickers = Object.keys(config.edgarCikMap ?? {}), tags = ["Revenues", "EarningsPerShareDiluted", "NetIncomeLoss"] } = {}) {
+export async function fetchLatest(config, { tickers, tags = ["Revenues", "EarningsPerShareDiluted", "NetIncomeLoss"] } = {}, { kv } = {}) {
+  const resolvedTickers =
+    tickers ??
+    (Object.keys(config.edgarCikMap ?? {}).length > 0
+      ? Object.keys(config.edgarCikMap)
+      : (config.watchlist ?? []).map((w) => w.ticker));
+
   const throttle = createThrottle({ minIntervalMs: config.edgarMinRequestIntervalMs ?? 0 });
   const facts = [];
-  for (const ticker of tickers) {
+  for (const ticker of resolvedTickers) {
+    const cik = await resolveCik(config, kv, ticker);
+    if (!cik) {
+      console.warn("edgar_fundamentals: skipping ticker, no CIK resolvable via edgarCikMap or SEC lookup", { ticker });
+      continue;
+    }
     for (const tag of tags) {
       await throttle.wait();
-      facts.push(...(await fetchFacts(config, { ticker, tag })));
+      facts.push(...(await fetchFacts(config, { ticker, tag, cik })));
     }
   }
   return facts;

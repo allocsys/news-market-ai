@@ -93,12 +93,29 @@ export function loadConfig(env) {
     // SEC's own published number, not third-party identity/URL data we'd
     // be fabricating on someone's behalf by defaulting it.
     edgarMinRequestIntervalMs: Number(env.EDGAR_MIN_REQUEST_INTERVAL_MS) || 110,
-    // Hand-maintained ticker -> CIK map, same honest-narrow-scope convention
-    // as ingestion/entity_resolution.js's COMPANY_DOMAIN_MAP -- SEC does
-    // publish a free ticker->CIK lookup file (company_tickers.json) but
-    // fetching+caching+refreshing that is a separate task, not attempted
-    // here. "TICKER|cik" pairs, cik as SEC reports it (may or may not be
+    // Explicit ticker -> CIK OVERRIDE map (as of this session -- previously
+    // this was the ONLY source, see edgar_cik_lookup.js for the real lookup
+    // that now backstops it). Still useful to pin/correct a specific ticker
+    // without waiting on SEC's file or debugging a lookup miss against it,
+    // but an empty map no longer means "no fundamentals ingestion happens
+    // at all" -- fetchLatest falls back to resolving config.watchlist's
+    // tickers live against SEC instead (see edgar_fundamentals.js#fetchLatest).
+    // "TICKER|cik" pairs, cik as SEC reports it (may or may not be
     // zero-padded in the source file -- edgar_fundamentals.js normalizes it).
     edgarCikMap: Object.fromEntries(parseTickerUrlList(env.EDGAR_CIK_MAP).map(({ ticker, url: cik }) => [ticker, cik])),
+    // SEC's official free ticker->CIK lookup file (edgar_cik_lookup.js).
+    // Ships a real default -- unlike edgarCikMap/rssFeeds/scrapePages, this
+    // is SEC's own published, well-known endpoint (same "technical/official
+    // constant, not fabricated third-party data" reasoning as edgarApiBase
+    // and edgarMinRequestIntervalMs above), not a value we'd be inventing
+    // on someone's behalf by defaulting it.
+    edgarTickerCikUrl: env.EDGAR_TICKER_CIK_URL || "https://www.sec.gov/files/company_tickers.json",
+    // How long edgar_cik_lookup.js#getTickerCikMap's KV cache entry lives
+    // before a lookup re-fetches SEC's file. 24h default: ticker->CIK
+    // mappings change on the order of new listings/delistings, not
+    // intraday, so this is a conservative-but-not-paranoid refresh cadence
+    // that also respects KV's 1K writes/day free-tier cap (one write per
+    // cache-miss across the whole deployment, not per ticker/request).
+    edgarCikCacheTtlSeconds: Number(env.EDGAR_CIK_CACHE_TTL_SECONDS) || 86400,
   };
 }

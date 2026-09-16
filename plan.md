@@ -707,11 +707,10 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       cookie/crumb gap, etc); this item doesn't resolve any of those, it
       only makes the adapters reachable from the pipeline once a real
       network path exists.
-      KNOWN GAPS: (1) the live-spot-check gap above; (2) real ticker->CIK
-      resolution (SEC's `company_tickers.json`) still doesn't exist --
-      `edgarCikMap` is still the hand-maintained list, same as before, and
-      fetching/caching that file is separately blocked on the same
-      `data.sec.gov` restriction; (3) no throttling/backoff across the five
+      KNOWN GAPS: (1) the live-spot-check gap above; (2) ~~real ticker->CIK
+      resolution (SEC's `company_tickers.json`) still doesn't exist~~ --
+      CLOSED, see the "Real ticker -> CIK lookup" checklist item below;
+      (3) no throttling/backoff across the five
       sources when several are configured at once -- each adapter still
       makes its own unthrottled per-ticker/per-feed requests, sequentially,
       with no shared rate limiter; (4) `ingestPriceBars`/`ingestFundamentals`
@@ -767,3 +766,87 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       `data.sec.gov` network block (see the item above) means this can
       only be proven against mocked fetch, not confirmed to actually avoid
       a real 429 in production.
+
+- [x] Real ticker -> CIK lookup: replaced `config.edgarCikMap` as the SOLE
+      ticker->CIK source with a real lookup against SEC's public
+      `company_tickers.json`, keeping `edgarCikMap` itself as an explicit
+      per-ticker override rather than removing it.
+    - `src/ingestion/sources/edgar_cik_lookup.js`: NEW file.
+      `fetchTickerCikMap(config)` fetches+parses SEC's file (a ~1000-entry
+      object keyed by arbitrary numeric strings, NOT an array and NOT
+      keyed by ticker -- has to be scanned into a ticker-keyed map),
+      requires `config.edgarUserAgent` (same SEC UA policy as
+      `edgar_fundamentals.js`, this file is served from `www.sec.gov` not
+      `data.sec.gov` but the UA requirement isn't host-specific). `getTickerCikMap(config, kv)`
+      cache-aside wraps it via Cloudflare KV, same fails-open convention as
+      `shared/cooldown.js` (a KV read/write failure falls through to a live
+      fetch, never blocks resolution). `resolveCik(config, kv, ticker)`
+      checks `config.edgarCikMap[ticker]` first (override wins, skips KV/
+      fetch entirely), falls back to the live/cached SEC map, returns
+      `null` (not a throw) when genuinely not found in either.
+    - `edgar_fundamentals.js#fetchFacts`: now accepts an optional
+      pre-resolved `cik` param to skip its own lookup -- but its OWN
+      fallback (no `cik` passed) is still `config.edgarCikMap[ticker]`
+      ONLY, unchanged from before this session, so a direct `fetchFacts`
+      call for a ticker absent from `edgarCikMap` still throws immediately
+      with zero network calls, same as always. The live SEC lookup only
+      happens through `fetchLatest`.
+    - `edgar_fundamentals.js#fetchLatest`: default ticker list is now
+      `Object.keys(edgarCikMap)` when non-empty, else `config.watchlist`'s
+      tickers (previously: ONLY `edgarCikMap`'s keys, so an empty map meant
+      zero fundamentals ingestion no matter what else was configured).
+      Resolves each ticker's CIK via `resolveCik` BEFORE the throttled
+      `fetchFacts` call (an override or cache hit costs no throttle wait);
+      a ticker that resolves to no CIK anywhere is logged
+      (`console.warn`) and SKIPPED, not thrown -- deliberately different
+      from `fetchFacts`'s own "missing from edgarCikMap" throw, since a
+      live-lookup miss on one ticker in a larger batch is "no such ticker"
+      information, not a reason to abort the whole run.
+    - `config.js`: new `edgarTickerCikUrl` (default
+      `https://www.sec.gov/files/company_tickers.json` -- DOES ship a real
+      default, same "official published endpoint, not fabricated
+      third-party data" reasoning as `edgarApiBase`) and
+      `edgarCikCacheTtlSeconds` (default 86400 = 24h, same reasoning as
+      `edgarMinRequestIntervalMs` -- a technical pacing/freshness constant,
+      not identity/URL data). `edgarCikMap`'s own comment updated to
+      describe it as an override, not the sole source.
+    - `graph/pipeline.js#ingestFundamentals`: now takes a third `kv` param,
+      threaded through to `fetchLatest` so `resolveCik`'s cache actually
+      gets used in production; `runScheduledIngestion` passes
+      `env.CACHE_KV`. Omitting `kv` (as every pre-existing test call site
+      still does) works fine, it just means every lookup misses cache and
+      re-fetches SEC's file live each time -- same fails-open behavior as
+      not having KV at all.
+    - `test/edgar_cik_lookup.test.js`: NEW file, 16 tests --
+      `fetchTickerCikMap` (UA-missing throw, correct parsing of SEC's
+      numeric-keyed shape incl. uppercasing + skipping malformed entries,
+      transient-vs-non-transient VendorError by status/network-failure),
+      `getTickerCikMap` (no-kv always-live, cache hit skips fetch, cache
+      miss fetches+writes with the configured TTL, fails open on both a
+      `kv.get` and a `kv.put` failure), `resolveCik` (override
+      short-circuits kv/fetch entirely, live-map fallback, null on a
+      genuine miss), and `fetchLatest` wiring (watchlist fallback when
+      `edgarCikMap` is empty, skip-not-throw + warn-log for one
+      unresolvable ticker while others still process, still a true no-op
+      when both `edgarCikMap` and `watchlist` are empty, and a KV-sharing
+      test proving two tickers in the same run only fetch SEC's file
+      once). Full suite now 157/157 (was 141).
+    - Every PRE-EXISTING edgar_fundamentals.js/pipeline.js test (map-based
+      resolution, UA-missing throw, no-op-when-unconfigured, throttle
+      wiring) still passes unmodified -- verified by running the full
+      suite before writing any new test, not just the new file in
+      isolation.
+    KNOWN GAPS: (1) not verified against SEC's REAL `company_tickers.json`
+    -- like everything else touching `*.sec.gov`, this sandbox's network
+    block means the parsing logic is only proven against a mocked
+    response shaped the way SEC's docs/existing samples describe;
+    re-verify against a real fetch before relying on this in production if
+    SEC ever changes the file's shape; (2) the KV cache key
+    (`edgar:ticker-cik-map:v1`) is a single global entry for the WHOLE
+    ticker->CIK map, not per-ticker -- fine at this file's size (~1000
+    entries, comfortably under KV's 25MB per-value limit) but worth
+    knowing if SEC's file ever grows enough to matter; (3) no cache-busting
+    mechanism if SEC updates a CIK mid-TTL (e.g. a rare CIK reassignment)
+    -- would self-correct within `edgarCikCacheTtlSeconds` (24h default),
+    not immediately; not worth building a manual bust path for something
+    this rare unless it actually happens.

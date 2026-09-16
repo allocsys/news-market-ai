@@ -248,19 +248,27 @@ export async function ingestPriceBars(config, db) {
 }
 
 /**
- * Fetches fresh EDGAR XBRL facts for every ticker in config.edgarCikMap and
- * upserts them via storage/d1.js#insertFundamentalFact. A no-op (returns
- * `{count: 0}` without ever calling fetch) when edgarCikMap is empty --
- * config.js ships no default map or User-Agent on purpose (see that file's
- * header), so an unconfigured deployment should not error here, only a
- * misconfigured one (map set, User-Agent missing) should, and even that is
- * caught and logged rather than aborting the run -- same "strict
- * enhancement, not a hard dependency" reasoning as ingestPriceBars.
+ * Fetches fresh EDGAR XBRL facts for the resolved ticker list (edgarCikMap
+ * if non-empty, else config.watchlist -- see
+ * edgar_fundamentals.js#fetchLatest) and upserts them via
+ * storage/d1.js#insertFundamentalFact. A no-op (returns `{count: 0}`
+ * without ever calling fetch) when BOTH edgarCikMap and watchlist are
+ * empty -- config.js ships no default map or User-Agent on purpose (see
+ * that file's header), so a fully unconfigured deployment should not error
+ * here, only a misconfigured one (tickers resolved, User-Agent missing, or
+ * a ticker that resolves to no CIK anywhere) should, and even that is
+ * caught and logged (or, for a single unresolvable ticker, logged and
+ * skipped -- see fetchLatest's own header) rather than aborting the run --
+ * same "strict enhancement, not a hard dependency" reasoning as
+ * ingestPriceBars. `kv` (optional, typically env.CACHE_KV) is passed
+ * through to fetchLatest for resolveCik's live-SEC-lookup cache -- omitting
+ * it still works, it just means every lookup misses cache and re-fetches
+ * SEC's file live (fails open, see edgar_cik_lookup.js header).
  */
-export async function ingestFundamentals(config, db) {
+export async function ingestFundamentals(config, db, kv) {
   let facts;
   try {
-    facts = await fetchEdgarFactsLatest(config);
+    facts = await fetchEdgarFactsLatest(config, {}, { kv });
   } catch (err) {
     if (err instanceof VendorError) {
       logSkippedSource("fundamentals ingestion", "edgar", err);
@@ -287,7 +295,7 @@ export async function ingestFundamentals(config, db) {
  */
 export async function runScheduledIngestion(env, config, db) {
   await ingestPriceBars(config, db);
-  await ingestFundamentals(config, db);
+  await ingestFundamentals(config, db, env.CACHE_KV);
 
   const items = await collectNewsItems(config);
 
