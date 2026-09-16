@@ -419,8 +419,30 @@ tests/               # mirror TradingAgents' naming for the integrity-critical o
       wired into graph/pipeline.js or consumed by any agent -- there is no
       technical analyst yet to read price_bars; (3) daily bars only, no
       intraday.
-- [ ] Build signal on/off backtest comparison harness (walk-forward windows
-      already exist in `src/backtest/pointInTime.js#walkForwardWindows`)
+- [x] Build signal on/off backtest comparison harness (walk-forward windows
+      already exist in `src/backtest/pointInTime.js#walkForwardWindows`):
+      `src/backtest/metrics.js` (pure return-series stats -- cumulativeReturn,
+      sharpeRatio (annualized), maxDrawdown, winRate, summarizeReturns) and
+      `src/backtest/signalCompare.js` (`compareSignalOnOff` for two
+      already-computed return series with a sign-normalized `delta` -- positive
+      always means "signal looks better", including for maxDrawdown where a
+      naive subtraction would have the wrong sign; `compareSignalOnOffByWindow`
+      rolls that comparison across every `walkForwardWindows` window via
+      caller-supplied `getOnReturns`/`getOffReturns` callbacks, plus one pooled
+      overall comparison). Covered by `test/backtest_signal_compare.test.js`
+      (14 tests, hand-checked metric values + walk-forward rolling/pooling
+      behavior; 70 tests total in the suite now).
+      HONEST SCOPE (see `signalCompare.js`'s header): this is the windowing +
+      comparison MATH only, not an end-to-end backtest run -- it does not fetch
+      or compute real trade returns itself. That's blocked on two separate
+      things neither attempted here: (1) `closePosition` still has no caller
+      (see positions known-gaps above), so there is no realized-return series
+      to feed in yet; (2) a real "signal on" run needs the full agent graph
+      wired end-to-end against live data (GDELT/yfinance/rss/html_scrape,
+      still not wired into `graph/pipeline.js`), and "signal off" needs a
+      comparable no-signal baseline strategy that doesn't exist yet either.
+      `getOnReturns`/`getOffReturns` are the exact seam where that real data
+      plugs in later -- this harness itself won't need to change.
 - [x] `checkpoint_resume` test added (`test/checkpoint_resume.test.js`):
       exercises `graph/checkpointer.js`'s stage ordering + resume/state
       semantics against a minimal in-memory fake of the `pipeline_checkpoints`
