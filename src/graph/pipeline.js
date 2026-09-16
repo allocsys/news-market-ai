@@ -14,7 +14,7 @@
 // header for the known body-text gap).
 
 import { fetchLatest } from "../ingestion/sources/gdelt.js";
-import { insertNewsItem } from "../storage/d1.js";
+import { insertNewsItem, openPosition, getOpenPositionsRiskPctAsOf } from "../storage/d1.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
 import { runBullResearcher } from "../agents/researchers/bull.js";
@@ -92,9 +92,27 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
   }
 
   if (stage === "risk_checked") {
-    // openPositionsRiskPct: no real position store yet -- see
-    // portfolio_manager.js's header for why this is a placeholder.
-    state.portfolioDecision = evaluatePortfolio(state.riskDecision, { openPositionsRiskPct: 0 });
+    // openPositionsRiskPct now comes from a real point-in-time read (see
+    // storage/d1.js#getOpenPositionsRiskPctAsOf) instead of a hardcoded 0 --
+    // MAX_PORTFOLIO_RISK_PCT in portfolio_manager.js is still an untuned
+    // placeholder ceiling, see that file's header for the known limitation
+    // on re-evaluating an already-open ticker.
+    const openPositionsRiskPct = await getOpenPositionsRiskPctAsOf(db, { asOf });
+    state.portfolioDecision = evaluatePortfolio(state.riskDecision, { openPositionsRiskPct });
+
+    if (state.portfolioDecision.approvedForExecution) {
+      // id = tradeThesisId (ticker|asOf) so a checkpoint-resumed re-run of
+      // this stage can't double-open the same position (ON CONFLICT DO
+      // NOTHING in openPosition).
+      await openPosition(db, {
+        id: state.riskDecision.tradeThesisId,
+        ticker,
+        tradeThesisId: state.riskDecision.tradeThesisId,
+        positionSizePct: state.portfolioDecision.finalPositionSizePct,
+        openedAt: asOf,
+      });
+    }
+
     await checkpoint(db, { runId, ticker, stage: "portfolio_checked", state });
   }
 
