@@ -5,14 +5,15 @@
 // total portfolio risk budget. Deliberately NOT an LLM call, same reasoning
 // as risk.js: this is the layer that has to be trustworthy and reproducible.
 //
-// HONEST STATE: there is no portfolio/positions store wired up yet (no
-// "list open positions" read exists anywhere in src/storage/d1.js), so the
-// account-level checks below are a structural placeholder, not a real
-// correlation/exposure check. This function exists so the pipeline has the
-// right shape -- trader -> risk -> portfolio_manager -- before that data is
-// available, rather than skipping the stage and bolting it on awkwardly
-// later. Do not treat MAX_PORTFOLIO_RISK_PCT below as tuned; it's a
-// placeholder ceiling until real position data exists to check against.
+// UPDATE: a real positions store now exists (migrations/0003_positions.sql,
+// storage/d1.js#openPosition/closePosition/getOpenPositionsRiskPctAsOf),
+// and graph/pipeline.js passes a real point-in-time openPositionsRiskPct
+// instead of a hardcoded 0. Two things are still placeholders, though: (1)
+// MAX_PORTFOLIO_RISK_PCT below is not tuned against anything real yet, and
+// (2) there's still no correlation/cross-asset-exposure check -- this is a
+// flat total-risk-budget check only. Also see getOpenPositionsRiskPctAsOf's
+// own header for a known double-counting edge case on re-evaluating an
+// already-open ticker.
 
 import { PortfolioDecision } from "../../schemas/index.js";
 
