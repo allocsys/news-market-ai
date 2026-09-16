@@ -39,9 +39,12 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
   let stage = resume.stage;
   const state = resume.state ?? {};
 
-  if (stage === null && resume.stage !== null) {
-    // resumeFrom returned a non-null previous stage but nextStage() of it is
-    // null -- every stage already completed for this (runId, ticker).
+  // nextStage(lastCompletedStage) is null in TWO cases: a brand-new run
+  // (resumeFrom found no checkpoint row at all, so state is also null) and
+  // a fully-completed run (every stage's checkpoint exists, so state is
+  // populated). Disambiguate on `resume.state` rather than `stage` alone --
+  // this is exactly the ambiguity a naive resume implementation misses.
+  if (stage === null && resume.state !== null) {
     return state.portfolioDecision;
   }
 
