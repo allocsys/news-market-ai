@@ -25,6 +25,7 @@ import { resolveTickers } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { stripHtml, extractPageTitle } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
+import { createThrottle } from "../../shared/throttle.js";
 
 const PUBLISHED_META_PATTERNS = [
   /<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']*)["']/i,
@@ -109,8 +110,14 @@ export async function fetchArticle(config, { url, tickerHint } = {}) {
 export async function fetchLatest(config, { pages = config.scrapePages } = {}) {
   const items = [];
   const errors = [];
+  // No documented per-page rate limit -- config.scrapeMinRequestIntervalMs
+  // defaults to 0, a true no-op, same convention as rss.js/gdelt.js. Only
+  // paces calls made through THIS loop -- a direct fetchArticle call (like
+  // fetchFacts in edgar_fundamentals.js) is unaffected.
+  const throttle = createThrottle({ minIntervalMs: config.scrapeMinRequestIntervalMs ?? 0 });
 
   for (const { ticker, url } of pages) {
+    await throttle.wait();
     try {
       items.push(await fetchArticle(config, { url, tickerHint: ticker }));
     } catch (err) {
