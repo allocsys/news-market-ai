@@ -1,6 +1,6 @@
 // Mirror of bull.js -- see that file's header for the shared reasoning.
 
-import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { callStructured } from "../utils/structured.js";
 import { DebateSide } from "../../schemas/index.js";
 
 export async function runBearResearcher(env, config, { ticker, opinions }) {
@@ -14,8 +14,8 @@ Respond as JSON only, matching exactly:
 Analyst opinions:
 ${JSON.stringify(opinions, null, 2)}`;
 
-  const text = await geminiGenerateText(env, config, prompt, { model: config.geminiDeepModel });
-  const parsed = JSON.parse(stripJsonFence(text));
-
-  return DebateSide.parse({ stance: "bear", ...parsed });
+  return callStructured(env, config, DebateSide, prompt, {
+    model: config.geminiDeepModel,
+    extraFields: { stance: "bear" },
+  });
 }
