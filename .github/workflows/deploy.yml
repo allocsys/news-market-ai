@@ -69,13 +69,9 @@ jobs:
         with:
           filters: |
             code:
-              - 'src/**'
-              - 'test/**'
-              - 'package.json'
-              - 'package-lock.json'
-              - 'wrangler.toml'
-              - '.github/workflows/**'
-              - '.github/actions/**'
+              - '**'
+              - '!*.md'
+              - '!**/*.md'
             migrations:
               - 'migrations/**'
 
