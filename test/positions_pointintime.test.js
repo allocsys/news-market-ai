@@ -37,7 +37,7 @@ class FakePositionsDb {
               return;
             }
             if (/UPDATE positions SET closed_at/.test(sql)) {
-              const [closedAt, , id] = args; // closeReason (2nd bind) not modeled by this narrow fake
+              const [closedAt, , , id] = args; // closeReason/exitPrice (2nd/3rd binds) not modeled by this narrow fake
               const row = db.rows.get(id);
               if (row && row.closed_at === null) row.closed_at = closedAt;
               return;
