@@ -19,3 +19,11 @@ FINNHUB_API_KEY=your-finnhub-key-here
 # FINNHUB_API_BASE=https://finnhub.io/api/v1/company-news
 # FINNHUB_MIN_REQUEST_INTERVAL_MS=1100
 # FINNHUB_LOOKBACK_DAYS=3
+
+# Required to enable POST /backfill (src/index.js, triggers
+# graph/pipeline.js#backfillHistoricalNews). Unset = route stays disabled
+# (503) -- this is the safe default, not something to fix. Send it back as
+# the X-Backfill-Secret request header to call the route locally, e.g.:
+#   curl -X POST "http://localhost:8787/backfill?from=2024-01-01&to=2024-01-31" \
+#     -H "X-Backfill-Secret: your-local-secret-here"
+BACKFILL_API_SECRET=your-local-secret-here
