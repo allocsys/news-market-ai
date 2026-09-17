@@ -155,9 +155,9 @@ class FakePipelineDb {
               return;
             }
             if (/UPDATE positions SET closed_at/.test(sql)) {
-              const [closedAt, closeReason, id] = args;
+              const [closedAt, closeReason, exitPrice, id] = args;
               const p = db.positions.find((p) => p.id === id && p.closed_at === null);
-              if (p) { p.closed_at = closedAt; p.close_reason = closeReason; }
+              if (p) { p.closed_at = closedAt; p.close_reason = closeReason; p.exit_price = exitPrice; }
               return;
             }
             if (/INSERT INTO trade_decisions/.test(sql)) {
