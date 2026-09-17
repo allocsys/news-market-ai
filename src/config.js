@@ -230,6 +230,15 @@ export function loadConfig(env) {
     // on hintTicker/COMPANY_DOMAIN_MAP only) rather than throwing if the
     // index can't be built for any reason -- see gdelt.js/rss.js/
     // html_scrape.js's own wiring.
-    entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX === "true",
+    // UPDATE (2026-09-17): default flipped false -> true. Unit/wiring test
+    // coverage is thorough (see entity_resolution.test.js,
+    // entity_resolution_wiring.test.js -- normalization, word-boundary
+    // matching, KV cache-aside fail-open behavior, all three adapters'
+    // wiring), but this has NOT yet been validated against a live SEC
+    // fetch + real headline traffic -- every attempt this session hit
+    // unreliable network conditions before a live check could complete.
+    // Explicit opt-out remains available ("false") if live behavior turns
+    // out to need more false-positive tuning than expected.
+    entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX !== "false",
   };
 }
