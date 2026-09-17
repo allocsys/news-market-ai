@@ -135,6 +135,7 @@ test("collectNewsItems logs and skips a source that throws a VendorError, withou
     gdeltApiBase: "https://fake.test/gdelt", gdeltMode: "ArtList", gdeltFormat: "json", gdeltSort: "DateDesc", gdeltMaxRecords: 50,
     rssFeeds: [{ ticker: "AAPL", url: "https://fake.test/feed.xml" }],
     scrapePages: [],
+    retryMaxAttempts: 1, // this test asserts isolation, not retry timing -- see retry.js wiring
   };
 
   t.mock.method(global, "fetch", async (url) => {
@@ -208,7 +209,8 @@ test("ingestPriceBars fetches yfinance bars and upserts each one via insertPrice
 });
 
 test("ingestPriceBars logs and returns count:0 on a yfinance VendorError, without throwing", async (t) => {
-  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d" };
+  // retryMaxAttempts: 1 -- this test asserts isolation, not retry timing -- see retry.js wiring
+  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d", retryMaxAttempts: 1 };
   t.mock.method(global, "fetch", async () => ({ ok: false, status: 429 }));
 
   const errorLogs = [];
