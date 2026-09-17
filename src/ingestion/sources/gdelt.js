@@ -42,6 +42,7 @@ import { stripHtml } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
 import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
+import { withRetry } from "../../shared/retry.js";
 
 /** GDELT's seendate is "YYYYMMDDTHHMMSSZ" -- reformat to real ISO8601, or null if malformed. */
 function parseGdeltDate(seendate) {
@@ -88,19 +89,31 @@ export async function fetchLatest(config, { queries = config.watchlist } = {}) {
     try {
       const url = `${config.gdeltApiBase}?query=${encodeURIComponent(query)}&mode=${config.gdeltMode}&maxrecords=${config.gdeltMaxRecords}&format=${config.gdeltFormat}&sort=${config.gdeltSort}`;
 
-      let response;
-      try {
-        response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
-      } catch (err) {
-        throw new VendorError("gdelt", `network failure fetching GDELT DOC API: ${err.message}`, { transient: true });
-      }
+      // See yfinance.js#fetchDailyBars for the same wrapping convention:
+      // only the fetch + status check is retried (the transient failure
+      // modes retry.js's default shouldRetry looks for); JSON parsing and
+      // per-article validation below stay outside withRetry since a
+      // malformed payload is a permanent failure, not a vendor hiccup.
+      const response = await withRetry(
+        async () => {
+          let res;
+          try {
+            res = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
+          } catch (err) {
+            throw new VendorError("gdelt", `network failure fetching GDELT DOC API: ${err.message}`, { transient: true });
+          }
 
-      if (!response.ok) {
-        throw new VendorError("gdelt", `GDELT DOC API returned ${response.status}`, {
-          status: response.status,
-          transient: response.status === 429 || response.status >= 500,
-        });
-      }
+          if (!res.ok) {
+            throw new VendorError("gdelt", `GDELT DOC API returned ${res.status}`, {
+              status: res.status,
+              transient: res.status === 429 || res.status >= 500,
+            });
+          }
+
+          return res;
+        },
+        { maxAttempts: config.retryMaxAttempts, baseDelayMs: config.retryBaseDelayMs },
+      );
 
       const data = await response.json();
       for (const article of data.articles ?? []) {
