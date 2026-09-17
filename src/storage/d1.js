@@ -229,24 +229,76 @@ export async function getOpenPositionsAsOf(db, { asOf }) {
  * same required-asOf, no-"give me everything" convention as getNewsAsOf and
  * getDecisionMemoryAsOf, for the same Backtesting Integrity reason.
  *
- * KNOWN LIMITATION: does not exclude/net out an already-open position on
- * the SAME ticker being re-evaluated for a new thesis -- portfolio_manager
- * would see that ticker's existing exposure twice-counted toward the
- * portfolio ceiling in that edge case. Flagged rather than silently wrong;
- * fixing it needs a real "is this thesis replacing an existing position"
- * concept that doesn't exist yet.
+ * NETTING (previously a KNOWN LIMITATION, now closed): pass `excludeTicker`
+ * to net a ticker's own existing exposure OUT of this sum -- this is what
+ * lets graph/pipeline.js's risk_checked stage compute "every OTHER ticker's
+ * exposure" when re-evaluating a thesis for a ticker that may already have
+ * an open position, instead of double-counting that ticker against itself.
+ * Omitting `excludeTicker` preserves the exact original behavior (sum of
+ * everything), so every pre-existing caller/test is unaffected.
  */
-export async function getOpenPositionsRiskPctAsOf(db, { asOf }) {
+export async function getOpenPositionsRiskPctAsOf(db, { asOf, excludeTicker } = {}) {
   if (!asOf) {
     throw new LookaheadViolationError("getOpenPositionsRiskPctAsOf requires an explicit asOf timestamp");
   }
 
-  const { results } = await db
-    .prepare(`SELECT position_size_pct FROM positions WHERE opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`)
-    .bind(asOf, asOf)
-    .all();
+  const sql = excludeTicker
+    ? `SELECT position_size_pct FROM positions WHERE opened_at <= ? AND (closed_at IS NULL OR closed_at > ?) AND ticker != ?`
+    : `SELECT position_size_pct FROM positions WHERE opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`;
+  const binds = excludeTicker ? [asOf, asOf, excludeTicker] : [asOf, asOf];
+
+  const { results } = await db.prepare(sql).bind(...binds).all();
 
   return results.reduce((sum, r) => sum + r.position_size_pct, 0);
+}
+
+/**
+ * Point-in-time lookup of the SINGLE open position (if any) for `ticker` as
+ * of `asOf` -- what lets a caller detect "this thesis is re-evaluating a
+ * ticker that already has an open position" before deciding whether to
+ * replace it (see graph/pipeline.js's risk_checked stage, which closes this
+ * row with close_reason 'replaced' before opening the new one, rather than
+ * accumulating two live open rows for the same ticker). Same required-asOf
+ * convention as every other *AsOf reader. Returns null, not a throw, when
+ * no position is open for this ticker at `asOf` -- "nothing to replace" is
+ * a normal case, not an error.
+ *
+ * Uses ORDER BY opened_at DESC LIMIT 1 defensively -- under correct usage
+ * there should only ever be at most one open position per ticker at a given
+ * asOf (that invariant is exactly what this function + the replace-before-
+ * open logic in pipeline.js are for), but a single deterministic "most
+ * recent" pick is a safer contract than an unbounded read if that invariant
+ * is ever violated by a bug elsewhere.
+ */
+export async function getOpenPositionForTickerAsOf(db, { ticker, asOf }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getOpenPositionForTickerAsOf requires an explicit asOf timestamp");
+  }
+
+  const row = await db
+    .prepare(
+      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+       FROM positions
+       WHERE ticker = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)
+       ORDER BY opened_at DESC
+       LIMIT 1`
+    )
+    .bind(ticker, asOf, asOf)
+    .first();
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    ticker: row.ticker,
+    tradeThesisId: row.trade_thesis_id,
+    positionSizePct: row.position_size_pct,
+    direction: row.direction,
+    entryPrice: row.entry_price,
+    stopLossPct: row.stop_loss_pct,
+    takeProfitPct: row.take_profit_pct,
+    openedAt: row.opened_at,
+  };
 }
 
 /**
