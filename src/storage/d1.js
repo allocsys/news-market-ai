@@ -491,12 +491,23 @@ export async function insertTradeDecision(db, { id, ticker, asOf, debateId = nul
 // agent prompt.
 // ---------------------------------------------------------------------
 
-/** Most recent trade_decisions rows, newest first. Dashboard-only, see section header. */
-export async function getRecentTradeDecisions(db, { limit = 20 } = {}) {
-  const { results } = await db
-    .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions ORDER BY created_at DESC LIMIT ?`)
-    .bind(limit)
-    .all();
+/**
+ * Most recent trade_decisions rows, newest first. Dashboard-only, see
+ * section header. `status`, if given, filters to that exact status
+ * (e.g. "approved"/"rejected") -- omitting it preserves the original
+ * unfiltered behavior exactly, so the one pre-existing caller (dashboard.js,
+ * before this filter existed) is unaffected.
+ */
+export async function getRecentTradeDecisions(db, { limit = 20, status } = {}) {
+  const { results } = status
+    ? await db
+        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions WHERE status = ? ORDER BY created_at DESC LIMIT ?`)
+        .bind(status, limit)
+        .all()
+    : await db
+        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions ORDER BY created_at DESC LIMIT ?`)
+        .bind(limit)
+        .all();
 
   return results.map((r) => ({
     id: r.id,
