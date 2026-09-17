@@ -156,6 +156,7 @@ test("collectNewsItems threads kv through to gdelt/rss/scrape so a warm name-ind
   const config = {
     watchlist: [{ ticker: "AAPL", query: "AAPL" }],
     gdeltApiBase: "https://fake.test/gdelt", gdeltMode: "ArtList", gdeltFormat: "json", gdeltSort: "DateDesc", gdeltMaxRecords: 50,
+    gdeltFetchFullText: false, // this test is scoped to kv/name-index caching, not full-text enrichment -- leaving the default (true) on would fetch the mocked article's own URL as an extra request, which the fetch mock below can't distinguish from a SEC company_tickers.json fetch
     rssFeeds: [{ ticker: "", url: "https://fake.test/feed.xml" }],
     scrapePages: [],
     entityResolutionUseNameIndex: true,
