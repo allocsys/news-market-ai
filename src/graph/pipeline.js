@@ -42,7 +42,7 @@ import {
   getOpenPositionsRiskPctAsOf,
   getPriceBarsAsOf,
   insertPriceBar,
-  insertFundamentalFact,
+  insertFundamentalFacts,
   insertTradeDecision,
 } from "../storage/d1.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
@@ -300,6 +300,15 @@ export async function ingestPriceBars(config, db) {
  * it still works, it just means every lookup misses cache and re-fetches
  * SEC's file live (fails open, see edgar_cik_lookup.js header).
  */
+// D1 subrequest budget for the batched insert below. Each db.batch() call
+// is ONE Worker subrequest no matter how many facts are in it, but D1
+// still bounds a single batch's total statement count/payload size, so
+// this stays well under that rather than trying to push everything
+// through in one call. 200 is generous headroom under both that D1 limit
+// and Cloudflare's own per-invocation subrequest cap for any watchlist
+// size this project runs today.
+const FUNDAMENTALS_INSERT_CHUNK_SIZE = 200;
+
 export async function ingestFundamentals(config, db, kv) {
   let facts;
   try {
@@ -312,20 +321,29 @@ export async function ingestFundamentals(config, db, kv) {
     throw err;
   }
 
+  // UPDATE (2026-09-17): batched via insertFundamentalFacts instead of one
+  // insertFundamentalFact call per fact. The old per-fact loop meant one D1
+  // subrequest per row -- EDGAR's full companyfacts history for a single
+  // mature ticker/tag easily runs into the hundreds of historical/restated
+  // entries, and this loop pulls 3 tags per ticker, so it was blowing
+  // Cloudflare's per-invocation subrequest cap partway through a single
+  // cron run (live incident: "Too many API requests by single Worker
+  // invocation" x1047 in one run, all logged with ticker=TSLA before the
+  // cap was hit -- see cf_workers_observability_query for that trace).
+  // Chunking (rather than one db.batch() for all facts) keeps each batch
+  // call's own size bounded and means a genuinely malformed chunk (e.g. a
+  // D1 constraint violation) only loses that chunk's rows, not the whole
+  // run's insert -- same Failure Isolation spirit as the old per-fact
+  // try/catch, just scoped to a chunk instead of a single row now.
   let inserted = 0;
-  for (const fact of facts) {
+  for (let i = 0; i < facts.length; i += FUNDAMENTALS_INSERT_CHUNK_SIZE) {
+    const chunk = facts.slice(i, i + FUNDAMENTALS_INSERT_CHUNK_SIZE);
     try {
-      await insertFundamentalFact(db, fact);
-      inserted += 1;
+      await insertFundamentalFacts(db, chunk);
+      inserted += chunk.length;
     } catch (err) {
-      // A single malformed/unexpected fact (e.g. a D1 constraint violation)
-      // must not abort the rest of ingestion -- same Failure Isolation
-      // reasoning as the whole-source VendorError handling above, just
-      // scoped to one row instead of one source. See edgar_fundamentals.js's
-      // fy/fp skip for the specific incident (SQLITE_CONSTRAINT on
-      // fiscal_year) this is a backstop for.
-      console.error("fundamentals ingestion -- skipping one fact insert", {
-        ticker: fact.ticker, tag: fact.tag, fiscalYear: fact.fiscalYear, fiscalPeriod: fact.fiscalPeriod, message: err.message,
+      console.error("fundamentals ingestion -- skipping one chunk of fact inserts", {
+        chunkStart: i, chunkSize: chunk.length, message: err.message,
       });
     }
   }
