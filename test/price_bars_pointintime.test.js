@@ -146,7 +146,8 @@ test("fetchDailyBars parses a well-formed Yahoo chart response into valid PriceB
 
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => body }));
 
-  const bars = await fetchDailyBars(config, { tickers: ["AAPL"] });
+  const { bars, errors } = await fetchDailyBars(config, { tickers: ["AAPL"] });
+  assert.equal(errors.length, 0);
   assert.equal(bars.length, 1);
   assert.equal(bars[0].ticker, "AAPL");
   assert.equal(bars[0].date, "2026-01-05");
@@ -166,17 +167,18 @@ test("fetchDailyBars skips a bar with a null field instead of fabricating a valu
 
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => body }));
 
-  const bars = await fetchDailyBars(config, { tickers: ["AAPL"] });
+  const { bars } = await fetchDailyBars(config, { tickers: ["AAPL"] });
   assert.equal(bars.length, 1); // second bar skipped, not inserted with a fake high
 });
 
-test("fetchDailyBars throws a transient VendorError on HTTP 429", async (t) => {
+test("fetchDailyBars isolates a per-ticker HTTP 429 into `errors` instead of throwing", async (t) => {
   const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d" };
   t.mock.method(global, "fetch", async () => ({ ok: false, status: 429 }));
 
-  await assert.rejects(() => fetchDailyBars(config, { tickers: ["AAPL"] }), (err) => {
-    assert.ok(err instanceof VendorError);
-    assert.equal(err.transient, true);
-    return true;
-  });
+  const { bars, errors } = await fetchDailyBars(config, { tickers: ["AAPL"] });
+  assert.equal(bars.length, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].ticker, "AAPL");
+  assert.ok(errors[0].error instanceof VendorError);
+  assert.equal(errors[0].error.transient, true);
 });
