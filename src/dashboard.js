@@ -170,6 +170,57 @@ function healthRow(label, stat) {
   return `<tr${rowCls}><td>${escapeHtml(label)}</td><td class="num">${stat.count}</td><td class="num">${fmtTime(stat.lastIngestedAt)}</td><td>${flag}</td></tr>`;
 }
 
+// --------------------------------------------------------------------
+// LLM answer rendering (migrations/0008_trade_decisions_llm_answers.sql)
+// --------------------------------------------------------------------
+
+const OPINION_AGENT_LABELS = { news_event: "News", sentiment: "Sentiment", technical: "Technical" };
+
+/** One line for a single AnalystOpinion (schemas/index.js) -- agent-specific lead-in (eventType/sentiment) where present, then summary + justification. */
+function analystOpinionLine(op) {
+  const label = OPINION_AGENT_LABELS[op.agent] ?? op.agent;
+  const lead = op.agent === "news_event" && op.eventType ? `${op.eventType} \u2014 ` : op.agent === "sentiment" && op.sentiment ? `${op.sentiment} \u2014 ` : "";
+  return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(lead)}${escapeHtml(op.summary)} <span class="llm-justification">(${escapeHtml(op.justification)})</span></div>`;
+}
+
+/** Bull + bear + verdict lines for one DebateVerdict (schemas/index.js) -- bull/bear are nested DebateSide objects inside it. */
+function debateLines(debate) {
+  if (!debate) return "";
+  const confidencePct = typeof debate.confidence === "number" ? `${(debate.confidence * 100).toFixed(0)}%` : "\u2014";
+  return `<div class="llm-block"><span class="llm-agent llm-agent-bull">Bull</span>${escapeHtml(debate.bull?.argument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(debate.bull?.justification ?? "\u2014")})</span></div>
+    <div class="llm-block"><span class="llm-agent llm-agent-bear">Bear</span>${escapeHtml(debate.bear?.argument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(debate.bear?.justification ?? "\u2014")})</span></div>
+    <div class="llm-block"><span class="llm-agent">Verdict</span>${escapeHtml(debate.direction ?? "\u2014")}, ${confidencePct} confidence, ${escapeHtml(debate.timeHorizon ?? "\u2014")} horizon <span class="llm-justification">(${escapeHtml(debate.justification ?? "\u2014")})</span></div>`;
+}
+
+/** Trader's instrument + rationale (TradeThesis, schemas/index.js) -- always present on a decision row, unlike opinions/debate which may predate migrations/0008. */
+function traderLine(thesis) {
+  if (!thesis) return "";
+  return `<div class="llm-block"><span class="llm-agent">Trader</span>${escapeHtml(thesis.instrument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(thesis.rationale ?? "\u2014")})</span></div>`;
+}
+
+/**
+ * The full "LLM answer" for one decision row, behind a native <details>
+ * disclosure (no client JS -- same zero-build philosophy as the rest of
+ * this file): every analyst opinion, the bull/bear debate + judge verdict,
+ * and the trader's rationale, in pipeline order. Falls back to an honest
+ * "not recorded" message for rows written before migrations/0008 (both
+ * opinions and debate null on those).
+ */
+function llmAnswerDetails(d) {
+  if (!d.opinions && !d.debate) {
+    return `<details class="llm-answer"><summary>view</summary><p class="empty">Not recorded for this decision (predates LLM-answer logging).</p></details>`;
+  }
+  const opinionLines = (d.opinions ?? []).map(analystOpinionLine).join("\n");
+  return `<details class="llm-answer">
+    <summary>view</summary>
+    <div class="llm-answer-body">
+      ${opinionLines}
+      ${debateLines(d.debate)}
+      ${traderLine(d.thesis)}
+    </div>
+  </details>`;
+}
+
 function decisionsTable(decisions) {
   if (decisions.length === 0) return `<p class="empty">No decisions match this filter.</p>`;
   const rows = decisions
@@ -181,11 +232,12 @@ function decisionsTable(decisions) {
         <td class="num">${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
         <td>${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</td>
         <td class="num">${fmtTime(d.createdAt)}</td>
+        <td>${llmAnswerDetails(d)}</td>
       </tr>`
     )
     .join("\n");
   return `<table>
-    <thead><tr><th>Ticker</th><th>Direction</th><th>Status</th><th>Size</th><th>Reason</th><th>Decided</th></tr></thead>
+    <thead><tr><th>Ticker</th><th>Direction</th><th>Status</th><th>Size</th><th>Reason</th><th>Decided</th><th>LLM reasoning</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
