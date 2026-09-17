@@ -161,6 +161,54 @@ export async function getDecisionMemoryAsOf(db, { ticker, asOf, limit = 10 }) {
 }
 
 /**
+ * Backtest-RESULT read (deliberately NOT asOf-gated the way every reader
+ * above this point is) -- this answers "what did the signal-on strategy
+ * actually realize during this one test window", for
+ * backtest/onSignalRunner.js's getOnReturns(window) callback, mirroring
+ * noSignalBaseline.js's getPriceBarsAsOf-based getOffReturns(window) on the
+ * signal-off side. Same carve-out as the "Dashboard-only reads" section
+ * further down this file: a realized_return recorded in decision_memory
+ * describes an outcome that has ALREADY happened (graph/settle.js only
+ * ever writes it once a position is actually closed), so there is no
+ * future-information leak risk to gate against here the way there is for
+ * getDecisionMemoryAsOf's OWN use (feeding an agent's live prior-lessons
+ * prompt, which is exactly why that function stays asOf-gated -- this one
+ * is read AFTER a backtest window fully finishes, not injected into any
+ * agent prompt).
+ *
+ * Still bounded on BOTH ends (`from` AND `to` both required), same
+ * no-"give me everything" convention as every other range/asOf reader in
+ * this file -- it just isn't a lookahead-prevention bound here, it's what
+ * scopes the result to exactly one test window's outcomes so pooling
+ * returns per-window (see signalCompare.js#compareSignalOnOffByWindow)
+ * doesn't double-count a return that resolved outside it. `realized_return
+ * IS NOT NULL` excludes rows recordDecisionOutcome wrote with a null value
+ * (should not happen in practice -- settle.js#settlePositionOutcome never
+ * calls closeTheLoop when computeRealizedReturn returned null -- but
+ * filtering defensively here costs nothing and keeps this function's own
+ * "never fabricate/never include a non-number" contract self-evident
+ * without relying on that upstream invariant holding forever).
+ */
+export async function getRealizedReturnsInRange(db, { ticker, from, to, limit = 500 }) {
+  if (!from || !to) {
+    throw new LookaheadViolationError("getRealizedReturnsInRange requires an explicit {from, to} range");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT realized_return
+       FROM decision_memory
+       WHERE ticker = ? AND resolved_at >= ? AND resolved_at < ? AND realized_return IS NOT NULL
+       ORDER BY resolved_at ASC
+       LIMIT ?`
+    )
+    .bind(ticker, from, to, limit)
+    .all();
+
+  return results.map((r) => r.realized_return);
+}
+
+/**
  * Checkpoint/resume for multi-agent runs (plan.md Adopted Pattern #12,
  * graph/checkpointer.js). One row per (runId, ticker) -- upsert on every
  * completed stage rather than append-only, since resume only ever cares
