@@ -37,11 +37,18 @@
 //    never records an exit price (only closed_at/close_reason), so this
 //    view shows direction/entry price/close reason/timing, not a return
 //    figure. See storage/d1.js#getRecentlyClosedPositions's own header.
-// 4. debate_id on every trade_decisions row is always null -- the debates
-//    table has no write path either (surfaced while building this, see
-//    storage/d1.js#insertTradeDecision's header). This dashboard shows the
-//    bull/bear reasoning as it exists today: nowhere, since it's not
-//    persisted -- only the thesis that came out the other end.
+// 4. debate_id on every trade_decisions row is STILL always null -- the
+//    normalized `debates`/`analyst_opinions` tables (migrations/0001_init.sql)
+//    still have no write path (surfaced while building this, see
+//    storage/d1.js#insertTradeDecision's header). What changed
+//    (migrations/0008_trade_decisions_llm_answers.sql): trade_decisions now
+//    also carries `opinions` (the Analyst Team's per-article output) and
+//    `debate` (bull/bear/verdict) as JSON columns on the same row, and this
+//    dashboard's Decisions section (below) renders them per-row behind a
+//    <details> disclosure -- no client JS needed, same zero-build
+//    philosophy as the rest of this file. Rows written BEFORE that
+//    migration have both columns null and render an honest "not recorded"
+//    message instead of a blank/broken panel.
 // 5. The price sparkline section (new) plots price_bars.close as ingested
 //    -- it's whatever yfinance last reported, not adjusted for splits/divs,
 //    and only covers tickers with at least 2 bars on record. A ticker with
@@ -163,6 +170,57 @@ function healthRow(label, stat) {
   return `<tr${rowCls}><td>${escapeHtml(label)}</td><td class="num">${stat.count}</td><td class="num">${fmtTime(stat.lastIngestedAt)}</td><td>${flag}</td></tr>`;
 }
 
+// --------------------------------------------------------------------
+// LLM answer rendering (migrations/0008_trade_decisions_llm_answers.sql)
+// --------------------------------------------------------------------
+
+const OPINION_AGENT_LABELS = { news_event: "News", sentiment: "Sentiment", technical: "Technical" };
+
+/** One line for a single AnalystOpinion (schemas/index.js) -- agent-specific lead-in (eventType/sentiment) where present, then summary + justification. */
+function analystOpinionLine(op) {
+  const label = OPINION_AGENT_LABELS[op.agent] ?? op.agent;
+  const lead = op.agent === "news_event" && op.eventType ? `${op.eventType} \u2014 ` : op.agent === "sentiment" && op.sentiment ? `${op.sentiment} \u2014 ` : "";
+  return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(lead)}${escapeHtml(op.summary)} <span class="llm-justification">(${escapeHtml(op.justification)})</span></div>`;
+}
+
+/** Bull + bear + verdict lines for one DebateVerdict (schemas/index.js) -- bull/bear are nested DebateSide objects inside it. */
+function debateLines(debate) {
+  if (!debate) return "";
+  const confidencePct = typeof debate.confidence === "number" ? `${(debate.confidence * 100).toFixed(0)}%` : "\u2014";
+  return `<div class="llm-block"><span class="llm-agent llm-agent-bull">Bull</span>${escapeHtml(debate.bull?.argument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(debate.bull?.justification ?? "\u2014")})</span></div>
+    <div class="llm-block"><span class="llm-agent llm-agent-bear">Bear</span>${escapeHtml(debate.bear?.argument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(debate.bear?.justification ?? "\u2014")})</span></div>
+    <div class="llm-block"><span class="llm-agent">Verdict</span>${escapeHtml(debate.direction ?? "\u2014")}, ${confidencePct} confidence, ${escapeHtml(debate.timeHorizon ?? "\u2014")} horizon <span class="llm-justification">(${escapeHtml(debate.justification ?? "\u2014")})</span></div>`;
+}
+
+/** Trader's instrument + rationale (TradeThesis, schemas/index.js) -- always present on a decision row, unlike opinions/debate which may predate migrations/0008. */
+function traderLine(thesis) {
+  if (!thesis) return "";
+  return `<div class="llm-block"><span class="llm-agent">Trader</span>${escapeHtml(thesis.instrument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(thesis.rationale ?? "\u2014")})</span></div>`;
+}
+
+/**
+ * The full "LLM answer" for one decision row, behind a native <details>
+ * disclosure (no client JS -- same zero-build philosophy as the rest of
+ * this file): every analyst opinion, the bull/bear debate + judge verdict,
+ * and the trader's rationale, in pipeline order. Falls back to an honest
+ * "not recorded" message for rows written before migrations/0008 (both
+ * opinions and debate null on those).
+ */
+function llmAnswerDetails(d) {
+  if (!d.opinions && !d.debate) {
+    return `<details class="llm-answer"><summary>view</summary><p class="empty">Not recorded for this decision (predates LLM-answer logging).</p></details>`;
+  }
+  const opinionLines = (d.opinions ?? []).map(analystOpinionLine).join("\n");
+  return `<details class="llm-answer">
+    <summary>view</summary>
+    <div class="llm-answer-body">
+      ${opinionLines}
+      ${debateLines(d.debate)}
+      ${traderLine(d.thesis)}
+    </div>
+  </details>`;
+}
+
 function decisionsTable(decisions) {
   if (decisions.length === 0) return `<p class="empty">No decisions match this filter.</p>`;
   const rows = decisions
@@ -174,11 +232,12 @@ function decisionsTable(decisions) {
         <td class="num">${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
         <td>${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</td>
         <td class="num">${fmtTime(d.createdAt)}</td>
+        <td>${llmAnswerDetails(d)}</td>
       </tr>`
     )
     .join("\n");
   return `<table>
-    <thead><tr><th>Ticker</th><th>Direction</th><th>Status</th><th>Size</th><th>Reason</th><th>Decided</th></tr></thead>
+    <thead><tr><th>Ticker</th><th>Direction</th><th>Status</th><th>Size</th><th>Reason</th><th>Decided</th><th>LLM reasoning</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -448,6 +507,32 @@ const STYLE = `
   .status-neutral { color: #8b9490; }
   .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; }
 
+  /* LLM answer disclosure (migrations/0008_trade_decisions_llm_answers.sql) -- native <details>, no client JS */
+  .llm-answer summary {
+    cursor: pointer; color: #7d9bb8; font-size: 0.8rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    list-style: none; width: fit-content;
+  }
+  .llm-answer summary::-webkit-details-marker { display: none; }
+  .llm-answer summary::before { content: "\\25b8 "; }
+  .llm-answer[open] summary::before { content: "\\25be "; }
+  .llm-answer summary:hover { color: #a9c3db; }
+  .llm-answer-body {
+    margin-top: 0.5rem; padding: 0.7rem 0.85rem;
+    background: #0d1210; border: 1px solid #263028; border-radius: 5px;
+    max-width: 52ch; display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .llm-block { font-size: 0.8rem; line-height: 1.5; color: #cfd6c8; }
+  .llm-agent {
+    display: inline-block; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
+    color: #0d1210; background: #7d9bb8; border-radius: 3px;
+    padding: 0.08rem 0.4rem; margin-right: 0.4rem; vertical-align: middle;
+  }
+  .llm-agent-bull { background: #6b8f71; }
+  .llm-agent-bear { background: #a85c4a; }
+  .llm-justification { color: #7d8a7f; font-style: italic; }
+
   tr.stale-row td { color: #8b8060; }
   .stale-flag {
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.72rem;
@@ -626,7 +711,7 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
 
   <section id="decisions">
     <h2>Recent trade decisions</h2>
-    <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Bull/bear debate reasoning isn't shown -- not persisted anywhere yet, see this page's own module header.</p>
+    <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Expand "LLM reasoning" on a row to see the Analyst Team's opinions, the bull/bear debate, the judge's verdict, and the trader's rationale that produced it -- rows from before this feature shipped show "not recorded" instead.</p>
     ${decisionsFilterBar}
     ${decisionsTable(decisions)}
   </section>

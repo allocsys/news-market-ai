@@ -468,15 +468,31 @@ export async function getFundamentalFactsAsOf(db, { ticker, tag, asOf, limit = 2
  * has no write path either, same previously-undiscovered gap as this
  * table had. Not fixed here (out of scope for wiring up decisions
  * specifically); flagged in plan.md.
+ *
+ * `opinions`/`debate` (migrations/0008_trade_decisions_llm_answers.sql) are
+ * the full LLM reasoning chain that produced this decision -- the analyst
+ * opinions array (state.opinions) and the bull/bear/verdict object
+ * (state.verdict) from graph/pipeline.js. Both optional/nullable so a
+ * caller that doesn't have them (none currently -- pipeline.js always
+ * passes both) still inserts cleanly; stored as-is via JSON.stringify, same
+ * convention as thesis/riskDecision/portfolioDecision on this same row.
+ * This is what src/dashboard.js's new "LLM reasoning" disclosure per
+ * decision row reads back -- see getRecentTradeDecisions below.
  */
-export async function insertTradeDecision(db, { id, ticker, asOf, debateId = null, thesis, riskDecision, portfolioDecision, status, createdAt }) {
+export async function insertTradeDecision(db, { id, ticker, asOf, debateId = null, thesis, riskDecision, portfolioDecision, status, createdAt, opinions = null, debate = null }) {
   await db
     .prepare(
-      `INSERT INTO trade_decisions (id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO trade_decisions (id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO NOTHING`
     )
-    .bind(id, ticker, asOf, debateId, JSON.stringify(thesis), JSON.stringify(riskDecision), JSON.stringify(portfolioDecision), status, createdAt)
+    .bind(
+      id, ticker, asOf, debateId,
+      JSON.stringify(thesis), JSON.stringify(riskDecision), JSON.stringify(portfolioDecision),
+      status, createdAt,
+      opinions != null ? JSON.stringify(opinions) : null,
+      debate != null ? JSON.stringify(debate) : null
+    )
     .run();
 }
 
@@ -501,11 +517,11 @@ export async function insertTradeDecision(db, { id, ticker, asOf, debateId = nul
 export async function getRecentTradeDecisions(db, { limit = 20, status } = {}) {
   const { results } = status
     ? await db
-        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions WHERE status = ? ORDER BY created_at DESC LIMIT ?`)
+        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate FROM trade_decisions WHERE status = ? ORDER BY created_at DESC LIMIT ?`)
         .bind(status, limit)
         .all()
     : await db
-        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions ORDER BY created_at DESC LIMIT ?`)
+        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate FROM trade_decisions ORDER BY created_at DESC LIMIT ?`)
         .bind(limit)
         .all();
 
@@ -519,6 +535,12 @@ export async function getRecentTradeDecisions(db, { limit = 20, status } = {}) {
     portfolioDecision: r.portfolio_decision ? JSON.parse(r.portfolio_decision) : null,
     status: r.status,
     createdAt: r.created_at,
+    // LLM reasoning chain (migrations/0008_trade_decisions_llm_answers.sql).
+    // Nullable: rows written before this migration/change have neither
+    // column populated -- dashboard.js renders an honest "not recorded"
+    // state for those rather than assuming every row has this data.
+    opinions: r.opinions ? JSON.parse(r.opinions) : null,
+    debate: r.debate ? JSON.parse(r.debate) : null,
   }));
 }
 
