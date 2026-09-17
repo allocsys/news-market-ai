@@ -71,6 +71,7 @@ import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
 import { checkpoint, resumeFrom } from "./checkpointer.js";
 import { shouldContinueDebate } from "./conditional_logic.js";
 import { loadLessonsForDebate } from "./reflection.js";
+import { settlePositionOutcome } from "./settle.js";
 import { VendorError } from "../shared/errors.js";
 
 /**
@@ -165,19 +166,24 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
       // two live open rows for the same ticker -- the netting fix above
       // only corrects the RISK-PCT MATH, this is what keeps the positions
       // table itself honest (at most one open position per ticker).
+      // Fetched ONCE -- it's both the exitPrice for a replaced existing
+      // position and the entryPrice for the new one below, since both
+      // happen at the same ticker/asOf. May be null (yfinance ingestion
+      // isn't wired into this pipeline yet, a separate known gap), in
+      // which case the new position still opens but
+      // agents/risk_mgmt/exit.js#evaluateExit can only apply a time-based
+      // exit to it later, never stop-loss/take-profit, until real price
+      // data exists for this ticker (see migrations/0006's header for the
+      // same honest-null convention).
+      const priceBars = await getPriceBarsAsOf(db, { ticker, asOf, limit: 1 });
+      const currentPrice = priceBars[0]?.close ?? null;
+
       if (existingPosition && existingPosition.id !== state.riskDecision.tradeThesisId) {
-        await closePosition(db, { id: existingPosition.id, closedAt: asOf, closeReason: "replaced" });
+        await closePosition(db, { id: existingPosition.id, closedAt: asOf, closeReason: "replaced", exitPrice: currentPrice });
+        await settlePositionOutcome(env, config, db, { position: existingPosition, exitPrice: currentPrice, closedAt: asOf, closeReason: "replaced" });
       }
 
-      // entryPrice comes from the most recent price_bars row at/before asOf
-      // -- may be null (yfinance ingestion isn't wired into this pipeline
-      // yet, a separate known gap), in which case the position still opens
-      // but agents/risk_mgmt/exit.js#evaluateExit can only apply a
-      // time-based exit to it later, never stop-loss/take-profit, until
-      // real price data exists for this ticker (see migrations/0006's
-      // header for the same honest-null convention).
-      const priceBars = await getPriceBarsAsOf(db, { ticker, asOf, limit: 1 });
-      const entryPrice = priceBars[0]?.close ?? null;
+      const entryPrice = currentPrice;
 
       // id = tradeThesisId (ticker|asOf) so a checkpoint-resumed re-run of
       // this stage can't double-open the same position (ON CONFLICT DO
