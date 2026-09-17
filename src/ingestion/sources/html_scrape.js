@@ -27,7 +27,7 @@
 // hits the exact same kind of unbounded-latency site.
 
 import { buildNormalizedItem } from "../normalize.js";
-import { resolveTickers } from "../entity_resolution.js";
+import { resolveTickers, getCompanyNameIndex } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { stripHtml, extractPageTitle } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
@@ -57,7 +57,7 @@ function extractPublishedAt(html) {
  * role as gdelt.js's per-ticker query / rss.js's per-feed ticker -- pass it
  * when the caller already knows which ticker this URL is about.
  */
-export async function fetchArticle(config, { url, tickerHint } = {}) {
+export async function fetchArticle(config, { url, tickerHint, nameIndex = [] } = {}) {
   let response;
   try {
     response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
@@ -87,7 +87,7 @@ export async function fetchArticle(config, { url, tickerHint } = {}) {
     // malformed URL would already have failed fetch() above in practice; kept defensive
   }
 
-  const tickers = resolveTickers({ title, domain, hintTicker: tickerHint });
+  const tickers = resolveTickers({ title, domain, hintTicker: tickerHint, nameIndex });
 
   const item = await buildNormalizedItem({
     source: `scrape:${domain || "unknown"}`,
@@ -114,9 +114,23 @@ export async function fetchArticle(config, { url, tickerHint } = {}) {
  * Pattern #11: no silent degradation) -- callers that need "throw on any
  * failure" semantics should inspect `errors` themselves.
  */
-export async function fetchLatest(config, { pages = config.scrapePages } = {}) {
+export async function fetchLatest(config, { pages = config.scrapePages } = {}, { kv } = {}) {
   const items = [];
   const errors = [];
+  // Opt-in real entity resolution -- see gdelt.js's identical wiring for the
+  // full rationale (built once per call, fails open, off by default). Only
+  // fetchLatest's own loop gets it -- a direct fetchArticle call (mirrors
+  // fetchFacts's own single-item convention in edgar_fundamentals.js) still
+  // defaults nameIndex to [], i.e. hintTicker/domain-map matching only,
+  // unless the caller explicitly passes one in.
+  let nameIndex = [];
+  if (config.entityResolutionUseNameIndex) {
+    try {
+      nameIndex = await getCompanyNameIndex(config, kv);
+    } catch (err) {
+      console.error("html_scrape: entity-resolution name index unavailable, falling back to hintTicker/domain-map matching only", { message: err.message });
+    }
+  }
   // No documented per-page rate limit -- config.scrapeMinRequestIntervalMs
   // defaults to 0, a true no-op, same convention as rss.js/gdelt.js. Only
   // paces calls made through THIS loop -- a direct fetchArticle call (like
@@ -126,7 +140,7 @@ export async function fetchLatest(config, { pages = config.scrapePages } = {}) {
   for (const { ticker, url } of pages) {
     await throttle.wait();
     try {
-      items.push(await fetchArticle(config, { url, tickerHint: ticker }));
+      items.push(await fetchArticle(config, { url, tickerHint: ticker, nameIndex }));
     } catch (err) {
       errors.push({ url, error: err });
     }
