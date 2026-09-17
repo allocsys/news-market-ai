@@ -6,17 +6,16 @@
 // AND agents/utils/memory.js#fetchPriorLessons's use of it, against a
 // minimal in-memory fake of D1's prepare/bind/all interface.
 //
-// HONEST SCOPE: FakeMemoryDb only understands the one SELECT d1.js issues
-// against decision_memory -- not a general D1/SQLite emulator, same
-// convention as checkpoint_resume.test.js's FakeCheckpointDb. Does not
-// exercise recordAndReflect (the write path), since that calls the live
-// Gemini cascade via callStructured -- out of scope for a pure leak-check
-// test, same reasoning as checkpoint_resume.test.js's boundary.
+// HONEST SCOPE: FakeMemoryDb only understands the two queries d1.js issues
+// against decision_memory (the SELECT, plus -- since the fake-model
+// injection point below closed the old gap -- the INSERT recordDecisionOutcome
+// issues) -- not a general D1/SQLite emulator, same convention as
+// checkpoint_resume.test.js's FakeCheckpointDb.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getDecisionMemoryAsOf } from "../src/storage/d1.js";
-import { fetchPriorLessons } from "../src/agents/utils/memory.js";
+import { fetchPriorLessons, recordAndReflect } from "../src/agents/utils/memory.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 
 class FakeMemoryDb {
@@ -39,6 +38,14 @@ class FakeMemoryDb {
               .sort((a, b) => (a.resolved_at < b.resolved_at ? 1 : -1)) // resolved_at DESC, matching the real ORDER BY
               .slice(0, limit);
             return { results };
+          },
+          async run() {
+            if (!/INSERT INTO decision_memory/.test(sql)) {
+              throw new Error(`FakeMemoryDb: unsupported run() query: ${sql}`);
+            }
+            const [id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt] = args;
+            if (db.rows.some((r) => r.id === id)) return; // ON CONFLICT(id) DO NOTHING, matching the real SQL
+            db.rows.push({ id, decision_id: decisionId, ticker, realized_return: realizedReturn, alpha_return: alphaReturn, reflection, resolved_at: resolvedAt });
           },
         };
       },
