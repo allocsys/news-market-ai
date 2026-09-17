@@ -39,6 +39,8 @@ import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar
 import {
   insertNewsItem,
   openPosition,
+  closePosition,
+  getOpenPositionForTickerAsOf,
   getOpenPositionsRiskPctAsOf,
   getPriceBarsAsOf,
   insertPriceBar,
@@ -129,15 +131,32 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
   }
 
   if (stage === "risk_checked") {
-    // openPositionsRiskPct now comes from a real point-in-time read (see
-    // storage/d1.js#getOpenPositionsRiskPctAsOf) instead of a hardcoded 0 --
-    // MAX_PORTFOLIO_RISK_PCT in portfolio_manager.js is still an untuned
-    // placeholder ceiling, see that file's header for the known limitation
-    // on re-evaluating an already-open ticker.
-    const openPositionsRiskPct = await getOpenPositionsRiskPctAsOf(db, { asOf });
-    state.portfolioDecision = evaluatePortfolio(state.riskDecision, { openPositionsRiskPct });
+    // NETTING (previously a known gap, now closed): find this ticker's own
+    // existing open position (if any) BEFORE computing the portfolio-wide
+    // risk sum, then exclude it via `excludeTicker` -- openPositionsRiskPct
+    // below is therefore "every OTHER ticker's exposure", never double-
+    // counting this ticker against itself. MAX_PORTFOLIO_RISK_PCT in
+    // portfolio_manager.js is still an untuned placeholder ceiling, that
+    // part is unchanged.
+    const existingPosition = await getOpenPositionForTickerAsOf(db, { ticker, asOf });
+    const openPositionsRiskPct = await getOpenPositionsRiskPctAsOf(db, { asOf, excludeTicker: ticker });
+    state.portfolioDecision = evaluatePortfolio(state.riskDecision, {
+      openPositionsRiskPct,
+      isReplacingPosition: existingPosition !== null,
+    });
 
     if (state.portfolioDecision.approvedForExecution) {
+      // If this ticker already has an open position AND it isn't literally
+      // the same row (same id = same tradeThesisId -- a checkpoint-resumed
+      // re-run of this exact stage), close it as 'replaced' before opening
+      // the new one. Without this, a re-evaluated ticker would accumulate
+      // two live open rows for the same ticker -- the netting fix above
+      // only corrects the RISK-PCT MATH, this is what keeps the positions
+      // table itself honest (at most one open position per ticker).
+      if (existingPosition && existingPosition.id !== state.riskDecision.tradeThesisId) {
+        await closePosition(db, { id: existingPosition.id, closedAt: asOf, closeReason: "replaced" });
+      }
+
       // entryPrice comes from the most recent price_bars row at/before asOf
       // -- may be null (yfinance ingestion isn't wired into this pipeline
       // yet, a separate known gap), in which case the position still opens
