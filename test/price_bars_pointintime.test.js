@@ -172,7 +172,10 @@ test("fetchDailyBars skips a bar with a null field instead of fabricating a valu
 });
 
 test("fetchDailyBars isolates a per-ticker HTTP 429 into `errors` instead of throwing", async (t) => {
-  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d" };
+  // retryMaxAttempts: 1 -- this test asserts isolation, not retry timing;
+  // see this edit's commit message for why it's pinned rather than left
+  // to withRetry's own (slower) default.
+  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d", retryMaxAttempts: 1 };
   t.mock.method(global, "fetch", async () => ({ ok: false, status: 429 }));
 
   const { bars, errors } = await fetchDailyBars(config, { tickers: ["AAPL"] });
