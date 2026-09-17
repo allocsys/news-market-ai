@@ -220,7 +220,7 @@ function logSkippedSource(stage, source, err) {
  * per-page errors are logged here too, for the same "never silently skip"
  * reason, even though they don't hit the try/catch below.
  */
-export async function collectNewsItems(config) {
+export async function collectNewsItems(config, kv) {
   const items = [];
 
   const sources = [
@@ -234,7 +234,7 @@ export async function collectNewsItems(config) {
       // an item that fails enrichment is NOT dropped, it just stays
       // metadata-only (see enrichWithFullText's own header).
       run: async () => {
-        const { items: gdeltItems, errors: gdeltErrors } = await fetchGdeltLatest(config);
+        const { items: gdeltItems, errors: gdeltErrors } = await fetchGdeltLatest(config, {}, { kv });
         for (const { error } of gdeltErrors) {
           logSkippedSource("news ingestion", "gdelt", error);
         }
@@ -246,11 +246,11 @@ export async function collectNewsItems(config) {
         return enriched;
       },
     },
-    { name: "rss", run: () => fetchRssLatest(config) },
+    { name: "rss", run: () => fetchRssLatest(config, {}, { kv }) },
     {
       name: "scrape",
       run: async () => {
-        const { items: scraped, errors } = await fetchScrapeLatest(config);
+        const { items: scraped, errors } = await fetchScrapeLatest(config, {}, { kv });
         for (const { url, error } of errors) {
           console.error("scrape vendor failure -- skipping page", { url, message: error.message });
         }
@@ -380,7 +380,7 @@ export async function runScheduledIngestion(env, config, db) {
   await ingestPriceBars(config, db);
   await ingestFundamentals(config, db, env.CACHE_KV);
 
-  const items = await collectNewsItems(config);
+  const items = await collectNewsItems(config, env.CACHE_KV);
 
   const results = [];
   for (const item of items) {
