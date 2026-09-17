@@ -19,6 +19,12 @@
 //    `body`. Expect noisier text than gdelt.js or rss.js's body field.
 // 3. No robots.txt / paywall handling of any kind -- this fetches the URL
 //    as given and takes whatever comes back.
+// UPDATE (2026-09-17): fetch() below now goes through
+// shared/fetch_with_timeout.js#fetchWithTimeout (config.fetchTimeoutMs) --
+// see gdelt.js's header for the live incident (an untimed-out fetch against
+// an arbitrary third-party page hanging a whole scheduled Worker invocation
+// with no catchable error) that applies equally here, since this adapter
+// hits the exact same kind of unbounded-latency site.
 
 import { buildNormalizedItem } from "../normalize.js";
 import { resolveTickers } from "../entity_resolution.js";
@@ -26,6 +32,7 @@ import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { stripHtml, extractPageTitle } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
+import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 
 const PUBLISHED_META_PATTERNS = [
   /<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']*)["']/i,
@@ -53,7 +60,7 @@ function extractPublishedAt(html) {
 export async function fetchArticle(config, { url, tickerHint } = {}) {
   let response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
   } catch (err) {
     throw new VendorError("scrape", `network failure fetching ${url}: ${err.message}`, { transient: true });
   }

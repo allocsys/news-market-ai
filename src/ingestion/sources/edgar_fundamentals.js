@@ -44,10 +44,16 @@
 //    only paces calls made THROUGH `fetchLatest`'s own loop -- a caller
 //    invoking `fetchFacts` directly, repeatedly, itself (bypassing
 //    `fetchLatest`) is not throttled by this, same as before.
+// UPDATE (2026-09-17): fetch() now goes through
+// shared/fetch_with_timeout.js#fetchWithTimeout (config.fetchTimeoutMs) --
+// see gdelt.js's header for the live silent-scheduled-run-death incident
+// that made a timeout on every ingestion fetch a hard requirement, not just
+// a nice-to-have.
 
 import { validateFundamentalFact } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
+import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 import { resolveCik } from "./edgar_cik_lookup.js";
 
 function normalizeCik(cik) {
@@ -87,7 +93,7 @@ export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
   const url = `${config.edgarApiBase}/CIK${cik}.json`;
   let response;
   try {
-    response = await fetch(url, { headers: { "User-Agent": config.edgarUserAgent, Accept: "application/json" } });
+    response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs, headers: { "User-Agent": config.edgarUserAgent, Accept: "application/json" } });
   } catch (err) {
     throw new VendorError("edgar", `network failure fetching EDGAR companyfacts for ${ticker}: ${err.message}`, { transient: true });
   }

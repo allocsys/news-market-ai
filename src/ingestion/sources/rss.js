@@ -14,6 +14,10 @@
 // stripped of any inner HTML via jsonify.js#stripHtml -- like gdelt.js this
 // is NOT the full article text, just whatever summary the feed itself
 // includes (some feeds give a full article, most give a teaser paragraph).
+// UPDATE (2026-09-17): fetch() now goes through
+// shared/fetch_with_timeout.js#fetchWithTimeout (config.fetchTimeoutMs) --
+// see gdelt.js's header for the live silent-scheduled-run-death incident
+// that made a timeout on every ingestion fetch a hard requirement.
 
 import { buildNormalizedItem } from "../normalize.js";
 import { resolveTickers } from "../entity_resolution.js";
@@ -21,6 +25,7 @@ import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { parseFeedItems, stripHtml } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
+import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 
 /**
  * Fetches and normalizes every item from each `{ ticker, url }` pair in
@@ -43,7 +48,7 @@ export async function fetchLatest(config, { feeds = config.rssFeeds } = {}) {
     await throttle.wait();
     let response;
     try {
-      response = await fetch(url);
+      response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
     } catch (err) {
       throw new VendorError("rss", `network failure fetching feed ${url}: ${err.message}`, { transient: true });
     }

@@ -31,6 +31,19 @@ export function loadConfig(env) {
     geminiFallbackModels: parseList(env.GEMINI_FALLBACK_MODELS),
     geminiApiBase: "https://generativelanguage.googleapis.com/v1beta",
     geminiRequestTimeoutMs: Number(env.GEMINI_REQUEST_TIMEOUT_MS) || 30000,
+    // Timeout for every plain-`fetch` ingestion call (shared/fetch_with_timeout.js)
+    // -- gdelt.js (search + full-text enrichment), html_scrape.js, yfinance.js,
+    // rss.js, edgar_fundamentals.js, edgar_cik_lookup.js. UPDATE: added after a
+    // live incident where a scheduled run's log showed an EDGAR error and then
+    // NOTHING after -- no completed, no failed -- consistent with the Worker
+    // invocation hanging forever on an untimed-out fetch (most likely
+    // gdelt.js#enrichWithFullText, which fetches up to ~150 arbitrary article
+    // URLs serially) until Cloudflare killed the invocation outright, which no
+    // try/catch can observe or log. 10s is a starting point, not vendor-derived
+    // like edgarMinRequestIntervalMs -- these are arbitrary third-party sites
+    // with no documented response-time guarantee, same "no single real number
+    // to derive a default from" situation as rssMinRequestIntervalMs.
+    fetchTimeoutMs: Number(env.FETCH_TIMEOUT_MS) || 10000,
     // Depth-vs-cost knob (plan.md Adopted Pattern #7): how many extra
     // bull/bear/judge rounds graph/conditional_logic.js may run when the
     // judge's confidence is too low to act on. 1 means "debate once, then

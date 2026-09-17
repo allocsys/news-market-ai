@@ -26,8 +26,14 @@
 // against a mocked fetch here, not confirmed against SEC's real file --
 // re-verify the parsing against a real response before relying on this in
 // production if SEC ever changes the file's shape.
+// UPDATE (2026-09-17): fetch() now goes through
+// shared/fetch_with_timeout.js#fetchWithTimeout (config.fetchTimeoutMs) --
+// see ../ingestion/sources/gdelt.js's header for the live silent-
+// scheduled-run-death incident that made a timeout on every ingestion
+// fetch a hard requirement, not just a nice-to-have.
 
 import { VendorError } from "../../shared/errors.js";
+import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 
 const CACHE_KEY = "edgar:ticker-cik-map:v1";
 
@@ -53,7 +59,7 @@ export async function fetchTickerCikMap(config) {
 
   let response;
   try {
-    response = await fetch(config.edgarTickerCikUrl, { headers: { "User-Agent": config.edgarUserAgent, Accept: "application/json" } });
+    response = await fetchWithTimeout(config.edgarTickerCikUrl, { timeoutMs: config.fetchTimeoutMs, headers: { "User-Agent": config.edgarUserAgent, Accept: "application/json" } });
   } catch (err) {
     throw new VendorError("edgar", `network failure fetching SEC ticker->CIK map: ${err.message}`, { transient: true });
   }

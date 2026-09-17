@@ -19,6 +19,15 @@
 // analysts reading `newsItem.body` will still see headline-only items for
 // any article this step fails on -- flagged per-article via the returned
 // `errors`, not silently degraded without a trace.
+// UPDATE (2026-09-17, later same day): this loop was also the culprit in a
+// live silent-scheduled-run-death incident -- it fetches every item's own
+// URL (up to gdeltMaxRecords x watchlist.length, e.g. 50 x 3 = 150 arbitrary
+// news-site pages) SERIALLY, and previously had NO timeout at all on any of
+// those fetches. One hung page fetch blocked the whole Worker invocation
+// until Cloudflare killed it outright -- not a catchable error, so nothing
+// ever logged "completed" or "failed" after it. Now goes through
+// shared/fetch_with_timeout.js#fetchWithTimeout (config.fetchTimeoutMs) so
+// a hung fetch surfaces as a normal, logged, per-article error instead.
 //
 // Ticker resolution is deterministic (Adopted Pattern #10, see
 // ../entity_resolution.js), never inferred by an LLM. Every returned item is
@@ -32,6 +41,7 @@ import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { stripHtml } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
+import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 
 /** GDELT's seendate is "YYYYMMDDTHHMMSSZ" -- reformat to real ISO8601, or null if malformed. */
 function parseGdeltDate(seendate) {
@@ -73,7 +83,7 @@ export async function fetchLatest(config, { queries = config.watchlist } = {}) {
 
     let response;
     try {
-      response = await fetch(url);
+      response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
     } catch (err) {
       throw new VendorError("gdelt", `network failure fetching GDELT DOC API: ${err.message}`, { transient: true });
     }
@@ -121,12 +131,16 @@ export async function fetchLatest(config, { queries = config.watchlist } = {}) {
  * one for no benefit.
  *
  * Per-article failure isolation, same convention as `html_scrape.js
- * #fetchLatest`: a failure (network error, non-2xx, or any unexpected
- * response shape) is caught, recorded in the returned `errors` array, and
- * that item comes back UNCHANGED -- still a valid metadata-only item, never
- * dropped from the batch -- rather than aborting enrichment for every other
- * article. Full text is a strict enhancement on top of an already-valid
- * item, not a hard requirement.
+ * #fetchLatest`: a failure (network error, non-2xx, timeout, or any
+ * unexpected response shape) is caught, recorded in the returned `errors`
+ * array, and that item comes back UNCHANGED -- still a valid metadata-only
+ * item, never dropped from the batch -- rather than aborting enrichment for
+ * every other article. Full text is a strict enhancement on top of an
+ * already-valid item, not a hard requirement. Each fetch is bounded by
+ * config.fetchTimeoutMs (shared/fetch_with_timeout.js) -- see this file's
+ * header for the live incident (Worker invocation hanging indefinitely on
+ * one untimed-out article fetch) that made this a hard requirement, not
+ * just a nice-to-have.
  *
  * Paced via `config.gdeltArticleFetchMinIntervalMs` (default 0, true no-op
  * -- same "arbitrary third-party sites, no single documented rate limit to
@@ -142,7 +156,7 @@ export async function enrichWithFullText(config, items) {
   for (const item of items) {
     await throttle.wait();
     try {
-      const response = await fetch(item.url);
+      const response = await fetchWithTimeout(item.url, { timeoutMs: config.fetchTimeoutMs });
       if (!response.ok) {
         throw new Error(`fetching full text for ${item.url} returned ${response.status}`);
       }

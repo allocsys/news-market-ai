@@ -20,6 +20,11 @@
 // Yahoo could tighten this at any time with no notice, since it's an
 // unofficial endpoint -- re-verify periodically, don't treat this as a
 // permanent guarantee.
+// UPDATE (2026-09-17, later same day): fetch() now goes through
+// shared/fetch_with_timeout.js#fetchWithTimeout (config.fetchTimeoutMs) --
+// see gdelt.js's header for the live silent-scheduled-run-death incident
+// that made a timeout on every ingestion fetch (not just this one) a hard
+// requirement.
 //
 // Every returned bar is run through market_data_validator.js#validatePriceBar
 // before being handed back, matching gdelt.js's validate-before-return
@@ -30,6 +35,7 @@ import { PriceBar } from "../../schemas/index.js";
 import { validatePriceBar } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
+import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 
 /** Yahoo's chart timestamps are Unix seconds -- convert to YYYY-MM-DD (UTC). */
 function timestampToDate(unixSeconds) {
@@ -56,7 +62,7 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
 
     let response;
     try {
-      response = await fetch(url);
+      response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
     } catch (err) {
       throw new VendorError("yfinance", `network failure fetching yfinance chart API: ${err.message}`, { transient: true });
     }
