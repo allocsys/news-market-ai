@@ -47,5 +47,11 @@ GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite"
 # why this is ticker-symbol-as-query for now (v1, deliberately blunt).
 WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
 
+# SEC EDGAR requires a descriptive User-Agent identifying the requester
+# (https://www.sec.gov/os/webmaster-faq#developers) -- not a secret, just an
+# identifying string, so it's fine as a plain var. Was missing entirely,
+# which made every EDGAR fundamentals fetch fail.
+EDGAR_USER_AGENT = "news-market-ai contact@allocsys.dev"
+
 # Secrets -- set via `wrangler secret put GEMINI_API_KEYS`, never committed:
 #   GEMINI_API_KEYS = comma-separated list of Gemini API keys (cascade rotates through all of them)
