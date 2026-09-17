@@ -3,7 +3,9 @@
 // every request, no caching layer, no client-side framework. Combines
 // three views the project previously had no way to see outside raw SQL or
 // Actions logs: recent trade decisions, current positions, and a rough
-// ingestion-health signal.
+// ingestion-health signal. Also renders two chart views (decision activity,
+// per-ticker price) as inline server-generated SVG -- no client JS, no
+// chart library dependency, fits the zero-build Worker environment.
 //
 // HONEST SCOPE, read before treating this as a complete operations view:
 // 1. Backtest results are NOT shown here -- there is no persisted table for
@@ -27,6 +29,15 @@
 //    storage/d1.js#insertTradeDecision's header). This dashboard shows the
 //    bull/bear reasoning as it exists today: nowhere, since it's not
 //    persisted -- only the thesis that came out the other end.
+// 5. The price sparkline section (new) plots price_bars.close as ingested
+//    -- it's whatever yfinance last reported, not adjusted for splits/divs,
+//    and only covers tickers with at least 2 bars on record. A ticker with
+//    0-1 bars is skipped from the chart grid rather than shown broken.
+// 6. The decision-activity chart buckets by created_at's UTC calendar date
+//    (see storage/d1.js#getDecisionStats) -- a decision made at 23:58 UTC
+//    and one at 00:02 UTC the next day land in different bars even if only
+//    minutes apart. A day with zero decisions is still shown as an empty
+//    bar (not omitted), so the x-axis stays a real, evenly-spaced timeline.
 //
 // All user-controllable/LLM-generated text (ticker strings, rationale,
 // reasons) is HTML-escaped before interpolation -- see escapeHtml below.
@@ -40,6 +51,8 @@ import {
   getRecentlyClosedPositions,
   getRecentCheckpoints,
   getIngestionHealth,
+  getDecisionStats,
+  getRecentPriceBars,
 } from "./storage/d1.js";
 
 const ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -116,6 +129,183 @@ function checkpointsTable(checkpoints) {
   </table>`;
 }
 
+/** One summary-stat card: a big number, a label, and an optional muted sub-line. */
+function statCard(value, label, sub = null) {
+  return `<div class="stat-card">
+    <div class="stat-value">${escapeHtml(value)}</div>
+    <div class="stat-label">${escapeHtml(label)}</div>
+    ${sub ? `<div class="stat-sub">${escapeHtml(sub)}</div>` : ""}
+  </div>`;
+}
+
+/**
+ * Derives the portfolio-snapshot summary cards from data this page already
+ * fetched -- no extra D1 reads. openPositions/closedPositions/decisions are
+ * the same arrays the tables below render, just aggregated here.
+ */
+function renderSummaryCards({ openPositions, closedPositions, decisionStats }) {
+  const totalExposurePct = openPositions.reduce((sum, p) => sum + (p.positionSizePct ?? 0), 0) * 100;
+  const longCount = openPositions.filter((p) => p.direction === "long").length;
+  const shortCount = openPositions.filter((p) => p.direction === "short").length;
+
+  const approved = decisionStats.totals.approved ?? 0;
+  const rejected = decisionStats.totals.rejected ?? 0;
+  const otherStatuses = Object.entries(decisionStats.totals).filter(([status]) => status !== "approved" && status !== "rejected");
+  const otherCount = otherStatuses.reduce((sum, [, count]) => sum + count, 0);
+  const decidedTotal = approved + rejected;
+  const approvalRate = decidedTotal > 0 ? ((approved / decidedTotal) * 100).toFixed(0) + "%" : "\u2014";
+
+  const stopLosses = closedPositions.filter((p) => p.closeReason === "stop_loss").length;
+  const takeProfits = closedPositions.filter((p) => p.closeReason === "take_profit").length;
+
+  return `<div class="stat-grid">
+    ${statCard(openPositions.length, "Open positions", `${longCount} long / ${shortCount} short`)}
+    ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %")}
+    ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`)}
+    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`)}
+  </div>`;
+}
+
+const CHART_STATUS_COLORS = { approved: "#6b8f71", rejected: "#a85c4a" };
+const CHART_STATUS_FALLBACK = "#8b9490";
+
+/**
+ * Stacked SVG bar chart: trade decisions per UTC calendar day, split by
+ * status. `daily` is storage/d1.js#getDecisionStats's `daily` rows
+ * (day, status, count), `days` is how many trailing days to show (fills in
+ * zero-bars for days with no rows so the x-axis stays evenly spaced).
+ * Pure server-rendered SVG -- no chart library, no client JS.
+ */
+function decisionsActivityChart(daily, days) {
+  const width = 640;
+  const height = 180;
+  const padLeft = 34;
+  const padBottom = 26;
+  const padTop = 10;
+  const plotW = width - padLeft - 12;
+  const plotH = height - padTop - padBottom;
+
+  // Build the last `days` UTC calendar dates, oldest first, so a day with
+  // zero decisions still gets its own (empty) bar slot.
+  const todayUtc = new Date();
+  const dayKeys = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), todayUtc.getUTCDate() - i));
+    dayKeys.push(d.toISOString().slice(0, 10));
+  }
+
+  // dayKey -> { status -> count }
+  const byDay = new Map(dayKeys.map((k) => [k, {}]));
+  const statusesSeen = new Set();
+  for (const row of daily) {
+    if (!byDay.has(row.day)) continue; // outside the requested window -- shouldn't happen given the SQL, but don't crash on it
+    byDay.get(row.day)[row.status] = row.count;
+    statusesSeen.add(row.status);
+  }
+
+  const dayTotals = dayKeys.map((k) => Object.values(byDay.get(k)).reduce((a, b) => a + b, 0));
+  const maxTotal = Math.max(1, ...dayTotals);
+
+  const barSlot = plotW / dayKeys.length;
+  const barWidth = Math.max(2, barSlot * 0.62);
+
+  // Stable status draw order: approved, rejected, then anything else
+  // (alphabetical) -- keeps stacking order consistent run to run.
+  const statuses = ["approved", "rejected", ...[...statusesSeen].filter((s) => s !== "approved" && s !== "rejected").sort()];
+
+  const bars = dayKeys
+    .map((day, i) => {
+      const counts = byDay.get(day);
+      const x = padLeft + i * barSlot + (barSlot - barWidth) / 2;
+      let yCursor = padTop + plotH;
+      const rects = statuses
+        .map((status) => {
+          const count = counts[status] ?? 0;
+          if (count === 0) return "";
+          const segH = (count / maxTotal) * plotH;
+          yCursor -= segH;
+          const color = CHART_STATUS_COLORS[status] ?? CHART_STATUS_FALLBACK;
+          return `<rect x="${x.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${segH.toFixed(1)}" fill="${color}"><title>${escapeHtml(day)}: ${count} ${escapeHtml(status)}</title></rect>`;
+        })
+        .join("");
+      // Sparse x-axis labels -- every ~3rd day (or every day if the window is short) to avoid overlapping text on a 640px chart.
+      const labelStride = days > 10 ? 3 : 1;
+      const label = i % labelStride === 0 ? `<text x="${(x + barWidth / 2).toFixed(1)}" y="${height - 6}" class="chart-axis-label" text-anchor="middle">${escapeHtml(day.slice(5))}</text>` : "";
+      return rects + label;
+    })
+    .join("\n");
+
+  const gridlines = [0, 0.5, 1]
+    .map((frac) => {
+      const y = padTop + plotH * (1 - frac);
+      const val = Math.round(maxTotal * frac);
+      return `<line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - 12}" y2="${y.toFixed(1)}" class="chart-gridline" />
+        <text x="${padLeft - 6}" y="${(y + 3).toFixed(1)}" class="chart-axis-label" text-anchor="end">${val}</text>`;
+    })
+    .join("\n");
+
+  const legend = statuses
+    .map((status) => `<span class="legend-item"><span class="legend-swatch" style="background:${CHART_STATUS_COLORS[status] ?? CHART_STATUS_FALLBACK}"></span>${escapeHtml(status)}</span>`)
+    .join("");
+
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" class="chart" role="img" aria-label="Trade decisions per day, last ${days} days">
+    ${gridlines}
+    ${bars}
+  </svg>
+  <div class="chart-legend">${legend}</div>`;
+}
+
+/**
+ * Small SVG line chart of recent closing prices for one ticker. `bars` is
+ * storage/d1.js#getRecentPriceBars's chronological (oldest-first) output.
+ * Returns an empty-state message instead of a chart if there are fewer
+ * than 2 bars -- a single point has no line to draw.
+ */
+function priceSparkline(bars, { width = 240, height = 64 } = {}) {
+  if (!bars || bars.length < 2) return `<p class="empty">not enough price history</p>`;
+
+  const closes = bars.map((b) => b.close);
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const padY = 4;
+  const stepX = width / (closes.length - 1);
+
+  const points = closes
+    .map((c, i) => {
+      const x = (i * stepX).toFixed(1);
+      const y = (height - padY - ((c - min) / range) * (height - padY * 2)).toFixed(1);
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  const first = closes[0];
+  const last = closes[closes.length - 1];
+  const up = last >= first;
+  const changePct = first !== 0 ? (((last - first) / first) * 100).toFixed(1) : "0.0";
+  const color = up ? "#6b8f71" : "#a85c4a";
+
+  return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" class="sparkline" role="img" aria-label="Recent close price trend">
+      <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" />
+    </svg>
+    <div class="sparkline-meta">
+      <span class="num">$${last.toFixed(2)}</span>
+      <span class="${up ? "status-approved" : "status-rejected"}">${up ? "\u25b2" : "\u25bc"} ${Math.abs(changePct)}%</span>
+      <span class="chart-axis-label">(${bars.length}d)</span>
+    </div>`;
+}
+
+function priceChartsGrid(tickerBars) {
+  const entries = Object.entries(tickerBars).filter(([, bars]) => bars && bars.length >= 2);
+  if (entries.length === 0) return `<p class="empty">No tickers with enough price history to chart yet.</p>`;
+
+  const cells = entries
+    .map(([ticker, bars]) => `<div class="chart-cell"><div class="chart-cell-title">${escapeHtml(ticker)}</div>${priceSparkline(bars)}</div>`)
+    .join("\n");
+
+  return `<div class="chart-cell-grid">${cells}</div>`;
+}
+
 const STYLE = `
   :root { color-scheme: dark; }
   body {
@@ -151,7 +341,33 @@ const STYLE = `
   .status-rejected { color: #a85c4a; }
   .status-neutral { color: #8b9490; }
   .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } main { padding: 0 1.25rem; } .ticker-strip { padding: 0.85rem 1.25rem; flex-wrap: wrap; } }
+
+  /* Summary stat cards */
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+  .stat-card { background: #10160f; border: 1px solid #263028; border-radius: 6px; padding: 0.9rem 1rem; }
+  .stat-value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 1.5rem; font-weight: 600; color: #e8e4d9; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 0.78rem; color: #7d8a7f; margin-top: 0.15rem; }
+  .stat-sub { font-size: 0.74rem; color: #55605a; margin-top: 0.35rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* Charts (server-rendered inline SVG, no client JS/library) */
+  .chart { display: block; background: #10160f; border: 1px solid #263028; border-radius: 6px; }
+  .chart-gridline { stroke: #1c231d; stroke-width: 1; }
+  .chart-axis-label { fill: #55605a; font-size: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .chart-legend { display: flex; gap: 1.1rem; margin-top: 0.6rem; font-size: 0.78rem; color: #7d8a7f; }
+  .legend-item { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .legend-swatch { width: 0.65rem; height: 0.65rem; border-radius: 2px; display: inline-block; }
+  .chart-cell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.25rem; }
+  .chart-cell { background: #10160f; border: 1px solid #263028; border-radius: 6px; padding: 0.8rem 0.9rem; }
+  .chart-cell-title { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; margin-bottom: 0.4rem; font-size: 0.86rem; }
+  .sparkline { display: block; }
+  .sparkline-meta { display: flex; gap: 0.6rem; align-items: baseline; margin-top: 0.35rem; font-size: 0.78rem; }
+
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr; }
+    .stat-grid { grid-template-columns: 1fr 1fr; }
+    main { padding: 0 1.25rem; }
+    .ticker-strip { padding: 0.85rem 1.25rem; flex-wrap: wrap; }
+  }
 `;
 
 /**
@@ -159,15 +375,30 @@ const STYLE = `
  * queries, no shared transaction needed) and returns a complete, self-
  * contained HTML page. Callers (src/index.js) are responsible for wrapping
  * this in a Response with the right content-type.
+ *
+ * Price-chart data is a second wave: it needs the distinct tickers from
+ * openPositions first, so those getRecentPriceBars calls fire after the
+ * first Promise.all resolves, capped at PRICE_CHART_TICKER_LIMIT distinct
+ * tickers to bound how many extra D1 reads one dashboard request can
+ * trigger.
  */
+const PRICE_CHART_TICKER_LIMIT = 8;
+const DECISION_ACTIVITY_DAYS = 14;
+
 export async function renderDashboardHtml(db) {
-  const [decisions, openPositions, closedPositions, checkpoints, health] = await Promise.all([
+  const [decisions, openPositions, closedPositions, checkpoints, health, decisionStats] = await Promise.all([
     getRecentTradeDecisions(db, { limit: 20 }),
     getAllOpenPositions(db, { limit: 50 }),
     getRecentlyClosedPositions(db, { limit: 20 }),
     getRecentCheckpoints(db, { limit: 30 }),
     getIngestionHealth(db),
+    getDecisionStats(db, { days: DECISION_ACTIVITY_DAYS }),
   ]);
+
+  const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
+  const priceBarsByTicker = Object.fromEntries(
+    await Promise.all(chartTickers.map(async (ticker) => [ticker, await getRecentPriceBars(db, { ticker, limit: 30 })]))
+  );
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -184,6 +415,23 @@ export async function renderDashboardHtml(db) {
     <p class="subtitle">live &mdash; generated ${fmtTime(new Date().toISOString())} &mdash; architecture &amp; known gaps in plan.md</p>
   </div>
   <main>
+
+  <section>
+    <h2>Portfolio snapshot</h2>
+    ${renderSummaryCards({ openPositions, closedPositions, decisionStats })}
+  </section>
+
+  <section>
+    <h2>Decision activity (last ${DECISION_ACTIVITY_DAYS} days)</h2>
+    <p class="note">Trade decisions per UTC calendar day, stacked by status. A zero-height day means the pipeline produced no decisions that day -- it doesn't distinguish "quiet market" from "run failed before reaching this stage" (see Recent pipeline activity below for that).</p>
+    ${decisionsActivityChart(decisionStats.daily, DECISION_ACTIVITY_DAYS)}
+  </section>
+
+  <section>
+    <h2>Price charts</h2>
+    <p class="note">Recent daily closes (yfinance, unadjusted) for tickers with an open position, up to ${PRICE_CHART_TICKER_LIMIT} charted. Not point-in-time-gated -- this is "what the price actually is right now", same convention as the rest of this dashboard.</p>
+    ${priceChartsGrid(priceBarsByTicker)}
+  </section>
 
   <section>
     <h2>Ingestion health</h2>
