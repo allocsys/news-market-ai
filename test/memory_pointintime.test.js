@@ -121,3 +121,91 @@ test("fetchPriorLessons's asOf boundary shifts forward correctly as simulated ti
   const later = await fetchPriorLessons(db, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
   assert.ok(later.includes("ignored bear case")); // now resolved and visible
 });
+
+// ---------------------------------------------------------------------
+// recordAndReflect -- the write path, now exercisable end-to-end via
+// config.fakeModel (agents/utils/structured.js's new injection point)
+// instead of needing the live Gemini cascade.
+// ---------------------------------------------------------------------
+
+test("recordAndReflect calls the real callStructured path (via config.fakeModel), persists the outcome, and returns the reflection text", async () => {
+  const db = new FakeMemoryDb([]);
+  let capturedPrompt = null;
+
+  const config = {
+    geminiQuickModel: "quick-model",
+    fakeModel: async (prompt, opts) => {
+      capturedPrompt = prompt;
+      assert.equal(opts.model, "quick-model"); // recordAndReflect explicitly passes geminiQuickModel
+      return JSON.stringify({ reflection: "sized too aggressively given low confidence" });
+    },
+  };
+
+  const reflection = await recordAndReflect({}, config, db, {
+    id: "dec-1|reflection",
+    decisionId: "dec-1",
+    ticker: "AAPL",
+    decisionSummary: { direction: "long", instrument: "equity" },
+    realizedReturn: -0.02,
+    alphaReturn: -0.03,
+    resolvedAt: "2026-03-01T00:00:00Z",
+  });
+
+  assert.equal(reflection, "sized too aggressively given low confidence");
+  assert.ok(capturedPrompt.includes("AAPL")); // grounded in the real ticker, not a placeholder
+  assert.ok(capturedPrompt.includes("-0.02")); // grounded in the real realized return
+
+  // Persisted row is now readable back through the normal asOf-gated read path.
+  const rows = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-03-02T00:00:00Z" });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reflection, "sized too aggressively given low confidence");
+  assert.equal(rows[0].realized_return, -0.02);
+});
+
+test("recordAndReflect is idempotent -- a second call with the same id does not duplicate the row (ON CONFLICT DO NOTHING)", async () => {
+  const db = new FakeMemoryDb([]);
+  const config = {
+    geminiQuickModel: "quick-model",
+    fakeModel: async () => JSON.stringify({ reflection: "first reflection" }),
+  };
+
+  const args = {
+    id: "dec-1|reflection",
+    decisionId: "dec-1",
+    ticker: "AAPL",
+    decisionSummary: { direction: "long" },
+    realizedReturn: 0.01,
+    alphaReturn: 0.01,
+    resolvedAt: "2026-03-01T00:00:00Z",
+  };
+
+  await recordAndReflect({}, config, db, args);
+  config.fakeModel = async () => JSON.stringify({ reflection: "a different second reflection" });
+  await recordAndReflect({}, config, db, args); // same id -- a checkpoint-resumed re-run scenario
+
+  const rows = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-03-02T00:00:00Z" });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reflection, "first reflection"); // the second call's write never landed
+});
+
+test("recordAndReflect surfaces a schema-validation error rather than silently persisting a malformed reflection", async () => {
+  const db = new FakeMemoryDb([]);
+  const config = {
+    geminiQuickModel: "quick-model",
+    fakeModel: async () => JSON.stringify({ notReflection: "wrong shape" }), // missing required `reflection: string`
+  };
+
+  await assert.rejects(() =>
+    recordAndReflect({}, config, db, {
+      id: "dec-2|reflection",
+      decisionId: "dec-2",
+      ticker: "AAPL",
+      decisionSummary: {},
+      realizedReturn: 0,
+      alphaReturn: 0,
+      resolvedAt: "2026-03-01T00:00:00Z",
+    })
+  );
+
+  assert.equal(db.rows.length, 0); // failed validation, nothing should have been written
+});
