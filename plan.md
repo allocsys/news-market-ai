@@ -247,8 +247,11 @@ are no longer limited to mocks/fakes for the LLM-call path.
   opt-in and off by default — most production traffic still resolves tickers via
   the older hand-maintained domain map / explicit hints alone until the flag is
   flipped on and validated.
-- **GDELT** DOC API returns metadata only (`body` is empty until full-text fetch
-  is added); its live `articles[]` response shape is still unverified (every
+- **GDELT** DOC API itself still returns metadata only, but `gdelt.js#enrichWithFullText`
+  now fetches each article's own page to fill `body` (on by default, per-article
+  failure isolation, timeout-bounded, capped via `gdeltMaxArticlesToEnrich`) —
+  best-effort, not a guarantee: paywalls/bot-challenges still leave some items
+  headline-only. Its live `articles[]` response shape is still unverified (every
   live attempt on `doc/doc` gets rate-limited, appears endpoint-specific/shared-IP,
   not fixable by pacing alone — `gdeltMinRequestIntervalMs` now defaults to
   GDELT's own stated 5000ms).
