@@ -49,6 +49,11 @@ function timestampToDate(unixSeconds) {
  */
 export async function fetchDailyBars(config, { tickers = config.watchlist.map((w) => w.ticker) } = {}) {
   const bars = [];
+  // Per-ticker failures (rate limit, timeout, malformed payload) are
+  // isolated below -- collected here and returned alongside `bars` rather
+  // than thrown, so one bad ticker never blocks the others in the same
+  // run. See this function's own per-ticker try/catch for why.
+  const errors = [];
   // No documented Yahoo rate limit (this is an unofficial endpoint to begin
   // with, see this file's header) -- config.yfinanceMinRequestIntervalMs
   // defaults to 0, a true no-op, same convention as gdelt.js/rss.js. Exists
@@ -58,57 +63,70 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
 
   for (const ticker of tickers) {
     await throttle.wait();
-    const url = `${config.yfinanceApiBase}/${encodeURIComponent(ticker)}?interval=${config.yfinanceInterval}&range=${config.yfinanceRange}`;
-
-    let response;
     try {
-      response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
-    } catch (err) {
-      throw new VendorError("yfinance", `network failure fetching yfinance chart API: ${err.message}`, { transient: true });
-    }
+      const url = `${config.yfinanceApiBase}/${encodeURIComponent(ticker)}?interval=${config.yfinanceInterval}&range=${config.yfinanceRange}`;
 
-    if (!response.ok) {
-      throw new VendorError("yfinance", `yfinance chart API returned ${response.status} for ${ticker}`, {
-        status: response.status,
-        transient: response.status === 429 || response.status >= 500,
-      });
-    }
-
-    const data = await response.json();
-    const result = data?.chart?.result?.[0];
-    const chartError = data?.chart?.error;
-    if (chartError) {
-      throw new VendorError("yfinance", `yfinance chart API returned an error payload for ${ticker}: ${JSON.stringify(chartError)}`);
-    }
-    if (!result) {
-      throw new VendorError("yfinance", `yfinance chart API returned no result for ${ticker} -- unexpected response shape`);
-    }
-
-    const timestamps = result.timestamp ?? [];
-    const quote = result.indicators?.quote?.[0] ?? {};
-
-    for (let i = 0; i < timestamps.length; i++) {
-      // Yahoo returns null for fields it couldn't compute (e.g. a halted
-      // session) -- skip rather than insert a bar with fabricated numbers.
-      if (quote.open?.[i] == null || quote.high?.[i] == null || quote.low?.[i] == null || quote.close?.[i] == null || quote.volume?.[i] == null) {
-        continue;
+      let response;
+      try {
+        response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
+      } catch (err) {
+        throw new VendorError("yfinance", `network failure fetching yfinance chart API: ${err.message}`, { transient: true });
       }
 
-      const bar = PriceBar.parse({
-        ticker,
-        date: timestampToDate(timestamps[i]),
-        open: quote.open[i],
-        high: quote.high[i],
-        low: quote.low[i],
-        close: quote.close[i],
-        volume: quote.volume[i],
-        source: "yfinance",
-      });
+      if (!response.ok) {
+        throw new VendorError("yfinance", `yfinance chart API returned ${response.status} for ${ticker}`, {
+          status: response.status,
+          transient: response.status === 429 || response.status >= 500,
+        });
+      }
 
-      validatePriceBar(bar, { source: "yfinance" });
-      bars.push(bar);
+      const data = await response.json();
+      const result = data?.chart?.result?.[0];
+      const chartError = data?.chart?.error;
+      if (chartError) {
+        throw new VendorError("yfinance", `yfinance chart API returned an error payload for ${ticker}: ${JSON.stringify(chartError)}`);
+      }
+      if (!result) {
+        throw new VendorError("yfinance", `yfinance chart API returned no result for ${ticker} -- unexpected response shape`);
+      }
+
+      const timestamps = result.timestamp ?? [];
+      const quote = result.indicators?.quote?.[0] ?? {};
+
+      for (let i = 0; i < timestamps.length; i++) {
+        // Yahoo returns null for fields it couldn't compute (e.g. a halted
+        // session) -- skip rather than insert a bar with fabricated numbers.
+        if (quote.open?.[i] == null || quote.high?.[i] == null || quote.low?.[i] == null || quote.close?.[i] == null || quote.volume?.[i] == null) {
+          continue;
+        }
+
+        const bar = PriceBar.parse({
+          ticker,
+          date: timestampToDate(timestamps[i]),
+          open: quote.open[i],
+          high: quote.high[i],
+          low: quote.low[i],
+          close: quote.close[i],
+          volume: quote.volume[i],
+          source: "yfinance",
+        });
+
+        validatePriceBar(bar, { source: "yfinance" });
+        bars.push(bar);
+      }
+    } catch (err) {
+      // A single ticker's failure (rate limit, timeout, bad payload) does
+      // NOT abort the rest of the watchlist -- see header comment on this
+      // function. Only VendorError is swallowed here; anything else (a
+      // real bug, e.g. a schema/validation throw) still propagates, same
+      // convention as pipeline.js's collectNewsItems.
+      if (err instanceof VendorError) {
+        errors.push({ ticker, error: err });
+      } else {
+        throw err;
+      }
     }
   }
 
-  return bars;
+  return { bars, errors };
 }
