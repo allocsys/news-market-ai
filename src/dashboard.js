@@ -7,6 +7,16 @@
 // per-ticker price) as inline server-generated SVG -- no client JS, no
 // chart library dependency, fits the zero-build Worker environment.
 //
+// FILTERS (added after initial ship): decision status/limit, the activity
+// chart's day window, and the open-positions row limit are all read from
+// the request's query string (?decisionStatus=approved&decisionLimit=50&
+// activityDays=30&positionsLimit=25) and rendered as plain GET links/forms
+// -- no client JS needed, a filter change is just a normal page navigation
+// to a new URL, same zero-build philosophy as the rest of this file.
+// parseDashboardParams clamps every value to a small allowed set rather
+// than trusting the query string directly, so a malformed/hostile param
+// falls back to the default instead of erroring the page.
+//
 // HONEST SCOPE, read before treating this as a complete operations view:
 // 1. Backtest results are NOT shown here -- there is no persisted table for
 //    a completed backtest run (src/backtest/*.js is a pure computation
@@ -17,9 +27,12 @@
 // 2. Vendor/ingestion errors are NOT shown per-source -- graph/pipeline.js's
 //    failure isolation only console.error()s a skipped source, which isn't
 //    queryable from D1. What IS shown (getIngestionHealth) is a weaker but
-//    real proxy: last-ingested timestamp + row count per table. A stale
-//    timestamp is a real signal something's wrong; it just can't say WHICH
-//    vendor or WHY without adding a real error-log table (not built here).
+//    real proxy: last-ingested timestamp + row count per table, now with a
+//    simple staleness threshold (STALE_INGESTION_HOURS) that flags a row
+//    when its last-ingested time is older than that many hours. That's a
+//    fixed heuristic, not a per-source SLA -- it just says "this looks
+//    old", not WHICH vendor or WHY without a real error-log table (not
+//    built here).
 // 3. Realized P&L on closed positions can't be shown -- closePosition
 //    never records an exit price (only closed_at/close_reason), so this
 //    view shows direction/entry price/close reason/timing, not a return
@@ -74,12 +87,84 @@ function statusBadge(status) {
   return `<span class="status ${cls}">[${escapeHtml(status)}]</span>`;
 }
 
+// --------------------------------------------------------------------
+// Query-param filters
+// --------------------------------------------------------------------
+
+const ACTIVITY_DAYS_OPTIONS = [7, 14, 30, 60];
+const DECISION_STATUS_OPTIONS = ["all", "approved", "rejected"];
+const DECISION_LIMIT_OPTIONS = [10, 20, 50, 100];
+const POSITIONS_LIMIT_OPTIONS = [10, 25, 50, 100];
+const STALE_INGESTION_HOURS = 26; // a bit over one day -- gives a daily cron room without false-alarming on normal jitter
+
+function pickFromOptions(raw, options, fallback) {
+  const parsed = Number.isNaN(Number(raw)) ? raw : Number(raw);
+  return options.includes(parsed) ? parsed : fallback;
+}
+
+/**
+ * Reads and clamps every filter to a small allowed set from the request's
+ * query string. A missing/unrecognized value silently falls back to the
+ * default rather than erroring the page -- a dashboard should never 500 on
+ * a hand-edited or stale URL.
+ */
+export function parseDashboardParams(searchParams) {
+  const sp = searchParams ?? new URLSearchParams();
+  return {
+    activityDays: pickFromOptions(sp.get("activityDays"), ACTIVITY_DAYS_OPTIONS, 14),
+    decisionStatus: DECISION_STATUS_OPTIONS.includes(sp.get("decisionStatus")) ? sp.get("decisionStatus") : "all",
+    decisionLimit: pickFromOptions(sp.get("decisionLimit"), DECISION_LIMIT_OPTIONS, 20),
+    positionsLimit: pickFromOptions(sp.get("positionsLimit"), POSITIONS_LIMIT_OPTIONS, 50),
+  };
+}
+
+/** Builds a "?a=1&b=2" query string for `params` with `overrides` applied -- used to make filter links/forms that preserve every OTHER current filter. */
+function buildQuery(params, overrides = {}) {
+  const merged = { ...params, ...overrides };
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(merged)) sp.set(k, String(v));
+  return `?${sp.toString()}`;
+}
+
+function pillLinks(label, options, current, paramName, params) {
+  const links = options
+    .map((opt) => {
+      const active = String(opt) === String(current);
+      return `<a href="${buildQuery(params, { [paramName]: opt })}" class="pill${active ? " pill-active" : ""}">${escapeHtml(String(opt))}</a>`;
+    })
+    .join("");
+  return `<div class="filter-group"><span class="filter-label">${escapeHtml(label)}</span><div class="pill-row">${links}</div></div>`;
+}
+
+// --------------------------------------------------------------------
+// Section nav
+// --------------------------------------------------------------------
+
+const NAV_SECTIONS = [
+  ["snapshot", "Snapshot"],
+  ["activity", "Activity"],
+  ["charts", "Charts"],
+  ["health", "Health"],
+  ["decisions", "Decisions"],
+  ["positions", "Positions"],
+  ["pipeline", "Pipeline"],
+  ["backtest", "Backtest"],
+];
+
+function renderNav() {
+  const links = NAV_SECTIONS.map(([id, label]) => `<a href="#${id}">${escapeHtml(label)}</a>`).join("");
+  return `<nav class="section-nav">${links}</nav>`;
+}
+
 function healthRow(label, stat) {
-  return `<tr><td>${escapeHtml(label)}</td><td class="num">${stat.count}</td><td class="num">${fmtTime(stat.lastIngestedAt)}</td></tr>`;
+  const stale = stat.lastIngestedAt ? Date.now() - new Date(stat.lastIngestedAt).getTime() > STALE_INGESTION_HOURS * 3600 * 1000 : true;
+  const rowCls = stale ? " class=\"stale-row\"" : "";
+  const flag = stale ? `<span class="stale-flag" title="No new rows in over ${STALE_INGESTION_HOURS}h">stale</span>` : `<span class="ok-flag">fresh</span>`;
+  return `<tr${rowCls}><td>${escapeHtml(label)}</td><td class="num">${stat.count}</td><td class="num">${fmtTime(stat.lastIngestedAt)}</td><td>${flag}</td></tr>`;
 }
 
 function decisionsTable(decisions) {
-  if (decisions.length === 0) return `<p class="empty">No decisions recorded yet.</p>`;
+  if (decisions.length === 0) return `<p class="empty">No decisions match this filter.</p>`;
   const rows = decisions
     .map(
       (d) => `<tr>
@@ -129,9 +214,9 @@ function checkpointsTable(checkpoints) {
   </table>`;
 }
 
-/** One summary-stat card: a big number, a label, and an optional muted sub-line. */
-function statCard(value, label, sub = null) {
-  return `<div class="stat-card">
+/** One summary-stat card: a big number, a label, an optional muted sub-line, and an accent color to break up an otherwise uniform grid. */
+function statCard(value, label, sub = null, accent = "#7d8a7f") {
+  return `<div class="stat-card" style="--accent:${accent}">
     <div class="stat-value">${escapeHtml(value)}</div>
     <div class="stat-label">${escapeHtml(label)}</div>
     ${sub ? `<div class="stat-sub">${escapeHtml(sub)}</div>` : ""}
@@ -159,10 +244,10 @@ function renderSummaryCards({ openPositions, closedPositions, decisionStats }) {
   const takeProfits = closedPositions.filter((p) => p.closeReason === "take_profit").length;
 
   return `<div class="stat-grid">
-    ${statCard(openPositions.length, "Open positions", `${longCount} long / ${shortCount} short`)}
-    ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %")}
-    ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`)}
-    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`)}
+    ${statCard(openPositions.length, "Open positions", `${longCount} long / ${shortCount} short`, "#c9a24b")}
+    ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %", "#6b8f71")}
+    ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`, "#7d9bb8")}
+    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`, "#a85c4a")}
   </div>`;
 }
 
@@ -229,7 +314,7 @@ function decisionsActivityChart(daily, days) {
         })
         .join("");
       // Sparse x-axis labels -- every ~3rd day (or every day if the window is short) to avoid overlapping text on a 640px chart.
-      const labelStride = days > 10 ? 3 : 1;
+      const labelStride = days > 10 ? Math.ceil(days / 10) : 1;
       const label = i % labelStride === 0 ? `<text x="${(x + barWidth / 2).toFixed(1)}" y="${height - 6}" class="chart-axis-label" text-anchor="middle">${escapeHtml(day.slice(5))}</text>` : "";
       return rects + label;
     })
@@ -308,33 +393,54 @@ function priceChartsGrid(tickerBars) {
 
 const STYLE = `
   :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    margin: 0; padding: 0 0 3rem;
+    margin: 0; padding: 0 0 4rem;
     background: #0d1210; color: #e8e4d9;
+    line-height: 1.4;
   }
   .ticker-strip {
     display: flex; align-items: baseline; gap: 0.9rem;
-    padding: 0.85rem 2rem; margin-bottom: 2rem;
+    padding: 0.85rem 2rem;
     border-bottom: 1px solid #c9a24b;
     background: #10160f;
   }
   .ticker-strip .mark { color: #c9a24b; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; letter-spacing: 0.02em; }
-  h1 { font-size: 1.15rem; font-weight: 600; margin: 0; }
+  h1 { font-size: 1.15rem; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
   .subtitle { color: #7d8a7f; margin: 0; font-size: 0.82rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-  main { padding: 0 2rem; }
-  section { margin-bottom: 2.75rem; }
-  h2 { font-size: 0.98rem; font-weight: 600; border-bottom: 1px solid #263028; padding-bottom: 0.5rem; margin-bottom: 0.75rem; }
-  .note { color: #7d8a7f; font-size: 0.8rem; margin: 0.25rem 0 0.9rem; max-width: 62ch; line-height: 1.5; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
-  th, td {
-    text-align: left; padding: 0.5rem 0.7rem;
+
+  .section-nav {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; flex-wrap: wrap; gap: 1.1rem;
+    padding: 0.6rem 2rem; margin-bottom: 2.25rem;
+    background: rgba(13,18,16,0.92); backdrop-filter: blur(6px);
     border-bottom: 1px solid #1c231d;
   }
-  th { color: #7d8a7f; font-weight: 500; font-size: 0.78rem; }
-  td.num, th:nth-child(n) ~ th { font-variant-numeric: tabular-nums; }
+  .section-nav a {
+    color: #9aa69b; text-decoration: none; font-size: 0.8rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.02em; padding: 0.2rem 0;
+    border-bottom: 1px solid transparent;
+    transition: color 0.12s ease, border-color 0.12s ease;
+  }
+  .section-nav a:hover { color: #c9a24b; border-color: #c9a24b; }
+
+  main { padding: 0 2rem; }
+  section { margin-bottom: 2.9rem; scroll-margin-top: 3.2rem; }
+  h2 { font-size: 1rem; font-weight: 600; border-bottom: 1px solid #263028; padding-bottom: 0.55rem; margin-bottom: 0.85rem; letter-spacing: 0.01em; }
+  .note { color: #7d8a7f; font-size: 0.8rem; margin: 0.25rem 0 1rem; max-width: 66ch; line-height: 1.55; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  th, td {
+    text-align: left; padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid #1c231d;
+  }
+  th { color: #7d8a7f; font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
   td.num { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #cfd6c8; font-size: 0.83rem; }
-  td.ticker { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; }
+  td.ticker { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; color: #f0ede2; }
+  tbody tr { transition: background 0.1s ease; }
+  tbody tr:hover { background: #131a13; }
   .empty { color: #55605a; font-style: italic; font-size: 0.86rem; }
   .status { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.82rem; }
   .status-approved { color: #6b8f71; }
@@ -342,31 +448,73 @@ const STYLE = `
   .status-neutral { color: #8b9490; }
   .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; }
 
+  tr.stale-row td { color: #8b8060; }
+  .stale-flag {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.72rem;
+    color: #0d1210; background: #c9a24b; border-radius: 3px; padding: 0.12rem 0.4rem;
+    letter-spacing: 0.03em;
+  }
+  .ok-flag {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.72rem;
+    color: #6b8f71; letter-spacing: 0.03em;
+  }
+
+  /* Filters -- plain GET links/forms, no client JS */
+  .filter-bar { display: flex; flex-wrap: wrap; gap: 1.75rem; align-items: flex-end; margin-bottom: 1rem; }
+  .filter-group { display: flex; flex-direction: column; gap: 0.35rem; }
+  .filter-label { font-size: 0.72rem; color: #7d8a7f; text-transform: uppercase; letter-spacing: 0.04em; }
+  .pill-row { display: flex; gap: 0.4rem; }
+  .pill {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem;
+    color: #cfd6c8; text-decoration: none;
+    padding: 0.28rem 0.65rem; border-radius: 999px;
+    border: 1px solid #263028; background: #10160f;
+    transition: border-color 0.12s ease, color 0.12s ease;
+  }
+  .pill:hover { border-color: #7d8a7f; }
+  .pill-active { color: #0d1210; background: #c9a24b; border-color: #c9a24b; font-weight: 600; }
+  .filter-form select {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.8rem;
+    background: #10160f; color: #e8e4d9; border: 1px solid #263028;
+    border-radius: 4px; padding: 0.32rem 0.5rem;
+  }
+  .filter-form button {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem; font-weight: 600;
+    color: #0d1210; background: #c9a24b; border: none; border-radius: 4px;
+    padding: 0.35rem 0.8rem; cursor: pointer;
+  }
+  .filter-form button:hover { background: #ddb75c; }
+
   /* Summary stat cards */
   .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
-  .stat-card { background: #10160f; border: 1px solid #263028; border-radius: 6px; padding: 0.9rem 1rem; }
-  .stat-value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 1.5rem; font-weight: 600; color: #e8e4d9; font-variant-numeric: tabular-nums; }
-  .stat-label { font-size: 0.78rem; color: #7d8a7f; margin-top: 0.15rem; }
-  .stat-sub { font-size: 0.74rem; color: #55605a; margin-top: 0.35rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .stat-card {
+    background: #10160f; border: 1px solid #263028; border-left: 3px solid var(--accent, #263028);
+    border-radius: 6px; padding: 0.95rem 1.05rem;
+  }
+  .stat-value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 1.55rem; font-weight: 600; color: #e8e4d9; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 0.78rem; color: #7d8a7f; margin-top: 0.2rem; }
+  .stat-sub { font-size: 0.74rem; color: #55605a; margin-top: 0.4rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 
   /* Charts (server-rendered inline SVG, no client JS/library) */
   .chart { display: block; background: #10160f; border: 1px solid #263028; border-radius: 6px; }
   .chart-gridline { stroke: #1c231d; stroke-width: 1; }
   .chart-axis-label { fill: #55605a; font-size: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-  .chart-legend { display: flex; gap: 1.1rem; margin-top: 0.6rem; font-size: 0.78rem; color: #7d8a7f; }
+  .chart-legend { display: flex; gap: 1.1rem; margin-top: 0.65rem; font-size: 0.78rem; color: #7d8a7f; }
   .legend-item { display: inline-flex; align-items: center; gap: 0.35rem; }
   .legend-swatch { width: 0.65rem; height: 0.65rem; border-radius: 2px; display: inline-block; }
   .chart-cell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.25rem; }
-  .chart-cell { background: #10160f; border: 1px solid #263028; border-radius: 6px; padding: 0.8rem 0.9rem; }
-  .chart-cell-title { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; margin-bottom: 0.4rem; font-size: 0.86rem; }
+  .chart-cell { background: #10160f; border: 1px solid #263028; border-radius: 6px; padding: 0.85rem 0.95rem; }
+  .chart-cell-title { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; margin-bottom: 0.45rem; font-size: 0.86rem; }
   .sparkline { display: block; }
-  .sparkline-meta { display: flex; gap: 0.6rem; align-items: baseline; margin-top: 0.35rem; font-size: 0.78rem; }
+  .sparkline-meta { display: flex; gap: 0.6rem; align-items: baseline; margin-top: 0.4rem; font-size: 0.78rem; }
 
   @media (max-width: 900px) {
     .grid { grid-template-columns: 1fr; }
     .stat-grid { grid-template-columns: 1fr 1fr; }
     main { padding: 0 1.25rem; }
     .ticker-strip { padding: 0.85rem 1.25rem; flex-wrap: wrap; }
+    .section-nav { padding: 0.6rem 1.25rem; overflow-x: auto; }
+    .filter-bar { gap: 1.1rem; }
   }
 `;
 
@@ -374,7 +522,9 @@ const STYLE = `
  * Fetches every section's data in parallel (independent read-only D1
  * queries, no shared transaction needed) and returns a complete, self-
  * contained HTML page. Callers (src/index.js) are responsible for wrapping
- * this in a Response with the right content-type.
+ * this in a Response with the right content-type, and for passing the
+ * request's URLSearchParams through as `options.searchParams` so filters
+ * (see this file's header) work.
  *
  * Price-chart data is a second wave: it needs the distinct tickers from
  * openPositions first, so those getRecentPriceBars calls fire after the
@@ -383,22 +533,48 @@ const STYLE = `
  * trigger.
  */
 const PRICE_CHART_TICKER_LIMIT = 8;
-const DECISION_ACTIVITY_DAYS = 14;
 
-export async function renderDashboardHtml(db) {
+export async function renderDashboardHtml(db, { searchParams } = {}) {
+  const params = parseDashboardParams(searchParams);
+
   const [decisions, openPositions, closedPositions, checkpoints, health, decisionStats] = await Promise.all([
-    getRecentTradeDecisions(db, { limit: 20 }),
-    getAllOpenPositions(db, { limit: 50 }),
+    getRecentTradeDecisions(db, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus }),
+    getAllOpenPositions(db, { limit: params.positionsLimit }),
     getRecentlyClosedPositions(db, { limit: 20 }),
     getRecentCheckpoints(db, { limit: 30 }),
     getIngestionHealth(db),
-    getDecisionStats(db, { days: DECISION_ACTIVITY_DAYS }),
+    getDecisionStats(db, { days: params.activityDays }),
   ]);
 
   const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
   const priceBarsByTicker = Object.fromEntries(
     await Promise.all(chartTickers.map(async (ticker) => [ticker, await getRecentPriceBars(db, { ticker, limit: 30 })]))
   );
+
+  const decisionsFilterBar = `<div class="filter-bar">
+    ${pillLinks("Status", DECISION_STATUS_OPTIONS, params.decisionStatus, "decisionStatus", params)}
+    ${pillLinks("Rows", DECISION_LIMIT_OPTIONS, params.decisionLimit, "decisionLimit", params)}
+  </div>`;
+
+  const activityFilterBar = `<div class="filter-bar">
+    ${pillLinks("Window", ACTIVITY_DAYS_OPTIONS.map((d) => `${d}d`), `${params.activityDays}d`, "__activityDaysDisplay", params)}
+  </div>`;
+  // The pill labels above are display strings ("7d"); build the real links
+  // manually since pillLinks assumes label === query value for non-display cases.
+  const activityFilterBarReal = `<div class="filter-bar">
+    <div class="filter-group">
+      <span class="filter-label">Window</span>
+      <div class="pill-row">
+        ${ACTIVITY_DAYS_OPTIONS.map(
+          (d) => `<a href="${buildQuery(params, { activityDays: d })}" class="pill${d === params.activityDays ? " pill-active" : ""}">${d}d</a>`
+        ).join("")}
+      </div>
+    </div>
+  </div>`;
+
+  const positionsFilterBar = `<div class="filter-bar">
+    ${pillLinks("Rows", POSITIONS_LIMIT_OPTIONS, params.positionsLimit, "positionsLimit", params)}
+  </div>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -414,30 +590,32 @@ export async function renderDashboardHtml(db) {
     <span class="mark">&bull;</span>
     <p class="subtitle">live &mdash; generated ${fmtTime(new Date().toISOString())} &mdash; architecture &amp; known gaps in plan.md</p>
   </div>
+  ${renderNav()}
   <main>
 
-  <section>
+  <section id="snapshot">
     <h2>Portfolio snapshot</h2>
     ${renderSummaryCards({ openPositions, closedPositions, decisionStats })}
   </section>
 
-  <section>
-    <h2>Decision activity (last ${DECISION_ACTIVITY_DAYS} days)</h2>
+  <section id="activity">
+    <h2>Decision activity</h2>
     <p class="note">Trade decisions per UTC calendar day, stacked by status. A zero-height day means the pipeline produced no decisions that day -- it doesn't distinguish "quiet market" from "run failed before reaching this stage" (see Recent pipeline activity below for that).</p>
-    ${decisionsActivityChart(decisionStats.daily, DECISION_ACTIVITY_DAYS)}
+    ${activityFilterBarReal}
+    ${decisionsActivityChart(decisionStats.daily, params.activityDays)}
   </section>
 
-  <section>
+  <section id="charts">
     <h2>Price charts</h2>
     <p class="note">Recent daily closes (yfinance, unadjusted) for tickers with an open position, up to ${PRICE_CHART_TICKER_LIMIT} charted. Not point-in-time-gated -- this is "what the price actually is right now", same convention as the rest of this dashboard.</p>
     ${priceChartsGrid(priceBarsByTicker)}
   </section>
 
-  <section>
+  <section id="health">
     <h2>Ingestion health</h2>
-    <p class="note">Last-ingested timestamp + row count per source. Not a per-vendor error log (none is persisted yet) -- a stale timestamp is the strongest signal available here.</p>
+    <p class="note">Last-ingested timestamp + row count per source. Not a per-vendor error log (none is persisted yet) -- a stale timestamp is the strongest signal available here. "Stale" below just means no new rows in over ${STALE_INGESTION_HOURS}h, a fixed heuristic, not a per-source SLA.</p>
     <table>
-      <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th></tr></thead>
+      <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th><th>Status</th></tr></thead>
       <tbody>
         ${healthRow("News (gdelt/rss/scrape)", health.news)}
         ${healthRow("Price bars (yfinance)", health.priceBars)}
@@ -446,15 +624,17 @@ export async function renderDashboardHtml(db) {
     </table>
   </section>
 
-  <section>
+  <section id="decisions">
     <h2>Recent trade decisions</h2>
     <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Bull/bear debate reasoning isn't shown -- not persisted anywhere yet, see this page's own module header.</p>
+    ${decisionsFilterBar}
     ${decisionsTable(decisions)}
   </section>
 
   <div class="grid">
-    <section>
+    <section id="positions">
       <h2>Open positions (${openPositions.length})</h2>
+      ${positionsFilterBar}
       ${positionsTable(openPositions)}
     </section>
     <section>
@@ -462,14 +642,14 @@ export async function renderDashboardHtml(db) {
       <p class="note">No exit price is recorded on close -- realized return can't be shown, only how/when a position closed.</p>
       ${positionsTable(closedPositions, { closed: true })}
     </section>
-    <section>
+    <section id="pipeline">
       <h2>Recent pipeline activity</h2>
       <p class="note">Latest completed stage per run. A stuck/crashed run just stops appearing here, not shown as a failure.</p>
       ${checkpointsTable(checkpoints)}
     </section>
   </div>
 
-  <section>
+  <section id="backtest">
     <h2>Backtest results</h2>
     <p class="note">Not shown -- no backtest run's output is persisted yet (src/backtest/*.js is a computation library, not a stored-results table). See plan.md.</p>
   </section>
