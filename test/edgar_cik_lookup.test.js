@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { VendorError } from "../src/shared/errors.js";
-import { fetchTickerCikMap, getTickerCikMap, resolveCik } from "../src/ingestion/sources/edgar_cik_lookup.js";
+import { fetchTickerCikMap, fetchTickerDirectory, getTickerCikMap, resolveCik } from "../src/ingestion/sources/edgar_cik_lookup.js";
 import { fetchLatest as fetchEdgarLatest } from "../src/ingestion/sources/edgar_fundamentals.js";
 
 const BASE_CONFIG = {
@@ -97,6 +97,45 @@ test("fetchTickerCikMap throws a transient VendorError on a 503, non-transient o
     assert.equal(err.transient, false);
     return true;
   });
+});
+
+// ---------------------------------------------------------------------------
+// fetchTickerDirectory
+// ---------------------------------------------------------------------------
+
+test("fetchTickerDirectory parses SEC's shape into an uppercased ticker -> {cik, title} directory, skipping malformed entries", async (t) => {
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockSecTickerJson() }));
+
+  const directory = await fetchTickerDirectory(BASE_CONFIG);
+  assert.deepEqual(directory, {
+    AAPL: { cik: "0000320193", title: "Apple Inc." },
+    MSFT: { cik: "0000789019", title: "MICROSOFT CORP" },
+  });
+});
+
+test("fetchTickerDirectory throws the same VendorError conditions as fetchTickerCikMap (shared fetch helper)", async (t) => {
+  await assert.rejects(() => fetchTickerDirectory({ ...BASE_CONFIG, edgarUserAgent: "" }), (err) => {
+    assert.ok(err instanceof VendorError);
+    assert.equal(err.transient, false);
+    return true;
+  });
+
+  t.mock.method(global, "fetch", async () => ({ ok: false, status: 503 }));
+  await assert.rejects(() => fetchTickerDirectory(BASE_CONFIG), (err) => {
+    assert.ok(err instanceof VendorError);
+    assert.equal(err.transient, true);
+    return true;
+  });
+});
+
+test("fetchTickerDirectory and fetchTickerCikMap agree on the CIK half of the same underlying data", async (t) => {
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockSecTickerJson() }));
+
+  const directory = await fetchTickerDirectory(BASE_CONFIG);
+  const cikMap = await fetchTickerCikMap(BASE_CONFIG);
+  for (const [ticker, cik] of Object.entries(cikMap)) {
+    assert.equal(directory[ticker].cik, cik);
+  }
 });
 
 // ---------------------------------------------------------------------------
