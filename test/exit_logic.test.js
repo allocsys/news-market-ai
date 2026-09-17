@@ -237,7 +237,7 @@ test("closePosition records closeReason and a subsequent getOpenPositionsAsOf no
 
 test("checkOpenPositionExits closes a position whose stop_loss triggers against price_bars, leaves others open", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 10 };
+  const config = { maxPositionHoldDays: 10, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
@@ -252,16 +252,25 @@ test("checkOpenPositionExits closes a position whose stop_loss triggers against 
   await seedBar(db, { ticker: "AAPL", date: "2026-01-02", close: 95 }); // -5%, past stop_loss
   await seedBar(db, { ticker: "MSFT", date: "2026-01-02", close: 201 }); // unchanged, stays open
 
-  const closed = await checkOpenPositionExits(db, config, { asOf: "2026-01-02T12:00:00Z" });
+  const closed = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-02T12:00:00Z" });
 
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   const stillOpen = await getOpenPositionsAsOf(db, { asOf: "2026-01-03T00:00:00Z" });
   assert.deepEqual(stillOpen.map((p) => p.id), ["MSFT|t1"]);
+
+  // exitPrice recorded (the same bar that triggered the exit), and a
+  // realized return computed + recorded via settlePositionOutcome.
+  assert.equal(db.positions.get("AAPL|t1").exit_price, 95);
+  assert.equal(db.decisionMemory.length, 1);
+  assert.equal(db.decisionMemory[0].decision_id, "AAPL|t1");
+  assert.equal(db.decisionMemory[0].realized_return, (95 - 100) / 100); // -0.05, direction 'long'
+  assert.equal(db.decisionMemory[0].alpha_return, null); // HONEST SCOPE -- no benchmark ingestion yet
+  assert.equal(db.decisionMemory[0].reflection, "test reflection");
 });
 
-test("checkOpenPositionExits closes a position on a time-based exit even with no price_bars data at all", async () => {
+test("checkOpenPositionExits closes a position on a time-based exit even with no price_bars data at all, and records no reflection since the realized return isn't computable", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 5 };
+  const config = { maxPositionHoldDays: 5, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "TSLA|t1", ticker: "TSLA", tradeThesisId: "TSLA|t1", positionSizePct: 0.03,
@@ -271,8 +280,13 @@ test("checkOpenPositionExits closes a position on a time-based exit even with no
   // No price bars seeded for TSLA at all -- this is the "yfinance not wired
   // in yet" case documented in exit_check.js's header.
 
-  const closed = await checkOpenPositionExits(db, config, { asOf: "2026-01-08T00:00:00Z" }); // 7 days later
-  assert.deepEqual(closed, [{ id: "TSLA|t1", ticker: "TSLA", reason: "time_based" }]);
+  const closed = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-08T00:00:00Z" }); // 7 days later
+  assert.deepEqual(closed, [{ id: "TSLA": "TSLA", id: "TSLA|t1", ticker: "TSLA", reason: "time_based" }]);
+
+  // No entryPrice AND no exitPrice -- settlePositionOutcome must skip
+  // reflection entirely rather than fabricate a realized return.
+  assert.equal(db.positions.get("TSLA|t1").exit_price, null);
+  assert.equal(db.decisionMemory.length, 0);
 });
 
 test("checkOpenPositionExits closes nothing and returns an empty array when no position triggers", async () => {
