@@ -187,3 +187,21 @@ jobs:
             exit 0
           fi
           echo "$GEMINI_API_KEYS" | npx wrangler secret put GEMINI_API_KEYS
+      - name: Set FINNHUB_API_KEY on the deployed Worker
+        # Same idempotent, non-blocking shape as the GEMINI_API_KEYS step
+        # above -- Finnhub replaced GDELT as the news source (2026-09-18,
+        # see plan.md), and like the Gemini key, an unset Finnhub key
+        # shouldn't block a first deploy of everything else. Without it,
+        # finnhub.js's fetchLatest logs a 401 VendorError per ticker and
+        # that source is skipped (see pipeline.js's failure-isolation
+        # model) rather than anything crashing.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: |
+          if [ -z "$FINNHUB_API_KEY" ]; then
+            echo "FINNHUB_API_KEY repo secret not set -- skipping. The Worker is deployed but Finnhub news ingestion will fail (401, logged and skipped) until this is configured."
+            exit 0
+          fi
+          echo "$FINNHUB_API_KEY" | npx wrangler secret put FINNHUB_API_KEY
