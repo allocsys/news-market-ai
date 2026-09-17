@@ -188,5 +188,19 @@ export function loadConfig(env) {
     // that also respects KV's 1K writes/day free-tier cap (one write per
     // cache-miss across the whole deployment, not per ticker/request).
     edgarCikCacheTtlSeconds: Number(env.EDGAR_CIK_CACHE_TTL_SECONDS) || 86400,
+    // Bug fix (2026-09-17, see bug.md "Too many API requests by single
+    // Worker invocation"): fetchFacts() previously returned EVERY fact
+    // entry EDGAR has ever reported for a tag -- 10+ years of quarterly/
+    // annual history for a mature ticker -- with no recency filter at all,
+    // despite the function being named fetchLatest. Re-fetched and
+    // re-upserted on every 15-min cron tick across the whole watchlist x
+    // tag set, this blew through the Worker's per-invocation subrequest
+    // cap (each D1 batch-insert statement counts as a subrequest, same as
+    // each outbound fetch). This caps how far back a `filed` date can be
+    // and still be kept. ~370 days covers the last 4 quarters plus one
+    // annual (FY) comparison with a little slack -- generous for what the
+    // debate/judge/trader stages actually need (recent point-in-time
+    // fundamentals), not a tuned/backtested number.
+    edgarFactsLookbackDays: Number(env.EDGAR_FACTS_LOOKBACK_DAYS) || 370,
   };
 }
