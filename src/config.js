@@ -109,6 +109,16 @@ export function loadConfig(env) {
     // (that field paces GDELT's own DOC API search endpoint specifically --
     // a completely different host/limit from the article pages this fetches).
     gdeltArticleFetchMinIntervalMs: Number(env.GDELT_ARTICLE_FETCH_MIN_REQUEST_INTERVAL_MS) || 0,
+    // Caps how many items enrichWithFullText actually fetches per run --
+    // added after a live incident where fetching every item's own URL
+    // (unbounded, up to ~150) exhausted Cloudflare's per-invocation
+    // subrequest cap and starved the downstream Gemini calls in the same
+    // invocation (see gdelt.js#enrichWithFullText header). Items beyond
+    // this cap are simply left metadata-only (never dropped), same
+    // per-item failure convention as an actual fetch error. 15 is a
+    // conservative starting point, not derived from a documented Workers
+    // limit -- tune via env var per deployment/plan.
+    gdeltMaxArticlesToEnrich: Number(env.GDELT_MAX_ARTICLES_TO_ENRICH) || 15,
     // yfinance's unofficial chart API (ingestion/sources/yfinance.js) --
     // see that file's header for the real risk that this endpoint now often
     // requires a cookie+crumb handshake this adapter does not perform.
