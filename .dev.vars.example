@@ -11,3 +11,11 @@ GEMINI_API_KEYS=key1,key2,key3
 # GEMINI_DEEP_MODEL=gemini-2.5-flash
 # GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 # GEMINI_REQUEST_TIMEOUT_MS=30000
+
+# Finnhub news source (src/ingestion/sources/finnhub.js) -- replaced GDELT
+# 2026-09-18, see plan.md. Free tier key from https://finnhub.io.
+FINNHUB_API_KEY=your-finnhub-key-here
+# Optional overrides -- see config.js for defaults.
+# FINNHUB_API_BASE=https://finnhub.io/api/v1/company-news
+# FINNHUB_MIN_REQUEST_INTERVAL_MS=1100
+# FINNHUB_LOOKBACK_DAYS=3
