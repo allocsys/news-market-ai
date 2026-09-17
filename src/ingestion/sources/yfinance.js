@@ -36,6 +36,7 @@ import { validatePriceBar } from "../market_data_validator.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
 import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
+import { withRetry } from "../../shared/retry.js";
 
 /** Yahoo's chart timestamps are Unix seconds -- convert to YYYY-MM-DD (UTC). */
 function timestampToDate(unixSeconds) {
@@ -66,19 +67,32 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
     try {
       const url = `${config.yfinanceApiBase}/${encodeURIComponent(ticker)}?interval=${config.yfinanceInterval}&range=${config.yfinanceRange}`;
 
-      let response;
-      try {
-        response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
-      } catch (err) {
-        throw new VendorError("yfinance", `network failure fetching yfinance chart API: ${err.message}`, { transient: true });
-      }
+      // The fetch + status check (not JSON parsing/validation below) is
+      // what withRetry wraps -- those are the failure modes retry.js's
+      // default shouldRetry considers worth retrying (network error, 429,
+      // 5xx), via the transient: true VendorError already thrown here. A
+      // malformed/unexpected payload is a permanent failure, not a vendor
+      // hiccup -- retrying it would just reproduce the same bad response.
+      const response = await withRetry(
+        async () => {
+          let res;
+          try {
+            res = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
+          } catch (err) {
+            throw new VendorError("yfinance", `network failure fetching yfinance chart API: ${err.message}`, { transient: true });
+          }
 
-      if (!response.ok) {
-        throw new VendorError("yfinance", `yfinance chart API returned ${response.status} for ${ticker}`, {
-          status: response.status,
-          transient: response.status === 429 || response.status >= 500,
-        });
-      }
+          if (!res.ok) {
+            throw new VendorError("yfinance", `yfinance chart API returned ${res.status} for ${ticker}`, {
+              status: res.status,
+              transient: res.status === 429 || res.status >= 500,
+            });
+          }
+
+          return res;
+        },
+        { maxAttempts: config.retryMaxAttempts, baseDelayMs: config.retryBaseDelayMs },
+      );
 
       const data = await response.json();
       const result = data?.chart?.result?.[0];
