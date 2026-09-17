@@ -9,9 +9,16 @@
 # that machinery doesn't apply -- one test job, one migration job, one
 # deploy job. What WAS brought back (2026-09-17): a single dorny/paths-filter
 # job gating two things -- (a) skip test/migrate/deploy entirely on a
-# docs-only diff (plan.md, README.md), (b) only run the migrate job when
-# migrations/ itself changed, so an ordinary code-only push doesn't re-run
-# (idempotent but pointless) remote D1 migrations. workflow_dispatch has no
+# docs-only diff (any markdown file, anywhere), (b) only run the migrate job
+# when migrations/ itself changed, so an ordinary code-only push doesn't
+# re-run (idempotent but pointless) remote D1 migrations. UPDATE (2026-09-17,
+# later): the `code` filter started as an inclusion list (src/**, test/**,
+# package.json, ...) that had to be hand-updated every time a new top-level
+# directory was added, or a push into an unlisted path would silently sail
+# through ungated as if it were docs-only. Flipped to exclusion-based --
+# `**` minus any `*.md` -- so it's correct by construction for any future
+# directory without a workflow-file edit; only markdown counts as docs now.
+# workflow_dispatch has no
 # base ref to diff against, so it bypasses the filter outright and always
 # runs everything -- a manual trigger is an explicit ask to do the full job.
 #
