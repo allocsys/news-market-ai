@@ -31,8 +31,15 @@
 // log line. A non-VendorError (an actual bug, not a vendor failure) still
 // propagates immediately, same as before.
 
-import { fetchLatest as fetchGdeltLatest, enrichWithFullText as enrichGdeltFullText } from "../ingestion/sources/gdelt.js";
+import { fetchLatest as fetchFinnhubLatest } from "../ingestion/sources/finnhub.js";
 import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
+// gdelt.js is intentionally NOT imported here anymore (2026-09-18) -- see
+// plan.md's GDELT correction/replacement note. The file and its test
+// coverage are kept in the repo, unwired but easy to re-enable, per an
+// explicit product decision (not a unilateral removal): re-import
+// fetchLatest/enrichWithFullText from "../ingestion/sources/gdelt.js" and
+// add a "gdelt" entry back into collectNewsItems's `sources` array below
+// if GDELT is ever reinstated as a source.
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
 import { fetchDailyBars } from "../ingestion/sources/yfinance.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
@@ -225,25 +232,17 @@ export async function collectNewsItems(config, kv) {
 
   const sources = [
     {
-      name: "gdelt",
-      // UPDATE (2026-09-17): full-text enrichment (gdelt.js#enrichWithFullText)
-      // now runs by default after the metadata fetch -- gated on
-      // config.gdeltFetchFullText (default true, see config.js) so it can
-      // still be disabled. Per-article enrichment failures are logged here,
-      // same "never silently skip" reasoning as the scrape source below --
-      // an item that fails enrichment is NOT dropped, it just stays
-      // metadata-only (see enrichWithFullText's own header).
+      name: "finnhub",
+      // GDELT's replacement (see plan.md, 2026-09-18) -- same failure-
+      // isolation shape as every other source here: a per-ticker
+      // VendorError is logged and that ticker's items are simply absent,
+      // never aborts the rest of the watchlist or the other sources.
       run: async () => {
-        const { items: gdeltItems, errors: gdeltErrors } = await fetchGdeltLatest(config, {}, { kv });
-        for (const { error } of gdeltErrors) {
-          logSkippedSource("news ingestion", "gdelt", error);
+        const { items: finnhubItems, errors: finnhubErrors } = await fetchFinnhubLatest(config, {}, { kv });
+        for (const { error } of finnhubErrors) {
+          logSkippedSource("news ingestion", "finnhub", error);
         }
-        if (config.gdeltFetchFullText === false || gdeltItems.length === 0) return gdeltItems;
-        const { items: enriched, errors } = await enrichGdeltFullText(config, gdeltItems);
-        for (const { url, error } of errors) {
-          console.error("gdelt full-text fetch failed -- keeping metadata-only item", { url, message: error.message });
-        }
-        return enriched;
+        return finnhubItems;
       },
     },
     { name: "rss", run: () => fetchRssLatest(config, {}, { kv }) },
