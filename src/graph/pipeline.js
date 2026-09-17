@@ -31,7 +31,7 @@
 // log line. A non-VendorError (an actual bug, not a vendor failure) still
 // propagates immediately, same as before.
 
-import { fetchLatest as fetchGdeltLatest } from "../ingestion/sources/gdelt.js";
+import { fetchLatest as fetchGdeltLatest, enrichWithFullText as enrichGdeltFullText } from "../ingestion/sources/gdelt.js";
 import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
 import { fetchDailyBars } from "../ingestion/sources/yfinance.js";
@@ -205,7 +205,25 @@ export async function collectNewsItems(config) {
   const items = [];
 
   const sources = [
-    { name: "gdelt", run: () => fetchGdeltLatest(config) },
+    {
+      name: "gdelt",
+      // UPDATE (2026-09-17): full-text enrichment (gdelt.js#enrichWithFullText)
+      // now runs by default after the metadata fetch -- gated on
+      // config.gdeltFetchFullText (default true, see config.js) so it can
+      // still be disabled. Per-article enrichment failures are logged here,
+      // same "never silently skip" reasoning as the scrape source below --
+      // an item that fails enrichment is NOT dropped, it just stays
+      // metadata-only (see enrichWithFullText's own header).
+      run: async () => {
+        const gdeltItems = await fetchGdeltLatest(config);
+        if (config.gdeltFetchFullText === false || gdeltItems.length === 0) return gdeltItems;
+        const { items: enriched, errors } = await enrichGdeltFullText(config, gdeltItems);
+        for (const { url, error } of errors) {
+          console.error("gdelt full-text fetch failed -- keeping metadata-only item", { url, message: error.message });
+        }
+        return enriched;
+      },
+    },
     { name: "rss", run: () => fetchRssLatest(config) },
     {
       name: "scrape",
