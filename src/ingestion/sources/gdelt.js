@@ -152,8 +152,17 @@ export async function enrichWithFullText(config, items) {
   const throttle = createThrottle({ minIntervalMs: config.gdeltArticleFetchMinIntervalMs ?? 0 });
   const errors = [];
 
+  // Bound how many of `items` actually get fetched this run -- see this
+  // file's header (2026-09-17 subrequest-exhaustion incident) and
+  // config.js#gdeltMaxArticlesToEnrich. Items past the cap are left
+  // metadata-only, same outcome as a per-article fetch failure below, just
+  // decided up front instead of after burning a subrequest on each one.
+  const maxToEnrich = config.gdeltMaxArticlesToEnrich ?? items.length;
+  const toEnrich = items.slice(0, maxToEnrich);
+  const skipped = items.slice(maxToEnrich);
+
   const enriched = [];
-  for (const item of items) {
+  for (const item of toEnrich) {
     await throttle.wait();
     try {
       const response = await fetchWithTimeout(item.url, { timeoutMs: config.fetchTimeoutMs });
@@ -167,6 +176,8 @@ export async function enrichWithFullText(config, items) {
       enriched.push(item); // unchanged -- still a valid metadata-only item, never dropped
     }
   }
+
+  enriched.push(...skipped); // never fetched -- left metadata-only, not an error, just out of this run's budget
 
   return { items: enriched, errors };
 }
