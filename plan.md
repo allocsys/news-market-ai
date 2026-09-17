@@ -334,13 +334,19 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   path is unaffected. **Still open:** `rss.js`/`html_scrape.js` remain
   permanently live-feed/live-page-only — there's no `from`/`to` a feed or
   a scraped page can accept, so they cannot backfill; this is a real gap,
-  not an oversight. `backfillHistoricalNews` also isn't yet wired to any
-  operational entry point (a CLI/script, a one-off `workflow_dispatch`
-  job) — it exists as a callable function with test coverage
-  (`test/ingestion_wiring.test.js`), not something anyone can invoke
-  outside a test yet. A real end-to-end run also still needs a comparable
-  no-signal baseline strategy and will make live LLM calls across
-  historical data (expensive/slow), separate from the backfill gap itself.
+  not an oversight. `backfillHistoricalNews` now has a real operational
+  entry point: `POST /backfill?from=...&to=...` (`src/index.js`), gated
+  behind a required `X-Backfill-Secret` header matched against
+  `BACKFILL_API_SECRET` (`config.js#backfillApiSecret`, no default --
+  stays disabled/503 until explicitly set via `wrangler secret put`, same
+  "disabled, not open" convention as every other unset secret in this
+  project; pushed on deploy the same idempotent way as
+  `GEMINI_API_KEYS`/`FINNHUB_API_KEY`, see `deploy.yml`). Covered by
+  `test/index_backfill.test.js` (auth/validation branches, success, and
+  the genuine-bug-vs-vendor-isolation 500 distinction). A real end-to-end
+  run still needs a comparable no-signal baseline strategy and will make
+  live LLM calls across historical data (expensive/slow), separate
+  concerns from the backfill gap itself.
 - **CI**: no lockfile-sync job (fine while there's one `package.json`). The
   docs-vs-code path filter is now exclusion-based (`**` minus any `*.md`,
   anywhere) rather than a manually maintained inclusion list, so a new
