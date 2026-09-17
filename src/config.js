@@ -77,6 +77,25 @@ export function loadConfig(env) {
     // live-verification, which per-Worker-instance pacing wouldn't address
     // -- but it's still the correct, now-documented default regardless.
     gdeltMinRequestIntervalMs: Number(env.GDELT_MIN_REQUEST_INTERVAL_MS) || 5000,
+
+    // UPDATE (2026-09-17): gdelt.js#enrichWithFullText -- an explicit opt-in
+    // second step that fetches each article's own page to fill in `body`
+    // (fetchLatest alone only ever returns metadata, see that file's HONEST
+    // SCOPE note). Defaults to true/enabled -- graph/pipeline.js#collectNewsItems
+    // calls it by default -- since a headline-only newsItem.body is a real,
+    // previously-documented gap for the analysts reading it; explicit
+    // opt-out ("false") exists for anyone who wants cheaper/faster runs or
+    // is wary of the extra per-article fetches against arbitrary third-party
+    // sites.
+    gdeltFetchFullText: env.GDELT_FETCH_FULL_TEXT !== "false",
+
+    // Paces enrichWithFullText's per-article loop -- arbitrary third-party
+    // article pages, same "no single documented rate limit to derive a
+    // default from" reasoning as scrapeMinRequestIntervalMs below, so this
+    // defaults to 0 (a true no-op), NOT gdeltMinRequestIntervalMs's 5000
+    // (that field paces GDELT's own DOC API search endpoint specifically --
+    // a completely different host/limit from the article pages this fetches).
+    gdeltArticleFetchMinIntervalMs: Number(env.GDELT_ARTICLE_FETCH_MIN_REQUEST_INTERVAL_MS) || 0,
     // yfinance's unofficial chart API (ingestion/sources/yfinance.js) --
     // see that file's header for the real risk that this endpoint now often
     // requires a cookie+crumb handshake this adapter does not perform.
