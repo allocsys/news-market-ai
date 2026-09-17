@@ -79,15 +79,30 @@ test("callStructured still strips a ```json fence from a fake model's output", a
   assert.equal(result.value, "fenced");
 });
 
-test("callStructured still merges extraFields under the fake model's own parsed fields", async () => {
+test("callStructured's parsed fake-model output takes precedence over extraFields when both define the same key (matches real-model precedence)", async () => {
   const config = {
     geminiQuickModel: "m",
-    fakeModel: async () => JSON.stringify({ value: "model-supplied" }),
+    fakeModel: async () => JSON.stringify({ value: "from fake model" }),
   };
 
-  const result = await callStructured({}, config, Simple, "prompt", { extraFields: { unrelated: "kept" } });
+  // extraFields is meant for values the caller already knows and the model
+  // doesn't need to echo back (e.g. newsItemId) -- but if the model DOES
+  // return the same key, `{...extraFields, ...parsed}` means the model's
+  // own answer wins, same as it would with a real Gemini response.
+  const result = await callStructured({}, config, Simple, "prompt", { extraFields: { value: "from extra fields" } });
+  assert.equal(result.value, "from fake model");
+});
+
+test("callStructured merges an extraFields key the fake model's output doesn't touch", async () => {
+  const WithTwoFields = z.object({ value: z.string(), ticker: z.string() });
+  const config = {
+    geminiQuickModel: "m",
+    fakeModel: async () => JSON.stringify({ value: "model-supplied" }), // no `ticker` here
+  };
+
+  const result = await callStructured({}, config, WithTwoFields, "prompt", { extraFields: { ticker: "AAPL" } });
   assert.equal(result.value, "model-supplied");
-  assert.equal(result.unrelated, "kept");
+  assert.equal(result.ticker, "AAPL"); // came through from extraFields untouched
 });
 
 test("callStructured still enforces schema validation against a fake model's output -- a bad shape throws, same as a real prompt/schema mismatch would", async () => {
