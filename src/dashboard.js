@@ -514,8 +514,8 @@ const STYLE = `
     list-style: none; width: fit-content;
   }
   .llm-answer summary::-webkit-details-marker { display: none; }
-  .llm-answer summary::before { content: "\25b8 "; }
-  .llm-answer[open] summary::before { content: "\25be "; }
+  .llm-answer summary::before { content: "\\25b8 "; }
+  .llm-answer[open] summary::before { content: "\\25be "; }
   .llm-answer summary:hover { color: #a9c3db; }
   .llm-answer-body {
     margin-top: 0.5rem; padding: 0.7rem 0.85rem;
