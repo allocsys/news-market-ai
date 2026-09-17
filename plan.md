@@ -274,7 +274,8 @@ are no longer limited to mocks/fakes for the LLM-call path.
 - **Backtest harness** (`signalCompare.js`) is windowing + comparison math only —
   no real end-to-end backtest run yet; needs the full agent graph against live
   data plus a comparable no-signal baseline strategy.
-- **CI**: no lockfile-sync job (fine while there's one `package.json`); the
-  docs-vs-code path filter is a fixed list that needs manual updating if a new
-  top-level code directory is added later.
+- **CI**: no lockfile-sync job (fine while there's one `package.json`). The
+  docs-vs-code path filter is now exclusion-based (`**` minus any `*.md`,
+  anywhere) rather than a manually maintained inclusion list, so a new
+  top-level code directory is gated correctly without a workflow-file edit.
 - **Dashboard** UI/UX pass has not been screenshot-reviewed.
