@@ -11,7 +11,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { openPosition, closePosition, getOpenPositionsRiskPctAsOf } from "../src/storage/d1.js";
+import { openPosition, closePosition, getOpenPositionsRiskPctAsOf, getOpenPositionForTickerAsOf } from "../src/storage/d1.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 
 class FakePositionsDb {
@@ -48,11 +48,37 @@ class FakePositionsDb {
             if (!/SELECT position_size_pct FROM positions/.test(sql)) {
               throw new Error(`FakePositionsDb: unsupported all() query: ${sql}`);
             }
-            const [asOf1, asOf2] = args;
+            // excludeTicker (netting) adds a third bind param + "AND ticker != ?"
+            // to the same SQL shape -- distinguish by arg count, not by a
+            // stricter regex, so this fake stays agnostic to exact SQL text.
+            const [asOf1, asOf2, excludeTicker] = args;
             const results = [...db.rows.values()]
               .filter((r) => r.opened_at <= asOf1 && (r.closed_at === null || r.closed_at > asOf2))
+              .filter((r) => excludeTicker === undefined || r.ticker !== excludeTicker)
               .map((r) => ({ position_size_pct: r.position_size_pct }));
             return { results };
+          },
+          async first() {
+            if (!/SELECT id, ticker, trade_thesis_id.*FROM positions\s+WHERE ticker = \?/s.test(sql)) {
+              throw new Error(`FakePositionsDb: unsupported first() query: ${sql}`);
+            }
+            const [ticker, asOf1, asOf2] = args;
+            const matches = [...db.rows.values()]
+              .filter((r) => r.ticker === ticker && r.opened_at <= asOf1 && (r.closed_at === null || r.closed_at > asOf2))
+              .sort((a, b) => (a.opened_at < b.opened_at ? 1 : -1)); // ORDER BY opened_at DESC
+            const row = matches[0];
+            if (!row) return null;
+            return {
+              id: row.id,
+              ticker: row.ticker,
+              trade_thesis_id: row.trade_thesis_id,
+              position_size_pct: row.position_size_pct,
+              direction: row.direction ?? null,
+              entry_price: row.entry_price ?? null,
+              stop_loss_pct: row.stop_loss_pct ?? null,
+              take_profit_pct: row.take_profit_pct ?? null,
+              opened_at: row.opened_at,
+            };
           },
         };
       },
