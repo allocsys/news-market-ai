@@ -109,3 +109,50 @@ export async function fetchLatest(config, { queries = config.watchlist } = {}) {
 
   return items;
 }
+
+/**
+ * Best-effort full-text enrichment for `fetchLatest`'s metadata-only items
+ * (see HONEST SCOPE above). Fetches each item's own `url`, strips the
+ * returned HTML via `jsonify.js#stripHtml`, and returns a NEW items array
+ * with `body` filled in on success. Does NOT re-derive `title`/`publishedAt`
+ * from the page (unlike `html_scrape.js#fetchArticle`) -- GDELT's own
+ * values are already the normalized, validated ones for these items;
+ * re-deriving from a scrape would risk replacing a good value with a worse
+ * one for no benefit.
+ *
+ * Per-article failure isolation, same convention as `html_scrape.js
+ * #fetchLatest`: a failure (network error, non-2xx, or any unexpected
+ * response shape) is caught, recorded in the returned `errors` array, and
+ * that item comes back UNCHANGED -- still a valid metadata-only item, never
+ * dropped from the batch -- rather than aborting enrichment for every other
+ * article. Full text is a strict enhancement on top of an already-valid
+ * item, not a hard requirement.
+ *
+ * Paced via `config.gdeltArticleFetchMinIntervalMs` (default 0, true no-op
+ * -- same "arbitrary third-party sites, no single documented rate limit to
+ * derive a default from" reasoning as `scrapeMinRequestIntervalMs`, NOT the
+ * same field as `gdeltMinRequestIntervalMs`, which paces the DOC API search
+ * endpoint itself, a completely different host/limit).
+ */
+export async function enrichWithFullText(config, items) {
+  const throttle = createThrottle({ minIntervalMs: config.gdeltArticleFetchMinIntervalMs ?? 0 });
+  const errors = [];
+
+  const enriched = [];
+  for (const item of items) {
+    await throttle.wait();
+    try {
+      const response = await fetch(item.url);
+      if (!response.ok) {
+        throw new Error(`fetching full text for ${item.url} returned ${response.status}`);
+      }
+      const html = await response.text();
+      enriched.push({ ...item, body: stripHtml(html), raw: { ...item.raw, fullTextFetched: true } });
+    } catch (err) {
+      errors.push({ url: item.url, error: err });
+      enriched.push(item); // unchanged -- still a valid metadata-only item, never dropped
+    }
+  }
+
+  return { items: enriched, errors };
+}
