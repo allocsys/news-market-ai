@@ -215,7 +215,10 @@ export async function collectNewsItems(config) {
       // an item that fails enrichment is NOT dropped, it just stays
       // metadata-only (see enrichWithFullText's own header).
       run: async () => {
-        const gdeltItems = await fetchGdeltLatest(config);
+        const { items: gdeltItems, errors: gdeltErrors } = await fetchGdeltLatest(config);
+        for (const { error } of gdeltErrors) {
+          logSkippedSource("news ingestion", "gdelt", error);
+        }
         if (config.gdeltFetchFullText === false || gdeltItems.length === 0) return gdeltItems;
         const { items: enriched, errors } = await enrichGdeltFullText(config, gdeltItems);
         for (const { url, error } of errors) {
@@ -265,15 +268,9 @@ export async function collectNewsItems(config) {
  * should not block news ingestion or the pipeline run.
  */
 export async function ingestPriceBars(config, db) {
-  let bars;
-  try {
-    bars = await fetchDailyBars(config);
-  } catch (err) {
-    if (err instanceof VendorError) {
-      logSkippedSource("price bar ingestion", "yfinance", err);
-      return { count: 0 };
-    }
-    throw err;
+  const { bars, errors } = await fetchDailyBars(config);
+  for (const { error } of errors) {
+    logSkippedSource("price bar ingestion", "yfinance", error);
   }
 
   for (const bar of bars) {
