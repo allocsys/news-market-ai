@@ -150,20 +150,19 @@ test("html_scrape.fetchLatest resolves tickers via the name index when enabled",
 // graph/pipeline.js#collectNewsItems -- kv threading
 // ---------------------------------------------------------------------------
 
-test("collectNewsItems threads kv through to gdelt/rss/scrape so a warm name-index cache is shared across all three (no re-fetch of SEC's file)", async (t) => {
+test("collectNewsItems threads kv through to finnhub/rss/scrape so a warm name-index cache is shared across all three (no re-fetch of SEC's file)", async (t) => {
   const kv = fakeKv();
   await kv.put("entity:company-name-index:v1", JSON.stringify([{ name: "microsoft", ticker: "MSFT" }]));
   const config = {
     watchlist: [{ ticker: "AAPL", query: "AAPL" }],
-    gdeltApiBase: "https://fake.test/gdelt", gdeltMode: "ArtList", gdeltFormat: "json", gdeltSort: "DateDesc", gdeltMaxRecords: 50,
-    gdeltFetchFullText: false, // this test is scoped to kv/name-index caching, not full-text enrichment -- leaving the default (true) on would fetch the mocked article's own URL as an extra request, which the fetch mock below can't distinguish from a SEC company_tickers.json fetch
+    finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3,
     rssFeeds: [{ ticker: "", url: "https://fake.test/feed.xml" }],
     scrapePages: [],
     entityResolutionUseNameIndex: true,
   };
   let secFetches = 0;
   t.mock.method(global, "fetch", async (url) => {
-    if (String(url).includes("gdelt")) return { ok: true, status: 200, json: async () => ({ articles: [{ url: "https://x.example.com/a", seendate: "20260915T143000Z", title: "Microsoft earnings beat", domain: "x.example.com" }] }) };
+    if (String(url).includes("finnhub")) return { ok: true, status: 200, json: async () => [{ url: "https://x.example.com/a", datetime: 1757941800, headline: "Microsoft earnings beat" }] };
     if (String(url).includes("feed.xml")) return { ok: true, status: 200, text: async () => rssXmlWithTitle("Microsoft cloud growth") };
     secFetches++;
     return { ok: true, status: 200, json: async () => ({}) };
@@ -172,22 +171,22 @@ test("collectNewsItems threads kv through to gdelt/rss/scrape so a warm name-ind
   const items = await collectNewsItems(config, kv);
   assert.equal(secFetches, 0); // both sources hit the shared kv cache, never re-fetch SEC's file
 
-  const gdeltItem = items.find((i) => i.source === "gdelt");
+  const finnhubItem = items.find((i) => i.source === "finnhub");
   const rssItem = items.find((i) => i.source.startsWith("rss:"));
-  assert.ok(gdeltItem.tickers.includes("MSFT"));
+  assert.ok(finnhubItem.tickers.includes("MSFT"));
   assert.ok(rssItem.tickers.includes("MSFT"));
 });
 
 test("collectNewsItems works with no kv argument at all (every pre-existing call site) -- name index just misses cache when enabled, doesn't break", async (t) => {
   const config = {
     watchlist: [{ ticker: "AAPL", query: "AAPL" }],
-    gdeltApiBase: "https://fake.test/gdelt", gdeltMode: "ArtList", gdeltFormat: "json", gdeltSort: "DateDesc", gdeltMaxRecords: 50,
+    finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3,
     rssFeeds: [],
     scrapePages: [],
     // entityResolutionUseNameIndex left unset -- this is also the default,
     // no-kv path every existing caller before this session already used.
   };
-  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => ({ articles: [] }) }));
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => [] }));
 
   const items = await collectNewsItems(config);
   assert.deepEqual(items, []);
