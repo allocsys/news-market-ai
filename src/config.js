@@ -135,6 +135,30 @@ export function loadConfig(env) {
     // conservative starting point, not derived from a documented Workers
     // limit -- tune via env var per deployment/plan.
     gdeltMaxArticlesToEnrich: Number(env.GDELT_MAX_ARTICLES_TO_ENRICH) || 15,
+    // Finnhub /company-news API (ingestion/sources/finnhub.js) -- GDELT's
+    // replacement as the primary news source (see plan.md, 2026-09-18).
+    // No default API key on purpose, same "no default without an explicit
+    // reason" convention as edgarUserAgent/rssFeeds -- a made-up key would
+    // just fail every request, and shipping a real one here would be
+    // committing a secret to source control. Every ingestion attempt with
+    // an empty key surfaces as a normal 401 VendorError (logged, that
+    // source skipped), not a special-cased startup failure -- same
+    // "strict enhancement, not a hard dependency" treatment collectNewsItems
+    // already gives every other news source.
+    finnhubApiKey: env.FINNHUB_API_KEY || "",
+    finnhubApiBase: env.FINNHUB_API_BASE || "https://finnhub.io/api/v1/company-news",
+    // Paces finnhub.js#fetchLatest's per-ticker loop (shared/throttle.js).
+    // Finnhub's free tier is documented at 60 requests/minute -- 1100ms
+    // (~54/min) leaves a small safety margin under that ceiling, same
+    // "real vendor-published number, small padding" treatment as
+    // edgarMinRequestIntervalMs's 110ms over EDGAR's 10/sec figure.
+    finnhubMinRequestIntervalMs: Number(env.FINNHUB_MIN_REQUEST_INTERVAL_MS) || 1100,
+    // How many days back each /company-news call's `from` param reaches --
+    // NOT a backtesting window, just wide enough slack to not miss stories
+    // if a scheduled run gets delayed/skipped once. 3 days is a
+    // conservative starting point, not tuned against real traffic yet --
+    // same untuned-placeholder caveat as maxPositionHoldDays.
+    finnhubLookbackDays: Number(env.FINNHUB_LOOKBACK_DAYS) || 3,
     // yfinance's unofficial chart API (ingestion/sources/yfinance.js) --
     // see that file's header for the real risk that this endpoint now often
     // requires a cookie+crumb handshake this adapter does not perform.
