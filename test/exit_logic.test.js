@@ -291,7 +291,7 @@ test("checkOpenPositionExits closes a position on a time-based exit even with no
 
 test("checkOpenPositionExits closes nothing and returns an empty array when no position triggers", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 10 };
+  const config = { maxPositionHoldDays: 10, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
@@ -300,13 +300,13 @@ test("checkOpenPositionExits closes nothing and returns an empty array when no p
   });
   await seedBar(db, { ticker: "AAPL", date: "2026-01-02", close: 101 });
 
-  const closed = await checkOpenPositionExits(db, config, { asOf: "2026-01-02T12:00:00Z" });
+  const closed = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-02T12:00:00Z" });
   assert.deepEqual(closed, []);
 });
 
 test("checkOpenPositionExits is safe to re-run: an already-closed position is not returned/closed again", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 10 };
+  const config = { maxPositionHoldDays: 10, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
@@ -315,9 +315,12 @@ test("checkOpenPositionExits is safe to re-run: an already-closed position is no
   });
   await seedBar(db, { ticker: "AAPL", date: "2026-01-02", close: 95 });
 
-  const firstRun = await checkOpenPositionExits(db, config, { asOf: "2026-01-02T12:00:00Z" });
+  const firstRun = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-02T12:00:00Z" });
   assert.equal(firstRun.length, 1);
 
-  const secondRun = await checkOpenPositionExits(db, config, { asOf: "2026-01-03T12:00:00Z" });
+  const secondRun = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-03T12:00:00Z" });
   assert.deepEqual(secondRun, []);
+
+  // settlePositionOutcome only ran once, on the first (real) close.
+  assert.equal(db.decisionMemory.length, 1);
 });
