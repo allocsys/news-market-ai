@@ -14,6 +14,16 @@ import { isCoolingDown, setCooldown, parseRetryDelaySeconds } from "../../shared
 import { VendorError } from "../../shared/errors.js";
 
 const DEFAULT_COOLDOWN_SECONDS = 60;
+// Overall wall-clock budget for the whole model/key cascade, independent of
+// the per-call geminiRequestTimeoutMs. Added after a live incident where a
+// scheduled run walked 2 models x N keys x 30s timeouts with zero logging,
+// compounding to ~177s of total silence before Cloudflare's platform killed
+// the invocation outright (outcome "exceededCpu", but really a duration
+// ceiling -- each 30s wait was pure fetch/AbortController I/O, not CPU).
+// This caps the cascade well under that ceiling and always throws a clear,
+// logged error instead of letting the platform's kill be the first sign of
+// trouble.
+const MAX_CASCADE_MS = 90000;
 
 async function callOnce(config, model, apiKey, body, keyIndex) {
   const controller = new AbortController();
@@ -67,6 +77,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
   const kv = env.CACHE_KV;
   const primaryModel = opts.model || config.geminiQuickModel;
   const models = [primaryModel, ...config.geminiFallbackModels.filter((m) => m !== primaryModel)];
+  const cascadeStart = Date.now();
 
   let lastErr;
   for (let mi = 0; mi < models.length; mi++) {
@@ -76,7 +87,19 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
       const apiKey = config.geminiApiKeys[ki];
       const isLastCombination = mi === models.length - 1 && ki === config.geminiApiKeys.length - 1;
 
+      const elapsedMs = Date.now() - cascadeStart;
+      if (elapsedMs >= MAX_CASCADE_MS) {
+        const budgetErr = new VendorError(
+          "gemini",
+          `Gemini cascade exceeded its ${MAX_CASCADE_MS}ms budget after ${elapsedMs}ms (stopped before model "${model}" key #${ki}); last error: ${lastErr?.message || "none"}`,
+          { transient: true }
+        );
+        console.log(`[gemini] cascade budget exceeded: ${budgetErr.message}`);
+        throw budgetErr;
+      }
+
       if (await isCoolingDown(kv, model, ki)) {
+        console.log(`[gemini] model "${model}" key #${ki} skipped (cooldown active), elapsed=${elapsedMs}ms`);
         lastErr = new VendorError("gemini", `model "${model}" key #${ki} is in a recorded cooldown`, {
           status: 429,
           transient: true,
@@ -89,6 +112,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         if (mi > 0 || ki > 0) {
           data._fallbackModelUsed = model;
           data._fallbackKeyIndex = ki;
+          console.log(`[gemini] succeeded on fallback model "${model}" key #${ki} after ${elapsedMs}ms`);
         }
         return data;
       } catch (err) {
@@ -97,6 +121,10 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         const isRateLimited = err.status === 429;
         const isOverloaded = err.status === 503;
         const isNetworkTransient = err.transient === true && !err.status;
+
+        console.log(
+          `[gemini] attempt failed: model="${model}" key=#${ki} status=${err.status || "n/a"} transient=${!!err.transient} elapsed=${Date.now() - cascadeStart}ms message=${err.message}`
+        );
 
         // Bad/revoked key: skip to the next key on this SAME model. Must not
         // `break`, or we'd abandon the remaining keys entirely.
