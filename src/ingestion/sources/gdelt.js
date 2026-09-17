@@ -5,13 +5,20 @@
 // our strongest free source for point-in-time backtesting.
 //
 // HONEST SCOPE: GDELT DOC API returns article METADATA only (title, url,
-// seendate, domain) -- not full article body text. `body` below is left as
-// an empty string; fetching+parsing full text from each article URL is a
-// real future task (paywalls, robots.txt, wildly inconsistent per-publisher
-// HTML) deliberately not attempted here. Downstream analysts read
-// `newsItem.body` in their prompts, so until this is filled in they are
-// effectively analyzing headlines only -- flagged here rather than silently
-// degrading without a trace.
+// seendate, domain) -- not full article body text. `fetchLatest` below
+// leaves `body` as an empty string, unchanged -- it stays a pure metadata
+// fetch, so nothing about its existing behavior/tests changes.
+// UPDATE (2026-09-17): full-text fetching now exists as an explicit,
+// separate opt-in step -- see `enrichWithFullText` below -- rather than
+// remaining a documented-but-unfixed gap. It is best-effort by design, not
+// a guarantee: paywalls, robots.txt, and wildly inconsistent per-publisher
+// HTML mean some articles will still end up empty or noisy even with this
+// wired in (html_scrape.js's own live-verified finding -- major finance
+// publishers returning a 401 bot-challenge page -- applies here too, since
+// GDELT article URLs point at exactly that kind of site). Downstream
+// analysts reading `newsItem.body` will still see headline-only items for
+// any article this step fails on -- flagged per-article via the returned
+// `errors`, not silently degraded without a trace.
 //
 // Ticker resolution is deterministic (Adopted Pattern #10, see
 // ../entity_resolution.js), never inferred by an LLM. Every returned item is
@@ -22,6 +29,7 @@
 import { buildNormalizedItem } from "../normalize.js";
 import { resolveTickers } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
+import { stripHtml } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
 
