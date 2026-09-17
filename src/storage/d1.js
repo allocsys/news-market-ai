@@ -321,6 +321,41 @@ export async function insertFundamentalFact(db, fact) {
 }
 
 /**
+ * Batched sibling of insertFundamentalFact -- same upsert, but for many
+ * rows in one db.batch() call instead of one db-prepared .run() per row.
+ * Each individual .run() is its own Worker subrequest, so a per-fact loop
+ * over EDGAR's full companyfacts history for even one ticker/tag can blow
+ * Cloudflare's per-invocation subrequest cap well before the loop
+ * finishes (see graph/pipeline.js#ingestFundamentals's header for the live
+ * incident this fixes: TSLA alone threw "Too many API requests by single
+ * Worker invocation" 1047 times in one 15-minute cron run). db.batch()
+ * sends the whole array as ONE request to D1, so a chunk of N facts costs
+ * one subrequest regardless of N. No-op on an empty array (db.batch([])
+ * is otherwise a wasted round trip).
+ */
+export async function insertFundamentalFacts(db, facts) {
+  if (facts.length === 0) return;
+
+  const stmt = db.prepare(
+    `INSERT INTO fundamental_facts (ticker, cik, tag, val, unit, fiscal_year, fiscal_period, form, filed_at, source, ingested_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(ticker, tag, fiscal_year, fiscal_period, form) DO UPDATE SET
+       val = excluded.val, unit = excluded.unit, filed_at = excluded.filed_at,
+       source = excluded.source, ingested_at = excluded.ingested_at`
+  );
+
+  const ingestedAt = new Date().toISOString();
+  const batch = facts.map((fact) =>
+    stmt.bind(
+      fact.ticker, fact.cik, fact.tag, fact.val, fact.unit,
+      fact.fiscalYear, fact.fiscalPeriod, fact.form, fact.filedAt, fact.source, ingestedAt
+    )
+  );
+
+  await db.batch(batch);
+}
+
+/**
  * Point-in-time read (plan.md Backtesting Integrity, point 3): for
  * `ticker`/`tag`, the latest-filed-as-of-`asOf` fact PER FISCAL PERIOD --
  * i.e. whatever value an analyst reading at `asOf` would actually have
