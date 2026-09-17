@@ -8,10 +8,16 @@
 // point lookup by run_id+ticker) -- it is NOT a general D1/SQLite emulator,
 // deliberately, matching this repo's convention of not building more than
 // what's needed (see e.g. entity_resolution.js's domain map). It does not
-// exercise runPipelineForTicker itself, since that requires live Gemini
-// calls across six agent modules -- a true integration test of the full
-// resume path belongs in a separate, mocked-LLM-layer test once
-// agents/utils/structured.js exposes a way to inject a fake model response.
+// exercise runPipelineForTicker itself -- that's FakePipelineDb, a
+// separate, wider fake covering positions/trade_decisions/decision_memory/
+// price_bars too, further down this file. Splitting them keeps this file's
+// top half a pure unit test of checkpointer.js's stage-ordering logic
+// against the smallest fake that can exercise it.
+//
+// UPDATE (2026-09-17): agents/utils/structured.js now exposes
+// config.fakeModel (see that file's header), which is what makes the
+// full-pipeline integration test below possible -- previously this would
+// have required live Gemini calls across six agent modules.
 
 import test from "node:test";
 import assert from "node:assert/strict";
