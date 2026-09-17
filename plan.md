@@ -242,6 +242,19 @@ plus a resume-after-crash test proving already-completed stages are never
 re-invoked. checkpoint/resume, memory/reflection, and technical-analyst tests
 are no longer limited to mocks/fakes for the LLM-call path.
 
+**Bugfix (2026-09-17):** the resume-after-crash test above is what caught a
+real off-by-one in `graph/pipeline.js` -- `checkpointer.js#resumeFrom` returns
+the NEXT-NEEDED stage (its own unit tests require this), but pipeline.js's
+block conditions/reassignments were written assuming the last-COMPLETED
+stage instead. A fresh run never noticed (self-consistent within one
+cascading execution), but resuming right after the "analyzed" checkpoint
+skipped the debate block entirely and crashed `runTrader` on an undefined
+verdict. This had been silently red on `main` (CI) since the resume test
+was added, unnoticed because every push since was docs-only and skipped the
+test job (see the CI path-filter fix below). Fixed by realigning every
+block's condition/reassignment to the same next-needed convention
+resumeFrom already uses; CI is green end-to-end again as of this commit.
+
 ## Known Gaps / Backlog
 - **Entity resolution** now has a real SEC-backed name-matching path, but it's
   opt-in and off by default — most production traffic still resolves tickers via
