@@ -5,17 +5,22 @@
 // relatively thin "call things in order, save progress" layer.
 //
 // STATE: runScheduledIngestion below now pulls from every ingestion adapter
-// that exists (gdelt, rss, html_scrape for news items; yfinance for price
-// bars; edgar_fundamentals for XBRL facts), not just GDELT. NOT yet
-// exercised against LIVE vendor traffic -- see each adapter's own header
-// for the specific unverified risk (GDELT's empty-body gap, yfinance's
-// cookie/crumb gap, etc). This session's change is the WIRING half only
-// (calling adapters from here, feeding their output into storage, fully
-// covered by mocked-fetch tests in test/ingestion_wiring.test.js); the
-// LIVE spot-check half is blocked from this sandbox's network egress
-// (confirmed 403/host_not_allowed against api.gdeltproject.org,
-// query1.finance.yahoo.com, data.sec.gov) and remains an open item -- see
-// plan.md.
+// that's wired in (finnhub, rss, html_scrape for news items; yfinance for
+// price bars; edgar_fundamentals for XBRL facts). NOT yet exercised against
+// LIVE vendor traffic -- see each adapter's own header for the specific
+// unverified risk (finnhub's field-mapping is doc-derived, not yet
+// live-confirmed; yfinance's cookie/crumb gap; etc). GDELT (gdelt.js) was
+// the original news source here but was unwired 2026-09-18 -- its live
+// response shape was never actually confirmed and its rate limiting proved
+// too severe from this sandbox's egress IP; the file and its tests remain
+// in the repo, just not imported by this module -- see plan.md's GDELT
+// correction/replacement note. This session's change is the WIRING half
+// only (calling adapters from here, feeding their output into storage,
+// fully covered by mocked-fetch tests in test/ingestion_wiring.test.js);
+// the LIVE spot-check half is blocked from this sandbox's network egress
+// (confirmed 403/host_not_allowed against query1.finance.yahoo.com,
+// data.sec.gov, and similarly against finnhub.io) and remains an open item
+// -- see plan.md.
 //
 // FAILURE ISOLATION (Adopted Pattern #11 read literally: "surface a typed
 // error and follow an explicit configured fallback order -- never silently
