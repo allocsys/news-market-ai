@@ -351,13 +351,31 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   cutoff everything else uses. `makeBuyAndHoldOffReturns` matches
   `compareSignalOnOffByWindow`'s `getOffReturns(window)` callback exactly,
   so it plugs straight in with no adapter code. Covered by
-  `test/backtest_no_signal_baseline.test.js`. **What's actually left for a
-  real end-to-end run now:** only the "signal on" side -- running the real
-  LLM-backed pipeline (`runPipelineForTicker`) across backfilled
-  historical news to produce `getOnReturns`. That's a genuinely bigger,
-  separate undertaking (live Gemini calls across a historical date range
-  -- expensive, slow, and needs its own cost/rate-limit-aware runner), not
-  attempted on this branch.
+  `test/backtest_no_signal_baseline.test.js`. **The "signal on" side is now
+  also built** (`src/backtest/onSignalRunner.js`): walks a test window
+  (plus a `graceDays` extension, default `config.maxPositionHoldDays`) one
+  calendar day at a time, running `runPipelineForTicker` against whatever
+  backfilled news landed that day (via two new point-in-time-flavored
+  `storage/d1.js` readers, `getNewsItemsInRange` and, for the results side,
+  `getRealizedReturnsInRange`) and calling `exit_check.js#checkOpenPositionExits`
+  every day so stop-loss/take-profit/time-based exits get the same daily
+  cadence the live cron path gives them -- a position only becomes a
+  realized return once something closes it, so a single end-of-window pass
+  would have systematically under-counted closes. `makeOnSignalReturns`
+  matches `getOnReturns(window)` exactly, same drop-in shape as the
+  no-signal side. Covered by `test/backtest_on_signal_runner.test.js`,
+  entirely via `config.fakeModel` (zero real Gemini/Finnhub calls in CI).
+  **COST WARNING, not yet done:** actually invoking this against real
+  backfilled news/live Gemini traffic for a real backtest run has NOT been
+  done this session, deliberately -- `runPipelineForTicker` makes several
+  LLM calls per news item plus one more per position close, so a real run
+  spends real quota and needs an explicit go-ahead, not a routine test
+  pass. **What's actually left for a real end-to-end run now:** wiring
+  `backfillHistoricalNews` + `makeOnSignalReturns` + `makeBuyAndHoldOffReturns`
+  + `compareSignalOnOffByWindow` together behind one real invocation (a
+  script or an operational endpoint, mirroring `POST /backfill`'s own
+  gated-secret pattern) and actually running it once, with real cost
+  accepted -- the math/orchestration layer itself is now fully built.
 - **CI**: no lockfile-sync job (fine while there's one `package.json`). The
   docs-vs-code path filter is now exclusion-based (`**` minus any `*.md`,
   anywhere) rather than a manually maintained inclusion list, so a new
