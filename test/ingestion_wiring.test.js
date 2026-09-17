@@ -14,8 +14,46 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectNewsItems, ingestPriceBars, ingestFundamentals } from "../src/graph/pipeline.js";
+import { collectNewsItems, ingestPriceBars, ingestFundamentals, backfillHistoricalNews } from "../src/graph/pipeline.js";
+import { fetchLatest as fetchFinnhubLatest } from "../src/ingestion/sources/finnhub.js";
 import { VendorError } from "../src/shared/errors.js";
+
+/**
+ * Minimal in-memory fake of storage/d1.js#insertNewsItem's three tables
+ * (news_items, news_item_revisions, news_item_tickers) -- FakeDb above only
+ * understands the price_bars/fundamental_facts INSERT shapes ingestPriceBars/
+ * ingestFundamentals issue, so backfillHistoricalNews (which calls
+ * insertNewsItem) needs its own fake rather than overloading that one.
+ */
+class FakeNewsDb {
+  constructor() {
+    this.newsItems = [];
+    this.tickers = [];
+  }
+
+  prepare(sql) {
+    const db = this;
+    return {
+      bind(...args) {
+        return {
+          async run() {
+            if (/INSERT INTO news_items/.test(sql)) {
+              const [id, source, url, firstPublishedAt] = args;
+              db.newsItems.push({ id, source, url, firstPublishedAt });
+            } else if (/INSERT INTO news_item_revisions/.test(sql)) {
+              // exercised by insertNewsItem but not asserted on here -- news_items is the signal this test suite cares about
+            } else if (/INSERT INTO news_item_tickers/.test(sql)) {
+              const [newsItemId, ticker] = args;
+              db.tickers.push({ newsItemId, ticker });
+            } else {
+              throw new Error(`FakeNewsDb: unsupported run() query: ${sql}`);
+            }
+          },
+        };
+      },
+    };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -230,6 +268,94 @@ test("ingestPriceBars rethrows a non-VendorError (a real bug, not a vendor failu
 
   const db = new FakeDb();
   await assert.rejects(() => ingestPriceBars(config, db), TypeError);
+});
+
+// ---------------------------------------------------------------------------
+// finnhub.js explicit {from, to} range
+// ---------------------------------------------------------------------------
+
+test("finnhub fetchLatest uses an explicit {from, to} range instead of the trailing lookback window, when provided", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }], finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3 };
+
+  let capturedUrl;
+  t.mock.method(global, "fetch", async (url) => {
+    capturedUrl = String(url);
+    return { ok: true, status: 200, json: async () => [] };
+  });
+
+  await fetchFinnhubLatest(config, { from: "2024-01-01", to: "2024-01-31" }, {});
+
+  assert.ok(capturedUrl.includes("from=2024-01-01"));
+  assert.ok(capturedUrl.includes("to=2024-01-31"));
+});
+
+test("finnhub fetchLatest still defaults to the trailing lookback window when from/to are omitted (regression guard)", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }], finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3 };
+
+  let capturedUrl;
+  t.mock.method(global, "fetch", async (url) => {
+    capturedUrl = String(url);
+    return { ok: true, status: 200, json: async () => [] };
+  });
+
+  await fetchFinnhubLatest(config, {}, {});
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  assert.ok(capturedUrl.includes(`to=${todayStr}`));
+  assert.ok(!capturedUrl.includes("from=2024")); // sanity: not accidentally picking up a stale hardcoded date
+});
+
+// ---------------------------------------------------------------------------
+// backfillHistoricalNews
+// ---------------------------------------------------------------------------
+
+test("backfillHistoricalNews requires an explicit {from, to} range", async () => {
+  const config = { watchlist: [{ ticker: "AAPL" }], finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key" };
+  const db = new FakeNewsDb();
+  await assert.rejects(() => backfillHistoricalNews(config, db, {}), /requires an explicit \{from, to\}/);
+});
+
+test("backfillHistoricalNews fetches finnhub for the given range and persists every item via insertNewsItem", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }], finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key" };
+
+  let capturedUrl;
+  t.mock.method(global, "fetch", async (url) => {
+    capturedUrl = String(url);
+    return { ok: true, status: 200, json: async () => mockFinnhubJson() };
+  });
+
+  const db = new FakeNewsDb();
+  const result = await backfillHistoricalNews(config, db, { from: "2024-01-01", to: "2024-01-31" });
+
+  assert.equal(result.inserted, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(db.newsItems.length, 1);
+  assert.equal(db.newsItems[0].source, "finnhub");
+  assert.ok(db.tickers.some((t2) => t2.ticker === "AAPL"));
+  assert.ok(capturedUrl.includes("from=2024-01-01"));
+  assert.ok(capturedUrl.includes("to=2024-01-31"));
+});
+
+test("backfillHistoricalNews logs and skips a ticker's VendorError without throwing, same isolation as collectNewsItems", async (t) => {
+  const config = {
+    watchlist: [{ ticker: "AAPL" }, { ticker: "MSFT" }],
+    finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", retryMaxAttempts: 1,
+  };
+
+  t.mock.method(global, "fetch", async (url) => {
+    if (String(url).includes("symbol=AAPL")) return { ok: false, status: 503 };
+    return { ok: true, status: 200, json: async () => mockFinnhubJson() };
+  });
+
+  const errorLogs = [];
+  t.mock.method(console, "error", (...args) => errorLogs.push(args));
+
+  const db = new FakeNewsDb();
+  const result = await backfillHistoricalNews(config, db, { from: "2024-01-01", to: "2024-01-31" });
+
+  assert.equal(result.inserted, 1); // only MSFT's item persisted
+  assert.equal(result.errors.length, 1);
+  assert.ok(errorLogs.some(([msg, detail]) => msg.includes("historical news backfill") && detail.source === "finnhub"));
 });
 
 // ---------------------------------------------------------------------------

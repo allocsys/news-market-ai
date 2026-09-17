@@ -10,9 +10,22 @@
 // Pattern #11).
 
 import { loadConfig } from "./config.js";
-import { runScheduledIngestion } from "./graph/pipeline.js";
+import { runScheduledIngestion, backfillHistoricalNews } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
 import { renderDashboardHtml } from "./dashboard.js";
+
+/**
+ * Basic YYYY-MM-DD shape check -- just enough to reject obvious garbage
+ * (empty string, "tomorrow", a swapped from/to) with a clear 400 before it
+ * reaches fetchLatest's `new Date(...)`, which would otherwise silently
+ * produce an "Invalid Date" and a broken Finnhub URL instead of a useful
+ * error. Not a full calendar-validity check (e.g. "2024-02-30" passes this
+ * regex) -- that's Finnhub's own problem to reject, same as any other
+ * vendor-input validation this project doesn't duplicate client-side.
+ */
+function isPlausibleDateString(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
 
 export default {
   async fetch(request, env) {
@@ -25,6 +38,57 @@ export default {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" },
       });
+    }
+
+    // Operational entry point for graph/pipeline.js#backfillHistoricalNews
+    // -- see plan.md's Backlog note this closes ("backfillHistoricalNews
+    // isn't yet wired to any operational entry point"). POST, not GET:
+    // this has side effects (real Finnhub calls, D1 writes), unlike
+    // /dashboard's read-only GET.
+    if (pathname === "/backfill" && request.method === "POST") {
+      const config = loadConfig(env);
+
+      // Disabled, not "open to anyone," when unconfigured -- see
+      // config.js#backfillApiSecret's header for why this has no default.
+      if (!config.backfillApiSecret) {
+        return new Response(JSON.stringify({ error: "backfill endpoint is not configured (BACKFILL_API_SECRET unset)" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (request.headers.get("X-Backfill-Secret") !== config.backfillApiSecret) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      if (!isPlausibleDateString(from) || !isPlausibleDateString(to)) {
+        return new Response(JSON.stringify({ error: "from/to query params are required, as YYYY-MM-DD" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      try {
+        const result = await backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV });
+        console.log("backfill run completed", { from, to, inserted: result.inserted, errorCount: result.errors.length });
+        return new Response(JSON.stringify({ inserted: result.inserted, errorCount: result.errors.length }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      } catch (err) {
+        // A malformed request already returned 400 above -- anything thrown
+        // here is a real failure (vendor/DB), not a client mistake, same
+        // "surface, don't swallow" treatment as scheduled()'s try/catches.
+        console.error("backfill run failed", { from, to, message: err.message });
+        return new Response(JSON.stringify({ error: "backfill run failed", message: err.message }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
     }
 
     return new Response(
@@ -50,7 +114,7 @@ export default {
     // above -- same Adopted Pattern #11 "surface, don't swallow" reasoning,
     // applied independently to each concern.
     try {
-      const closed = await checkOpenPositionExits(env.DB, config, { asOf: new Date().toISOString() });
+      const closed = await checkOpenPositionExits(env, config, env.DB, { asOf: new Date().toISOString() });
       console.log("exit check completed", { closed: closed.length, closed });
     } catch (err) {
       console.error("exit check failed", { message: err.message });

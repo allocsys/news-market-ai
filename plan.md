@@ -309,9 +309,73 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   untuned placeholders.
 - **Exit logic** will only fire time-based exits in practice until yfinance price
   bars are populated for a given ticker before a position opens.
-- **Backtest harness** (`signalCompare.js`) is windowing + comparison math only —
-  no real end-to-end backtest run yet; needs the full agent graph against live
-  data plus a comparable no-signal baseline strategy.
+- **Realized returns / reflection loop, now wired** (branch `wire-backtest`):
+  `closePosition` now records `exit_price` (migrations/0009), and
+  `graph/settle.js#settlePositionOutcome` computes a direction-aware realized
+  return from it and calls `reflection.js#closeTheLoop` — which existed and
+  was unit-tested since the LLM-answers PR but had **zero production
+  callers** until now. Wired into both `closePosition` call sites
+  (`exit_check.js`'s stop_loss/take_profit/time_based exits and
+  `pipeline.js`'s "replaced" branch). `alphaReturn` is still always `null`
+  — no benchmark price series is ingested anywhere in this project; that's
+  a separate, larger gap (needs its own ingestion source). A reflection
+  failure (LLM call) is logged and swallowed, not thrown — the position
+  itself is already closed regardless.
+- **Backtest harness** (`signalCompare.js`) is windowing + comparison math
+  only — no real end-to-end backtest run yet. With realized returns now
+  computable (see above), the **historical news backfill** gap for Finnhub
+  is now closed (branch `wire-backtest`): `finnhub.js#fetchLatest` accepts
+  an explicit `{from, to}` range (Finnhub's `/company-news` already
+  supported arbitrary dates — the adapter just never exposed that), and
+  `graph/pipeline.js#backfillHistoricalNews` wires it into a real entry
+  point that persists results through the same `insertNewsItem`
+  point-in-time storage path live ingestion uses. Default trailing-window
+  behavior is unchanged when `from`/`to` are omitted, so the live cron
+  path is unaffected. **Still open:** `rss.js`/`html_scrape.js` remain
+  permanently live-feed/live-page-only — there's no `from`/`to` a feed or
+  a scraped page can accept, so they cannot backfill; this is a real gap,
+  not an oversight. `backfillHistoricalNews` now has a real operational
+  entry point: `POST /backfill?from=...&to=...` (`src/index.js`), gated
+  behind a required `X-Backfill-Secret` header matched against
+  `BACKFILL_API_SECRET` (`config.js#backfillApiSecret`, no default --
+  stays disabled/503 until explicitly set via `wrangler secret put`, same
+  "disabled, not open" convention as every other unset secret in this
+  project; pushed on deploy the same idempotent way as
+  `GEMINI_API_KEYS`/`FINNHUB_API_KEY`, see `deploy.yml`). Covered by
+  `test/index_backfill.test.js` (auth/validation branches, success, and
+  the genuine-bug-vs-vendor-isolation 500 distinction). The comparable
+  **no-signal baseline strategy** `signalCompare.js` needed is also now
+  built: `src/backtest/noSignalBaseline.js` -- naive equal-weighted
+  buy-and-hold across the same ticker universe/window, zero LLM calls,
+  zero news reads, sourced from the same point-in-time `getPriceBarsAsOf`
+  cutoff everything else uses. `makeBuyAndHoldOffReturns` matches
+  `compareSignalOnOffByWindow`'s `getOffReturns(window)` callback exactly,
+  so it plugs straight in with no adapter code. Covered by
+  `test/backtest_no_signal_baseline.test.js`. **The "signal on" side is now
+  also built** (`src/backtest/onSignalRunner.js`): walks a test window
+  (plus a `graceDays` extension, default `config.maxPositionHoldDays`) one
+  calendar day at a time, running `runPipelineForTicker` against whatever
+  backfilled news landed that day (via two new point-in-time-flavored
+  `storage/d1.js` readers, `getNewsItemsInRange` and, for the results side,
+  `getRealizedReturnsInRange`) and calling `exit_check.js#checkOpenPositionExits`
+  every day so stop-loss/take-profit/time-based exits get the same daily
+  cadence the live cron path gives them -- a position only becomes a
+  realized return once something closes it, so a single end-of-window pass
+  would have systematically under-counted closes. `makeOnSignalReturns`
+  matches `getOnReturns(window)` exactly, same drop-in shape as the
+  no-signal side. Covered by `test/backtest_on_signal_runner.test.js`,
+  entirely via `config.fakeModel` (zero real Gemini/Finnhub calls in CI).
+  **COST WARNING, not yet done:** actually invoking this against real
+  backfilled news/live Gemini traffic for a real backtest run has NOT been
+  done this session, deliberately -- `runPipelineForTicker` makes several
+  LLM calls per news item plus one more per position close, so a real run
+  spends real quota and needs an explicit go-ahead, not a routine test
+  pass. **What's actually left for a real end-to-end run now:** wiring
+  `backfillHistoricalNews` + `makeOnSignalReturns` + `makeBuyAndHoldOffReturns`
+  + `compareSignalOnOffByWindow` together behind one real invocation (a
+  script or an operational endpoint, mirroring `POST /backfill`'s own
+  gated-secret pattern) and actually running it once, with real cost
+  accepted -- the math/orchestration layer itself is now fully built.
 - **CI**: no lockfile-sync job (fine while there's one `package.json`). The
   docs-vs-code path filter is now exclusion-based (`**` minus any `*.md`,
   anywhere) rather than a manually maintained inclusion list, so a new

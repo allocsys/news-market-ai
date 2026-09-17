@@ -205,3 +205,20 @@ jobs:
             exit 0
           fi
           echo "$FINNHUB_API_KEY" | npx wrangler secret put FINNHUB_API_KEY
+      - name: Set BACKFILL_API_SECRET on the deployed Worker
+        # Same idempotent, non-blocking shape as the two steps above.
+        # Unlike GEMINI_API_KEYS/FINNHUB_API_KEY, an unset secret here isn't
+        # a degraded-but-working state -- src/index.js's POST /backfill
+        # route stays fully disabled (503) until this is set, which is the
+        # intended safe default (see config.js#backfillApiSecret's header),
+        # not a gap to fix later.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BACKFILL_API_SECRET: ${{ secrets.BACKFILL_API_SECRET }}
+        run: |
+          if [ -z "$BACKFILL_API_SECRET" ]; then
+            echo "BACKFILL_API_SECRET repo secret not set -- skipping. The /backfill route stays disabled (503) until this is configured, which is the safe default."
+            exit 0
+          fi
+          echo "$BACKFILL_API_SECRET" | npx wrangler secret put BACKFILL_API_SECRET

@@ -70,6 +70,52 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
 }
 
 /**
+ * Enumeration read, NOT a point-in-time snapshot like getNewsAsOf above --
+ * this is what backtest/onSignalRunner.js needs instead: every backfilled
+ * news item for `ticker` published in [from, to), so the runner can drive
+ * runPipelineForTicker once per item, each call using THAT item's own
+ * published_at as its asOf (exactly the live cron path's own convention,
+ * see graph/pipeline.js#runScheduledIngestion). getNewsAsOf can't serve
+ * this: it answers "what would an agent reading at one single asOf see",
+ * capped at `limit` and newest-first, not "list every decision point in a
+ * date range" in chronological order.
+ *
+ * Still bounded on BOTH ends (`from` AND `to` both required) -- same
+ * no-"give me everything" convention as every asOf-gated reader above,
+ * just with an explicit window instead of a single cutoff. Reuses
+ * getNewsAsOf's own revision-selection subquery (latest revision as of
+ * the ROW's own published_at, not `to`) so a backfilled item is read the
+ * same revision-correct way live ingestion would have seen it at the time
+ * it first appeared -- trivial today since insertNewsItem only ever writes
+ * revision 1 (see that function's own comment), but this stays correct
+ * the day a real revision-2 writer exists.
+ */
+export async function getNewsItemsInRange(db, { ticker, from, to, limit = 500 }) {
+  if (!from || !to) {
+    throw new LookaheadViolationError("getNewsItemsInRange requires an explicit {from, to} range");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT r.news_item_id AS id, r.revision, r.published_at AS published_at, r.title, r.body
+       FROM news_item_revisions r
+       JOIN news_item_tickers t ON t.news_item_id = r.news_item_id
+       WHERE t.ticker = ?
+         AND r.published_at >= ? AND r.published_at < ?
+         AND r.revision = (
+           SELECT MAX(r2.revision) FROM news_item_revisions r2
+           WHERE r2.news_item_id = r.news_item_id AND r2.published_at <= r.published_at
+         )
+       ORDER BY r.published_at ASC
+       LIMIT ?`
+    )
+    .bind(ticker, from, to, limit)
+    .all();
+
+  return results;
+}
+
+/**
  * Write path for the reflection/memory log (plan.md Adopted Pattern #8).
  * Called once a trade decision's outcome is known -- realizedReturn/
  * alphaReturn are only meaningful after `resolvedAt` has actually passed,
@@ -112,6 +158,54 @@ export async function getDecisionMemoryAsOf(db, { ticker, asOf, limit = 10 }) {
     .all();
 
   return results;
+}
+
+/**
+ * Backtest-RESULT read (deliberately NOT asOf-gated the way every reader
+ * above this point is) -- this answers "what did the signal-on strategy
+ * actually realize during this one test window", for
+ * backtest/onSignalRunner.js's getOnReturns(window) callback, mirroring
+ * noSignalBaseline.js's getPriceBarsAsOf-based getOffReturns(window) on the
+ * signal-off side. Same carve-out as the "Dashboard-only reads" section
+ * further down this file: a realized_return recorded in decision_memory
+ * describes an outcome that has ALREADY happened (graph/settle.js only
+ * ever writes it once a position is actually closed), so there is no
+ * future-information leak risk to gate against here the way there is for
+ * getDecisionMemoryAsOf's OWN use (feeding an agent's live prior-lessons
+ * prompt, which is exactly why that function stays asOf-gated -- this one
+ * is read AFTER a backtest window fully finishes, not injected into any
+ * agent prompt).
+ *
+ * Still bounded on BOTH ends (`from` AND `to` both required), same
+ * no-"give me everything" convention as every other range/asOf reader in
+ * this file -- it just isn't a lookahead-prevention bound here, it's what
+ * scopes the result to exactly one test window's outcomes so pooling
+ * returns per-window (see signalCompare.js#compareSignalOnOffByWindow)
+ * doesn't double-count a return that resolved outside it. `realized_return
+ * IS NOT NULL` excludes rows recordDecisionOutcome wrote with a null value
+ * (should not happen in practice -- settle.js#settlePositionOutcome never
+ * calls closeTheLoop when computeRealizedReturn returned null -- but
+ * filtering defensively here costs nothing and keeps this function's own
+ * "never fabricate/never include a non-number" contract self-evident
+ * without relying on that upstream invariant holding forever).
+ */
+export async function getRealizedReturnsInRange(db, { ticker, from, to, limit = 500 }) {
+  if (!from || !to) {
+    throw new LookaheadViolationError("getRealizedReturnsInRange requires an explicit {from, to} range");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT realized_return
+       FROM decision_memory
+       WHERE ticker = ? AND resolved_at >= ? AND resolved_at < ? AND realized_return IS NOT NULL
+       ORDER BY resolved_at ASC
+       LIMIT ?`
+    )
+    .bind(ticker, from, to, limit)
+    .all();
+
+  return results.map((r) => r.realized_return);
 }
 
 /**
@@ -174,18 +268,23 @@ export async function openPosition(db, { id, ticker, tradeThesisId, positionSize
 
 /**
  * Write path for exiting a position (stop-loss/take-profit/time-based
- * exit). Now has a caller: src/graph/exit_check.js#checkOpenPositionExits,
- * driven by agents/risk_mgmt/exit.js#evaluateExit's deterministic rules --
- * closing the plan.md gap this function's old comment flagged ("exists now
- * so getOpenPositionsRiskPctAsOf has a real closed_at to filter on once
- * exit logic lands"). `closeReason` records which rule fired
- * ('stop_loss' | 'take_profit' | 'time_based'), same "reason documents
- * which rule fired" convention as RiskDecision.reason.
+ * exit). Callers: src/graph/exit_check.js#checkOpenPositionExits, driven
+ * by agents/risk_mgmt/exit.js#evaluateExit's deterministic rules, and
+ * graph/pipeline.js's "replaced" branch. `closeReason` records which rule
+ * fired ('stop_loss' | 'take_profit' | 'time_based' | 'replaced'), same
+ * "reason documents which rule fired" convention as RiskDecision.reason.
+ *
+ * `exitPrice` (migrations/0009_positions_exit_price.sql) is what
+ * graph/settle.js#settlePositionOutcome uses, together with this row's own
+ * entry_price/direction, to compute a realized return and feed it into the
+ * reflection loop (reflection.js#closeTheLoop) -- nullable ON PURPOSE, same
+ * convention as entry_price: a time_based exit with no price_bars data for
+ * this ticker still closes the position, just without a computable return.
  */
-export async function closePosition(db, { id, closedAt, closeReason = null }) {
+export async function closePosition(db, { id, closedAt, closeReason = null, exitPrice = null }) {
   await db
-    .prepare(`UPDATE positions SET closed_at = ?, close_reason = ? WHERE id = ? AND closed_at IS NULL`)
-    .bind(closedAt, closeReason, id)
+    .prepare(`UPDATE positions SET closed_at = ?, close_reason = ?, exit_price = ? WHERE id = ? AND closed_at IS NULL`)
+    .bind(closedAt, closeReason, exitPrice, id)
     .run();
 }
 
@@ -569,16 +668,17 @@ export async function getAllOpenPositions(db, { limit = 50 } = {}) {
 
 /**
  * Most recently closed positions. Dashboard-only, see section header.
- * HONEST GAP (surfaced while building this, not fixed here): closePosition
- * never records an exit price, only closed_at/close_reason -- so realized
- * P&L cannot actually be computed from this table today, only direction/
- * entry price/close reason/timing. Flagged in plan.md rather than silently
- * shown as if a return figure existed.
+ * `exitPrice` (migrations/0009_positions_exit_price.sql) is now recorded
+ * by closePosition when computable -- nullable for rows closed before that
+ * migration, or for a time_based exit with no price_bars data (same honest
+ * gap as entry_price ever being null). This function itself does not
+ * compute a realized return; graph/settle.js does that at close time and
+ * writes it to decision_memory, not onto this row.
  */
 export async function getRecentlyClosedPositions(db, { limit = 20 } = {}) {
   const { results } = await db
     .prepare(
-      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, opened_at, closed_at, close_reason
+      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, exit_price, opened_at, closed_at, close_reason
        FROM positions WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT ?`
     )
     .bind(limit)
@@ -591,6 +691,7 @@ export async function getRecentlyClosedPositions(db, { limit = 20 } = {}) {
     positionSizePct: r.position_size_pct,
     direction: r.direction,
     entryPrice: r.entry_price,
+    exitPrice: r.exit_price,
     openedAt: r.opened_at,
     closedAt: r.closed_at,
     closeReason: r.close_reason,

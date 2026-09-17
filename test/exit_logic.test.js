@@ -14,6 +14,13 @@ import { openPosition, closePosition, getOpenPositionsAsOf } from "../src/storag
 import { checkOpenPositionExits } from "../src/graph/exit_check.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 
+// Deterministic, offline stand-in for the reflection LLM call --
+// checkOpenPositionExits now calls settlePositionOutcome -> closeTheLoop ->
+// recordAndReflect under the hood after every close (see graph/settle.js).
+// Same config.fakeModel injection point memory_pointintime.test.js and
+// checkpoint_resume.test.js already use.
+const FAKE_REFLECTION_MODEL = async () => JSON.stringify({ reflection: "test reflection" });
+
 // ---------------------------------------------------------------------
 // evaluateExit -- pure function, no DB
 // ---------------------------------------------------------------------
@@ -103,6 +110,7 @@ class FakeDb {
   constructor() {
     this.positions = new Map();
     this.priceBars = new Map(); // `${ticker}|${date}` -> bar
+    this.decisionMemory = []; // rows written by recordDecisionOutcome (via settlePositionOutcome -> closeTheLoop)
   }
 
   prepare(sql) {
@@ -117,22 +125,29 @@ class FakeDb {
               db.positions.set(id, {
                 id, ticker, trade_thesis_id: tradeThesisId, position_size_pct: positionSizePct,
                 direction, entry_price: entryPrice, stop_loss_pct: stopLossPct, take_profit_pct: takeProfitPct,
-                opened_at: openedAt, closed_at: null, close_reason: null,
+                opened_at: openedAt, closed_at: null, close_reason: null, exit_price: null,
               });
               return;
             }
             if (/UPDATE positions SET closed_at/.test(sql)) {
-              const [closedAt, closeReason, id] = args;
+              const [closedAt, closeReason, exitPrice, id] = args;
               const row = db.positions.get(id);
               if (row && row.closed_at === null) {
                 row.closed_at = closedAt;
                 row.close_reason = closeReason;
+                row.exit_price = exitPrice;
               }
               return;
             }
             if (/INSERT INTO price_bars/.test(sql)) {
               const [ticker, date, open, high, low, close, volume, source] = args;
               db.priceBars.set(`${ticker}|${date}`, { ticker, date, open, high, low, close, volume, source });
+              return;
+            }
+            if (/INSERT INTO decision_memory/.test(sql)) {
+              const [id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt] = args;
+              if (db.decisionMemory.some((r) => r.id === id)) return; // ON CONFLICT(id) DO NOTHING
+              db.decisionMemory.push({ id, decision_id: decisionId, ticker, realized_return: realizedReturn, alpha_return: alphaReturn, reflection, resolved_at: resolvedAt });
               return;
             }
             throw new Error(`FakeDb: unsupported run() query: ${sql}`);
@@ -222,7 +237,7 @@ test("closePosition records closeReason and a subsequent getOpenPositionsAsOf no
 
 test("checkOpenPositionExits closes a position whose stop_loss triggers against price_bars, leaves others open", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 10 };
+  const config = { maxPositionHoldDays: 10, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
@@ -237,16 +252,25 @@ test("checkOpenPositionExits closes a position whose stop_loss triggers against 
   await seedBar(db, { ticker: "AAPL", date: "2026-01-02", close: 95 }); // -5%, past stop_loss
   await seedBar(db, { ticker: "MSFT", date: "2026-01-02", close: 201 }); // unchanged, stays open
 
-  const closed = await checkOpenPositionExits(db, config, { asOf: "2026-01-02T12:00:00Z" });
+  const closed = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-02T12:00:00Z" });
 
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   const stillOpen = await getOpenPositionsAsOf(db, { asOf: "2026-01-03T00:00:00Z" });
   assert.deepEqual(stillOpen.map((p) => p.id), ["MSFT|t1"]);
+
+  // exitPrice recorded (the same bar that triggered the exit), and a
+  // realized return computed + recorded via settlePositionOutcome.
+  assert.equal(db.positions.get("AAPL|t1").exit_price, 95);
+  assert.equal(db.decisionMemory.length, 1);
+  assert.equal(db.decisionMemory[0].decision_id, "AAPL|t1");
+  assert.equal(db.decisionMemory[0].realized_return, (95 - 100) / 100); // -0.05, direction 'long'
+  assert.equal(db.decisionMemory[0].alpha_return, null); // HONEST SCOPE -- no benchmark ingestion yet
+  assert.equal(db.decisionMemory[0].reflection, "test reflection");
 });
 
-test("checkOpenPositionExits closes a position on a time-based exit even with no price_bars data at all", async () => {
+test("checkOpenPositionExits closes a position on a time-based exit even with no price_bars data at all, and records no reflection since the realized return isn't computable", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 5 };
+  const config = { maxPositionHoldDays: 5, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "TSLA|t1", ticker: "TSLA", tradeThesisId: "TSLA|t1", positionSizePct: 0.03,
@@ -256,13 +280,18 @@ test("checkOpenPositionExits closes a position on a time-based exit even with no
   // No price bars seeded for TSLA at all -- this is the "yfinance not wired
   // in yet" case documented in exit_check.js's header.
 
-  const closed = await checkOpenPositionExits(db, config, { asOf: "2026-01-08T00:00:00Z" }); // 7 days later
+  const closed = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-08T00:00:00Z" }); // 7 days later
   assert.deepEqual(closed, [{ id: "TSLA|t1", ticker: "TSLA", reason: "time_based" }]);
+
+  // No entryPrice AND no exitPrice -- settlePositionOutcome must skip
+  // reflection entirely rather than fabricate a realized return.
+  assert.equal(db.positions.get("TSLA|t1").exit_price, null);
+  assert.equal(db.decisionMemory.length, 0);
 });
 
 test("checkOpenPositionExits closes nothing and returns an empty array when no position triggers", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 10 };
+  const config = { maxPositionHoldDays: 10, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
@@ -271,13 +300,13 @@ test("checkOpenPositionExits closes nothing and returns an empty array when no p
   });
   await seedBar(db, { ticker: "AAPL", date: "2026-01-02", close: 101 });
 
-  const closed = await checkOpenPositionExits(db, config, { asOf: "2026-01-02T12:00:00Z" });
+  const closed = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-02T12:00:00Z" });
   assert.deepEqual(closed, []);
 });
 
 test("checkOpenPositionExits is safe to re-run: an already-closed position is not returned/closed again", async () => {
   const db = new FakeDb();
-  const config = { maxPositionHoldDays: 10 };
+  const config = { maxPositionHoldDays: 10, geminiQuickModel: "quick", fakeModel: FAKE_REFLECTION_MODEL };
 
   await openPosition(db, {
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
@@ -286,9 +315,12 @@ test("checkOpenPositionExits is safe to re-run: an already-closed position is no
   });
   await seedBar(db, { ticker: "AAPL", date: "2026-01-02", close: 95 });
 
-  const firstRun = await checkOpenPositionExits(db, config, { asOf: "2026-01-02T12:00:00Z" });
+  const firstRun = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-02T12:00:00Z" });
   assert.equal(firstRun.length, 1);
 
-  const secondRun = await checkOpenPositionExits(db, config, { asOf: "2026-01-03T12:00:00Z" });
+  const secondRun = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-03T12:00:00Z" });
   assert.deepEqual(secondRun, []);
+
+  // settlePositionOutcome only ran once, on the first (real) close.
+  assert.equal(db.decisionMemory.length, 1);
 });

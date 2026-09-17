@@ -71,6 +71,7 @@ import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
 import { checkpoint, resumeFrom } from "./checkpointer.js";
 import { shouldContinueDebate } from "./conditional_logic.js";
 import { loadLessonsForDebate } from "./reflection.js";
+import { settlePositionOutcome } from "./settle.js";
 import { VendorError } from "../shared/errors.js";
 
 /**
@@ -165,19 +166,24 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
       // two live open rows for the same ticker -- the netting fix above
       // only corrects the RISK-PCT MATH, this is what keeps the positions
       // table itself honest (at most one open position per ticker).
+      // Fetched ONCE -- it's both the exitPrice for a replaced existing
+      // position and the entryPrice for the new one below, since both
+      // happen at the same ticker/asOf. May be null (yfinance ingestion
+      // isn't wired into this pipeline yet, a separate known gap), in
+      // which case the new position still opens but
+      // agents/risk_mgmt/exit.js#evaluateExit can only apply a time-based
+      // exit to it later, never stop-loss/take-profit, until real price
+      // data exists for this ticker (see migrations/0006's header for the
+      // same honest-null convention).
+      const priceBars = await getPriceBarsAsOf(db, { ticker, asOf, limit: 1 });
+      const currentPrice = priceBars[0]?.close ?? null;
+
       if (existingPosition && existingPosition.id !== state.riskDecision.tradeThesisId) {
-        await closePosition(db, { id: existingPosition.id, closedAt: asOf, closeReason: "replaced" });
+        await closePosition(db, { id: existingPosition.id, closedAt: asOf, closeReason: "replaced", exitPrice: currentPrice });
+        await settlePositionOutcome(env, config, db, { position: existingPosition, exitPrice: currentPrice, closedAt: asOf, closeReason: "replaced" });
       }
 
-      // entryPrice comes from the most recent price_bars row at/before asOf
-      // -- may be null (yfinance ingestion isn't wired into this pipeline
-      // yet, a separate known gap), in which case the position still opens
-      // but agents/risk_mgmt/exit.js#evaluateExit can only apply a
-      // time-based exit to it later, never stop-loss/take-profit, until
-      // real price data exists for this ticker (see migrations/0006's
-      // header for the same honest-null convention).
-      const priceBars = await getPriceBarsAsOf(db, { ticker, asOf, limit: 1 });
-      const entryPrice = priceBars[0]?.close ?? null;
+      const entryPrice = currentPrice;
 
       // id = tradeThesisId (ticker|asOf) so a checkpoint-resumed re-run of
       // this stage can't double-open the same position (ON CONFLICT DO
@@ -377,6 +383,53 @@ export async function ingestFundamentals(config, db, kv) {
     }
   }
   return { count: inserted };
+}
+
+/**
+ * Historical news backfill for a real end-to-end backtest run -- the
+ * remaining blocker plan.md's Backlog flagged once realized returns were
+ * wired (see graph/settle.js): every ingestion adapter was "what's new
+ * now" only, with finnhub.js hardcoding a trailing lookback window even
+ * though Finnhub's /company-news endpoint accepts an arbitrary from/to
+ * range. This just calls that range through and persists whatever comes
+ * back via storage/d1.js#insertNewsItem -- the exact same point-in-time
+ * storage path live ingestion uses, so a backfilled article is
+ * indistinguishable from a live-ingested one to any asOf-gated read
+ * (getNewsAsOf, etc).
+ *
+ * SCOPE: finnhub only. rss.js and html_scrape.js are inherently "what's
+ * published right now" sources (a live feed/page, not a queryable
+ * archive with a date-range parameter) -- there is no from/to to give
+ * them, so they cannot be backfilled this way. That's a real, permanent
+ * gap for those two sources, not an oversight left for later (see
+ * plan.md's Known Gaps for the "why").
+ *
+ * Same failure-isolation convention as collectNewsItems: a per-ticker
+ * VendorError from fetchLatest is logged and skipped, never aborts the
+ * rest of the range/watchlist. `from`/`to` are required (unlike
+ * fetchLatest's own trailing-window default) -- this function's whole
+ * purpose is an explicit historical range, so a caller forgetting to pass
+ * one should fail loudly rather than silently backfill "the last 3 days"
+ * again. Intended for a one-off backfill script/CLI, not the live cron
+ * path (runScheduledIngestion/collectNewsItems below remain unchanged).
+ */
+export async function backfillHistoricalNews(config, db, { from, to, kv } = {}) {
+  if (!from || !to) {
+    throw new Error("backfillHistoricalNews requires an explicit {from, to} range -- use collectNewsItems for the live trailing-window path instead");
+  }
+
+  const { items, errors } = await fetchFinnhubLatest(config, { from, to }, { kv });
+  for (const { error } of errors) {
+    logSkippedSource("historical news backfill", "finnhub", error);
+  }
+
+  let inserted = 0;
+  for (const item of items) {
+    await insertNewsItem(db, item);
+    inserted++;
+  }
+
+  return { inserted, errors };
 }
 
 /**
