@@ -58,7 +58,7 @@ import { withRetry } from "../../shared/retry.js";
  * failing ticker never blocks the rest of the watchlist in the same run.
  * Same convention as gdelt.js#fetchLatest/yfinance.js#fetchDailyBars.
  */
-export async function fetchLatest(config, { queries = config.watchlist } = {}, { kv } = {}) {
+export async function fetchLatest(config, { queries = config.watchlist, from, to } = {}, { kv } = {}) {
   const items = [];
   const errors = [];
 
@@ -81,10 +81,14 @@ export async function fetchLatest(config, { queries = config.watchlist } = {}, {
   // window wide enough to catch anything since the last 15-min cron tick
   // with generous slack for a missed run, not a backtesting window (see
   // config.js#finnhubLookbackDays for the "why a few days, not one" note).
-  const to = new Date();
-  const from = new Date(to.getTime() - (config.finnhubLookbackDays ?? 3) * 24 * 60 * 60 * 1000);
-  const toStr = to.toISOString().slice(0, 10);
-  const fromStr = from.toISOString().slice(0, 10);
+  // An explicit `from`/`to` (Date or YYYY-MM-DD string) overrides this
+  // trailing default -- lets a historical backfill request an arbitrary
+  // range, since /company-news already accepts one; the live cron path
+  // (collectNewsItems) never passes these, so its output is unchanged.
+  const toDate = to ? new Date(to) : new Date();
+  const fromDate = from ? new Date(from) : new Date(toDate.getTime() - (config.finnhubLookbackDays ?? 3) * 24 * 60 * 60 * 1000);
+  const toStr = toDate.toISOString().slice(0, 10);
+  const fromStr = fromDate.toISOString().slice(0, 10);
 
   for (const { ticker } of queries) {
     await throttle.wait();
