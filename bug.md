@@ -1,6 +1,6 @@
 # Bug: "Too many API requests by single Worker invocation" (subrequest limit)
 
-**Status:** ROOT CAUSE FOUND, not yet fixed.
+**Status:** FIX (1) IMPLEMENTED AND PUSHED (commits e49e976, 81258ba) -- awaiting redeploy confirmation via observability. Fixes (2)/(3) from "Proposed fix" below NOT implemented (deferred; (1) alone should already remove the fan-out that caused this).
 **Worker version observed on:** `b1be5622-ca43-4786-9b3c-c22f11228c1f` (post-`400d337f`, i.e. after the Gemini-cascade/fiscal_year fixes described elsewhere in this doc's history — those two remain fixed).
 
 ## Symptom
