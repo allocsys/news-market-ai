@@ -552,3 +552,55 @@ export async function getIngestionHealth(db) {
     fundamentals: { count: facts?.count ?? 0, lastIngestedAt: facts?.last ?? null },
   };
 }
+
+/**
+ * Trade-decision counts by status (all-time totals) plus a per-day
+ * breakdown for the last `days` days, both by status -- what
+ * dashboard.js's new activity chart renders as stacked bars. Dashboard-
+ * only, see section header (no asOf gate -- this describes decisions that
+ * have ALREADY happened, there's no "future" a live dashboard needs to
+ * avoid leaking).
+ *
+ * `day` buckets on created_at's DATE portion (UTC, since created_at is
+ * stored as an ISO string) via SQLite's substr, not strftime, to avoid a
+ * dependency on created_at parsing cleanly as a SQLite datetime literal --
+ * a plain ISO-8601 string's first 10 characters ARE its UTC date, no
+ * parsing needed.
+ */
+export async function getDecisionStats(db, { days = 14 } = {}) {
+  const totalsResult = await db.prepare(`SELECT status, COUNT(*) AS count FROM trade_decisions GROUP BY status`).all();
+
+  const dailyResult = await db
+    .prepare(
+      `SELECT substr(created_at, 1, 10) AS day, status, COUNT(*) AS count
+       FROM trade_decisions
+       WHERE created_at >= datetime('now', ?)
+       GROUP BY day, status
+       ORDER BY day ASC`
+    )
+    .bind(`-${days} days`)
+    .all();
+
+  const totals = totalsResult.results.reduce((acc, r) => {
+    acc[r.status] = r.count;
+    return acc;
+  }, {});
+
+  return { totals, daily: dailyResult.results, days };
+}
+
+/**
+ * Most recent price bars for `ticker`, oldest-first (chronological, ready
+ * to feed straight into a chart x-axis) -- current-state read, not
+ * point-in-time, same dashboard-only convention as this section's other
+ * reads: a live dashboard chart showing "price right now" has no
+ * lookahead concern the way an agent's technical analyst does.
+ */
+export async function getRecentPriceBars(db, { ticker, limit = 30 }) {
+  const { results } = await db
+    .prepare(`SELECT date, close FROM price_bars WHERE ticker = ? ORDER BY date DESC LIMIT ?`)
+    .bind(ticker, limit)
+    .all();
+
+  return results.reverse();
+}
