@@ -37,11 +37,18 @@
 //    never records an exit price (only closed_at/close_reason), so this
 //    view shows direction/entry price/close reason/timing, not a return
 //    figure. See storage/d1.js#getRecentlyClosedPositions's own header.
-// 4. debate_id on every trade_decisions row is always null -- the debates
-//    table has no write path either (surfaced while building this, see
-//    storage/d1.js#insertTradeDecision's header). This dashboard shows the
-//    bull/bear reasoning as it exists today: nowhere, since it's not
-//    persisted -- only the thesis that came out the other end.
+// 4. debate_id on every trade_decisions row is STILL always null -- the
+//    normalized `debates`/`analyst_opinions` tables (migrations/0001_init.sql)
+//    still have no write path (surfaced while building this, see
+//    storage/d1.js#insertTradeDecision's header). What changed
+//    (migrations/0008_trade_decisions_llm_answers.sql): trade_decisions now
+//    also carries `opinions` (the Analyst Team's per-article output) and
+//    `debate` (bull/bear/verdict) as JSON columns on the same row, and this
+//    dashboard's Decisions section (below) renders them per-row behind a
+//    <details> disclosure -- no client JS needed, same zero-build
+//    philosophy as the rest of this file. Rows written BEFORE that
+//    migration have both columns null and render an honest "not recorded"
+//    message instead of a blank/broken panel.
 // 5. The price sparkline section (new) plots price_bars.close as ingested
 //    -- it's whatever yfinance last reported, not adjusted for splits/divs,
 //    and only covers tickers with at least 2 bars on record. A ticker with
