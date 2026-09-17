@@ -172,10 +172,7 @@ test("fetchDailyBars skips a bar with a null field instead of fabricating a valu
 });
 
 test("fetchDailyBars isolates a per-ticker HTTP 429 into `errors` instead of throwing", async (t) => {
-  // retryMaxAttempts: 1 -- this test asserts isolation, not retry timing;
-  // see this edit's commit message for why it's pinned rather than left
-  // to withRetry's own (slower) default.
-  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d", retryMaxAttempts: 1 };
+  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d", retryMaxAttempts: 3, retryBaseDelayMs: 500, yfinanceCooldownSeconds: 900 };
   t.mock.method(global, "fetch", async () => ({ ok: false, status: 429 }));
 
   const { bars, errors } = await fetchDailyBars(config, { tickers: ["AAPL"] });
@@ -183,5 +180,68 @@ test("fetchDailyBars isolates a per-ticker HTTP 429 into `errors` instead of thr
   assert.equal(errors.length, 1);
   assert.equal(errors[0].ticker, "AAPL");
   assert.ok(errors[0].error instanceof VendorError);
+  // UPDATE (2026-09-18, live incident -- see config.js#yfinanceCooldownSeconds):
+  // 429 is no longer treated as retry.js-transient for yfinance specifically.
+  // Live traffic showed this 429 persists for hours, not the few-hundred-ms
+  // blip withRetry's backoff is meant to ride out -- retrying it in-process
+  // just re-fails while burning wall time on every single cron tick. A
+  // sustained 429 now fails fast and is handled via the cross-invocation KV
+  // cooldown (see the two tests below) instead of a bigger in-process ladder.
+  assert.equal(errors[0].error.transient, false);
+});
+
+test("fetchDailyBars does NOT retry a 429 in-process -- exactly one fetch call even with retries available", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d", retryMaxAttempts: 5, retryBaseDelayMs: 500 };
+  let callCount = 0;
+  t.mock.method(global, "fetch", async () => {
+    callCount++;
+    return { ok: false, status: 429 };
+  });
+
+  await fetchDailyBars(config, { tickers: ["AAPL"] });
+  // Would be up to 5 with the shared default (network error, 429, 5xx all
+  // transient); 1 proves the 429-specific shouldRetry override actually
+  // took effect rather than silently falling back to the shared default.
+  assert.equal(callCount, 1);
+});
+
+test("fetchDailyBars still retries a 5xx (a real transient failure) in-process, unlike 429", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d", retryMaxAttempts: 3, retryBaseDelayMs: 1 };
+  let callCount = 0;
+  t.mock.method(global, "fetch", async () => {
+    callCount++;
+    return { ok: false, status: 503 };
+  });
+
+  const { errors } = await fetchDailyBars(config, { tickers: ["AAPL"] });
+  assert.equal(callCount, 3); // full retryMaxAttempts ladder, unlike the 429 case above
   assert.equal(errors[0].error.transient, true);
+});
+
+test("fetchDailyBars records a cross-invocation KV cooldown for a ticker after a 429", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d", retryMaxAttempts: 1, yfinanceCooldownSeconds: 900 };
+  t.mock.method(global, "fetch", async () => ({ ok: false, status: 429 }));
+
+  const kv = fakePriceBarsKv();
+  await fetchDailyBars(config, { tickers: ["AAPL"] }, { kv });
+
+  assert.equal(kv.store.get("yfinance:cooldown:AAPL"), "1");
+});
+
+test("fetchDailyBars skips a ticker entirely (no fetch call) while its cooldown is active", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }, { ticker: "MSFT" }], yfinanceApiBase: "https://fake.test/chart", yfinanceInterval: "1d", yfinanceRange: "5d" };
+  const kv = fakePriceBarsKv();
+  kv.store.set("yfinance:cooldown:AAPL", "1"); // pre-seeded, as if a prior invocation just got a 429
+
+  const fetchedUrls = [];
+  t.mock.method(global, "fetch", async (url) => {
+    fetchedUrls.push(String(url));
+    return { ok: false, status: 500 }; // would fail anyway -- proves AAPL's skip, not a lucky success
+  });
+
+  const { errors } = await fetchDailyBars(config, { tickers: ["AAPL", "MSFT"] }, { kv });
+
+  assert.ok(!fetchedUrls.some((u) => u.includes("AAPL"))); // never attempted
+  assert.ok(fetchedUrls.some((u) => u.includes("MSFT"))); // MSFT unaffected by AAPL's cooldown
+  assert.ok(errors.find((e) => e.ticker === "AAPL").error.message.includes("cooling down"));
 });
