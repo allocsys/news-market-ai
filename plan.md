@@ -272,10 +272,16 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   now fetches each article's own page to fill `body` (on by default, per-article
   failure isolation, timeout-bounded, capped via `gdeltMaxArticlesToEnrich`) —
   best-effort, not a guarantee: paywalls/bot-challenges still leave some items
-  headline-only. Its live `articles[]` response shape is still unverified (every
-  live attempt on `doc/doc` gets rate-limited, appears endpoint-specific/shared-IP,
-  not fixable by pacing alone — `gdeltMinRequestIntervalMs` now defaults to
-  GDELT's own stated 5000ms).
+  headline-only. Live `articles[]` response shape is now **confirmed** (2026-09-17,
+  via `mcp__madmcp__web_fetch` after fixing that tool's own error-swallowing bug):
+  field-for-field match with what `gdelt.js#parseGdeltDate`/`fetchLatest` already
+  assume (`url`, `title`, `seendate` in exactly `YYYYMMDDTHHMMSSZ`, `domain`; plus
+  unused `url_mobile`/`socialimage`/`language`/`sourcecountry`, harmlessly ignored)
+  — no code change needed. Rate-limiting remains real and severe: even request
+  spacing well beyond the vendor's own stated 5000ms (`gdeltMinRequestIntervalMs`)
+  still 429'd on a fresh attempt this session; only a ~45s gap succeeded on a
+  third try — backs up the existing shared/rate-limited-egress-IP theory with an
+  actual data point, still not fixable by per-request pacing alone.
 - **yfinance** adapter is unofficial/undocumented; daily bars only, no intraday.
 - **EDGAR fundamentals**: only whatever XBRL `us-gaap` tags a filer reports (no
   non-GAAP figures); not rate-limited beyond EDGAR itself (110ms pacing only).
