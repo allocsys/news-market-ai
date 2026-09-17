@@ -507,6 +507,32 @@ const STYLE = `
   .status-neutral { color: #8b9490; }
   .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; }
 
+  /* LLM answer disclosure (migrations/0008_trade_decisions_llm_answers.sql) -- native <details>, no client JS */
+  .llm-answer summary {
+    cursor: pointer; color: #7d9bb8; font-size: 0.8rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    list-style: none; width: fit-content;
+  }
+  .llm-answer summary::-webkit-details-marker { display: none; }
+  .llm-answer summary::before { content: "\25b8 "; }
+  .llm-answer[open] summary::before { content: "\25be "; }
+  .llm-answer summary:hover { color: #a9c3db; }
+  .llm-answer-body {
+    margin-top: 0.5rem; padding: 0.7rem 0.85rem;
+    background: #0d1210; border: 1px solid #263028; border-radius: 5px;
+    max-width: 52ch; display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .llm-block { font-size: 0.8rem; line-height: 1.5; color: #cfd6c8; }
+  .llm-agent {
+    display: inline-block; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
+    color: #0d1210; background: #7d9bb8; border-radius: 3px;
+    padding: 0.08rem 0.4rem; margin-right: 0.4rem; vertical-align: middle;
+  }
+  .llm-agent-bull { background: #6b8f71; }
+  .llm-agent-bear { background: #a85c4a; }
+  .llm-justification { color: #7d8a7f; font-style: italic; }
+
   tr.stale-row td { color: #8b8060; }
   .stale-flag {
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.72rem;
