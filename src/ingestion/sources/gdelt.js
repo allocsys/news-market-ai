@@ -63,6 +63,12 @@ function parseGdeltDate(seendate) {
  */
 export async function fetchLatest(config, { queries = config.watchlist } = {}) {
   const items = [];
+  // Per-query failures (timeout, non-2xx, malformed payload) are isolated
+  // below -- collected here and returned alongside `items` rather than
+  // thrown, so one slow/failing ticker's search never blocks the rest of
+  // the watchlist in the same run. Same convention as yfinance.js's
+  // fetchDailyBars and this file's own enrichWithFullText below.
+  const errors = [];
   // UPDATE (2026-09-17): GDELT DOES now have a known, live-confirmed limit
   // -- a real 429 response body this session stated it verbatim ("please
   // limit requests to one every 5 seconds"), so config.js's loadConfig now
@@ -79,45 +85,58 @@ export async function fetchLatest(config, { queries = config.watchlist } = {}) {
 
   for (const { ticker, query } of queries) {
     await throttle.wait();
-    const url = `${config.gdeltApiBase}?query=${encodeURIComponent(query)}&mode=${config.gdeltMode}&maxrecords=${config.gdeltMaxRecords}&format=${config.gdeltFormat}&sort=${config.gdeltSort}`;
-
-    let response;
     try {
-      response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
+      const url = `${config.gdeltApiBase}?query=${encodeURIComponent(query)}&mode=${config.gdeltMode}&maxrecords=${config.gdeltMaxRecords}&format=${config.gdeltFormat}&sort=${config.gdeltSort}`;
+
+      let response;
+      try {
+        response = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
+      } catch (err) {
+        throw new VendorError("gdelt", `network failure fetching GDELT DOC API: ${err.message}`, { transient: true });
+      }
+
+      if (!response.ok) {
+        throw new VendorError("gdelt", `GDELT DOC API returned ${response.status}`, {
+          status: response.status,
+          transient: response.status === 429 || response.status >= 500,
+        });
+      }
+
+      const data = await response.json();
+      for (const article of data.articles ?? []) {
+        const publishedAt = parseGdeltDate(article.seendate);
+        if (!publishedAt) continue; // malformed date from vendor -- skip rather than insert garbage
+
+        const tickers = resolveTickers({ title: article.title, domain: article.domain, hintTicker: ticker });
+
+        const item = await buildNormalizedItem({
+          source: "gdelt",
+          url: article.url,
+          publishedAt,
+          tickers,
+          title: article.title,
+          body: "",
+          raw: article,
+        });
+
+        validateNormalizedNewsItem(item, { source: "gdelt" });
+        items.push(item);
+      }
     } catch (err) {
-      throw new VendorError("gdelt", `network failure fetching GDELT DOC API: ${err.message}`, { transient: true });
-    }
-
-    if (!response.ok) {
-      throw new VendorError("gdelt", `GDELT DOC API returned ${response.status}`, {
-        status: response.status,
-        transient: response.status === 429 || response.status >= 500,
-      });
-    }
-
-    const data = await response.json();
-    for (const article of data.articles ?? []) {
-      const publishedAt = parseGdeltDate(article.seendate);
-      if (!publishedAt) continue; // malformed date from vendor -- skip rather than insert garbage
-
-      const tickers = resolveTickers({ title: article.title, domain: article.domain, hintTicker: ticker });
-
-      const item = await buildNormalizedItem({
-        source: "gdelt",
-        url: article.url,
-        publishedAt,
-        tickers,
-        title: article.title,
-        body: "",
-        raw: article,
-      });
-
-      validateNormalizedNewsItem(item, { source: "gdelt" });
-      items.push(item);
+      // A single ticker's query failure does NOT abort the rest of the
+      // watchlist -- see header comment above this function. Only
+      // VendorError is swallowed here; anything else (a real bug, e.g. a
+      // schema/validation throw) still propagates, same convention as
+      // pipeline.js's collectNewsItems.
+      if (err instanceof VendorError) {
+        errors.push({ ticker, query, error: err });
+      } else {
+        throw err;
+      }
     }
   }
 
-  return items;
+  return { items, errors };
 }
 
 /**
