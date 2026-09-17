@@ -264,5 +264,16 @@ export function loadConfig(env) {
     // Explicit opt-out remains available ("false") if live behavior turns
     // out to need more false-positive tuning than expected.
     entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX !== "false",
+    // Shared secret required by src/index.js's POST /backfill route
+    // (graph/pipeline.js#backfillHistoricalNews) -- that route triggers
+    // real Finnhub API calls (spends free-tier quota) and D1 writes on
+    // demand, so it must not be reachable by an arbitrary caller the way
+    // the unauthenticated GET /dashboard route is. No default on purpose,
+    // same convention as finnhubApiKey/edgarUserAgent/rssFeeds: an unset
+    // secret means the route stays disabled (503), it never falls back to
+    // "open to anyone." Set via `wrangler secret put BACKFILL_API_SECRET`
+    // (a secret, not a plain var -- same treatment as GEMINI_API_KEYS),
+    // checked against the request's `X-Backfill-Secret` header.
+    backfillApiSecret: env.BACKFILL_API_SECRET || "",
   };
 }
