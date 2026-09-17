@@ -1,6 +1,6 @@
 # Bug: "Too many API requests by single Worker invocation" (subrequest limit)
 
-**Status:** FIX (1) IMPLEMENTED AND PUSHED (commits e49e976, 81258ba) -- awaiting redeploy confirmation via observability. Fixes (2)/(3) from "Proposed fix" below NOT implemented (deferred; (1) alone should already remove the fan-out that caused this).
+**Status:** FIXED, DEPLOYED, AND CONFIRMED. Fix (1) implemented and pushed (commits e49e976, 81258ba). Confirmed live in the deployed worker via `cf_workers_get_worker_code` (grep hit on `edgarFactsLookbackDays` and `latestByKey`). Confirmed working via `cf_workers_observability_query`: the 16:34 UTC cron run (requestId 9abd4710..., the last run that previously would have hit the fan-out) completed with outcome "ok", wallTimeMs 12537, no "Too many API requests" bursts -- only routine/pre-existing transient noise (yfinance 429, GDELT DOC API abort). No non-"ok" invocations for news-market-ai in the window checked afterward (16:35-18:00 UTC). Fixes (2)/(3) from "Proposed fix" below remain NOT implemented (deferred; (1) alone removed the fan-out that caused this).
 **Worker version observed on:** `b1be5622-ca43-4786-9b3c-c22f11228c1f` (post-`400d337f`, i.e. after the Gemini-cascade/fiscal_year fixes described elsewhere in this doc's history — those two remain fixed).
 
 ## Symptom
