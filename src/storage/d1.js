@@ -517,11 +517,11 @@ export async function insertTradeDecision(db, { id, ticker, asOf, debateId = nul
 export async function getRecentTradeDecisions(db, { limit = 20, status } = {}) {
   const { results } = status
     ? await db
-        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions WHERE status = ? ORDER BY created_at DESC LIMIT ?`)
+        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate FROM trade_decisions WHERE status = ? ORDER BY created_at DESC LIMIT ?`)
         .bind(status, limit)
         .all()
     : await db
-        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at FROM trade_decisions ORDER BY created_at DESC LIMIT ?`)
+        .prepare(`SELECT id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate FROM trade_decisions ORDER BY created_at DESC LIMIT ?`)
         .bind(limit)
         .all();
 
@@ -535,6 +535,12 @@ export async function getRecentTradeDecisions(db, { limit = 20, status } = {}) {
     portfolioDecision: r.portfolio_decision ? JSON.parse(r.portfolio_decision) : null,
     status: r.status,
     createdAt: r.created_at,
+    // LLM reasoning chain (migrations/0008_trade_decisions_llm_answers.sql).
+    // Nullable: rows written before this migration/change have neither
+    // column populated -- dashboard.js renders an honest "not recorded"
+    // state for those rather than assuming every row has this data.
+    opinions: r.opinions ? JSON.parse(r.opinions) : null,
+    debate: r.debate ? JSON.parse(r.debate) : null,
   }));
 }
 
