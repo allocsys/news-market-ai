@@ -44,6 +44,22 @@ export function loadConfig(env) {
     // with no documented response-time guarantee, same "no single real number
     // to derive a default from" situation as rssMinRequestIntervalMs.
     fetchTimeoutMs: Number(env.FETCH_TIMEOUT_MS) || 10000,
+    // Retry-with-backoff for a single failed vendor request (shared/retry.js
+    // #withRetry) -- wired into each ingestion adapter's per-item fetch
+    // (currently gdelt.js#fetchLatest, yfinance.js#fetchDailyBars). Before
+    // this existed, a single 429/5xx/timeout on one ticker/query was logged
+    // into that adapter's `errors` array and skipped for the entire 15-min
+    // cron cycle, even when the underlying problem was a few seconds of
+    // vendor overload. Only VendorError's `transient: true` failures are
+    // retried (see retry.js's default shouldRetry) -- a malformed-payload
+    // or other permanent failure still fails on the first attempt, same as
+    // today. Shared/generic across adapters, not vendor-derived, same scope
+    // as fetchTimeoutMs above -- unlike gdeltMinRequestIntervalMs/
+    // edgarMinRequestIntervalMs, which ARE real published per-vendor
+    // numbers. 3 attempts / 500ms base (500ms, 1000ms) is a conservative
+    // starting point, not tuned against live traffic yet.
+    retryMaxAttempts: Number(env.RETRY_MAX_ATTEMPTS) || 3,
+    retryBaseDelayMs: Number(env.RETRY_BASE_DELAY_MS) || 500,
     // Depth-vs-cost knob (plan.md Adopted Pattern #7): how many extra
     // bull/bear/judge rounds graph/conditional_logic.js may run when the
     // judge's confidence is too low to act on. 1 means "debate once, then
