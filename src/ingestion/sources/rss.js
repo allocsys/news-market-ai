@@ -20,7 +20,7 @@
 // that made a timeout on every ingestion fetch a hard requirement.
 
 import { buildNormalizedItem } from "../normalize.js";
-import { resolveTickers } from "../entity_resolution.js";
+import { resolveTickers, getCompanyNameIndex } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { parseFeedItems, stripHtml } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
@@ -35,8 +35,18 @@ import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
  * dated, unparseable) is skipped rather than inserted with a guessed date --
  * same "skip malformed, don't fabricate" convention as gdelt.js.
  */
-export async function fetchLatest(config, { feeds = config.rssFeeds } = {}) {
+export async function fetchLatest(config, { feeds = config.rssFeeds } = {}, { kv } = {}) {
   const items = [];
+  // Opt-in real entity resolution -- see gdelt.js's identical wiring for the
+  // full rationale (built once per call, fails open, off by default).
+  let nameIndex = [];
+  if (config.entityResolutionUseNameIndex) {
+    try {
+      nameIndex = await getCompanyNameIndex(config, kv);
+    } catch (err) {
+      console.error("rss: entity-resolution name index unavailable, falling back to hintTicker/domain-map matching only", { message: err.message });
+    }
+  }
   // No documented per-feed rate limit -- config.rssMinRequestIntervalMs
   // defaults to 0, a true no-op, same convention as gdelt.js/yfinance.js.
   // Feeds are third-party sites of wildly varying tolerance, so this is
@@ -77,7 +87,7 @@ export async function fetchLatest(config, { feeds = config.rssFeeds } = {}) {
       if (Number.isNaN(parsedDate.getTime())) continue; // vendor gave an unparseable date -- skip rather than fabricate
       const publishedAt = parsedDate.toISOString();
 
-      const tickers = resolveTickers({ title: entry.title, domain, hintTicker: ticker });
+      const tickers = resolveTickers({ title: entry.title, domain, hintTicker: ticker, nameIndex });
 
       const item = await buildNormalizedItem({
         source: `rss:${domain || "unknown"}`,
