@@ -70,6 +70,52 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
 }
 
 /**
+ * Enumeration read, NOT a point-in-time snapshot like getNewsAsOf above --
+ * this is what backtest/onSignalRunner.js needs instead: every backfilled
+ * news item for `ticker` published in [from, to), so the runner can drive
+ * runPipelineForTicker once per item, each call using THAT item's own
+ * published_at as its asOf (exactly the live cron path's own convention,
+ * see graph/pipeline.js#runScheduledIngestion). getNewsAsOf can't serve
+ * this: it answers "what would an agent reading at one single asOf see",
+ * capped at `limit` and newest-first, not "list every decision point in a
+ * date range" in chronological order.
+ *
+ * Still bounded on BOTH ends (`from` AND `to` both required) -- same
+ * no-"give me everything" convention as every asOf-gated reader above,
+ * just with an explicit window instead of a single cutoff. Reuses
+ * getNewsAsOf's own revision-selection subquery (latest revision as of
+ * the ROW's own published_at, not `to`) so a backfilled item is read the
+ * same revision-correct way live ingestion would have seen it at the time
+ * it first appeared -- trivial today since insertNewsItem only ever writes
+ * revision 1 (see that function's own comment), but this stays correct
+ * the day a real revision-2 writer exists.
+ */
+export async function getNewsItemsInRange(db, { ticker, from, to, limit = 500 }) {
+  if (!from || !to) {
+    throw new LookaheadViolationError("getNewsItemsInRange requires an explicit {from, to} range");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT r.news_item_id AS id, r.revision, r.published_at AS published_at, r.title, r.body
+       FROM news_item_revisions r
+       JOIN news_item_tickers t ON t.news_item_id = r.news_item_id
+       WHERE t.ticker = ?
+         AND r.published_at >= ? AND r.published_at < ?
+         AND r.revision = (
+           SELECT MAX(r2.revision) FROM news_item_revisions r2
+           WHERE r2.news_item_id = r.news_item_id AND r2.published_at <= r.published_at
+         )
+       ORDER BY r.published_at ASC
+       LIMIT ?`
+    )
+    .bind(ticker, from, to, limit)
+    .all();
+
+  return results;
+}
+
+/**
  * Write path for the reflection/memory log (plan.md Adopted Pattern #8).
  * Called once a trade decision's outcome is known -- realizedReturn/
  * alphaReturn are only meaningful after `resolvedAt` has actually passed,
