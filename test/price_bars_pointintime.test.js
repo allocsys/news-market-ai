@@ -20,6 +20,23 @@ import { fetchDailyBars } from "../src/ingestion/sources/yfinance.js";
 
 const VALID_BAR = { ticker: "AAPL", date: "2026-01-05", open: 100, high: 105, low: 99, close: 103, volume: 1000, source: "yfinance" };
 
+/** In-memory fake KV -- same get/put(key, value, {expirationTtl}) shape as
+ * edgar_cik_lookup.test.js/entity_resolution.test.js's fakeKv(), duplicated
+ * locally (not imported) to keep each test file's fixtures self-contained,
+ * same convention those files already follow relative to one another. */
+function fakePriceBarsKv() {
+  const store = new Map();
+  return {
+    store,
+    async get(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    async put(key, value) {
+      store.set(key, value);
+    },
+  };
+}
+
 test("validatePriceBar accepts an internally consistent bar", () => {
   assert.doesNotThrow(() => validatePriceBar(VALID_BAR));
 });
