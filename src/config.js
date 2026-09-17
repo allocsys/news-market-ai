@@ -218,5 +218,18 @@ export function loadConfig(env) {
     // debate/judge/trader stages actually need (recent point-in-time
     // fundamentals), not a tuned/backtested number.
     edgarFactsLookbackDays: Number(env.EDGAR_FACTS_LOOKBACK_DAYS) || 370,
+    // Real entity-resolution name matching (entity_resolution.js#getCompanyNameIndex,
+    // wired into gdelt.js/rss.js/html_scrape.js's fetchLatest) -- opt-in,
+    // default false. Building the index costs a real SEC company_tickers.json
+    // fetch (same file/UA requirement as edgar_cik_lookup.js) plus a
+    // per-article substring scan over ~1000 company names, so this stays an
+    // explicit choice rather than silently turning on the moment ingestion
+    // runs -- same "no default without an explicit reason" convention as
+    // rssFeeds/scrapePages/edgarUserAgent itself. Requires edgarUserAgent to
+    // actually be set when enabled; each adapter fails open (logs, matches
+    // on hintTicker/COMPANY_DOMAIN_MAP only) rather than throwing if the
+    // index can't be built for any reason -- see gdelt.js/rss.js/
+    // html_scrape.js's own wiring.
+    entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX === "true",
   };
 }
