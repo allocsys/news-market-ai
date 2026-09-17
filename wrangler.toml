@@ -20,6 +20,20 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 [triggers]
 crons = ["*/15 * * * *"]
 
+# Workers Observability (logs) -- was missing entirely, unlike every other
+# worker in this account, which made scheduled-run failures invisible (no
+# way to see why ingestion/LLM stages were failing). head_sampling_rate=1
+# logs every invocation; fine at this worker's request volume (one cron
+# fire per 15 min, no public traffic).
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
 [vars]
 # Two-tier model strategy (plan.md Adopted Pattern #7): quick/cheap model for
 # high-volume analyst passes, a stronger model reserved for debate + judge +
