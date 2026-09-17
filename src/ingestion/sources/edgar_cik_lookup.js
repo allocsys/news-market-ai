@@ -42,17 +42,12 @@ function normalizeCik(cik) {
 }
 
 /**
- * Fetches SEC's full ticker->CIK mapping fresh from the network (no
- * caching -- see getTickerCikMap for the cached wrapper most callers
- * should use instead). Requires config.edgarUserAgent, same SEC
- * User-Agent policy as edgar_fundamentals.js
- * (https://www.sec.gov/os/webmaster-faq#developers) -- this file is served
- * from www.sec.gov rather than data.sec.gov, but SEC's UA requirement is
- * about identifying the requester on automated requests to SEC systems
- * generally, not specific to one host, so it's honored here too rather
- * than assumed exempt.
+ * Fetches SEC's raw company_tickers.json fresh from the network. Shared by
+ * fetchTickerCikMap and fetchTickerDirectory below so the request/
+ * User-Agent/error handling lives in exactly one place -- callers should
+ * use one of those two, not this directly.
  */
-export async function fetchTickerCikMap(config) {
+async function fetchRawTickerJson(config) {
   if (!config.edgarUserAgent) {
     throw new VendorError("edgar", "config.edgarUserAgent is not set -- SEC requires a descriptive User-Agent on every request, see edgar_fundamentals.js header");
   }
@@ -71,13 +66,53 @@ export async function fetchTickerCikMap(config) {
     });
   }
 
-  const data = await response.json();
+  return response.json();
+}
+
+/**
+ * Fetches SEC's full ticker->CIK mapping fresh from the network (no
+ * caching -- see getTickerCikMap for the cached wrapper most callers
+ * should use instead). Requires config.edgarUserAgent, same SEC
+ * User-Agent policy as edgar_fundamentals.js
+ * (https://www.sec.gov/os/webmaster-faq#developers) -- this file is served
+ * from www.sec.gov rather than data.sec.gov, but SEC's UA requirement is
+ * about identifying the requester on automated requests to SEC systems
+ * generally, not specific to one host, so it's honored here too rather
+ * than assumed exempt.
+ *
+ * Output/behavior unchanged from before this file also had
+ * fetchTickerDirectory below -- both now share fetchRawTickerJson's single
+ * network call, this just projects it down to ticker->CIK only (discarding
+ * `title`, same as always).
+ */
+export async function fetchTickerCikMap(config) {
+  const data = await fetchRawTickerJson(config);
   const map = {};
   for (const entry of Object.values(data ?? {})) {
     if (!entry?.ticker || entry.cik_str === undefined || entry.cik_str === null) continue;
     map[String(entry.ticker).toUpperCase()] = normalizeCik(entry.cik_str);
   }
   return map;
+}
+
+/**
+ * Fetches SEC's full ticker->{cik, title} directory -- same request as
+ * fetchTickerCikMap, but keeps the `title` (legal company name) SEC's file
+ * also carries, which fetchTickerCikMap discards. Added for
+ * entity_resolution.js#buildCompanyNameIndex, which needs real company
+ * names to match against article headlines (Adopted Pattern #10 -- a
+ * bigger deterministic lookup table, not LLM inference). No caching here
+ * either -- see entity_resolution.js#getCompanyNameIndex for the KV
+ * cache-aside wrapper, same shape/convention as getTickerCikMap below.
+ */
+export async function fetchTickerDirectory(config) {
+  const data = await fetchRawTickerJson(config);
+  const directory = {};
+  for (const entry of Object.values(data ?? {})) {
+    if (!entry?.ticker || entry.cik_str === undefined || entry.cik_str === null) continue;
+    directory[String(entry.ticker).toUpperCase()] = { cik: normalizeCik(entry.cik_str), title: entry.title ?? null };
+  }
+  return directory;
 }
 
 /**
