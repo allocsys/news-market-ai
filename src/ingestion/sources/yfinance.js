@@ -37,6 +37,7 @@ import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
 import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 import { withRetry } from "../../shared/retry.js";
+import { isVendorCoolingDown, setVendorCooldown } from "../../shared/cooldown.js";
 
 /** Yahoo's chart timestamps are Unix seconds -- convert to YYYY-MM-DD (UTC). */
 function timestampToDate(unixSeconds) {
@@ -48,7 +49,7 @@ function timestampToDate(unixSeconds) {
  * config.watchlist's tickers). One request per ticker, since the chart
  * endpoint is single-symbol only -- there is no batch mode.
  */
-export async function fetchDailyBars(config, { tickers = config.watchlist.map((w) => w.ticker) } = {}) {
+export async function fetchDailyBars(config, { tickers = config.watchlist.map((w) => w.ticker) } = {}, { kv } = {}) {
   const bars = [];
   // Per-ticker failures (rate limit, timeout, malformed payload) are
   // isolated below -- collected here and returned alongside `bars` rather
@@ -63,16 +64,39 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
   const throttle = createThrottle({ minIntervalMs: config.yfinanceMinRequestIntervalMs ?? 0 });
 
   for (const ticker of tickers) {
+    // A prior call already got a 429 for this ticker and recorded a
+    // cross-invocation cooldown (see below) -- skip the attempt entirely
+    // rather than re-running a fetch (and, before this fix, a whole
+    // exponential-backoff retry ladder) already known to be blocked. This
+    // is what stops a sustained rate-limit from re-costing wall time on
+    // every single 15-minute cron tick (see config.js#yfinanceCooldownSeconds).
+    if (await isVendorCoolingDown(kv, "yfinance", ticker)) {
+      errors.push({
+        ticker,
+        error: new VendorError("yfinance", `yfinance cooling down for ${ticker} after a recent 429 -- skipping until cooldown expires`, { status: 429, transient: false }),
+      });
+      continue;
+    }
+
     await throttle.wait();
     try {
       const url = `${config.yfinanceApiBase}/${encodeURIComponent(ticker)}?interval=${config.yfinanceInterval}&range=${config.yfinanceRange}`;
 
       // The fetch + status check (not JSON parsing/validation below) is
       // what withRetry wraps -- those are the failure modes retry.js's
-      // default shouldRetry considers worth retrying (network error, 429,
-      // 5xx), via the transient: true VendorError already thrown here. A
+      // default shouldRetry considers worth retrying (network error, 5xx),
+      // via the transient: true VendorError already thrown here. A
       // malformed/unexpected payload is a permanent failure, not a vendor
       // hiccup -- retrying it would just reproduce the same bad response.
+      //
+      // 429 is deliberately EXCLUDED from shouldRetry here (unlike the
+      // shared default, which retries any transient: true failure) -- live
+      // traffic showed yfinance's 429 is a sustained block lasting hours,
+      // not a short burst retry.js's backoff is meant to ride out. Retrying
+      // it in-process just burns 500ms/1000ms/... of wall time per attempt
+      // for a call already known to fail; failing fast here and recording a
+      // cooldown below (so the NEXT invocation skips it, see above) is what
+      // actually stops the wall-time/CPU blowup, not a bigger backoff ladder.
       const response = await withRetry(
         async () => {
           let res;
@@ -85,7 +109,7 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
           if (!res.ok) {
             throw new VendorError("yfinance", `yfinance chart API returned ${res.status} for ${ticker}`, {
               status: res.status,
-              transient: res.status === 429 || res.status >= 500,
+              transient: res.status >= 500, // 429 handled separately, see comment above
             });
           }
 
@@ -135,6 +159,9 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
       // real bug, e.g. a schema/validation throw) still propagates, same
       // convention as pipeline.js's collectNewsItems.
       if (err instanceof VendorError) {
+        if (err.status === 429) {
+          await setVendorCooldown(kv, "yfinance", ticker, config.yfinanceCooldownSeconds);
+        }
         errors.push({ ticker, error: err });
       } else {
         throw err;
