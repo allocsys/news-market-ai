@@ -256,10 +256,18 @@ block's condition/reassignment to the same next-needed convention
 resumeFrom already uses; CI is green end-to-end again as of this commit.
 
 ## Known Gaps / Backlog
-- **Entity resolution** now has a real SEC-backed name-matching path, but it's
-  opt-in and off by default — most production traffic still resolves tickers via
-  the older hand-maintained domain map / explicit hints alone until the flag is
-  flipped on and validated.
+- **Entity resolution** now has a real SEC-backed name-matching path, and
+  `config.entityResolutionUseNameIndex` now defaults **on** (flipped 2026-09-17,
+  commit `57606aa`). This was flipped on the strength of existing unit/wiring
+  test coverage alone (normalization, word-boundary matching, KV cache-aside
+  fail-open behavior, all three adapters' wiring) — **it has not yet been
+  validated against a live SEC fetch + real headline traffic**, since every
+  attempt this session hit unreliable network conditions before a live check
+  could complete. Explicit opt-out (`ENTITY_RESOLUTION_USE_NAME_INDEX=false`)
+  remains available if live false-positive rates turn out worse than the unit
+  tests suggest. Next step: run a live check once network access is reliable,
+  and downgrade the default back to off if headline name-matching produces
+  more false-positive ticker attributions than expected in practice.
 - **GDELT** DOC API itself still returns metadata only, but `gdelt.js#enrichWithFullText`
   now fetches each article's own page to fill `body` (on by default, per-article
   failure isolation, timeout-bounded, capped via `gdeltMaxArticlesToEnrich`) —
