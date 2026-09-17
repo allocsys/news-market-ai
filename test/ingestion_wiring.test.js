@@ -26,6 +26,17 @@ class FakeDb {
   constructor() {
     this.priceBars = [];
     this.fundamentalFacts = [];
+    this.batchCalls = []; // records each db.batch() call's statement count, for asserting the subrequest-storm fix actually batches
+  }
+
+  /** Mirrors real D1's db.batch(statements): each element is already a bound Statement (from prepare().bind()), run sequentially, one "request" for the whole array. */
+  async batch(statements) {
+    this.batchCalls.push(statements.length);
+    const results = [];
+    for (const stmt of statements) {
+      results.push(await stmt.run());
+    }
+    return results;
   }
 
   prepare(sql) {
