@@ -14,6 +14,13 @@ import { openPosition, closePosition, getOpenPositionsAsOf } from "../src/storag
 import { checkOpenPositionExits } from "../src/graph/exit_check.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 
+// Deterministic, offline stand-in for the reflection LLM call --
+// checkOpenPositionExits now calls settlePositionOutcome -> closeTheLoop ->
+// recordAndReflect under the hood after every close (see graph/settle.js).
+// Same config.fakeModel injection point memory_pointintime.test.js and
+// checkpoint_resume.test.js already use.
+const FAKE_REFLECTION_MODEL = async () => JSON.stringify({ reflection: "test reflection" });
+
 // ---------------------------------------------------------------------
 // evaluateExit -- pure function, no DB
 // ---------------------------------------------------------------------
@@ -103,6 +110,7 @@ class FakeDb {
   constructor() {
     this.positions = new Map();
     this.priceBars = new Map(); // `${ticker}|${date}` -> bar
+    this.decisionMemory = []; // rows written by recordDecisionOutcome (via settlePositionOutcome -> closeTheLoop)
   }
 
   prepare(sql) {
@@ -117,22 +125,29 @@ class FakeDb {
               db.positions.set(id, {
                 id, ticker, trade_thesis_id: tradeThesisId, position_size_pct: positionSizePct,
                 direction, entry_price: entryPrice, stop_loss_pct: stopLossPct, take_profit_pct: takeProfitPct,
-                opened_at: openedAt, closed_at: null, close_reason: null,
+                opened_at: openedAt, closed_at: null, close_reason: null, exit_price: null,
               });
               return;
             }
             if (/UPDATE positions SET closed_at/.test(sql)) {
-              const [closedAt, closeReason, id] = args;
+              const [closedAt, closeReason, exitPrice, id] = args;
               const row = db.positions.get(id);
               if (row && row.closed_at === null) {
                 row.closed_at = closedAt;
                 row.close_reason = closeReason;
+                row.exit_price = exitPrice;
               }
               return;
             }
             if (/INSERT INTO price_bars/.test(sql)) {
               const [ticker, date, open, high, low, close, volume, source] = args;
               db.priceBars.set(`${ticker}|${date}`, { ticker, date, open, high, low, close, volume, source });
+              return;
+            }
+            if (/INSERT INTO decision_memory/.test(sql)) {
+              const [id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt] = args;
+              if (db.decisionMemory.some((r) => r.id === id)) return; // ON CONFLICT(id) DO NOTHING
+              db.decisionMemory.push({ id, decision_id: decisionId, ticker, realized_return: realizedReturn, alpha_return: alphaReturn, reflection, resolved_at: resolvedAt });
               return;
             }
             throw new Error(`FakeDb: unsupported run() query: ${sql}`);
