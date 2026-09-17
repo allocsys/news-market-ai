@@ -73,8 +73,8 @@ function mockRssXml() {
     </channel></rss>`;
 }
 
-function mockGdeltJson() {
-  return { articles: [{ url: "https://gdelt.example.com/story", seendate: "20260915T143000Z", title: "GDELT story about Acme" }] };
+function mockFinnhubJson() {
+  return [{ url: "https://finnhub.example.com/story", datetime: 1757941800, headline: "Finnhub story about Acme", summary: "A brief summary." }];
 }
 
 function mockYahooChart({ ticker = "AAPL" } = {}) {
@@ -108,16 +108,16 @@ function mockCompanyFactsJson() {
 // collectNewsItems
 // ---------------------------------------------------------------------------
 
-test("collectNewsItems merges items from gdelt, rss, and html_scrape into one list", async (t) => {
+test("collectNewsItems merges items from finnhub, rss, and html_scrape into one list", async (t) => {
   const config = {
     watchlist: [{ ticker: "AAPL", query: "AAPL" }],
-    gdeltApiBase: "https://fake.test/gdelt", gdeltMode: "ArtList", gdeltFormat: "json", gdeltSort: "DateDesc", gdeltMaxRecords: 50,
+    finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3,
     rssFeeds: [{ ticker: "AAPL", url: "https://fake.test/feed.xml" }],
     scrapePages: [],
   };
 
   t.mock.method(global, "fetch", async (url) => {
-    if (String(url).includes("gdelt")) return { ok: true, status: 200, json: async () => mockGdeltJson() };
+    if (String(url).includes("finnhub")) return { ok: true, status: 200, json: async () => mockFinnhubJson() };
     if (String(url).includes("feed.xml")) return { ok: true, status: 200, text: async () => mockRssXml() };
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -126,20 +126,20 @@ test("collectNewsItems merges items from gdelt, rss, and html_scrape into one li
   assert.equal(items.length, 2);
   const sources = items.map((i) => i.source).sort();
   assert.ok(sources.some((s) => s.startsWith("rss:")));
-  assert.ok(sources.some((s) => s === "gdelt"));
+  assert.ok(sources.some((s) => s === "finnhub"));
 });
 
 test("collectNewsItems logs and skips a source that throws a VendorError, without losing the other sources' items", async (t) => {
   const config = {
     watchlist: [{ ticker: "AAPL", query: "AAPL" }],
-    gdeltApiBase: "https://fake.test/gdelt", gdeltMode: "ArtList", gdeltFormat: "json", gdeltSort: "DateDesc", gdeltMaxRecords: 50,
+    finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3,
     rssFeeds: [{ ticker: "AAPL", url: "https://fake.test/feed.xml" }],
     scrapePages: [],
     retryMaxAttempts: 1, // this test asserts isolation, not retry timing -- see retry.js wiring
   };
 
   t.mock.method(global, "fetch", async (url) => {
-    if (String(url).includes("gdelt")) return { ok: false, status: 503 }; // GDELT down
+    if (String(url).includes("finnhub")) return { ok: false, status: 503 }; // Finnhub down
     if (String(url).includes("feed.xml")) return { ok: true, status: 200, text: async () => mockRssXml() };
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -150,17 +150,17 @@ test("collectNewsItems logs and skips a source that throws a VendorError, withou
   const items = await collectNewsItems(config);
   assert.equal(items.length, 1); // only the RSS item survives
   assert.equal(items[0].source.startsWith("rss:"), true);
-  assert.ok(errorLogs.some(([msg, detail]) => msg.includes("news ingestion") && detail.source === "gdelt"));
+  assert.ok(errorLogs.some(([msg, detail]) => msg.includes("news ingestion") && detail.source === "finnhub"));
 });
 
 test("collectNewsItems returns an empty list, not an error, when rssFeeds/scrapePages are unconfigured (no defaults, per config.js)", async (t) => {
   const config = {
     watchlist: [{ ticker: "AAPL", query: "AAPL" }],
-    gdeltApiBase: "https://fake.test/gdelt", gdeltMode: "ArtList", gdeltFormat: "json", gdeltSort: "DateDesc", gdeltMaxRecords: 50,
+    finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3,
     rssFeeds: [],
     scrapePages: [],
   };
-  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => ({ articles: [] }) }));
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => [] }));
 
   const items = await collectNewsItems(config);
   assert.deepEqual(items, []);
