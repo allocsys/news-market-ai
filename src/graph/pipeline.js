@@ -209,6 +209,15 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
       portfolioDecision: state.portfolioDecision,
       status: state.portfolioDecision.approvedForExecution ? "approved" : "rejected",
       createdAt: new Date().toISOString(),
+      // Full LLM reasoning chain (migrations/0008_trade_decisions_llm_answers.sql)
+      // -- state.opinions is the Analyst Team's per-article output (news_event/
+      // sentiment/technical, technical possibly absent), state.verdict is the
+      // Research Manager's DebateVerdict with the bull/bear DebateSide objects
+      // nested inside it. Both were already being checkpointed into
+      // pipeline_checkpoints' opaque JSON blob; this is the same data, just
+      // also written to a column src/dashboard.js can read directly.
+      opinions: state.opinions,
+      debate: state.verdict,
     });
 
     await checkpoint(db, { runId, ticker, stage: "portfolio_checked", state });
