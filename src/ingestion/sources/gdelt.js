@@ -36,7 +36,7 @@
 // (Adopted Pattern #11) rather than an empty/partial silent result.
 
 import { buildNormalizedItem } from "../normalize.js";
-import { resolveTickers } from "../entity_resolution.js";
+import { resolveTickers, getCompanyNameIndex } from "../entity_resolution.js";
 import { validateNormalizedNewsItem } from "../market_data_validator.js";
 import { stripHtml } from "../jsonify.js";
 import { VendorError } from "../../shared/errors.js";
@@ -62,8 +62,24 @@ function parseGdeltDate(seendate) {
  * so they're tunable via env vars if the live API's behavior/shape needs
  * adjusting without a code change.
  */
-export async function fetchLatest(config, { queries = config.watchlist } = {}) {
+export async function fetchLatest(config, { queries = config.watchlist } = {}, { kv } = {}) {
   const items = [];
+  // Opt-in real entity resolution (see entity_resolution.js and config.js's
+  // entityResolutionUseNameIndex) -- built ONCE for this whole call, not per
+  // article, and never lets a build failure (missing edgarUserAgent, SEC
+  // down, KV error) abort ingestion: this is a strict enhancement to ticker
+  // resolution, not a hard dependency, same "fails open, logged once"
+  // reasoning as ingestPriceBars/ingestFundamentals treat their own vendor
+  // failures in pipeline.js. Default false means nameIndex stays [] and
+  // resolveTickers behaves exactly as it did before this existed.
+  let nameIndex = [];
+  if (config.entityResolutionUseNameIndex) {
+    try {
+      nameIndex = await getCompanyNameIndex(config, kv);
+    } catch (err) {
+      console.error("gdelt: entity-resolution name index unavailable, falling back to hintTicker/domain-map matching only", { message: err.message });
+    }
+  }
   // Per-query failures (timeout, non-2xx, malformed payload) are isolated
   // below -- collected here and returned alongside `items` rather than
   // thrown, so one slow/failing ticker's search never blocks the rest of
@@ -120,7 +136,7 @@ export async function fetchLatest(config, { queries = config.watchlist } = {}) {
         const publishedAt = parseGdeltDate(article.seendate);
         if (!publishedAt) continue; // malformed date from vendor -- skip rather than insert garbage
 
-        const tickers = resolveTickers({ title: article.title, domain: article.domain, hintTicker: ticker });
+        const tickers = resolveTickers({ title: article.title, domain: article.domain, hintTicker: ticker, nameIndex });
 
         const item = await buildNormalizedItem({
           source: "gdelt",
