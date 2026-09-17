@@ -275,3 +275,48 @@ test("ingestFundamentals logs and returns count:0 when the map is set but edgarU
   assert.deepEqual(result, { count: 0 });
   assert.ok(errorLogs.some(([msg, detail]) => msg.includes("fundamentals ingestion") && detail.source === "edgar"));
 });
+
+// Regression coverage for the live subrequest-cap incident (see
+// pipeline.js#ingestFundamentals's header): a per-fact D1 .run() loop threw
+// "Too many API requests by single Worker invocation" 1047 times in one
+// cron run for TSLA alone. These two tests assert the actual fix -- many
+// facts go through db.batch() in chunks, not one .run() per fact -- rather
+// than just re-checking the already-covered row counts above.
+
+test("ingestFundamentals batches many facts from one EDGAR response into a single db.batch() call, not one run() per fact", async (t) => {
+  const manyEntries = Array.from({ length: 40 }, (_, i) => ({
+    fy: 2020 + Math.floor(i / 4), fp: ["Q1", "Q2", "Q3", "FY"][i % 4], form: "10-Q", filed: "2026-07-25", val: 1000 + i, end: "2026-06-30",
+  }));
+  const config = { edgarUserAgent: "test-suite contact@example.com", edgarApiBase: "https://fake.test/companyfacts", edgarCikMap: { TSLA: "1318605" } };
+  t.mock.method(global, "fetch", async () => ({
+    ok: true, status: 200,
+    json: async () => ({ facts: { "us-gaap": { Revenues: { units: { USD: manyEntries } }, EarningsPerShareDiluted: { units: {} }, NetIncomeLoss: { units: {} } } } }),
+  }));
+
+  const db = new FakeDb();
+  const result = await ingestFundamentals(config, db);
+
+  assert.equal(result.count, 40);
+  assert.equal(db.fundamentalFacts.length, 40);
+  assert.equal(db.batchCalls.length, 1); // one db.batch() call for the whole chunk, not 40 separate subrequests
+  assert.equal(db.batchCalls[0], 40);
+});
+
+test("ingestFundamentals splits a fact count over the chunk size into multiple bounded db.batch() calls", async (t) => {
+  const manyEntries = Array.from({ length: 450 }, (_, i) => ({
+    fy: 2000 + Math.floor(i / 4), fp: ["Q1", "Q2", "Q3", "FY"][i % 4], form: "10-Q", filed: "2026-07-25", val: i, end: "2026-06-30",
+  }));
+  const config = { edgarUserAgent: "test-suite contact@example.com", edgarApiBase: "https://fake.test/companyfacts", edgarCikMap: { TSLA: "1318605" } };
+  t.mock.method(global, "fetch", async () => ({
+    ok: true, status: 200,
+    json: async () => ({ facts: { "us-gaap": { Revenues: { units: { USD: manyEntries } }, EarningsPerShareDiluted: { units: {} }, NetIncomeLoss: { units: {} } } } }),
+  }));
+
+  const db = new FakeDb();
+  const result = await ingestFundamentals(config, db);
+
+  assert.equal(result.count, 450);
+  assert.equal(db.batchCalls.length, 3); // 200 + 200 + 50, per FUNDAMENTALS_INSERT_CHUNK_SIZE
+  assert.ok(db.batchCalls.every((size) => size <= 200));
+  assert.deepEqual(db.batchCalls, [200, 200, 50]);
+});
