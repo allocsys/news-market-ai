@@ -224,12 +224,22 @@ other ingestion adapters), CI green end-to-end against real Cloudflare infra,
 and live-traffic verification against GDELT/yfinance/SEC EDGAR/RSS/HTML-scrape
 (via `mcp__Madmcp__web_fetch`, which bypasses the sandbox's own egress block).
 
-**In progress:** positions netting fix (a re-evaluated ticker with an open
-position was double-counting exposure and leaving duplicate open rows) — PR #1
-open on branch `positions-netting`, awaiting CI + review.
+**Also done:** positions-netting fix (a re-evaluated ticker with an open position
+was double-counting exposure and leaving duplicate open rows) — merged via PR #1
+(commit `5858dff`). Real entity resolution via an opt-in, SEC-backed company-name
+index (`entity_resolution.js#buildCompanyNameIndex`/`matchTickersByName`/
+`getCompanyNameIndex`, gated by `config.entityResolutionUseNameIndex`, default
+false) — wired into GDELT, RSS, and HTML-scrape ingestion, with `kv` threaded
+through `collectNewsItems` so the index is cached in production. Fails open on
+any error; `resolveTickers` stays fully backward-compatible when the index is
+omitted; default behavior across all three adapters is byte-for-byte unchanged
+when the flag is off.
 
 ## Known Gaps / Backlog
-- **Entity resolution** is a small hand-maintained domain map — real coverage TBD.
+- **Entity resolution** now has a real SEC-backed name-matching path, but it's
+  opt-in and off by default — most production traffic still resolves tickers via
+  the older hand-maintained domain map / explicit hints alone until the flag is
+  flipped on and validated.
 - **`structured.js`** has no fake-model injection point yet, so no test exercises
   a real LLM-call path end-to-end (checkpoint/resume, memory, technical-analyst
   "has data" path are all tested only against mocks/fakes for this reason).
