@@ -50,7 +50,7 @@ export default {
     // above -- same Adopted Pattern #11 "surface, don't swallow" reasoning,
     // applied independently to each concern.
     try {
-      const closed = await checkOpenPositionExits(env.DB, config, { asOf: new Date().toISOString() });
+      const closed = await checkOpenPositionExits(env, config, env.DB, { asOf: new Date().toISOString() });
       console.log("exit check completed", { closed: closed.length, closed });
     } catch (err) {
       console.error("exit check failed", { message: err.message });
