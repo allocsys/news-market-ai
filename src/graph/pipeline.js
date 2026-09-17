@@ -97,10 +97,10 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
     ]);
     state.opinions = [newsOpinion, sentimentOpinion, technicalOpinion].filter(Boolean);
     await checkpoint(db, { runId, ticker, stage: "analyzed", state });
-    stage = "analyzed";
+    stage = "debated"; // next-needed after "analyzed" is written, per resumeFrom's own convention
   }
 
-  if (stage === "analyzed") {
+  if (stage === "debated") {
     const priorLessons = await loadLessonsForDebate(db, { ticker, asOf });
     let verdict;
     let rounds = 0;
@@ -115,22 +115,22 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
 
     state.verdict = verdict;
     await checkpoint(db, { runId, ticker, stage: "debated", state });
-    stage = "debated";
-  }
-
-  if (stage === "debated") {
-    state.thesis = await runTrader(env, config, state.verdict);
-    await checkpoint(db, { runId, ticker, stage: "traded", state });
-    stage = "traded";
+    stage = "traded"; // next-needed after "debated" is written
   }
 
   if (stage === "traded") {
-    state.riskDecision = evaluateRisk(state.thesis, state.verdict);
-    await checkpoint(db, { runId, ticker, stage: "risk_checked", state });
-    stage = "risk_checked";
+    state.thesis = await runTrader(env, config, state.verdict);
+    await checkpoint(db, { runId, ticker, stage: "traded", state });
+    stage = "risk_checked"; // next-needed after "traded" is written
   }
 
   if (stage === "risk_checked") {
+    state.riskDecision = evaluateRisk(state.thesis, state.verdict);
+    await checkpoint(db, { runId, ticker, stage: "risk_checked", state });
+    stage = "portfolio_checked"; // next-needed after "risk_checked" is written
+  }
+
+  if (stage === "portfolio_checked") {
     // NETTING (previously a known gap, now closed): find this ticker's own
     // existing open position (if any) BEFORE computing the portfolio-wide
     // risk sum, then exclude it via `excludeTicker` -- openPositionsRiskPct
