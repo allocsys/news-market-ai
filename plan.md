@@ -274,8 +274,18 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   history and could not be reproduced: a fresh verification attempt this session
   got a clean, explicit 429 from GDELT's own rate limiter on every try (immediate,
   after a 7s wait, and after a 45s wait), never a successful response. The live
-  `articles[]` shape remains **unverified**. GDELT is being replaced as a data
-  source — see below.
+  `articles[]` shape remains **unverified**. **REPLACED** (2026-09-18) as the
+  primary news source by `src/ingestion/sources/finnhub.js` (Finnhub's free
+  `/company-news` endpoint, 60 req/min, explicitly production-permitted unlike
+  NewsAPI's dev-only free tier or Alpha Vantage's 25/day cap) -- unwired from
+  `graph/pipeline.js#collectNewsItems`, but `gdelt.js` and its test coverage are
+  kept in the repo (not deleted) for easy re-enable per an explicit product
+  decision. Finnhub's own field mapping (`headline`/`summary`/`url`/`datetime`/
+  `source`) is written from Finnhub's published docs only -- **not yet
+  live-verified against a real successful response** (blocked on a real
+  `FINNHUB_API_KEY` repo secret being set). Do not upgrade this to "confirmed"
+  without an actual successful fetch in hand -- see the correction directly
+  above for why.
 - **yfinance** adapter is unofficial/undocumented; daily bars only, no intraday.
 - **EDGAR fundamentals**: only whatever XBRL `us-gaap` tags a filer reports (no
   non-GAAP figures); not rate-limited beyond EDGAR itself (110ms pacing only).
