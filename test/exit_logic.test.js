@@ -281,7 +281,7 @@ test("checkOpenPositionExits closes a position on a time-based exit even with no
   // in yet" case documented in exit_check.js's header.
 
   const closed = await checkOpenPositionExits({}, config, db, { asOf: "2026-01-08T00:00:00Z" }); // 7 days later
-  assert.deepEqual(closed, [{ id: "TSLA": "TSLA", id: "TSLA|t1", ticker: "TSLA", reason: "time_based" }]);
+  assert.deepEqual(closed, [{ id: "TSLA|t1", ticker: "TSLA", reason: "time_based" }]);
 
   // No entryPrice AND no exitPrice -- settlePositionOutcome must skip
   // reflection entirely rather than fabricate a realized return.
