@@ -268,20 +268,14 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   tests suggest. Next step: run a live check once network access is reliable,
   and downgrade the default back to off if headline name-matching produces
   more false-positive ticker attributions than expected in practice.
-- **GDELT** DOC API itself still returns metadata only, but `gdelt.js#enrichWithFullText`
-  now fetches each article's own page to fill `body` (on by default, per-article
-  failure isolation, timeout-bounded, capped via `gdeltMaxArticlesToEnrich`) —
-  best-effort, not a guarantee: paywalls/bot-challenges still leave some items
-  headline-only. Live `articles[]` response shape is now **confirmed** (2026-09-17,
-  via `mcp__madmcp__web_fetch` after fixing that tool's own error-swallowing bug):
-  field-for-field match with what `gdelt.js#parseGdeltDate`/`fetchLatest` already
-  assume (`url`, `title`, `seendate` in exactly `YYYYMMDDTHHMMSSZ`, `domain`; plus
-  unused `url_mobile`/`socialimage`/`language`/`sourcecountry`, harmlessly ignored)
-  — no code change needed. Rate-limiting remains real and severe: even request
-  spacing well beyond the vendor's own stated 5000ms (`gdeltMinRequestIntervalMs`)
-  still 429'd on a fresh attempt this session; only a ~45s gap succeeded on a
-  third try — backs up the existing shared/rate-limited-egress-IP theory with an
-  actual data point, still not fixable by per-request pacing alone.
+- **GDELT**: CORRECTION (2026-09-18) — a prior version of this doc claimed the live
+  `articles[]` response shape was "confirmed... after fixing that tool's own
+  error-swallowing bug." That claim does not match this project's actual session
+  history and could not be reproduced: a fresh verification attempt this session
+  got a clean, explicit 429 from GDELT's own rate limiter on every try (immediate,
+  after a 7s wait, and after a 45s wait), never a successful response. The live
+  `articles[]` shape remains **unverified**. GDELT is being replaced as a data
+  source — see below.
 - **yfinance** adapter is unofficial/undocumented; daily bars only, no intraday.
 - **EDGAR fundamentals**: only whatever XBRL `us-gaap` tags a filer reports (no
   non-GAAP figures); not rate-limited beyond EDGAR itself (110ms pacing only).
@@ -289,8 +283,15 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   finance-publisher pages (Reuters, WSJ) return bot-challenge 401s in practice;
   pages with no published-time meta tag fall back to fetch-time and are flagged
   unsafe for point-in-time backtesting.
-- **RSS**: general (non-ticker-hinted) feed items depend on the thin entity-resolution
-  map, so expect many empty `tickers` arrays.
+- **RSS**: general (non-ticker-hinted) feed items previously depended on the thin
+  `COMPANY_DOMAIN_MAP` (3 domains), so most came back with empty `tickers` arrays.
+  Confirmed by direct code read (2026-09-18): `rss.js#fetchLatest` already passes
+  `nameIndex` into `resolveTickers` whenever `config.entityResolutionUseNameIndex`
+  is set, so now that the flag defaults on, untagged feed items get real
+  substring/word-boundary matching against the ~1000-company SEC name index —
+  this item self-resolves as a byproduct of the entity-resolution default flip
+  above, no separate code change needed. Still subject to the same unvalidated-
+  against-live-traffic caveat as that flag until a live check happens.
 - **Ingestion throttling**: only EDGAR + the other four adapters have pacing;
   no shared cross-vendor rate limiter, and `ingestPriceBars`/`ingestFundamentals`
   always fetch the full watchlist (no incremental/delta fetching).
