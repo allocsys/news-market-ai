@@ -22,6 +22,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { STAGES, nextStage, checkpoint, resumeFrom } from "../src/graph/checkpointer.js";
+import { runPipelineForTicker } from "../src/graph/pipeline.js";
+import { runNewsEventAnalyst } from "../src/agents/analysts/newsEventAnalyst.js";
+import { runSentimentAnalyst } from "../src/agents/analysts/sentimentAnalyst.js";
+import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 
 class FakeCheckpointDb {
   constructor() {
@@ -121,9 +125,6 @@ test("resumeFrom keeps separate (runId, ticker) pairs independent", async () => 
 // decisions is a normal, honest state for a ticker's first-ever run, and
 // keeps this fake from needing to be a general SQLite emulator).
 // =======================================================================
-
-import { runPipelineForTicker } from "../src/graph/pipeline.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 
 class FakePipelineDb {
   constructor() {
@@ -295,8 +296,6 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
   // db ends up in exactly the state a real crash-after-"analyzed" run would
   // leave it in, without having to partially execute runPipelineForTicker
   // itself (which has no built-in way to stop early on command).
-  const { runNewsEventAnalyst } = await import("../src/agents/analysts/newsEventAnalyst.js");
-  const { runSentimentAnalyst } = await import("../src/agents/analysts/sentimentAnalyst.js");
   const [newsOpinion, sentimentOpinion] = await Promise.all([
     runNewsEventAnalyst({}, configForFirstHalf, NEWS_ITEM),
     runSentimentAnalyst({}, configForFirstHalf, NEWS_ITEM),
