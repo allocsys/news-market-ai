@@ -233,16 +233,20 @@ false) — wired into GDELT, RSS, and HTML-scrape ingestion, with `kv` threaded
 through `collectNewsItems` so the index is cached in production. Fails open on
 any error; `resolveTickers` stays fully backward-compatible when the index is
 omitted; default behavior across all three adapters is byte-for-byte unchanged
-when the flag is off.
+when the flag is off. `structured.js` now has a `config.fakeModel` injection
+point (off by default, falls through unchanged to the real Gemini cascade),
+with true end-to-end tests riding it: `callStructured` itself (precedence,
+arg passthrough, JSON-fence stripping, schema validation), `recordAndReflect`'s
+write path, and a full `runPipelineForTicker` run through every agent/stage
+plus a resume-after-crash test proving already-completed stages are never
+re-invoked. checkpoint/resume, memory/reflection, and technical-analyst tests
+are no longer limited to mocks/fakes for the LLM-call path.
 
 ## Known Gaps / Backlog
 - **Entity resolution** now has a real SEC-backed name-matching path, but it's
   opt-in and off by default — most production traffic still resolves tickers via
   the older hand-maintained domain map / explicit hints alone until the flag is
   flipped on and validated.
-- **`structured.js`** has no fake-model injection point yet, so no test exercises
-  a real LLM-call path end-to-end (checkpoint/resume, memory, technical-analyst
-  "has data" path are all tested only against mocks/fakes for this reason).
 - **GDELT** DOC API returns metadata only (`body` is empty until full-text fetch
   is added); its live `articles[]` response shape is still unverified (every
   live attempt on `doc/doc` gets rate-limited, appears endpoint-specific/shared-IP,
@@ -271,6 +275,3 @@ when the flag is off.
   docs-vs-code path filter is a fixed list that needs manual updating if a new
   top-level code directory is added later.
 - **Dashboard** UI/UX pass has not been screenshot-reviewed.
-- Next up: a fake-model injection point in `structured.js` to unlock true
-  end-to-end LLM-call-path tests (checkpoint/resume, memory, and
-  technical-analyst tests currently only exercise mocks/fakes).
