@@ -312,10 +312,24 @@ export async function ingestFundamentals(config, db, kv) {
     throw err;
   }
 
+  let inserted = 0;
   for (const fact of facts) {
-    await insertFundamentalFact(db, fact);
+    try {
+      await insertFundamentalFact(db, fact);
+      inserted += 1;
+    } catch (err) {
+      // A single malformed/unexpected fact (e.g. a D1 constraint violation)
+      // must not abort the rest of ingestion -- same Failure Isolation
+      // reasoning as the whole-source VendorError handling above, just
+      // scoped to one row instead of one source. See edgar_fundamentals.js's
+      // fy/fp skip for the specific incident (SQLITE_CONSTRAINT on
+      // fiscal_year) this is a backstop for.
+      console.error("fundamentals ingestion -- skipping one fact insert", {
+        ticker: fact.ticker, tag: fact.tag, fiscalYear: fact.fiscalYear, fiscalPeriod: fact.fiscalPeriod, message: err.message,
+      });
+    }
   }
-  return { count: facts.length };
+  return { count: inserted };
 }
 
 /**
