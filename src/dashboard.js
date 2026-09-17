@@ -711,7 +711,7 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
 
   <section id="decisions">
     <h2>Recent trade decisions</h2>
-    <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Bull/bear debate reasoning isn't shown -- not persisted anywhere yet, see this page's own module header.</p>
+    <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Expand "LLM reasoning" on a row to see the Analyst Team's opinions, the bull/bear debate, the judge's verdict, and the trader's rationale that produced it -- rows from before this feature shipped show "not recorded" instead.</p>
     ${decisionsFilterBar}
     ${decisionsTable(decisions)}
   </section>
