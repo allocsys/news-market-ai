@@ -16,10 +16,11 @@ import { renderDashboardHtml } from "./dashboard.js";
 
 export default {
   async fetch(request, env) {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
 
     if (pathname === "/dashboard") {
-      const html = await renderDashboardHtml(env.DB);
+      const html = await renderDashboardHtml(env.DB, { searchParams: url.searchParams });
       return new Response(html, {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" },
