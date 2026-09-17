@@ -323,14 +323,24 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   itself is already closed regardless.
 - **Backtest harness** (`signalCompare.js`) is windowing + comparison math
   only — no real end-to-end backtest run yet. With realized returns now
-  computable (see above), the remaining blocker is **historical news
-  backfill**: every ingestion adapter (finnhub/rss/html_scrape) is wired
-  for "what's new now" only — finnhub.js hardcodes a trailing lookback
-  window, not an arbitrary backfill range, even though Finnhub's
-  `/company-news` endpoint accepts arbitrary `from`/`to` dates. A real
-  end-to-end run also needs a comparable no-signal baseline strategy and
-  will make live LLM calls across historical data (expensive/slow),
-  separate from the backfill gap itself.
+  computable (see above), the **historical news backfill** gap for Finnhub
+  is now closed (branch `wire-backtest`): `finnhub.js#fetchLatest` accepts
+  an explicit `{from, to}` range (Finnhub's `/company-news` already
+  supported arbitrary dates — the adapter just never exposed that), and
+  `graph/pipeline.js#backfillHistoricalNews` wires it into a real entry
+  point that persists results through the same `insertNewsItem`
+  point-in-time storage path live ingestion uses. Default trailing-window
+  behavior is unchanged when `from`/`to` are omitted, so the live cron
+  path is unaffected. **Still open:** `rss.js`/`html_scrape.js` remain
+  permanently live-feed/live-page-only — there's no `from`/`to` a feed or
+  a scraped page can accept, so they cannot backfill; this is a real gap,
+  not an oversight. `backfillHistoricalNews` also isn't yet wired to any
+  operational entry point (a CLI/script, a one-off `workflow_dispatch`
+  job) — it exists as a callable function with test coverage
+  (`test/ingestion_wiring.test.js`), not something anyone can invoke
+  outside a test yet. A real end-to-end run also still needs a comparable
+  no-signal baseline strategy and will make live LLM calls across
+  historical data (expensive/slow), separate from the backfill gap itself.
 - **CI**: no lockfile-sync job (fine while there's one `package.json`). The
   docs-vs-code path filter is now exclusion-based (`**` minus any `*.md`,
   anywhere) rather than a manually maintained inclusion list, so a new
