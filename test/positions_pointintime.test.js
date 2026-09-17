@@ -140,3 +140,74 @@ test("openPosition is idempotent on the same id -- a checkpoint-resumed re-run c
   const pct = await getOpenPositionsRiskPctAsOf(db, { asOf: "2026-01-15T00:00:00Z" });
   assert.equal(pct, 0.03); // not 0.06 -- the second call was a no-op
 });
+
+// --- Netting: excludeTicker + getOpenPositionForTickerAsOf ---------------
+// Covers the previously-documented KNOWN LIMITATION (re-evaluating a
+// ticker that already has an open position double-counted its own
+// exposure) now that both halves of the fix exist: excludeTicker on the
+// summed read, and getOpenPositionForTickerAsOf for finding what to
+// replace.
+
+test("getOpenPositionsRiskPctAsOf with excludeTicker nets that ticker's own exposure out of the sum", async () => {
+  const db = new FakePositionsDb();
+  await openPosition(db, { id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03, openedAt: "2026-01-01T00:00:00Z" });
+  await openPosition(db, { id: "MSFT|t1", ticker: "MSFT", tradeThesisId: "MSFT|t1", positionSizePct: 0.02, openedAt: "2026-01-05T00:00:00Z" });
+
+  const pct = await getOpenPositionsRiskPctAsOf(db, { asOf: "2026-01-10T00:00:00Z", excludeTicker: "AAPL" });
+  assert.equal(pct, 0.02); // AAPL's own 0.03 excluded, only MSFT's 0.02 remains
+});
+
+test("getOpenPositionsRiskPctAsOf without excludeTicker is unaffected -- pre-existing behavior preserved", async () => {
+  const db = new FakePositionsDb();
+  await openPosition(db, { id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03, openedAt: "2026-01-01T00:00:00Z" });
+  await openPosition(db, { id: "MSFT|t1", ticker: "MSFT", tradeThesisId: "MSFT|t1", positionSizePct: 0.02, openedAt: "2026-01-05T00:00:00Z" });
+
+  const pct = await getOpenPositionsRiskPctAsOf(db, { asOf: "2026-01-10T00:00:00Z" });
+  assert.equal(pct, 0.05); // no excludeTicker -- sums everything, same as before this session
+});
+
+test("getOpenPositionForTickerAsOf throws LookaheadViolationError when asOf is omitted", async () => {
+  const db = new FakePositionsDb();
+  await assert.rejects(() => getOpenPositionForTickerAsOf(db, { ticker: "AAPL" }), LookaheadViolationError);
+});
+
+test("getOpenPositionForTickerAsOf returns null when the ticker has no open position", async () => {
+  const db = new FakePositionsDb();
+  const pos = await getOpenPositionForTickerAsOf(db, { ticker: "AAPL", asOf: "2026-01-10T00:00:00Z" });
+  assert.equal(pos, null);
+});
+
+test("getOpenPositionForTickerAsOf finds the ticker's open position as of asOf", async () => {
+  const db = new FakePositionsDb();
+  await openPosition(db, { id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03, openedAt: "2026-01-01T00:00:00Z" });
+
+  const pos = await getOpenPositionForTickerAsOf(db, { ticker: "AAPL", asOf: "2026-01-10T00:00:00Z" });
+  assert.equal(pos.id, "AAPL|t1");
+  assert.equal(pos.ticker, "AAPL");
+  assert.equal(pos.positionSizePct, 0.03);
+});
+
+test("getOpenPositionForTickerAsOf returns null for a position not yet opened as of asOf (no lookahead)", async () => {
+  const db = new FakePositionsDb();
+  await openPosition(db, { id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03, openedAt: "2026-02-01T00:00:00Z" });
+
+  const pos = await getOpenPositionForTickerAsOf(db, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
+  assert.equal(pos, null);
+});
+
+test("getOpenPositionForTickerAsOf returns null once the position has closed strictly before asOf", async () => {
+  const db = new FakePositionsDb();
+  await openPosition(db, { id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03, openedAt: "2026-01-01T00:00:00Z" });
+  await closePosition(db, { id: "AAPL|t1", closedAt: "2026-01-10T00:00:00Z", closeReason: "replaced" });
+
+  const pos = await getOpenPositionForTickerAsOf(db, { ticker: "AAPL", asOf: "2026-01-20T00:00:00Z" });
+  assert.equal(pos, null);
+});
+
+test("getOpenPositionForTickerAsOf is per-ticker -- does not return a different ticker's position", async () => {
+  const db = new FakePositionsDb();
+  await openPosition(db, { id: "MSFT|t1", ticker: "MSFT", tradeThesisId: "MSFT|t1", positionSizePct: 0.02, openedAt: "2026-01-01T00:00:00Z" });
+
+  const pos = await getOpenPositionForTickerAsOf(db, { ticker: "AAPL", asOf: "2026-01-10T00:00:00Z" });
+  assert.equal(pos, null);
+});
