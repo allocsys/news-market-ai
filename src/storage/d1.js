@@ -174,18 +174,23 @@ export async function openPosition(db, { id, ticker, tradeThesisId, positionSize
 
 /**
  * Write path for exiting a position (stop-loss/take-profit/time-based
- * exit). Now has a caller: src/graph/exit_check.js#checkOpenPositionExits,
- * driven by agents/risk_mgmt/exit.js#evaluateExit's deterministic rules --
- * closing the plan.md gap this function's old comment flagged ("exists now
- * so getOpenPositionsRiskPctAsOf has a real closed_at to filter on once
- * exit logic lands"). `closeReason` records which rule fired
- * ('stop_loss' | 'take_profit' | 'time_based'), same "reason documents
- * which rule fired" convention as RiskDecision.reason.
+ * exit). Callers: src/graph/exit_check.js#checkOpenPositionExits, driven
+ * by agents/risk_mgmt/exit.js#evaluateExit's deterministic rules, and
+ * graph/pipeline.js's "replaced" branch. `closeReason` records which rule
+ * fired ('stop_loss' | 'take_profit' | 'time_based' | 'replaced'), same
+ * "reason documents which rule fired" convention as RiskDecision.reason.
+ *
+ * `exitPrice` (migrations/0009_positions_exit_price.sql) is what
+ * graph/settle.js#settlePositionOutcome uses, together with this row's own
+ * entry_price/direction, to compute a realized return and feed it into the
+ * reflection loop (reflection.js#closeTheLoop) -- nullable ON PURPOSE, same
+ * convention as entry_price: a time_based exit with no price_bars data for
+ * this ticker still closes the position, just without a computable return.
  */
-export async function closePosition(db, { id, closedAt, closeReason = null }) {
+export async function closePosition(db, { id, closedAt, closeReason = null, exitPrice = null }) {
   await db
-    .prepare(`UPDATE positions SET closed_at = ?, close_reason = ? WHERE id = ? AND closed_at IS NULL`)
-    .bind(closedAt, closeReason, id)
+    .prepare(`UPDATE positions SET closed_at = ?, close_reason = ?, exit_price = ? WHERE id = ? AND closed_at IS NULL`)
+    .bind(closedAt, closeReason, exitPrice, id)
     .run();
 }
 
@@ -569,16 +574,17 @@ export async function getAllOpenPositions(db, { limit = 50 } = {}) {
 
 /**
  * Most recently closed positions. Dashboard-only, see section header.
- * HONEST GAP (surfaced while building this, not fixed here): closePosition
- * never records an exit price, only closed_at/close_reason -- so realized
- * P&L cannot actually be computed from this table today, only direction/
- * entry price/close reason/timing. Flagged in plan.md rather than silently
- * shown as if a return figure existed.
+ * `exitPrice` (migrations/0009_positions_exit_price.sql) is now recorded
+ * by closePosition when computable -- nullable for rows closed before that
+ * migration, or for a time_based exit with no price_bars data (same honest
+ * gap as entry_price ever being null). This function itself does not
+ * compute a realized return; graph/settle.js does that at close time and
+ * writes it to decision_memory, not onto this row.
  */
 export async function getRecentlyClosedPositions(db, { limit = 20 } = {}) {
   const { results } = await db
     .prepare(
-      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, opened_at, closed_at, close_reason
+      `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, exit_price, opened_at, closed_at, close_reason
        FROM positions WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT ?`
     )
     .bind(limit)
@@ -591,6 +597,7 @@ export async function getRecentlyClosedPositions(db, { limit = 20 } = {}) {
     positionSizePct: r.position_size_pct,
     direction: r.direction,
     entryPrice: r.entry_price,
+    exitPrice: r.exit_price,
     openedAt: r.opened_at,
     closedAt: r.closed_at,
     closeReason: r.close_reason,
