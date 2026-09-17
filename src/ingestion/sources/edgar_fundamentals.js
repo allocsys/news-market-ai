@@ -109,7 +109,23 @@ export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
   const concept = data.facts?.["us-gaap"]?.[tag];
   if (!concept) return []; // filer simply doesn't report this tag -- not an error, just no data
 
-  const facts = [];
+  // Bug fix (2026-09-17, see bug.md "Too many API requests by single Worker
+  // invocation"): this loop used to push every entry EDGAR has ever
+  // reported for `tag`, unfiltered -- despite the function being named
+  // fetchLatest. For a mature ticker that's 10+ years of quarterly/annual
+  // history; multiplied across every (ticker x tag) in the watchlist on
+  // every 15-min cron tick, the resulting D1 batch-insert statements (each
+  // one its own subrequest, same as an outbound fetch) blew through the
+  // Worker's per-invocation subrequest cap. Two changes here: (a) drop any
+  // entry filed before config.edgarFactsLookbackDays -- a real recency
+  // filter, matching what "latest" in the function name always implied;
+  // (b) dedupe restatements, keeping only the most-recently-filed entry
+  // per (unit, fiscalYear, fiscalPeriod, form) -- a later 10-K/A restating
+  // an earlier period should still win (it's the current belief), but
+  // doesn't need every prior restatement re-inserted on every run.
+  const cutoffMs = config.edgarFactsLookbackDays ? Date.now() - config.edgarFactsLookbackDays * 24 * 60 * 60 * 1000 : -Infinity;
+  const latestByKey = new Map();
+
   for (const [unit, entries] of Object.entries(concept.units ?? {})) {
     for (const entry of entries ?? []) {
       // `filed` is the actual public filing date -- see this file's header
@@ -118,6 +134,7 @@ export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
 
       const filedAt = new Date(entry.filed);
       if (Number.isNaN(filedAt.getTime())) continue; // malformed date from vendor -- skip rather than insert garbage
+      if (filedAt.getTime() < cutoffMs) continue; // outside the lookback window -- this is what actually caps the fan-out
 
       // fundamental_facts.fiscal_year/fiscal_period are NOT NULL (see
       // migrations/0005_fundamental_facts.sql) and validateFundamentalFact
@@ -129,22 +146,31 @@ export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
       // garbage, same convention as the filed/val checks above.
       if (entry.fy === undefined || entry.fy === null || entry.fp === undefined || entry.fp === null) continue;
 
-      const fact = {
-        ticker,
-        cik,
-        tag,
-        val: entry.val,
-        unit,
-        fiscalYear: entry.fy,
-        fiscalPeriod: entry.fp,
-        form: entry.form,
-        filedAt: filedAt.toISOString(),
-        source: "edgar",
-      };
+      const key = `${unit}|${entry.fy}|${entry.fp}|${entry.form}`;
+      const existing = latestByKey.get(key);
+      if (existing && new Date(existing.entry.filed).getTime() >= filedAt.getTime()) continue; // an already-kept entry for this period was filed later (or same time) -- keep it, skip this one
 
-      validateFundamentalFact(fact, { source: "edgar" });
-      facts.push(fact);
+      latestByKey.set(key, { entry, unit, filedAt });
     }
+  }
+
+  const facts = [];
+  for (const { entry, unit, filedAt } of latestByKey.values()) {
+    const fact = {
+      ticker,
+      cik,
+      tag,
+      val: entry.val,
+      unit,
+      fiscalYear: entry.fy,
+      fiscalPeriod: entry.fp,
+      form: entry.form,
+      filedAt: filedAt.toISOString(),
+      source: "edgar",
+    };
+
+    validateFundamentalFact(fact, { source: "edgar" });
+    facts.push(fact);
   }
 
   return facts;
