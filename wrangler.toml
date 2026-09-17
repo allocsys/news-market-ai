@@ -53,5 +53,18 @@ WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
 # which made every EDGAR fundamentals fetch fail.
 EDGAR_USER_AGENT = "news-market-ai contact@allocsys.dev"
 
+# Hardcoded CIK overrides for the current watchlist -- bypasses
+# resolveCik()'s fallback to fetchTickerCikMap() (src/ingestion/sources/
+# edgar_cik_lookup.js), which downloads and parses SEC's full
+# company_tickers.json (~10k+ entries) just to resolve 3 tickers. That
+# fetch+parse was heavy enough to trip the Worker's CPU limit before the
+# result could be written to the KV cache, so a cold cache caused every
+# subsequent 15-min cron run to repeat the same expensive path and die
+# the same way -- a self-perpetuating failure loop, not a one-off.
+# Format: TICKER|CIK, comma-separated (see parseTickerUrlList in
+# src/config.js). CIKs from SEC's EDGAR company search, zero-padding
+# doesn't matter -- normalizeCik() pads to 10 digits either way.
+EDGAR_CIK_MAP = "AAPL|0000320193,MSFT|0000789019,TSLA|0001318605"
+
 # Secrets -- set via `wrangler secret put GEMINI_API_KEYS`, never committed:
 #   GEMINI_API_KEYS = comma-separated list of Gemini API keys (cascade rotates through all of them)
