@@ -119,6 +119,16 @@ export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
       const filedAt = new Date(entry.filed);
       if (Number.isNaN(filedAt.getTime())) continue; // malformed date from vendor -- skip rather than insert garbage
 
+      // fundamental_facts.fiscal_year/fiscal_period are NOT NULL (see
+      // migrations/0005_fundamental_facts.sql) and validateFundamentalFact
+      // below does not check these fields -- an entry missing fy/fp (some
+      // older companyfacts frames omit them entirely) previously reached
+      // storage/d1.js#insertFundamentalFact uncaught, threw a
+      // SQLITE_CONSTRAINT error, and killed the whole scheduled run before
+      // news/analyst/debate/trade stages ever ran. Skip rather than insert
+      // garbage, same convention as the filed/val checks above.
+      if (entry.fy === undefined || entry.fy === null || entry.fp === undefined || entry.fp === null) continue;
+
       const fact = {
         ticker,
         cik,
