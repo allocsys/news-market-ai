@@ -1,0 +1,175 @@
+// The "signal on" half of Adopted Pattern #6 ("prove the signal helps
+// before trusting it"). signalCompare.js#compareSignalOnOffByWindow already
+// has the walk-forward + metrics-comparison machinery and takes
+// getOnReturns/getOffReturns as caller-supplied callbacks without supplying
+// either itself (see that file's header). noSignalBaseline.js supplies the
+// "off" side (naive buy-and-hold, zero LLM calls). This file supplies the
+// "on" side: actually running the real LLM-backed pipeline
+// (graph/pipeline.js#runPipelineForTicker) over backfilled historical news
+// (graph/pipeline.js#backfillHistoricalNews) and turning the positions it
+// opens into the realized returns getOnReturns(window) must produce.
+//
+// COST / LIVE-TRAFFIC WARNING: unlike noSignalBaseline.js, calling the
+// functions this file exports for real spends real Gemini quota (multiple
+// LLM calls per news item via runPipelineForTicker: analyst team, bull/bear
+// debate, judge, trader, plus one more per position close via
+// graph/settle.js#settlePositionOutcome's reflection call) and, if paired
+// with a fresh backfillHistoricalNews call, real Finnhub quota too. This
+// module adds no cost/rate-limit guard of its own beyond whatever
+// llm/gemini/client.js's cascade already provides -- it is meant to be
+// invoked deliberately (a real backtest run), never as a side effect of
+// routine testing. Unit/integration tests in this repo exercise it via
+// config.fakeModel (agents/utils/structured.js), the same convention
+// test/checkpoint_resume.test.js's full-pipeline test already established,
+// so covering this file costs zero real API calls.
+//
+// WHY A DAY-BY-DAY WALK, NOT JUST "RUN THE PIPELINE ONCE PER NEWS ITEM":
+// opening a position (runPipelineForTicker's portfolio_checked stage) does
+// not by itself produce a realized return -- a position only becomes a
+// realized number once something CLOSES it, and closing is
+// graph/exit_check.js#checkOpenPositionExits's job (stop-loss/take-profit/
+// time-based, driven by day-by-day price movement), called on its own
+// periodic cadence by the live cron path (src/index.js#scheduled), not by
+// runPipelineForTicker itself. So a faithful backtest of "what would the
+// live system have realized" has to replay that same cadence: for each day
+// in the window, run the pipeline for whatever backfilled news landed that
+// day (opening/replacing positions exactly as the live path would), THEN
+// call checkOpenPositionExits for that same day so already-open positions
+// get their scheduled chance to exit. A single end-of-window pass would
+// systematically under-count closes (every position still open at testEnd
+// would simply never resolve) and would let a later news item's pipeline
+// run see price/position state it should only see day-by-day, not
+// instantly.
+//
+// GRACE PERIOD: `graceDays` (default config.maxPositionHoldDays) extends
+// the day-by-day walk PAST `testEnd` purely so a position opened near the
+// end of the test window still gets its fair chance to hit a stop-loss/
+// take-profit/time-based exit and contribute a realized return, rather
+// than being silently excluded just because it happened to still be open
+// exactly at testEnd. This does NOT let entry decisions see anything past
+// testEnd -- getNewsItemsInRange below is still bounded to [testStart,
+// testEnd) for what triggers a NEW pipeline run; the grace period only
+// keeps checking positions that already opened for exits.
+//
+// WINDOW ATTRIBUTION: getRealizedReturnsInRange reads every realized return
+// whose resolved_at (== closedAt) falls in [testStart, testEnd + graceDays),
+// regardless of when the underlying position was opened -- so a position
+// opened from a news item just before testStart that happens to close
+// during this window IS counted. This mirrors noSignalBaseline.js's own
+// testStart-to-testEnd entry/exit convention (not perfectly attribution-
+// clean toward either window, but consistent between "on" and "off" so
+// compareSignalOnOff stays an apples-to-apples comparison, not skewed by a
+// boundary-effect difference between the two sides).
+
+import { getNewsItemsInRange, getRealizedReturnsInRange } from "../storage/d1.js";
+import { runPipelineForTicker } from "../graph/pipeline.js";
+import { checkOpenPositionExits } from "../graph/exit_check.js";
+
+const DAY_MS = 86400000;
+
+/** Every UTC calendar day from `startIso` (truncated to midnight) through `endIso`, inclusive, as ISO strings. */
+function eachDayIso(startIso, endIso) {
+  const days = [];
+  const cursor = new Date(startIso);
+  cursor.setUTCHours(0, 0, 0, 0);
+  const end = new Date(endIso);
+  while (cursor.getTime() <= end.getTime()) {
+    days.push(cursor.toISOString());
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return days;
+}
+
+/** Groups getNewsItemsInRange's rows by their UTC calendar date (published_at's first 10 chars), for the day-by-day walk below. */
+function groupItemsByDay(items) {
+  const byDay = new Map();
+  for (const item of items) {
+    const day = item.published_at.slice(0, 10);
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(item);
+  }
+  return byDay;
+}
+
+/**
+ * Runs the real pipeline for ONE ticker across one test window (plus grace
+ * period), returning the realized returns that resulted -- exactly the
+ * "array of per-position returns for this window" shape
+ * compareSignalOnOffByWindow's getOnReturns(window) needs, same contract as
+ * noSignalBaseline.js#computeBuyAndHoldReturns.
+ *
+ * `runIdPrefix` disambiguates checkpoint rows (graph/checkpointer.js keys
+ * on (runId, ticker)) across repeated backtest runs over the SAME
+ * backfilled news items -- without it, a second walk-forward window whose
+ * grace period overlaps a news item already used by an earlier window
+ * would resume from that earlier run's checkpoint instead of executing
+ * fresh, since runPipelineForTicker's own convention (see
+ * graph/pipeline.js) is to key runId off the news item's id alone. Default
+ * is the window's own testStart, which is unique per window by
+ * construction (walkForwardWindows never repeats a testStart).
+ */
+export async function runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix }) {
+  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
+  const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
+  const prefix = runIdPrefix ?? testStart;
+
+  const newsItems = await getNewsItemsInRange(db, { ticker, from: testStart, to: testEnd });
+  const itemsByDay = groupItemsByDay(newsItems);
+
+  for (const dayIso of eachDayIso(testStart, walkEnd)) {
+    const dayItems = itemsByDay.get(dayIso.slice(0, 10)) ?? [];
+    for (const item of dayItems) {
+      await runPipelineForTicker(env, config, db, {
+        runId: `${prefix}|${item.id}`,
+        ticker,
+        newsItem: { id: item.id, tickers: [ticker], title: item.title, body: item.body, publishedAt: item.published_at },
+        asOf: item.published_at,
+      });
+    }
+    // Runs regardless of whether any news landed today -- an already-open
+    // position from an earlier day can still hit its stop-loss/take-profit/
+    // time-based exit on a day with no news at all, same as the live path.
+    await checkOpenPositionExits(env, config, db, { asOf: dayIso });
+  }
+
+  return getRealizedReturnsInRange(db, { ticker, from: testStart, to: walkEnd });
+}
+
+/**
+ * Multi-ticker sibling -- pools every ticker's realized returns for one
+ * test window into a single array, same "pool across the universe" shape
+ * as noSignalBaseline.js#computeBuyAndHoldReturns. Sequential per ticker
+ * (not Promise.all) deliberately: runPipelineForTicker's own portfolio
+ * stage reads cross-ticker open-position exposure
+ * (getOpenPositionsRiskPctAsOf), so concurrent tickers racing through the
+ * same day would see each other's NOT-YET-COMMITTED state inconsistently
+ * -- the live cron path itself is also sequential per news item for the
+ * same reason (see runScheduledIngestion's own for-loop, not a
+ * Promise.all).
+ */
+export async function runOnSignalReturns(env, config, db, { tickers, testStart, testEnd, graceDays }) {
+  const returns = [];
+  for (const ticker of tickers) {
+    const tickerReturns = await runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}` });
+    returns.push(...tickerReturns);
+  }
+  return returns;
+}
+
+/**
+ * Binds env/config/db/tickers, returning a function with exactly
+ * signalCompare.js#compareSignalOnOffByWindow's getOnReturns(window)
+ * signature -- mirrors noSignalBaseline.js#makeBuyAndHoldOffReturns exactly,
+ * so a real end-to-end run is just:
+ *
+ *   const getOnReturns = makeOnSignalReturns(env, config, db, { tickers });
+ *   const getOffReturns = makeBuyAndHoldOffReturns(db, { tickers });
+ *   await compareSignalOnOffByWindow({ ..., getOnReturns, getOffReturns });
+ *
+ * See this file's header for the real cost this incurs once actually
+ * invoked -- do not wire this into any automated/scheduled path without an
+ * explicit decision to spend that budget.
+ */
+export function makeOnSignalReturns(env, config, db, { tickers, graceDays }) {
+  return (window) => runOnSignalReturns(env, config, db, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays });
+}
