@@ -343,10 +343,21 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   project; pushed on deploy the same idempotent way as
   `GEMINI_API_KEYS`/`FINNHUB_API_KEY`, see `deploy.yml`). Covered by
   `test/index_backfill.test.js` (auth/validation branches, success, and
-  the genuine-bug-vs-vendor-isolation 500 distinction). A real end-to-end
-  run still needs a comparable no-signal baseline strategy and will make
-  live LLM calls across historical data (expensive/slow), separate
-  concerns from the backfill gap itself.
+  the genuine-bug-vs-vendor-isolation 500 distinction). The comparable
+  **no-signal baseline strategy** `signalCompare.js` needed is also now
+  built: `src/backtest/noSignalBaseline.js` -- naive equal-weighted
+  buy-and-hold across the same ticker universe/window, zero LLM calls,
+  zero news reads, sourced from the same point-in-time `getPriceBarsAsOf`
+  cutoff everything else uses. `makeBuyAndHoldOffReturns` matches
+  `compareSignalOnOffByWindow`'s `getOffReturns(window)` callback exactly,
+  so it plugs straight in with no adapter code. Covered by
+  `test/backtest_no_signal_baseline.test.js`. **What's actually left for a
+  real end-to-end run now:** only the "signal on" side -- running the real
+  LLM-backed pipeline (`runPipelineForTicker`) across backfilled
+  historical news to produce `getOnReturns`. That's a genuinely bigger,
+  separate undertaking (live Gemini calls across a historical date range
+  -- expensive, slow, and needs its own cost/rate-limit-aware runner), not
+  attempted on this branch.
 - **CI**: no lockfile-sync job (fine while there's one `package.json`). The
   docs-vs-code path filter is now exclusion-based (`**` minus any `*.md`,
   anywhere) rather than a manually maintained inclusion list, so a new
