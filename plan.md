@@ -309,9 +309,28 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   untuned placeholders.
 - **Exit logic** will only fire time-based exits in practice until yfinance price
   bars are populated for a given ticker before a position opens.
-- **Backtest harness** (`signalCompare.js`) is windowing + comparison math only —
-  no real end-to-end backtest run yet; needs the full agent graph against live
-  data plus a comparable no-signal baseline strategy.
+- **Realized returns / reflection loop, now wired** (branch `wire-backtest`):
+  `closePosition` now records `exit_price` (migrations/0009), and
+  `graph/settle.js#settlePositionOutcome` computes a direction-aware realized
+  return from it and calls `reflection.js#closeTheLoop` — which existed and
+  was unit-tested since the LLM-answers PR but had **zero production
+  callers** until now. Wired into both `closePosition` call sites
+  (`exit_check.js`'s stop_loss/take_profit/time_based exits and
+  `pipeline.js`'s "replaced" branch). `alphaReturn` is still always `null`
+  — no benchmark price series is ingested anywhere in this project; that's
+  a separate, larger gap (needs its own ingestion source). A reflection
+  failure (LLM call) is logged and swallowed, not thrown — the position
+  itself is already closed regardless.
+- **Backtest harness** (`signalCompare.js`) is windowing + comparison math
+  only — no real end-to-end backtest run yet. With realized returns now
+  computable (see above), the remaining blocker is **historical news
+  backfill**: every ingestion adapter (finnhub/rss/html_scrape) is wired
+  for "what's new now" only — finnhub.js hardcodes a trailing lookback
+  window, not an arbitrary backfill range, even though Finnhub's
+  `/company-news` endpoint accepts arbitrary `from`/`to` dates. A real
+  end-to-end run also needs a comparable no-signal baseline strategy and
+  will make live LLM calls across historical data (expensive/slow),
+  separate from the backfill gap itself.
 - **CI**: no lockfile-sync job (fine while there's one `package.json`). The
   docs-vs-code path filter is now exclusion-based (`**` minus any `*.md`,
   anywhere) rather than a manually maintained inclusion list, so a new
