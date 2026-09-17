@@ -271,6 +271,6 @@ when the flag is off.
   docs-vs-code path filter is a fixed list that needs manual updating if a new
   top-level code directory is added later.
 - **Dashboard** UI/UX pass has not been screenshot-reviewed.
-- Once positions-netting is resolved: two other previously-scoped gaps are next
-  up (real entity-resolution coverage; a fake-model injection point in
-  `structured.js` to unlock true end-to-end LLM-call-path tests).
+- Next up: a fake-model injection point in `structured.js` to unlock true
+  end-to-end LLM-call-path tests (checkpoint/resume, memory, and
+  technical-analyst tests currently only exercise mocks/fakes).
