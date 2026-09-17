@@ -386,6 +386,53 @@ export async function ingestFundamentals(config, db, kv) {
 }
 
 /**
+ * Historical news backfill for a real end-to-end backtest run -- the
+ * remaining blocker plan.md's Backlog flagged once realized returns were
+ * wired (see graph/settle.js): every ingestion adapter was "what's new
+ * now" only, with finnhub.js hardcoding a trailing lookback window even
+ * though Finnhub's /company-news endpoint accepts an arbitrary from/to
+ * range. This just calls that range through and persists whatever comes
+ * back via storage/d1.js#insertNewsItem -- the exact same point-in-time
+ * storage path live ingestion uses, so a backfilled article is
+ * indistinguishable from a live-ingested one to any asOf-gated read
+ * (getNewsAsOf, etc).
+ *
+ * SCOPE: finnhub only. rss.js and html_scrape.js are inherently "what's
+ * published right now" sources (a live feed/page, not a queryable
+ * archive with a date-range parameter) -- there is no from/to to give
+ * them, so they cannot be backfilled this way. That's a real, permanent
+ * gap for those two sources, not an oversight left for later (see
+ * plan.md's Known Gaps for the "why").
+ *
+ * Same failure-isolation convention as collectNewsItems: a per-ticker
+ * VendorError from fetchLatest is logged and skipped, never aborts the
+ * rest of the range/watchlist. `from`/`to` are required (unlike
+ * fetchLatest's own trailing-window default) -- this function's whole
+ * purpose is an explicit historical range, so a caller forgetting to pass
+ * one should fail loudly rather than silently backfill "the last 3 days"
+ * again. Intended for a one-off backfill script/CLI, not the live cron
+ * path (runScheduledIngestion/collectNewsItems below remain unchanged).
+ */
+export async function backfillHistoricalNews(config, db, { from, to, kv } = {}) {
+  if (!from || !to) {
+    throw new Error("backfillHistoricalNews requires an explicit {from, to} range -- use collectNewsItems for the live trailing-window path instead");
+  }
+
+  const { items, errors } = await fetchFinnhubLatest(config, { from, to }, { kv });
+  for (const { error } of errors) {
+    logSkippedSource("historical news backfill", "finnhub", error);
+  }
+
+  let inserted = 0;
+  for (const item of items) {
+    await insertNewsItem(db, item);
+    inserted++;
+  }
+
+  return { inserted, errors };
+}
+
+/**
  * Entry point for the cron trigger (src/index.js#scheduled). Pulls fresh
  * news (collectNewsItems) and price/fundamentals data (ingestPriceBars,
  * ingestFundamentals) from every wired adapter, then runs the pipeline
