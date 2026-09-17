@@ -21,6 +21,41 @@ function cooldownKey(model, keyIndex) {
   return `gemini:cooldown:${model}:${keyIndex}`;
 }
 
+// Generic per-vendor cooldown, same KV-backed TTL mechanism as the
+// Gemini-specific pair above, just keyed by an arbitrary (vendor, key)
+// pair instead of (model, keyIndex). Added for yfinance.js (2026-09-18,
+// see that file's header): a sustained 429 from an unofficial endpoint
+// isn't a few-hundred-ms blip retry.js's exponential backoff is meant for
+// -- it can persist for hours (same shared-egress-IP suspicion already
+// documented for GDELT in config.js), so an in-process retry loop just
+// re-fails on every single 15-minute cron tick, burning wall-clock time
+// for nothing. This lets a single confirmed 429 make every OTHER
+// invocation within the cooldown window skip that vendor/ticker entirely
+// -- near-zero cost -- instead of re-attempting and re-failing.
+function vendorCooldownKey(vendor, key) {
+  return `${vendor}:cooldown:${key}`;
+}
+
+export async function isVendorCoolingDown(kv, vendor, key) {
+  if (!kv) return false;
+  try {
+    const value = await kv.get(vendorCooldownKey(vendor, key));
+    return value != null;
+  } catch {
+    return false;
+  }
+}
+
+export async function setVendorCooldown(kv, vendor, key, seconds) {
+  if (!kv) return;
+  const ttl = Math.max(KV_MIN_TTL_SECONDS, Math.floor(seconds ?? DEFAULT_COOLDOWN_SECONDS));
+  try {
+    await kv.put(vendorCooldownKey(vendor, key), "1", { expirationTtl: ttl });
+  } catch {
+    // best-effort only -- see file header
+  }
+}
+
 export async function isCoolingDown(kv, model, keyIndex) {
   if (!kv) return false;
   try {
