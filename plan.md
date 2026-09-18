@@ -218,6 +218,27 @@ an aggregate query that ignores the Rows limit (`routes.js`/`d1.js`).
 **Done when:** every dashboard panel's data is reachable via `/api/*`, exposure is
 correct above the Rows filter, tests pass, dashboard unchanged.
 
+### Step 2 -- Dashboard Worker
+New Worker `news-market-ai-dashboard` (own `wrangler` config + CI deploy job) with
+a service binding to `backend`. It owns login, the session cookie, and the UI;
+`/api/*` is proxied same-origin (no CORS). Open decision: server-rendered first
+(reuse `views/*`, keeps tests), static/client-rendered later -- the API is the same
+either way. Move `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, `JWT_SECRET` to this
+Worker; make `backend` private (service binding only), so it fails closed instead
+of serving an open dashboard when login is unconfigured. Cut over, then delete the
+dashboard/login/auth code from `backend`.
+**Done when:** the dashboard works end to end from the new Worker, `backend` serves
+no HTML, and the login secrets exist only on `dashboard`.
+
+### Step 3 -- Job queue for backfill and backtest
+Add a `JOBS` queue (plus dead-letter queue). `POST /backfill` and
+`POST /backtest/run` validate, enqueue, and return the accepted page; a consumer runs
+`backfillHistoricalNews` / `runManualBacktest`. Job status lives in D1
+(`backtest_runs` already persists a `running` row). This removes the `waitUntil`
+30s cut-off. Keep the scripted-JSON response behavior for non-form callers.
+**Done when:** a long backtest completes past 30s, failures land as `failed` rows,
+and `test/index_backfill.test.js` is updated for the enqueue behavior.
+
 ## Repo Structure
 ```
 ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
