@@ -28,6 +28,8 @@ import {
 } from "./dashboard/routes.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
 import { renderLoginPage } from "./login.js";
+import { renderShell } from "./dashboard/shell.js";
+import { renderRunAcceptedPage } from "./dashboard/views/status.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
 
 /**
@@ -77,7 +79,7 @@ function htmlResponse(html, { status = 200 } = {}) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname } = url;
     const config = loadConfig(env);
