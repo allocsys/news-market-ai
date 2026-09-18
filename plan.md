@@ -658,6 +658,17 @@ code now gates on the dashboard session.
 
 ## Repo Structure
 ```
+src/index.js          # `backend` Worker entry point (wrangler.toml) -- JSON
+                      # API, /backfill + /backtest/run, cron scheduler, JOBS
+                      # (backfill-only) queue consumer, D1 migrations
+src/dashboard-worker.js  # `dashboard` Worker entry point (wrangler.dashboard.toml)
+                      # -- login, session, SSR UI; calls `backend` via a
+                      # service binding
+src/ingest-worker.js  # `ingest` Worker entry point (wrangler.ingest.toml) --
+                      # INGEST queue consumer (ingest_ticker/ingest_feeds)
+src/llm-worker.js     # `llm` Worker entry point (wrangler.llm.toml) -- ANALYZE
+                      # + LLM_JOBS (backtest/exit_check) queue consumer, the
+                      # only Worker holding GEMINI_API_KEYS
 ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
   errors.js           # typed vendor error taxonomy (Pattern 11)
   date_window.js       # point-in-time cutoff/boundary helpers
