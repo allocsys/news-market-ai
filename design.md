@@ -1,1 +1,82 @@
-$(cat /home/claude/design.md)
+# Dashboard Design Spec
+
+A target design direction for the operations dashboard, written from scratch against what a professional analytics/ops product should look and feel like — not a critique or incremental patch of the current implementation. Treat this as the brief for a redesign, not a changelog.
+
+## Design principles
+
+1. **Clarity over decoration.** This is a data-dense operational tool used by one or a few operators to make real decisions (trade approvals, backfill/backtest triggers). Every visual choice should make numbers, statuses, and trends easier to scan at a glance — never purely aesthetic.
+2. **Familiar patterns, not novelty.** Use conventions operators already know from tools like Linear, Vercel, Stripe Dashboard, and Grafana: sidebar or top nav, card-based summary stats, data tables with sticky headers, consistent status colors. Novel layout metaphors cost more in onboarding than they add in personality.
+3. **One system, applied consistently.** A small set of reusable primitives (spacing scale, type scale, color tokens, component variants) applied everywhere, rather than one-off inline styles per section. Consistency reads as "professional" far more than any individual component choice. This system must stay evergreen — new sections and features should have an obvious place to go without inventing new visual rules.
+4. **Legible density.** Operators want to see a lot of data per screen, but density must never come at the cost of readability — enough whitespace and clear visual grouping so a dense screen still scans in seconds, not minutes.
+5. **Accessible by default.** WCAG AA contrast minimums, real focus states, semantic HTML, and color never used as the sole signal (status also gets an icon/label, not just a hue).
+
+## Architecture: frontend and backend as separate layers
+
+The Navigation behavior requirement below (one real route per section) only stays maintainable if the code is split along the same seam. `src/dashboard.js` today is a single ~54KB file mixing query-string parsing, D1 orchestration, HTML templating, and all inline CSS/JS — turning that into nine routes without splitting it first just produces nine equally-tangled files.
+
+- **Backend (data layer):** D1 queries and query-param parsing/clamping (`src/storage/d1.js`, `parseDashboardParams`) stay backend concerns, untouched by this redesign. Each section's route handler calls only the backend functions that section needs — never fetches data for sections it isn't rendering (this is also what makes independent per-section routes actually fast).
+- **Frontend (view layer):** one render function per section (e.g. `renderSnapshotPage`, `renderPositionsPage`), each a pure function of "this section's already-fetched data" → HTML string. No D1 calls, no query-string reading inside a view function. Shared chrome — sidebar/bottom-nav, mobile header, `<style>` block — lives in one shell every page wraps itself in, not copy-pasted per section.
+- **Routing (the seam):** one thin route per section (suggested: `src/dashboard/routes.js`) that reads query params → calls the relevant backend fetch(es) → hands the result to that section's frontend render function → returns the response. This route layer is the only thing that talks to both sides; it contains no HTML and no raw SQL.
+- Suggested layout: `src/dashboard/views/*.js` (frontend), `src/dashboard/shell.js` (nav + layout chrome + styles, shared by every view), `src/dashboard/routes.js` (backend wiring). `src/storage/d1.js` remains the real data layer, untouched by this split.
+
+## Layout
+
+- **Desktop (≥1024px):** Fixed left sidebar (240–280px) for primary navigation, persistent across scroll. Main content area uses a centered max-width (1200–1400px) with responsive gutters — don't let content stretch edge-to-edge on wide monitors.
+- **Tablet (768–1023px):** Sidebar collapses to an **icon-only rail** (labels on hover/tap), persistently visible — not a slide-out drawer. A rail needs no open/close state or overlay logic and stays reachable with zero JS beyond a CSS `:hover`/`:focus` tooltip, which fits a project with no client-side framework (see Navigation behavior below). A drawer is explicitly not used here.
+- **Mobile (<768px):** No sidebar. Use a slim top app bar (logo/title + key status/account info) and a **fixed bottom tab bar** holding exactly these 4–5 primary destinations: **Snapshot, Decisions, Positions, Pipeline, Health.** These are the sections an operator needs to check or act on constantly. Everything else — **Activity, Charts, Backfill, Backtest** — lives inside a "More" tab. Activity and Charts are exploratory rather than glanceable; Backfill and Backtest are deliberate, infrequent, quota-spending actions that already require an explicit confirmation step (see Components → Costly-action confirmation), so putting them one tap deeper is consistent with treating them as non-casual actions rather than an oversight. If a future section is added, place it as primary only if it's something an operator needs at-a-glance on every visit — default new sections to "More."
+  Bottom bar: 56–64px tall, icon + short label per tab, active tab visually distinct (filled icon or accent underline), safe-area padding for notched devices.
+- **Grid:** 8px base spacing unit throughout (8/16/24/32/48/64). Card and section gaps use multiples of this unit — never arbitrary pixel values.
+- **Content sections:** Group related content into cards or panels with clear headers, not an undifferentiated scroll of tables. Panels that belong to the *same* nav destination's page — for example the Positions page's "open" and "closed" sub-panels — can sit side-by-side in a responsive grid on wide screens, stacking to a single column on mobile. Content belonging to a *different* nav destination is never pulled onto another section's page just to fill a grid — see Navigation behavior, which is a hard requirement, not a layout preference.
+
+## Navigation behavior
+
+This is the one point in this spec that is a hard requirement, not a stylistic preference: **every nav item (sidebar entries on desktop, tabs on the mobile bottom bar) must be a real, independently navigable page/view — its own URL/route that can be linked to, bookmarked, and loaded directly — not a same-page `<a href="#section-id">` scroll-to-anchor link.**
+
+- Clicking a nav item loads that section as its own page. Only that section's data needs to be fetched for that request — sections the operator isn't currently viewing should not all be fetched and rendered into one giant page just so anchors can jump between them.
+- The active nav item is derived from the current route, not from scroll position — no scroll-spy/IntersectionObserver logic standing in for real navigation.
+- Direct-linking and refreshing on any section's URL must load that section directly, not the top of a combined page.
+- This applies equally to the desktop sidebar, the tablet icon rail, and the mobile bottom tab bar (and its "More" overflow menu) — all are navigation to distinct pages, just presented in different chrome for the viewport size.
+- **Implementation is separate server-rendered routes, one per section** (e.g. `GET /dashboard/positions`, `GET /dashboard/decisions`), per the Architecture section above. This is a zero-build Cloudflare Worker with no bundler and no client-side JS framework anywhere in the codebase — a client-routed single-page app is not an option here and should not be scoped as one. What does NOT satisfy this requirement: one route that renders every section's markup into one document with `id` anchors and a nav bar of `#fragment` links, which is the current implementation and the specific pattern this spec is asking to move away from.
+
+## Typography
+
+- **One typeface family** (a well-tested system/product UI font: Inter, IBM Plex Sans, or the OS system font stack) for everything — headings, body, and data. Avoid mixing serif display type with monospace data with sans body copy; that mix reads as "assembled," not designed.
+- Reserve a **monospace font** only for genuinely tabular/numeric data where digit alignment matters (prices, timestamps, IDs) — not for labels, nav items, or prose.
+- **Type scale**, six steps, each roughly 1.15–1.35× the step before it (not a mathematically exact ratio, but consistently spaced rather than arbitrary): **12 / 14 (body default) / 16 / 20 / 24 / 32px.** 12px is reserved for small uppercase metadata labels only (table column headers, timestamps) — never body copy. Headings use a consistent weight (600) and never rely on italics or unusual case (no forced uppercase+letterspacing for section titles — reserve uppercase+tracking only for small metadata labels like table column headers, where it's a genuine convention).
+- Line height 1.5 for body text, 1.2–1.3 for headings.
+
+## Color system
+
+- **Light and dark mode both supported**, driven by CSS custom properties / design tokens, not a single hardcoded palette. Respect `prefers-color-scheme` by default, with a manual override if the product needs one.
+- Neutral base: a proper gray scale (9–10 steps) for backgrounds, borders, and text — not pure black/white, not a tinted "mood" palette.
+- One accent/brand color used sparingly for primary actions and active/selected states only — not for decorative rules, mastheads, or borders throughout the page.
+- Semantic colors, consistent everywhere they appear: success/green, danger/red, warning/amber, info/blue. Used for status badges, deltas, and alerts — always paired with text/icon, never color alone.
+- Minimum 4.5:1 contrast for body text, 3:1 for large text and UI component borders, checked against both light and dark backgrounds.
+
+## Components
+
+- **Buttons:** clear primary/secondary/tertiary/destructive variants, consistent height (36–40px default), 6–8px border radius, visible hover/active/focus/disabled states.
+- **Cards / stat tiles:** subtle border or very light shadow (not both heavy-handed), 8–12px border radius, consistent internal padding (16–24px). A stat tile shows one number prominently, a label below it, and optionally a trend indicator (arrow + %) — avoid overloading a single tile with more than one data point.
+- **Tables:** sticky header row, comfortable row height (44–48px), zebra striping or hover-row highlighting (not both), right-aligned numeric columns with tabular figures, and a built-in responsive strategy — either horizontal scroll inside a bounded container with a visible scroll affordance, or a card-per-row transformation below a defined breakpoint. Never let a table force the whole page to scroll horizontally.
+- **Forms/filters:** grouped logically, labeled clearly above each input (not placeholder-as-label), consistent input height matching buttons, obvious required/error states. Prefer real form controls (native selects, date pickers) over recreating them with custom markup unless there's a specific need.
+- **Status badges:** pill-shaped, semantic color background at low opacity with matching text color, icon + label, consistent sizing.
+- **Navigation:** active state always visually obvious (background fill or accent indicator, not just a color change on text), clear hit targets (minimum 44×44px touch target on mobile).
+- **Charts:** use a real charting approach appropriate to the data (bar for comparisons, line for trends over time), consistent color mapping to the semantic palette above, legible axis labels, and a clear empty state when there's no data — never a blank gap.
+- **Costly-action confirmation.** Backfill and backtest triggers spend real external API quota (Finnhub, Gemini) on every run. Now that dashboard access is session-only (no shared secret required per request), there is nothing else standing between a misclick and a wasted run — so the UI must supply that friction itself. Both triggers must be a two-step flow, not a single button-press POST: submitting the form navigates to a review page that restates the exact parameters (date range, ticker(s), estimated scope) and a plain-language cost warning, with a distinct, explicitly-labeled "Confirm and run" button that performs the actual POST. This fits the existing zero-client-JS pattern used elsewhere on this dashboard (a filter change is already just a GET navigation) — the confirmation step is a second page, not a JS dialog.
+- **Loading, error, and empty states.** Every section reads from D1 on each request, and Backfill/Backtest additionally depend on external calls that can fail or run long. Each section/panel needs its own handling, independent of the rest of the page:
+  - *Empty:* a specific, friendly one-line message for that panel ("No open positions", "No decisions in this window") — never a blank table or silently missing card. This already applies to charts and should apply everywhere a table or list can legitimately be empty.
+  - *Error:* if a section's data fetch fails, that section shows an inline error message in place of its content — the rest of the page (nav, other sections' data on the same page, if any) still renders. A failure in one panel must never blank or 500 the whole page.
+  - *In-progress:* for the backfill/backtest triggers specifically, after confirmation the operator is taken to a status view indicating the run was accepted and is in progress, rather than a bare redirect back to a page that looks unchanged.
+
+## Motion
+
+- Fast, purposeful transitions only (150–200ms ease) on hover/focus/expand — no decorative animation. Respect `prefers-reduced-motion`.
+
+## What "professional" means here, concretely
+
+A professional result is one where:
+- A new operator can find any current section within a few seconds on both desktop and mobile, however many sections exist at the time — the system doesn't depend on memorizing today's specific list.
+- Every screen holds up when someone with a large monitor and someone on a mid-range phone in bright sunlight both need to read it.
+- Nothing about the visual style calls attention to itself — the data is the interesting part, and the UI gets out of its way.
+- The next 10 features (new filters, new tables, new charts, or an entirely new section) all have an obvious place to go within the existing system and existing route/view/shell structure, instead of requiring a new one-off visual treatment or a rethink of the nav each time.
+- No action that spends real API quota or money can be triggered by a single accidental click.
