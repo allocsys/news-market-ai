@@ -1,0 +1,32 @@
+name = "news-market-ai-dashboard"
+main = "src/dashboard-worker.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Service binding to the `backend` Worker (this repo's original single
+# Worker, name = "news-market-ai", now private -- see wrangler.toml, which
+# has workers_dev = false and no [[routes]]). All D1/KV access happens on
+# the other side of this binding; `dashboard` itself has no D1/KV bindings
+# of its own -- it owns login + rendering only (plan.md "Step 2 -- Dashboard
+# Worker").
+[[services]]
+binding = "BACKEND"
+service = "news-market-ai"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+# Secrets -- set via `wrangler secret put <NAME> --config wrangler.dashboard.toml`,
+# never committed (same convention as the backend Worker's wrangler.toml):
+#   DASHBOARD_USERNAME, DASHBOARD_PASSWORD, JWT_SECRET -- moved here from
+#   backend (Step 2). ALL THREE must be set together or the login stays
+#   disabled (503) -- see src/dashboard-worker.js#isDashboardAuthConfigured.
+#   SESSION_TTL_SECONDS -- optional, non-secret override of the 24h default
+#   (src/config.js#sessionTtlSeconds), pushed the same way for simplicity
+#   since this Worker has no separate `wrangler var put` step either.
