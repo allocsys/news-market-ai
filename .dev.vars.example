@@ -20,10 +20,12 @@ FINNHUB_API_KEY=your-finnhub-key-here
 # FINNHUB_MIN_REQUEST_INTERVAL_MS=1100
 # FINNHUB_LOOKBACK_DAYS=3
 
-# Required to enable POST /backfill (src/index.js, triggers
-# graph/pipeline.js#backfillHistoricalNews). Unset = route stays disabled
-# (503) -- this is the safe default, not something to fix. Send it back as
-# the X-Backfill-Secret request header to call the route locally, e.g.:
-#   curl -X POST "http://localhost:8787/backfill?from=2024-01-01&to=2024-01-31" \
-#     -H "X-Backfill-Secret: your-local-secret-here"
-BACKFILL_API_SECRET=your-local-secret-here
+# POST /backfill and POST /backtest/run (src/index.js) no longer accept a
+# shared secret -- a logged-in dashboard session is the only way to call
+# either route now. To exercise them locally: set DASHBOARD_USERNAME/
+# DASHBOARD_PASSWORD/JWT_SECRET below, log in via GET /login in the
+# browser, then use the dashboard's own backfill/backtest trigger forms
+# (the session cookie authorizes the POST automatically).
+# DASHBOARD_USERNAME=your-local-username
+# DASHBOARD_PASSWORD=your-local-password
+# JWT_SECRET=some-long-random-local-dev-value
