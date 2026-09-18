@@ -309,8 +309,8 @@ export async function collectNewsItems(config, kv) {
  * works, it just means every invocation retries every ticker regardless of
  * a recent 429 (fails open, same convention as edgar_cik_lookup.js).
  */
-export async function ingestPriceBars(config, db, kv) {
-  const { bars, errors } = await fetchDailyBars(config, {}, { kv });
+export async function ingestPriceBars(config, db, kv, { tickers } = {}) {
+  const { bars, errors } = await fetchDailyBars(config, tickers ? { tickers } : {}, { kv });
   for (const { error } of errors) {
     logSkippedSource("price bar ingestion", "yfinance", error);
   }
@@ -348,10 +348,10 @@ export async function ingestPriceBars(config, db, kv) {
 // size this project runs today.
 const FUNDAMENTALS_INSERT_CHUNK_SIZE = 200;
 
-export async function ingestFundamentals(config, db, kv) {
+export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
   let facts;
   try {
-    facts = await fetchEdgarFactsLatest(config, {}, { kv });
+    facts = await fetchEdgarFactsLatest(config, tickers ? { tickers } : {}, { kv });
   } catch (err) {
     if (err instanceof VendorError) {
       logSkippedSource("fundamentals ingestion", "edgar", err);
