@@ -1,4 +1,4 @@
-import { renderSummaryCards, donutChart, gaugeChart, errorState, escapeHtml, fmtTime } from "../helpers.js";
+import { renderSummaryCards, donutChart, gaugeChart, errorState, positionsTable } from "../helpers.js";
 
 export function renderSnapshotView({ openPositions, closedPositions, decisionStats, error }) {
   if (error) {
@@ -78,20 +78,7 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
     <section>
       <h2>Recently closed <span class="h2-count">${closedPositions.length}</span></h2>
       <p class="note">Last 20 exits. No exit price is recorded on close -- realized return can't be shown, only how and when a position closed.</p>
-      ${closedPositions.length === 0
-        ? `<p class="empty">None.</p>`
-        : `<div class="table-wrap"><table>
-          <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th><th>Opened</th><th>Closed</th><th>Reason</th></tr></thead>
-          <tbody>${closedPositions.map((p) => `<tr>
-            <td class="ticker">${escapeHtml(p.ticker)}</td>
-            <td>${escapeHtml(p.direction ?? "\u2014")}</td>
-            <td class="num">${(p.positionSizePct * 100).toFixed(1)}%</td>
-            <td class="num">${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
-            <td class="num">${fmtTime(p.openedAt)}</td>
-            <td class="num">${fmtTime(p.closedAt)}</td>
-            <td>${escapeHtml(p.closeReason ?? "\u2014")}</td>
-          </tr>`).join("\n")}</tbody>
-        </table></div>`}
+      ${positionsTable(closedPositions, { closed: true })}
     </section>
   </section>`;
 }

@@ -75,7 +75,7 @@ export function healthRow(label, stat) {
   const stale = stat.lastIngestedAt ? Date.now() - new Date(stat.lastIngestedAt).getTime() > STALE_INGESTION_HOURS * 3600 * 1000 : true;
   const rowCls = stale ? " class=\"stale-row\"" : "";
   const flag = stale ? `<span class="stale-flag" title="No new rows in over ${STALE_INGESTION_HOURS}h">stale</span>` : `<span class="ok-flag">fresh</span>`;
-  return `<tr${rowCls}><td>${escapeHtml(label)}</td><td class="num">${stat.count}</td><td class="num">${fmtTime(stat.lastIngestedAt)}</td><td>${flag}</td></tr>`;
+  return `<tr${rowCls}><td class="cell-title">${escapeHtml(label)}</td><td class="num" data-label="Rows">${stat.count}</td><td class="num cell-wide" data-label="Last ingested">${fmtTime(stat.lastIngestedAt)}</td><td data-label="Status">${flag}</td></tr>`;
 }
 
 const OPINION_AGENT_LABELS = { news_event: "News", sentiment: "Sentiment", technical: "Technical" };
@@ -119,13 +119,13 @@ export function decisionsTable(decisions) {
   const rows = decisions
     .map(
       (d) => `<tr>
-        <td class="ticker">${escapeHtml(d.ticker)}</td>
-        <td>${escapeHtml(d.thesis?.direction ?? "\u2014")}</td>
-        <td>${statusBadge(d.status)}</td>
-        <td class="num">${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
-        <td>${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</td>
-        <td class="num">${fmtTime(d.createdAt)}</td>
-        <td>${llmAnswerDetails(d)}</td>
+        <td class="ticker cell-title">${escapeHtml(d.ticker)}</td>
+        <td data-label="Direction">${escapeHtml(d.thesis?.direction ?? "\u2014")}</td>
+        <td data-label="Status">${statusBadge(d.status)}</td>
+        <td class="num" data-label="Size">${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
+        <td class="cell-wide" data-label="Reason">${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</td>
+        <td class="num" data-label="Decided">${fmtTime(d.createdAt)}</td>
+        <td class="cell-wide" data-label="LLM reasoning">${llmAnswerDetails(d)}</td>
       </tr>`
     )
     .join("\n");
@@ -140,12 +140,12 @@ export function positionsTable(positions, { closed = false } = {}) {
   const rows = positions
     .map(
       (p) => `<tr>
-        <td class="ticker">${escapeHtml(p.ticker)}</td>
-        <td>${escapeHtml(p.direction ?? "\u2014")}</td>
-        <td class="num">${(p.positionSizePct * 100).toFixed(1)}%</td>
-        <td class="num">${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
-        <td class="num">${fmtTime(p.openedAt)}</td>
-        ${closed ? `<td class="num">${fmtTime(p.closedAt)}</td><td>${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
+        <td class="ticker cell-title">${escapeHtml(p.ticker)}</td>
+        <td data-label="Direction">${escapeHtml(p.direction ?? "\u2014")}</td>
+        <td class="num" data-label="Size">${(p.positionSizePct * 100).toFixed(1)}%</td>
+        <td class="num" data-label="Entry">${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
+        <td class="num" data-label="Opened">${fmtTime(p.openedAt)}</td>
+        ${closed ? `<td class="num" data-label="Closed">${fmtTime(p.closedAt)}</td><td data-label="Reason">${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
       </tr>`
     )
     .join("\n");
@@ -158,7 +158,7 @@ export function positionsTable(positions, { closed = false } = {}) {
 export function backtestMetricRow(label, on, off, delta, { isPercent = true } = {}) {
   const fmt = (v) => (isPercent ? (v * 100).toFixed(1) + "%" : v.toFixed(2));
   const deltaCls = delta > 0 ? "status-approved" : delta < 0 ? "status-rejected" : "status-neutral";
-  return `<tr><td>${escapeHtml(label)}</td><td class="num">${fmt(on)}</td><td class="num">${fmt(off)}</td><td class="num ${deltaCls}">${delta > 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
+  return `<tr class="rt-tiles"><td class="cell-title">${escapeHtml(label)}</td><td class="num" data-label="Signal ON">${fmt(on)}</td><td class="num" data-label="Signal OFF">${fmt(off)}</td><td class="num ${deltaCls}" data-label="Delta">${delta > 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
 }
 
 export function backtestResultTable(result) {
@@ -194,6 +194,14 @@ export function backtestRunsList(runs) {
     .join("\n");
 }
 
+// Compact row of big-number stats used inside panels (Exit quality, Window totals).
+// items: [{ value, label, color? }]; cols = column count on phones (desktop auto-fits).
+export function miniStats(items, { cols = 2 } = {}) {
+  return `<div class="mini-stats" style="--cols:${Number(cols) || 2}">${items
+    .map((i) => `<div class="mini-stat"><div class="mini-stat-value" style="color:${i.color ?? "var(--text-main)"}">${escapeHtml(i.value)}</div><div class="mini-stat-label">${escapeHtml(i.label)}</div></div>`)
+    .join("")}</div>`;
+}
+
 // Replaced inline style string with class name "date-input" (defined in shell.js STYLE).
 // Call sites in views will switch from style="${DATE_INPUT_STYLE}" to class="date-input" as needed.
 export const DATE_INPUT_STYLE = "date-input";
@@ -209,7 +217,7 @@ export function rangePresetButtons(fromId, toId) {
 export function checkpointsTable(checkpoints) {
   if (checkpoints.length === 0) return `<p class="empty">No pipeline activity recorded yet.</p>`;
   const rows = checkpoints
-    .map((c) => `<tr><td class="ticker">${escapeHtml(c.ticker)}</td><td>${escapeHtml(c.stage)}</td><td class="num">${fmtTime(c.updated_at)}</td></tr>`)
+    .map((c) => `<tr><td class="ticker cell-title">${escapeHtml(c.ticker)}</td><td data-label="Last stage">${escapeHtml(c.stage)}</td><td class="num" data-label="Updated">${fmtTime(c.updated_at)}</td></tr>`)
     .join("\n");
   return `<div class="table-wrap"><table>
     <thead><tr><th>Ticker</th><th>Last Stage</th><th>Updated</th></tr></thead>

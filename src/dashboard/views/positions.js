@@ -1,6 +1,6 @@
 import {
   pillLinks, positionsTable, POSITIONS_LIMIT_OPTIONS, errorState,
-  donutChart, gaugeChart, escapeHtml,
+  donutChart, gaugeChart, miniStats,
 } from "../helpers.js";
 
 export function renderPositionsView({ openPositions, openPositionsError, closedPositions, closedPositionsError, params }) {
@@ -60,6 +60,20 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
     accent: exposureAccent,
   });
 
+  // --- Exit quality mini-stats -------------------------------------------------
+  const exitTotal = closedPositions.length || 1;
+  const tpPct = ((takeProfits / exitTotal) * 100).toFixed(0);
+  const slPct = ((stopLosses / exitTotal) * 100).toFixed(0);
+  const tpSlRatio = stopLosses > 0 ? (takeProfits / stopLosses).toFixed(2) : takeProfits > 0 ? "\u221e" : "\u2014";
+  const exitQuality = miniStats(
+    [
+      { value: takeProfits, label: `Take profit (${tpPct}%)`, color: "var(--color-success-text)" },
+      { value: stopLosses, label: `Stop loss (${slPct}%)`, color: "var(--color-danger-text)" },
+      { value: tpSlRatio, label: "TP / SL ratio" },
+    ],
+    { cols: 3 }
+  );
+
   return `<div class="grid">
     <section id="positions">
       <h2>Open positions${openPositionsError ? "" : ` <span class="h2-count">${openPositions.length}</span>`}</h2>
@@ -80,30 +94,7 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
           ${closeReasonsDonut}
           <div class="panel">
             <div class="panel-header"><span class="panel-title">Exit quality</span></div>
-            <div class="panel-body">
-              ${(() => {
-                const total = closedPositions.length || 1;
-                const tpPct = (takeProfits / total * 100).toFixed(0);
-                const slPct = (stopLosses / total * 100).toFixed(0);
-                const ratio = stopLosses > 0 ? (takeProfits / stopLosses).toFixed(2) : takeProfits > 0 ? "\u221e" : "\u2014";
-                return `
-                  <div style="display:flex;gap:1.5rem;flex-wrap:wrap">
-                    <div>
-                      <div style="font-family:var(--font-display);font-size:1.5rem;font-weight:600;color:var(--color-success-text);font-variant-numeric:tabular-nums">${takeProfits}</div>
-                      <div style="font-size:0.6875rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Take profit (${tpPct}%)</div>
-                    </div>
-                    <div>
-                      <div style="font-family:var(--font-display);font-size:1.5rem;font-weight:600;color:var(--color-danger-text);font-variant-numeric:tabular-nums">${stopLosses}</div>
-                      <div style="font-size:0.6875rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Stop loss (${slPct}%)</div>
-                    </div>
-                    <div>
-                      <div style="font-family:var(--font-display);font-size:1.5rem;font-weight:600;color:var(--text-main);font-variant-numeric:tabular-nums">${ratio}</div>
-                      <div style="font-size:0.6875rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">TP / SL ratio</div>
-                    </div>
-                  </div>
-                `;
-              })()}
-            </div>
+            <div class="panel-body">${exitQuality}</div>
           </div>
         </div>
         ${positionsTable(closedPositions, { closed: true })}

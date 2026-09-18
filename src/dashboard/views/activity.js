@@ -1,4 +1,4 @@
-import { buildQuery, ACTIVITY_DAYS_OPTIONS, decisionsActivityChart, errorState, escapeHtml } from "../helpers.js";
+import { buildQuery, ACTIVITY_DAYS_OPTIONS, decisionsActivityChart, errorState, miniStats } from "../helpers.js";
 
 export function renderActivityView({ decisionStats, params, error }) {
   const activityFilterBarReal = `<div class="filter-bar">
@@ -19,8 +19,6 @@ export function renderActivityView({ decisionStats, params, error }) {
   const totals = decisionStats.totals ?? {};
   const approved = totals.approved ?? 0;
   const rejected = totals.rejected ?? 0;
-  const otherStatusEntries = Object.entries(totals).filter(([status]) => status !== "approved" && status !== "rejected");
-  const otherCount = otherStatusEntries.reduce((sum, [, count]) => sum + count, 0);
   const decidedTotal = approved + rejected;
   const approvalPct = decidedTotal > 0 ? Math.round((approved / decidedTotal) * 100) : null;
   const dailyTotal = (decisionStats.daily ?? []).reduce((sum, row) => sum + (row.count ?? 0), 0);
@@ -28,24 +26,15 @@ export function renderActivityView({ decisionStats, params, error }) {
   const summaryPanel = `<div class="panel">
     <div class="panel-header"><span class="panel-title">Window totals</span></div>
     <div class="panel-body">
-      <div style="display:flex;gap:1.5rem;flex-wrap:wrap">
-        <div>
-          <div style="font-family:var(--font-display);font-size:1.5rem;font-weight:600;color:var(--text-main);font-variant-numeric:tabular-nums">${dailyTotal}</div>
-          <div style="font-size:0.6875rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Decisions (window)</div>
-        </div>
-        <div>
-          <div style="font-family:var(--font-display);font-size:1.5rem;font-weight:600;color:var(--color-success-text);font-variant-numeric:tabular-nums">${approved}</div>
-          <div style="font-size:0.6875rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Approved (all-time)</div>
-        </div>
-        <div>
-          <div style="font-family:var(--font-display);font-size:1.5rem;font-weight:600;color:var(--color-danger-text);font-variant-numeric:tabular-nums">${rejected}</div>
-          <div style="font-size:0.6875rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Rejected (all-time)</div>
-        </div>
-        <div>
-          <div style="font-family:var(--font-display);font-size:1.5rem;font-weight:600;color:var(--accent-bright);font-variant-numeric:tabular-nums">${approvalPct !== null ? approvalPct + "%" : "--"}</div>
-          <div style="font-size:0.6875rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Approval (all-time)</div>
-        </div>
-      </div>
+      ${miniStats(
+        [
+          { value: dailyTotal, label: "Decisions (window)" },
+          { value: approved, label: "Approved (all-time)", color: "var(--color-success-text)" },
+          { value: rejected, label: "Rejected (all-time)", color: "var(--color-danger-text)" },
+          { value: approvalPct !== null ? approvalPct + "%" : "--", label: "Approval (all-time)", color: "var(--accent-bright)" },
+        ],
+        { cols: 2 }
+      )}
     </div>
   </div>`;
 
