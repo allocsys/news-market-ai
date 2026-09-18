@@ -194,6 +194,24 @@ function renderNav() {
   return `<nav class="section-nav">${links}</nav>`;
 }
 
+function renderBottomNav() {
+  const links = NAV_SECTIONS.map(([id, label], i) => {
+    const n = String(i + 1).padStart(2, "0");
+    return `<a href="#${id}"><span class="nav-index">${n}</span>${escapeHtml(label)}</a>`;
+  }).join("");
+  return `<nav class="bottom-nav">${links}</nav>`;
+}
+
+function renderMobileHeader(sessionUsername) {
+  return `<div class="mobile-header">
+    <div class="wordmark">
+      <span class="wordmark-main">news-market-ai</span>
+      <span class="wordmark-sub">operations ledger</span>
+    </div>
+    <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}${sessionUsername ? `<br>logged in as ${escapeHtml(sessionUsername)} &middot; <a href="/logout" style="color:#6f92b8;">log out</a>` : ""}</div>
+  </div>`;
+}
+
 function healthRow(label, stat) {
   const stale = stat.lastIngestedAt ? Date.now() - new Date(stat.lastIngestedAt).getTime() > STALE_INGESTION_HOURS * 3600 * 1000 : true;
   const rowCls = stale ? " class=\"stale-row\"" : "";
@@ -267,10 +285,10 @@ function decisionsTable(decisions) {
       </tr>`
     )
     .join("\n");
-  return `<table>
+  return `<div class="table-wrap"><table>
     <thead><tr><th>Ticker</th><th>Direction</th><th>Status</th><th>Size</th><th>Reason</th><th>Decided</th><th>LLM reasoning</th></tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function positionsTable(positions, { closed = false } = {}) {
@@ -287,10 +305,10 @@ function positionsTable(positions, { closed = false } = {}) {
       </tr>`
     )
     .join("\n");
-  return `<table>
+  return `<div class="table-wrap"><table>
     <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th><th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 /**
@@ -313,7 +331,7 @@ function backtestMetricRow(label, on, off, delta, { isPercent = true } = {}) {
 function backtestResultTable(result) {
   if (!result) return "";
   const { on, off, delta } = result.overall;
-  return `<table>
+  return `<div class="table-wrap"><table>
     <thead><tr><th>Metric</th><th>Signal ON</th><th>Signal OFF (buy &amp; hold)</th><th>Delta</th></tr></thead>
     <tbody>
       ${backtestMetricRow("Cumulative return", on.cumulativeReturn, off.cumulativeReturn, delta.cumulativeReturn)}
@@ -321,7 +339,7 @@ function backtestResultTable(result) {
       ${backtestMetricRow("Win rate", on.winRate, off.winRate, delta.winRate)}
       ${backtestMetricRow("Max drawdown", on.maxDrawdown, off.maxDrawdown, delta.maxDrawdown)}
     </tbody>
-  </table>
+  </table></div>
   <p class="note">Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>`;
 }
 
@@ -356,7 +374,7 @@ function backtestRunsList(runs) {
  */
 // Shared date-input inline style -- both trigger forms below use the exact
 // same look, pulled out once rather than repeated per input.
-const DATE_INPUT_STYLE = "background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;";
+const DATE_INPUT_STYLE = "background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;width:100%;box-sizing:border-box;";
 
 /**
  * Quick-range preset buttons for a pair of <input type="date"> fields,
@@ -398,7 +416,7 @@ function backtestTriggerForm(hasSession) {
   return `<form method="post" action="/backtest/run" class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
-      <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT" style="background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.34rem 0.5rem;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:0.8rem;">
+      <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT" style="background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.34rem 0.5rem;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:0.8rem;width:100%;box-sizing:border-box;">
     </div>
     ${rangePresetButtons("backtestStart", "backtestEnd")}
     <div class="filter-group">
@@ -460,10 +478,10 @@ function checkpointsTable(checkpoints) {
   const rows = checkpoints
     .map((c) => `<tr><td class="ticker">${escapeHtml(c.ticker)}</td><td>${escapeHtml(c.stage)}</td><td class="num">${fmtTime(c.updated_at)}</td></tr>`)
     .join("\n");
-  return `<table>
+  return `<div class="table-wrap"><table>
     <thead><tr><th>Ticker</th><th>Last Stage</th><th>Updated</th></tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 /** One summary-stat card: a big number, a label, an optional muted sub-line, and an accent color to break up an otherwise uniform grid. */
@@ -731,6 +749,7 @@ const STYLE = `
     color: #7c8698; font-size: 0.82rem; margin: 0 0 1.1rem; max-width: 68ch; line-height: 1.6;
   }
 
+  .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 1rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.86rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   th, td { text-align: left; padding: 0.62rem 0.75rem; border-bottom: 1px solid #171d26; }
   th {
@@ -765,7 +784,8 @@ const STYLE = `
   .llm-answer-body {
     margin-top: 0.55rem; padding: 0.8rem 0.95rem;
     background: #0d1118; border: 1px solid #232b35; border-left: 2px solid #2c3644;
-    max-width: 54ch; display: flex; flex-direction: column; gap: 0.55rem;
+    max-width: 54ch; width: 100%; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 0.55rem;
   }
   .llm-block { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 0.8rem; line-height: 1.55; color: #c7cbd4; }
   .llm-agent {
@@ -792,7 +812,7 @@ const STYLE = `
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 0.68rem; color: #6e7787; text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .pill-row { display: flex; gap: 0.4rem; }
+  .pill-row { display: flex; gap: 0.4rem; flex-wrap: wrap; }
   /* .pill started as an anchor-only class (GET filter links) -- now also
      used on <button type="button"> preset elements (rangePresetButtons),
      so it resets default button chrome (font/appearance) and adds a
@@ -859,26 +879,106 @@ const STYLE = `
   .sparkline { display: block; }
   .sparkline-meta { display: flex; gap: 0.65rem; align-items: baseline; margin-top: 0.45rem; font-size: 0.78rem; }
 
+  /* Mobile header (hidden on desktop) */
+  .mobile-header { display: none; }
+  .bottom-nav { display: none; }
+
   @media (max-width: 900px) {
     .shell { flex-direction: column; }
-    .rail {
-      position: static; height: auto; width: 100%; flex: none;
-      flex-direction: row; align-items: center; gap: 1.4rem;
-      padding: 1rem 1.25rem; overflow-x: auto; white-space: nowrap;
-      border-right: none; border-bottom: 1px solid #232b35;
+    .rail { display: none; }
+    .mobile-header {
+      display: block;
+      background: #0d1118;
+      border-bottom: 1px solid #232b35;
+      padding: 1rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
     }
-    .wordmark { flex-direction: row; align-items: baseline; gap: 0.6rem; }
-    .wordmark-main { border-bottom: none; padding-bottom: 0; }
-    .wordmark-sub { margin-top: 0; }
-    .section-nav { flex-direction: row; gap: 0.9rem; }
-    .section-nav a { border-bottom: none; padding: 0; }
-    .rail-meta { display: none; }
-    main { padding: 1.75rem 1.25rem 4rem; }
+    .mobile-header .wordmark {
+      flex-direction: row;
+      align-items: baseline;
+      gap: 0.6rem;
+    }
+    .mobile-header .wordmark-main {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .mobile-header .rail-meta {
+      display: block;
+      margin-top: 0;
+      border-top: none;
+      padding-top: 0;
+    }
+    .content { width: 100%; }
+    main { padding: 1.75rem 1.25rem 6rem; }
     .stat-grid { grid-template-columns: 1fr 1fr; }
     .filter-bar { gap: 1.2rem; }
+
+    /* Fixed bottom navigation bar */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: #0d1118;
+      border-top: 1px solid #232b35;
+      display: flex;
+      overflow-x: auto;
+      white-space: nowrap;
+      -webkit-overflow-scrolling: touch;
+      padding: 0 0.5rem;
+    }
+    .bottom-nav::-webkit-scrollbar {
+      height: 3px;
+    }
+    .bottom-nav::-webkit-scrollbar-thumb {
+      background: #2c3644;
+    }
+    .bottom-nav a {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: #9aa3b0;
+      text-decoration: none;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.78rem;
+      padding: 0 0.85rem;
+      min-height: 48px;
+      border-bottom: none;
+      flex-shrink: 0;
+      transition: color 0.12s ease, background 0.12s ease;
+    }
+    .bottom-nav a:hover, .bottom-nav a:active {
+      color: #eadfb8;
+      background: #10151d;
+    }
+    .bottom-nav .nav-index {
+      color: #4a5566;
+      font-size: 0.68rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .stat-grid { grid-template-columns: 1fr; }
+    .chart-cell-grid { grid-template-columns: 1fr; }
+    .filter-bar { flex-direction: column; align-items: stretch; gap: 1rem; }
+    .filter-form input[type="text"],
+    .filter-form input[type="password"],
+    .filter-form input[type="date"],
+    .filter-form select {
+      width: 100%;
+    }
+    .pill, .filter-form button {
+      min-height: 40px;
+      padding: 0.5rem 0.8rem;
+    }
   }
 
   @media (min-width: 901px) {
+    .mobile-header { display: none; }
+    .bottom-nav { display: none; }
     .grid { grid-template-columns: 1fr 1fr 1fr; }
   }
 `;
@@ -961,6 +1061,7 @@ export async function renderDashboardHtml(db, { searchParams, sessionUsername = 
 </script>
 </head>
 <body>
+  ${renderMobileHeader(sessionUsername)}
   <div class="shell">
     <aside class="rail">
       <div class="wordmark">
@@ -994,14 +1095,14 @@ export async function renderDashboardHtml(db, { searchParams, sessionUsername = 
       <section id="health">
         <h2>Ingestion health</h2>
         <p class="note">Last-ingested timestamp + row count per source. Not a per-vendor error log (none is persisted yet) -- a stale timestamp is the strongest signal available here. "Stale" below just means no new rows in over ${STALE_INGESTION_HOURS}h, a fixed heuristic, not a per-source SLA.</p>
-        <table>
+        <div class="table-wrap"><table>
           <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th><th>Status</th></tr></thead>
           <tbody>
             ${healthRow("News (gdelt/rss/scrape)", health.news)}
             ${healthRow("Price bars (yfinance)", health.priceBars)}
             ${healthRow("Fundamentals (EDGAR)", health.fundamentals)}
           </tbody>
-        </table>
+        </table></div>
       </section>
 
       <section id="decisions">
@@ -1044,6 +1145,7 @@ export async function renderDashboardHtml(db, { searchParams, sessionUsername = 
       </main>
     </div>
   </div>
+  ${renderBottomNav()}
 </body>
 </html>`;
 }
