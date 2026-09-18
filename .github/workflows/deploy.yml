@@ -67,6 +67,7 @@ jobs:
     outputs:
       code: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.code == 'true' }}
       migrations: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.migrations == 'true' }}
+      dashboard: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_dispatch'
@@ -81,6 +82,14 @@ jobs:
               - '!**/*.md'
             migrations:
               - 'migrations/**'
+            dashboard:
+              - 'src/dashboard-worker.js'
+              - 'wrangler.dashboard.toml'
+              - 'src/dashboard/**'
+              - 'src/login.js'
+              - 'src/auth/**'
+              - 'src/config.js'
+              - '.github/workflows/deploy.yml'
 
   test:
     needs: changes
