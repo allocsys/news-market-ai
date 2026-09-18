@@ -170,6 +170,38 @@ real plaintext-id leak in the provisioning actions' `create` step output (ids ar
 now masked before printing — see git history on `ensure-d1-database`/
 `ensure-kv-namespace` for detail if ever revisited).
 
+**CI/CD for the 4-Worker split (reviewed `allocsys/ai-campaign-builder`'s
+deploy.yml, 2026-09-18):** that repo deploys 5 frontend apps + 1 backend Worker
+from a single npm-workspaces monorepo (`apps/<name>/`, each with its own
+`wrangler.toml`), which is the closest existing precedent to our upcoming
+dashboard/backend/ingest/llm split. Pattern to carry over once Step 2 starts:
+- **One job per Worker**, each gated on its own `dorny/paths-filter` output
+  (own `apps/<name>/**` OR shared `packages/**`/shared-code path OR the
+  workflow file itself) — mirrors our existing docs-vs-code filter, just
+  split per Worker instead of one filter for the whole repo. `workflow_dispatch`
+  always runs every job (no diff to compare against).
+- **Per-job `concurrency` group** (e.g. `deploy-dashboard-${{ github.ref }}`),
+  deliberately NOT one shared workflow-level group — an unrelated Worker's
+  push must never cancel this Worker's in-flight deploy.
+- **Migrations decoupled into their own job** (`backend-migrate` there, ours
+  stays the existing `migrate` job), gated on a narrower `migrations/**`-only
+  filter. Every Worker job that depends on the DB uses
+  `needs: [changes, migrate]` with `if: always() && ... (needs.migrate.result
+  == 'success' || needs.migrate.result == 'skipped')` — the `always()` is
+  required because GitHub Actions would otherwise skip the dependent job too
+  when `migrate` itself is skipped (no migration in that push).
+- **Secrets stay scoped to the Worker that owns them**, each job fails fast
+  on its own required secrets before deploying, then pushes them via
+  `wrangler secret put` right after deploy. Optional secret groups use a
+  bash `-z` guard inside `run:` and skip cleanly (secrets context is rejected
+  inside a step's `if:`). Maps directly onto our Step 5/6 key-isolation goal:
+  `dashboard`'s job only ever sees `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/
+  `JWT_SECRET`, `ingest`'s only `FINNHUB_API_KEY`, `llm`'s only
+  `GEMINI_API_KEYS` — no job touches a secret it doesn't own.
+- D1/KV provisioning stays exactly our existing `ensure-d1-database`/
+  `ensure-kv-namespace` composite actions, reused unmodified by every Worker
+  job that needs them (only `backend` binds D1 per the rule below).
+
 ## LLM Calling Layer: Multi-Key Gemini Cascade (ported from `madmcp`)
 **Two-axis cascade, model-first:** outer loop tries `[GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS]`
 across every key before stepping down a model tier; inner loop rotates
