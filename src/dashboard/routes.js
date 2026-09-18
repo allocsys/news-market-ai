@@ -37,6 +37,17 @@ function htmlResponse(html) {
 }
 
 /**
+ * This request's own path + query string, handed to the shell as the target of its
+ * Refresh link so a refresh reloads the same page with the same filters applied.
+ * Only the data-driven sections pass this -- the Backfill/Backtest trigger forms,
+ * their confirm pages, and More have nothing that goes stale, so they omit it.
+ */
+function currentPath(request) {
+  const url = new URL(request.url);
+  return url.pathname + url.search;
+}
+
+/**
  * Wraps a single D1 query promise so a rejection becomes { data: null, error }
  * instead of throwing through the route handler -- design.md's Loading/error/
  * empty-states requirement is that one panel's fetch failing must not blank
@@ -71,7 +82,7 @@ export async function handleSnapshotRoute(request, env, config) {
     decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} },
     error,
   });
-  return htmlResponse(renderShell({ activeSection: "snapshot", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "snapshot", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handleActivityRoute(request, env, config) {
@@ -80,7 +91,7 @@ export async function handleActivityRoute(request, env, config) {
   const params = parseDashboardParams(new URL(request.url).searchParams);
   const decisionStatsResult = await safe(getDecisionStats(env.DB, { days: params.activityDays }));
   const bodyHtml = renderActivityView({ decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} }, params, error: decisionStatsResult.error });
-  return htmlResponse(renderShell({ activeSection: "activity", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "activity", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handleChartsRoute(request, env, config) {
@@ -106,7 +117,7 @@ export async function handleChartsRoute(request, env, config) {
     );
   }
   const bodyHtml = renderChartsView({ priceBarsByTicker, error });
-  return htmlResponse(renderShell({ activeSection: "charts", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "charts", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handleHealthRoute(request, env, config) {
@@ -114,7 +125,7 @@ export async function handleHealthRoute(request, env, config) {
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const healthResult = await safe(getIngestionHealth(env.DB));
   const bodyHtml = renderHealthView({ health: healthResult.data, error: healthResult.error });
-  return htmlResponse(renderShell({ activeSection: "health", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "health", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handleDecisionsRoute(request, env, config) {
@@ -123,7 +134,7 @@ export async function handleDecisionsRoute(request, env, config) {
   const params = parseDashboardParams(new URL(request.url).searchParams);
   const decisionsResult = await safe(getRecentTradeDecisions(env.DB, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus }));
   const bodyHtml = renderDecisionsView({ decisions: decisionsResult.data ?? [], params, error: decisionsResult.error });
-  return htmlResponse(renderShell({ activeSection: "decisions", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "decisions", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handlePositionsRoute(request, env, config) {
@@ -144,7 +155,7 @@ export async function handlePositionsRoute(request, env, config) {
     closedPositionsError: closedPositionsResult.error,
     params,
   });
-  return htmlResponse(renderShell({ activeSection: "positions", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "positions", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handlePipelineRoute(request, env, config) {
@@ -152,7 +163,7 @@ export async function handlePipelineRoute(request, env, config) {
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const checkpointsResult = await safe(getRecentCheckpoints(env.DB, { limit: 30 }));
   const bodyHtml = renderPipelineView({ checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error });
-  return htmlResponse(renderShell({ activeSection: "pipeline", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "pipeline", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handleBackfillRoute(request, env, config) {
@@ -177,7 +188,7 @@ export async function handleBacktestRoute(request, env, config) {
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const backtestRunsResult = await safe(getRecentBacktestRuns(env.DB, { limit: 10 }));
   const bodyHtml = renderBacktestView({ backtestRuns: backtestRunsResult.data ?? [], error: backtestRunsResult.error });
-  return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml }));
+  return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
 }
 
 export async function handleBacktestConfirmRoute(request, env, config) {
