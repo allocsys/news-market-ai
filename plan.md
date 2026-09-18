@@ -379,9 +379,8 @@ and `test/index_backfill.test.js` is updated for the enqueue behavior. --
 Code-level criteria met (tests + failure-handling); live-past-30s verification
 still outstanding.
 
-### Step 4 -- Cron fan-out (still inside `backend`) -- SHIPPED 2026-09-18, NOT YET MERGED
-Built on branch `feat/step4-cron-fanout` (not on main yet -- see Current Status
-for why CI/merge is deliberately deferred this session, same as Step 3).
+### Step 4 -- Cron fan-out (still inside `backend`) -- DONE 2026-09-18
+Merged to main via PR #30 (squash commit `ba6a5b4`).
 
 `scheduled()` (`src/index.js`) is now a thin scheduler: it enqueues one
 `ingest_ticker` message per watchlist ticker plus one `ingest_feeds` message
@@ -451,10 +450,10 @@ see above), a crashed message retries without duplicating rows or LLM spend
 (done for ANALYZE specifically, by design -- see above; not yet exercised
 against a REAL crash/retry in live Cloudflare infra), and ops/day fits the
 budget (done, by the arithmetic above -- not yet confirmed against real
-Workers Observability numbers). **Still open:** no PR opened yet, no CI run
-yet, no live deploy verification yet -- per this session's instruction, CI/
-merge is being deferred until after Step 7 rather than chased per-step; see
-Current Status.
+Workers Observability numbers). **Still open:** CI on PR #30 was not chased
+before merging (same deferral as Step 3, per this session's instruction --
+to be checked once, after Step 7); no live deploy verification against real
+Cloudflare infra yet either -- both outstanding for whenever that check happens.
 
 ### Step 5 -- Extract `ingest` Worker
 Move the ingest consumer to `news-market-ai-ingest` (own `wrangler` config, CI job).
