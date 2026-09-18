@@ -17,6 +17,7 @@ const LOGIN_STYLE = `
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-subtle: rgba(59, 130, 246, 0.15);
+    --focus-ring: #60a5fa; /* same token/value as shell.js -- see the note there */
     --color-danger-bg: rgba(239, 68, 68, 0.12);
     --color-danger-text: #f87171;
     --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -63,7 +64,7 @@ const LOGIN_STYLE = `
     transition: background 150ms ease, box-shadow 150ms ease;
   }
   button:hover { background: var(--accent-hover); }
-  button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-subtle); }
+  button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .error {
     font-family: var(--font-sans);
     color: var(--color-danger-text); background: var(--color-danger-bg); border: 1px solid var(--color-danger-text);
