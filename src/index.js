@@ -95,11 +95,10 @@ export default {
         return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
       }
       const { username, password } = await readLoginForm(request);
-      // Plain equality, same convention as backfillApiSecret/backtestApiSecret
-      // elsewhere in this file -- see those checks' own history. A single
-      // operator credential pair checked once per login (not per request,
-      // unlike the API secrets), so the timing-attack surface here is far
-      // smaller than a per-request header comparison.
+      // Plain equality -- a single operator credential pair checked once
+      // per login (not per request the way the now-removed shared API
+      // secrets were), so the timing-attack surface here is far smaller
+      // than a per-request header comparison would be.
       if (username !== config.dashboardUsername || password !== config.dashboardPassword) {
         return htmlResponse(renderLoginPage({ error: "Invalid username or password." }), { status: 401 });
       }
