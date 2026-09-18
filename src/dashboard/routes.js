@@ -36,16 +36,41 @@ function htmlResponse(html) {
   return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+/**
+ * Wraps a single D1 query promise so a rejection becomes { data: null, error }
+ * instead of throwing through the route handler -- design.md's Loading/error/
+ * empty-states requirement is that one panel's fetch failing must not blank
+ * or 500 the whole page. Callers await this instead of the raw query and
+ * never need their own try/catch.
+ */
+async function safe(promise) {
+  try {
+    return { data: await promise, error: null };
+  } catch (err) {
+    console.error("dashboard panel query failed", { message: err.message });
+    return { data: null, error: err.message || "failed to load" };
+  }
+}
+
 export async function handleSnapshotRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const [openPositions, closedPositions, decisionStats] = await Promise.all([
-    getAllOpenPositions(env.DB, { limit: params.positionsLimit }),
-    getRecentlyClosedPositions(env.DB, { limit: 20 }),
-    getDecisionStats(env.DB, { days: params.activityDays }),
+  const [openPositionsResult, closedPositionsResult, decisionStatsResult] = await Promise.all([
+    safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit })),
+    safe(getRecentlyClosedPositions(env.DB, { limit: 20 })),
+    safe(getDecisionStats(env.DB, { days: params.activityDays })),
   ]);
-  const bodyHtml = renderSnapshotView({ openPositions, closedPositions, decisionStats });
+  // The stat grid is one combined panel drawn from all three queries, so a
+  // failure in any of them is reported as one error for the section --
+  // there's no meaningful way to show a "half stat grid".
+  const error = openPositionsResult.error || closedPositionsResult.error || decisionStatsResult.error || null;
+  const bodyHtml = renderSnapshotView({
+    openPositions: openPositionsResult.data ?? [],
+    closedPositions: closedPositionsResult.data ?? [],
+    decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} },
+    error,
+  });
   return htmlResponse(renderShell({ activeSection: "snapshot", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -53,8 +78,8 @@ export async function handleActivityRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const decisionStats = await getDecisionStats(env.DB, { days: params.activityDays });
-  const bodyHtml = renderActivityView({ decisionStats, params });
+  const decisionStatsResult = await safe(getDecisionStats(env.DB, { days: params.activityDays }));
+  const bodyHtml = renderActivityView({ decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} }, params, error: decisionStatsResult.error });
   return htmlResponse(renderShell({ activeSection: "activity", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -62,20 +87,33 @@ export async function handleChartsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const openPositions = await getAllOpenPositions(env.DB, { limit: params.positionsLimit });
-  const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
-  const priceBarsByTicker = Object.fromEntries(
-    await Promise.all(chartTickers.map(async (ticker) => [ticker, await getRecentPriceBars(env.DB, { ticker, limit: 30 })]))
-  );
-  const bodyHtml = renderChartsView({ priceBarsByTicker });
+  const openPositionsResult = await safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit }));
+  let priceBarsByTicker = {};
+  const error = openPositionsResult.error;
+  if (!error) {
+    const openPositions = openPositionsResult.data ?? [];
+    const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
+    const entries = await Promise.all(
+      chartTickers.map(async (ticker) => {
+        const result = await safe(getRecentPriceBars(env.DB, { ticker, limit: 30 }));
+        return [ticker, result];
+      })
+    );
+    // A single ticker's price-bar fetch failing shouldn't blank the whole
+    // grid -- skip that cell rather than erroring the whole Charts section.
+    priceBarsByTicker = Object.fromEntries(
+      entries.filter(([, result]) => !result.error).map(([ticker, result]) => [ticker, result.data])
+    );
+  }
+  const bodyHtml = renderChartsView({ priceBarsByTicker, error });
   return htmlResponse(renderShell({ activeSection: "charts", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
 export async function handleHealthRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
-  const health = await getIngestionHealth(env.DB);
-  const bodyHtml = renderHealthView({ health });
+  const healthResult = await safe(getIngestionHealth(env.DB));
+  const bodyHtml = renderHealthView({ health: healthResult.data, error: healthResult.error });
   return htmlResponse(renderShell({ activeSection: "health", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -83,8 +121,8 @@ export async function handleDecisionsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const decisions = await getRecentTradeDecisions(env.DB, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus });
-  const bodyHtml = renderDecisionsView({ decisions, params });
+  const decisionsResult = await safe(getRecentTradeDecisions(env.DB, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus }));
+  const bodyHtml = renderDecisionsView({ decisions: decisionsResult.data ?? [], params, error: decisionsResult.error });
   return htmlResponse(renderShell({ activeSection: "decisions", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -92,19 +130,28 @@ export async function handlePositionsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const [openPositions, closedPositions] = await Promise.all([
-    getAllOpenPositions(env.DB, { limit: params.positionsLimit }),
-    getRecentlyClosedPositions(env.DB, { limit: 20 }),
+  const [openPositionsResult, closedPositionsResult] = await Promise.all([
+    safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit })),
+    safe(getRecentlyClosedPositions(env.DB, { limit: 20 })),
   ]);
-  const bodyHtml = renderPositionsView({ openPositions, closedPositions, params });
+  // Open and closed positions are design.md's own named example of two
+  // sub-panels on one page that must fail independently -- each gets its
+  // own error, not one shared one.
+  const bodyHtml = renderPositionsView({
+    openPositions: openPositionsResult.data ?? [],
+    openPositionsError: openPositionsResult.error,
+    closedPositions: closedPositionsResult.data ?? [],
+    closedPositionsError: closedPositionsResult.error,
+    params,
+  });
   return htmlResponse(renderShell({ activeSection: "positions", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
 export async function handlePipelineRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
-  const checkpoints = await getRecentCheckpoints(env.DB, { limit: 30 });
-  const bodyHtml = renderPipelineView({ checkpoints });
+  const checkpointsResult = await safe(getRecentCheckpoints(env.DB, { limit: 30 }));
+  const bodyHtml = renderPipelineView({ checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error });
   return htmlResponse(renderShell({ activeSection: "pipeline", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -128,8 +175,8 @@ export async function handleBackfillConfirmRoute(request, env, config) {
 export async function handleBacktestRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
-  const backtestRuns = await getRecentBacktestRuns(env.DB, { limit: 10 });
-  const bodyHtml = renderBacktestView({ backtestRuns });
+  const backtestRunsResult = await safe(getRecentBacktestRuns(env.DB, { limit: 10 }));
+  const bodyHtml = renderBacktestView({ backtestRuns: backtestRunsResult.data ?? [], error: backtestRunsResult.error });
   return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 

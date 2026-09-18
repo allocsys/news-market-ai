@@ -14,6 +14,10 @@ export function fmtTime(iso) {
   return Number.isNaN(d.getTime()) ? escapeHtml(iso) : d.toISOString().replace("T", " ").slice(0, 19) + " UTC";
 }
 
+export function errorState(message) {
+  return `<p class="empty" style="color:#c1502e;">Couldn't load this section${message ? `: ${escapeHtml(message)}` : ""}.</p>`;
+}
+
 export function statusBadge(status) {
   const cls = status === "approved" ? "status-approved" : status === "rejected" ? "status-rejected" : "status-neutral";
   return `<span class="status ${cls}">[${escapeHtml(status)}]</span>`;

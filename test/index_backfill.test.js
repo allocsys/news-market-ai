@@ -135,7 +135,7 @@ test("POST /backfill with a valid session cookie and valid range calls backfillH
   assert.equal(env.DB.newsItems.length, 1);
 });
 
-test("POST /backfill accepts a form-encoded body (no secret field) -- dashboard's backfillTriggerForm submits this way", async (t) => {
+test("POST /backfill accepts a form-encoded body (no secret field) -- dashboard's backfillTriggerForm submits this way, gets the in-progress status page immediately, and the actual backfill runs via ctx.waitUntil in the background", async (t) => {
   const env = baseEnv({ DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "pw", JWT_SECRET: "secret" });
   const config = loadConfig(env);
   const cookie = sessionCookieHeader(await createSessionCookie("admin", config));
@@ -149,10 +149,21 @@ test("POST /backfill accepts a form-encoded body (no secret field) -- dashboard'
     body: body.toString(),
   });
 
-  const response = await worker.fetch(request, env);
+  // Minimal ExecutionContext stand-in -- captures the promise passed to
+  // ctx.waitUntil() so the test can await it itself instead of racing it.
+  const ctx = { promises: [], waitUntil(p) { this.promises.push(p); } };
+
+  const response = await worker.fetch(request, env, ctx);
   assert.equal(response.status, 200);
-  const responseBody = await response.json();
-  assert.equal(responseBody.inserted, 1);
+  assert.match(response.headers.get("content-type"), /text\/html/);
+  const html = await response.text();
+  assert.match(html, /Backfill accepted/);
+  assert.match(html, /2024-01-01/);
+  assert.match(html, /2024-01-31/);
+
+  // The response above returns before the real backfill finishes -- it only
+  // completes inside ctx.waitUntil, in the background.
+  await Promise.all(ctx.promises);
   assert.equal(env.DB.newsItems.length, 1);
 });
 
@@ -173,8 +184,13 @@ test("POST /backfill's query string still wins over a form field when both are p
     body: body.toString(),
   });
 
-  const response = await worker.fetch(request, env);
+  const ctx = { promises: [], waitUntil(p) { this.promises.push(p); } };
+  const response = await worker.fetch(request, env, ctx);
   assert.equal(response.status, 200);
+
+  // The from/to precedence assertion lives inside the mocked global.fetch,
+  // which only runs once the background backfill (ctx.waitUntil) executes.
+  await Promise.all(ctx.promises);
 });
 
 test("POST /backfill returns 500 with the failure message on a real (non-vendor) bug, e.g. a DB write failure", async (t) => {

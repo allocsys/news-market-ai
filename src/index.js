@@ -28,6 +28,8 @@ import {
 } from "./dashboard/routes.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
 import { renderLoginPage } from "./login.js";
+import { renderShell } from "./dashboard/shell.js";
+import { renderRunAcceptedPage } from "./dashboard/views/status.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
 
 /**
@@ -77,7 +79,7 @@ function htmlResponse(html, { status = 200 } = {}) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname } = url;
     const config = loadConfig(env);
@@ -182,9 +184,8 @@ export default {
       }
 
       const contentType = request.headers.get("content-type") || "";
-      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
-        ? await request.formData()
-        : null;
+      const isFormSubmit = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data");
+      const form = isFormSubmit ? await request.formData() : null;
       const fromForm = (key) => (form ? form.get(key) : null);
 
       const from = url.searchParams.get("from") ?? fromForm("from");
@@ -196,6 +197,28 @@ export default {
         });
       }
 
+      // Dashboard confirm-page submission (design.md "In-progress" state):
+      // don't make the operator's browser wait on the full backfill --
+      // kick it off in the background and respond immediately with a page
+      // confirming the run was accepted, rather than a bare JSON blob or a
+      // redirect to a page that looks unchanged.
+      if (isFormSubmit) {
+        ctx.waitUntil(
+          backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV })
+            .then((result) => console.log("backfill run completed", { from, to, inserted: result.inserted, errorCount: result.errors.length }))
+            .catch((err) => console.error("backfill run failed", { from, to, message: err.message }))
+        );
+        const bodyHtml = renderRunAcceptedPage({
+          title: "Backfill",
+          detail: `Backfilling historical news from ${from} to ${to}.`,
+          backLink: "/dashboard/backfill",
+          backLabel: "Backfill",
+        });
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername, bodyHtml }));
+      }
+
+      // Scripted/API caller (no form body) -- keep the original synchronous
+      // JSON response so nothing outside the dashboard UI breaks.
       try {
         const result = await backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV });
         console.log("backfill run completed", { from, to, inserted: result.inserted, errorCount: result.errors.length });
@@ -240,9 +263,8 @@ export default {
       }
 
       const contentType = request.headers.get("content-type") || "";
-      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
-        ? await request.formData()
-        : null;
+      const isFormSubmit = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data");
+      const form = isFormSubmit ? await request.formData() : null;
       const fromForm = (key) => (form ? form.get(key) : null);
 
       const testStart = url.searchParams.get("testStart") ?? fromForm("testStart");
@@ -268,14 +290,36 @@ export default {
       const graceDays = graceDaysParam ? Number(graceDaysParam) : undefined;
       const id = `backtest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      try {
-        // Point-in-time date strings (YYYY-MM-DD) become UTC-midnight ISO
-        // timestamps -- onSignalRunner.js/noSignalBaseline.js both expect
-        // full ISO strings, same as every other testStart/testEnd this
-        // repo's backtest package handles.
-        const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
-        const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
+      // Point-in-time date strings (YYYY-MM-DD) become UTC-midnight ISO
+      // timestamps -- onSignalRunner.js/noSignalBaseline.js both expect full
+      // ISO strings, same as every other testStart/testEnd this repo's
+      // backtest package handles.
+      const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
+      const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
 
+      // Dashboard confirm-page submission (design.md "In-progress" state):
+      // runManualBacktest already persists a 'running' row before the slow
+      // Gemini-backed part starts, so it's safe to let it finish in the
+      // background and respond immediately with an accepted/in-progress
+      // page instead of blocking the operator's browser on the whole run.
+      if (isFormSubmit) {
+        ctx.waitUntil(
+          runManualBacktest(env, config, env.DB, { id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays })
+            .then((outcome) => console.log("backtest run finished", { id, status: outcome.status, tickers }))
+            .catch((err) => console.error("backtest run request failed", { id, message: err.message }))
+        );
+        const bodyHtml = renderRunAcceptedPage({
+          title: "Backtest",
+          detail: `Running a backtest for ${tickers.join(", ")} from ${testStart} to ${testEnd}.`,
+          backLink: "/dashboard/backtest",
+          backLabel: "Backtest",
+        });
+        return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername, bodyHtml }));
+      }
+
+      // Scripted/API caller (no form body) -- keep the original synchronous
+      // JSON response so nothing outside the dashboard UI breaks.
+      try {
         const outcome = await runManualBacktest(env, config, env.DB, { id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays });
         console.log("backtest run finished", { id, status: outcome.status, tickers });
         return new Response(JSON.stringify(outcome), {
