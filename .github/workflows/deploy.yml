@@ -250,3 +250,60 @@ jobs:
           if [ -n "$SESSION_TTL_SECONDS" ]; then
             echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS
           fi
+
+  # `dashboard` Worker (plan.md Step 2) -- own path-filtered job, own
+  # concurrency group (an unrelated backend-only push must never cancel an
+  # in-flight dashboard deploy, and vice versa -- see plan.md's "CI/CD for
+  # the 4-Worker split" section), own secrets. Depends on backend's own
+  # `deploy` job (not just `test`/`migrate`) so the BACKEND service-binding
+  # target exists before this Worker that binds to it is deployed --
+  # matters most on a first-ever deploy of both.
+  deploy-dashboard:
+    needs: [changes, deploy]
+    if: always() && needs.deploy.result == 'success' && needs.changes.outputs.dashboard == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-news-market-ai-dashboard-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Check required secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
+            exit 1
+          fi
+      - name: Deploy dashboard Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:dashboard
+      - name: Set login secrets on the dashboard Worker
+        # Unlike backend's now-removed equivalent step, these three are the
+        # ONLY way the login can ever work -- dashboard has no "stays
+        # unauthenticated" fallback (plan.md Step 2: an unconfigured login
+        # fails closed, 503, everywhere). Same idempotent `wrangler secret
+        # put` shape, scoped to this Worker's own wrangler config.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DASHBOARD_USERNAME: ${{ secrets.DASHBOARD_USERNAME }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SESSION_TTL_SECONDS: ${{ secrets.SESSION_TTL_SECONDS }}
+        run: |
+          if [ -z "$DASHBOARD_USERNAME" ] || [ -z "$DASHBOARD_PASSWORD" ] || [ -z "$JWT_SECRET" ]; then
+            echo "DASHBOARD_USERNAME/DASHBOARD_PASSWORD/JWT_SECRET not all set -- skipping. The dashboard Worker is deployed but every /dashboard/* route returns 503 (disabled) until all three are configured."
+            exit 0
+          fi
+          echo "$DASHBOARD_USERNAME" | npx wrangler secret put DASHBOARD_USERNAME --config wrangler.dashboard.toml
+          echo "$DASHBOARD_PASSWORD" | npx wrangler secret put DASHBOARD_PASSWORD --config wrangler.dashboard.toml
+          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET --config wrangler.dashboard.toml
+          if [ -n "$SESSION_TTL_SECONDS" ]; then
+            echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS --config wrangler.dashboard.toml
+          fi
