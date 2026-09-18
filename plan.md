@@ -310,8 +310,13 @@ correct above the Rows filter, tests pass, dashboard unchanged. -- **Done.**
 ### Step 2 -- Dashboard Worker -- DONE 2026-09-18
 Merged to main via PR #28 (squash commit `3cb3e38`). CI on the PR ran green
 (changes + test; deploy/migrate/deploy-dashboard skipped as expected pre-merge,
-per the pattern above). Post-merge push run verified deploy-dashboard executes
-for real -- see Current Status for the outcome.
+per the pattern above). **Live-verified 2026-09-18:** the immediate post-merge
+push (run #213) got cancelled by a same-concurrency-group docs-only push before
+deploy-dashboard could run, and the next push's path filter correctly skipped it
+again (docs-only diff). Forced a manual `workflow_dispatch` run (deploy.yml run
+id 35393210094) to bypass the path filter -- changes/test/migrate/deploy/
+deploy-dashboard all completed green, confirming the new dashboard Worker
+deploys successfully against real Cloudflare infra end to end.
 
 What's on the branch: new `wrangler.dashboard.toml` + `src/dashboard-worker.js`
 owning login, the session cookie, and the UI (server-rendered, reusing `views/*`
