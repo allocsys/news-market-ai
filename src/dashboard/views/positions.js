@@ -3,7 +3,7 @@ import {
   donutChart, gaugeChart, miniStats,
 } from "../helpers.js";
 
-export function renderPositionsView({ openPositions, openPositionsError, closedPositions, closedPositionsError, params }) {
+export function renderPositionsView({ openPositions, openPositionsError, closedPositions, closedPositionsError, params, totalExposurePct }) {
   const positionsFilterBar = `<div class="filter-bar">
     ${pillLinks("Rows", POSITIONS_LIMIT_OPTIONS, params.positionsLimit, "positionsLimit", params)}
   </div>`;
@@ -46,7 +46,9 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
   );
 
   // --- Exposure gauge (open positions only) -----------------------------------
-  const totalExposurePct = openPositions.reduce((sum, p) => sum + (p.positionSizePct ?? 0), 0) * 100;
+  // totalExposurePct comes in as a prop (storage/d1.js#getOpenPositionsExposureTotal,
+  // an unbounded aggregate) rather than being summed here from the (Rows-limited)
+  // openPositions array -- see helpers.js#renderSummaryCards's own comment.
   const exposureFraction = Math.max(0, Math.min(1, totalExposurePct / 100));
   const exposureAccent =
     totalExposurePct >= 80 ? "var(--color-danger-text)" :
