@@ -123,29 +123,11 @@ export default {
     // this has side effects (real Finnhub calls, D1 writes), unlike
     // /dashboard's read-only GET.
     if (pathname === "/backfill" && request.method === "POST") {
-      // Two independent ways in: an active dashboard login session (the
-      // browser's own form submit, cookie sent automatically -- no secret
-      // typed at all, see dashboard.js#backfillTriggerForm), or the
-      // scripted/curl path below (X-Backfill-Secret header or a `secret`
-      // form field, unchanged). Either alone is sufficient.
       const sessionUsername = await getSessionUsername(request, config);
 
-      const contentType = request.headers.get("content-type") || "";
-      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
-        ? await request.formData()
-        : null;
-      const fromForm = (key) => (form ? form.get(key) : null);
-
-      const secret = request.headers.get("X-Backfill-Secret") ?? fromForm("secret");
-      const secretAuthorized = Boolean(config.backfillApiSecret) && secret === config.backfillApiSecret;
-
-      if (!sessionUsername && !secretAuthorized) {
-        // Disabled, not "open to anyone," when NEITHER auth path is even
-        // configured -- see config.js#backfillApiSecret's header for why
-        // an unset secret has no default, and isDashboardAuthConfigured
-        // above for the login side of the same reasoning.
-        if (!config.backfillApiSecret && !isDashboardAuthConfigured(config)) {
-          return new Response(JSON.stringify({ error: "backfill endpoint is not configured (set BACKFILL_API_SECRET or the dashboard login)" }), {
+      if (!sessionUsername) {
+        if (!isDashboardAuthConfigured(config)) {
+          return new Response(JSON.stringify({ error: "backfill endpoint is not configured (set up the dashboard login)" }), {
             status: 503,
             headers: { "content-type": "application/json" },
           });
@@ -155,6 +137,12 @@ export default {
           headers: { "content-type": "application/json" },
         });
       }
+
+      const contentType = request.headers.get("content-type") || "";
+      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
+        ? await request.formData()
+        : null;
+      const fromForm = (key) => (form ? form.get(key) : null);
 
       const from = url.searchParams.get("from") ?? fromForm("from");
       const to = url.searchParams.get("to") ?? fromForm("to");
@@ -193,22 +181,11 @@ export default {
     // Deliberately NOT wired into scheduled() -- manual-trigger only, per
     // the explicit "not automatic yet" decision this endpoint exists under.
     if (pathname === "/backtest/run" && request.method === "POST") {
-      // Same dual-auth-path convention as /backfill above -- an active
-      // dashboard session, or the scripted/curl secret path.
       const sessionUsername = await getSessionUsername(request, config);
 
-      const contentType = request.headers.get("content-type") || "";
-      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
-        ? await request.formData()
-        : null;
-      const fromForm = (key) => (form ? form.get(key) : null);
-
-      const secret = request.headers.get("X-Backtest-Secret") ?? fromForm("secret");
-      const secretAuthorized = Boolean(config.backtestApiSecret) && secret === config.backtestApiSecret;
-
-      if (!sessionUsername && !secretAuthorized) {
-        if (!config.backtestApiSecret && !isDashboardAuthConfigured(config)) {
-          return new Response(JSON.stringify({ error: "backtest endpoint is not configured (set BACKTEST_API_SECRET or the dashboard login)" }), {
+      if (!sessionUsername) {
+        if (!isDashboardAuthConfigured(config)) {
+          return new Response(JSON.stringify({ error: "backtest endpoint is not configured (set up the dashboard login)" }), {
             status: 503,
             headers: { "content-type": "application/json" },
           });
@@ -218,6 +195,12 @@ export default {
           headers: { "content-type": "application/json" },
         });
       }
+
+      const contentType = request.headers.get("content-type") || "";
+      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
+        ? await request.formData()
+        : null;
+      const fromForm = (key) => (form ? form.get(key) : null);
 
       const testStart = url.searchParams.get("testStart") ?? fromForm("testStart");
       const testEnd = url.searchParams.get("testEnd") ?? fromForm("testEnd");
