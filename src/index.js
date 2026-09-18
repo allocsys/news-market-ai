@@ -209,25 +209,22 @@ export default {
     }
   },
 
-  // JOBS consumer (plan.md Step 3). Each message is `{ type: 'backfill', id,
-  // from, to }` or `{ type: 'backtest', id, tickers, testStart, testEnd,
-  // graceDays }`, enqueued by POST /backfill / POST /backtest/run above.
-  // max_batch_size = 1 (wrangler.toml) means `batch.messages` is always a
-  // single-element array in production, but this loops generically anyway
-  // rather than assuming that stays true forever.
+  // Consumer for JOBS, INGEST, and ANALYZE (see module header above for
+  // the full type-by-type breakdown). max_batch_size varies per queue
+  // (wrangler.toml) -- JOBS's is 1, INGEST/ANALYZE's are larger -- so this
+  // loops generically over `batch.messages` rather than assuming any
+  // particular batch size.
   //
   // Per message: a business-logic failure (a bad backtest run,
-  // backfillHistoricalNews throwing on a vendor/DB error) is caught here,
-  // logged, and the message is still acked -- that failure is already the
-  // final, expected outcome (runManualBacktest itself persists it as a
-  // 'failed' backtest_runs row; a failed backfill has nothing else useful
-  // to persist since it made no lasting DB change), and retrying it would
-  // just spend real Gemini/Finnhub quota again for the same result. Only an
-  // unexpected crash in this handler itself (a real bug -- e.g. a malformed
-  // message with no recognizable `type`, or a throw from code we didn't
-  // anticipate) falls through to message.retry(), so wrangler.toml's
-  // max_retries/dead_letter_queue is the safety net for that, not for
-  // ordinary operational failures.
+  // backfillHistoricalNews throwing on a vendor/DB error, a failed ingest,
+  // etc.) is caught inside that message type's own branch, logged, and the
+  // message is still acked -- see each branch's own comment for why
+  // retrying wouldn't help (ANALYZE is the one exception, see its branch).
+  // An unexpected crash in this handler itself (a real bug -- e.g. a
+  // malformed message with no recognizable `type`, or a throw from code we
+  // didn't anticipate) falls through to message.retry(), so wrangler.toml's
+  // max_retries/dead_letter_queue on each queue is the safety net for that,
+  // not for ordinary operational failures.
   async queue(batch, env) {
     const config = loadConfig(env);
     for (const message of batch.messages) {
@@ -329,7 +326,7 @@ export default {
         }
         message.ack();
       } catch (err) {
-        console.error("JOBS message handler crashed unexpectedly, retrying", { message: err.message });
+        console.error("queue message handler crashed unexpectedly, retrying", { message: err.message });
         message.retry();
       }
     }
