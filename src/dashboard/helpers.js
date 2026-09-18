@@ -218,7 +218,19 @@ export function checkpointsTable(checkpoints) {
 }
 
 export function statCard(value, label, sub = null, accent = "var(--accent)") {
-  return `<div class="stat-card" style="--accent:${accent}">
+  // Maps a named accent token to a matching soft glow color used for the
+  // radial spotlight in the top-right of the card (see .stat-card::after in
+  // shell.js). Without this, the spotlight would always be blue even on a
+  // "danger" or "success" themed card, which read as inconsistent.
+  const glowMap = {
+    "var(--accent)": "var(--accent-glow)",
+    "var(--color-success-text)": "rgba(16, 185, 129, 0.18)",
+    "var(--color-danger-text)": "rgba(239, 68, 68, 0.18)",
+    "var(--color-warning-text)": "rgba(245, 158, 11, 0.18)",
+    "var(--color-info-text)": "var(--accent-glow)",
+  };
+  const glow = glowMap[accent] ?? "var(--accent-glow)";
+  return `<div class="stat-card" style="--stat-accent:${accent}; --stat-accent-glow:${glow}">
     <div class="stat-value">${escapeHtml(value)}</div>
     <div class="stat-label">${escapeHtml(label)}</div>
     ${sub ? `<div class="stat-sub">${escapeHtml(sub)}</div>` : ""}
@@ -288,6 +300,11 @@ export function decisionsActivityChart(daily, days) {
       const counts = byDay.get(day);
       const x = padLeft + i * barSlot + (barSlot - barWidth) / 2;
       let yCursor = padTop + plotH;
+      // Render each segment. The top segment (last drawn, highest on the bar)
+      // gets rounded top corners via rx=2 so the bar reads as a single shape
+      // even when stacked. We achieve this by tracking whether we're on the
+      // last non-empty segment of this bar.
+      const nonEmptyStatuses = statuses.filter((s) => (counts[s] ?? 0) > 0);
       const rects = statuses
         .map((status) => {
           const count = counts[status] ?? 0;
@@ -295,7 +312,9 @@ export function decisionsActivityChart(daily, days) {
           const segH = (count / maxTotal) * plotH;
           yCursor -= segH;
           const color = CHART_STATUS_COLORS[status] ?? CHART_STATUS_FALLBACK;
-          return `<rect x="${x.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${segH.toFixed(1)}" fill="${color}"><title>${escapeHtml(day)}: ${count} ${escapeHtml(status)}</title></rect>`;
+          const isTop = status === nonEmptyStatuses[nonEmptyStatuses.length - 1];
+          const rx = isTop ? Math.min(2, segH / 2, barWidth / 2) : 0;
+          return `<rect x="${x.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${segH.toFixed(1)}" fill="${color}" rx="${rx.toFixed(1)}"><title>${escapeHtml(day)}: ${count} ${escapeHtml(status)}</title></rect>`;
         })
         .join("");
       const labelStride = days > 10 ? Math.ceil(days / 10) : 1;
@@ -324,14 +343,14 @@ export function decisionsActivityChart(daily, days) {
   <div class="chart-legend">${legend}</div>`;
 }
 
-export function priceSparkline(bars, { width = 240, height = 64 } = {}) {
+export function priceSparkline(bars, { width = 240, height = 72 } = {}) {
   if (!bars || bars.length < 2) return `<p class="empty">not enough price history</p>`;
 
   const closes = bars.map((b) => b.close);
   const min = Math.min(...closes);
   const max = Math.max(...closes);
   const range = max - min || 1;
-  const padY = 4;
+  const padY = 6;
   const stepX = width / (closes.length - 1);
 
   const points = closes
@@ -347,8 +366,20 @@ export function priceSparkline(bars, { width = 240, height = 64 } = {}) {
   const up = last >= first;
   const changePct = first !== 0 ? (((last - first) / first) * 100).toFixed(1) : "0.0";
   const color = up ? "var(--color-success-text)" : "var(--color-danger-text)";
+  const fillColor = up ? "rgba(16, 185, 129, 0.14)" : "rgba(239, 68, 68, 0.14)";
+  const gradId = `spark-${Math.random().toString(36).slice(2, 9)}`;
+  // Area fill polygon: line points + bottom-right + bottom-left of plot area
+  const lastX = ((closes.length - 1) * stepX).toFixed(1);
+  const areaPoints = `0,${height - padY} ${points} ${lastX},${height - padY}`;
 
-  return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" class="sparkline" role="img" aria-label="Recent close price trend">
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" class="sparkline" role="img" aria-label="Recent close price trend">
+      <defs>
+        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${fillColor}" />
+          <stop offset="100%" stop-color="transparent" />
+        </linearGradient>
+      </defs>
+      <polygon points="${areaPoints}" fill="url(#${gradId})" stroke="none" />
       <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" />
     </svg>
     <div class="sparkline-meta">
@@ -363,8 +394,174 @@ export function priceChartsGrid(tickerBars) {
   if (entries.length === 0) return `<p class="empty">No tickers with enough price history to chart yet.</p>`;
 
   const cells = entries
-    .map(([ticker, bars]) => `<div class="chart-cell"><div class="chart-cell-title">${escapeHtml(ticker)}</div>${priceSparkline(bars)}</div>`)
+    .map(([ticker, bars]) => {
+      const closes = bars.map((b) => b.close);
+      const last = closes[closes.length - 1];
+      const first = closes[0];
+      const changePct = first !== 0 ? (((last - first) / first) * 100).toFixed(1) : "0.0";
+      const up = last >= first;
+      return `<div class="chart-cell"><div class="chart-cell-title"><span>${escapeHtml(ticker)}</span><span class="ticker-pill">${up ? "+" : ""}${changePct}%</span></div>${priceSparkline(bars)}</div>`;
+    })
     .join("\n");
 
   return `<div class="chart-cell-grid">${cells}</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Circular chart helpers (donut + gauge) -- pure SVG, no chart library.
+// Used on Snapshot (portfolio composition, exposure gauge), Health (fresh vs
+// stale sources), Decisions (approval rate), Positions (close reasons).
+// ---------------------------------------------------------------------------
+
+// Categorical palette -- 6 steps, mirrors shell.js's --chart-* tokens so the
+// donut's legend swatches line up with what the CSS would paint if we let it.
+const DONUT_PALETTE = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--chart-6)",
+];
+
+// Convert a fraction (0..1) on a circle of radius r centered at (cx,cy) into
+// cartesian (x,y). SVG arcs go clockwise from 12 o'clock -- callers don't need
+// to think about this, just pass startFraction/endFraction in [0,1].
+function polar(cx, cy, r, fraction) {
+  const angle = fraction * 2 * Math.PI - Math.PI / 2;
+  return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+}
+
+// Build a single <path d="..."> for one donut "slice" spanning
+// [startFraction, endFraction] on a ring of innerR..outerR around (cx,cy).
+// Large-arc-flag is 1 if the slice covers >50% of the circle.
+function donutSlicePath(cx, cy, innerR, outerR, startFraction, endFraction) {
+  const sweep = endFraction - startFraction;
+  if (sweep <= 0 || sweep >= 1) {
+    // Full ring (rare in this dashboard but cheap to handle) -- two arcs back
+    // to back along inner and outer radius, joined.
+    const o1 = polar(cx, cy, outerR, 0);
+    const o2 = polar(cx, cy, outerR, 0.5);
+    const i1 = polar(cx, cy, innerR, 0.5);
+    const i2 = polar(cx, cy, innerR, 0);
+    return `M ${o1.x.toFixed(2)} ${o1.y.toFixed(2)} A ${outerR} ${outerR} 0 0 1 ${o2.x.toFixed(2)} ${o2.y.toFixed(2)} A ${outerR} ${outerR} 0 0 1 ${o1.x.toFixed(2)} ${o1.y.toFixed(2)} M ${i1.x.toFixed(2)} ${i1.y.toFixed(2)} A ${innerR} ${innerR} 0 0 0 ${i2.x.toFixed(2)} ${i2.y.toFixed(2)} A ${innerR} ${innerR} 0 0 0 ${i1.x.toFixed(2)} ${i1.y.toFixed(2)} Z`;
+  }
+  const largeArc = sweep > 0.5 ? 1 : 0;
+  const p1 = polar(cx, cy, outerR, startFraction);
+  const p2 = polar(cx, cy, outerR, endFraction);
+  const p3 = polar(cx, cy, innerR, endFraction);
+  const p4 = polar(cx, cy, innerR, startFraction);
+  return `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${outerR} ${outerR} 0 ${largeArc} 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)} L ${p3.x.toFixed(2)} ${p3.y.toFixed(2)} A ${innerR} ${innerR} 0 ${largeArc} 0 ${p4.x.toFixed(2)} ${p4.y.toFixed(2)} Z`;
+}
+
+/**
+ * Render a donut chart with N segments + a center label and a side legend.
+ *
+ * @param {Array<{label:string, value:number, color?:string}>} segments - one per slice.
+ *   If a segment's color is omitted, palette rotates through DONUT_PALETTE.
+ *   Zero-value segments are skipped (no slice, no legend row) -- this matches
+ *   what most chart libraries do and keeps the legend uncluttered.
+ * @param {object} opts
+ * @param {string} opts.centerValue - text shown large in the donut hole (e.g. "12").
+ * @param {string} opts.centerLabel - small label under the center value (e.g. "open positions").
+ * @param {string} opts.title - panel title above the donut.
+ * @param {string} [opts.subtitle] - optional small subtitle.
+ */
+export function donutChart(segments, { centerValue, centerLabel, title, subtitle = null } = {}) {
+  const total = segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
+  // Empty-state: no data at all. Render a hollow ring + "no data" center so
+  // the layout doesn't collapse to nothing on a fresh D1.
+  if (total === 0) {
+    return `<div class="donut-cell">
+      ${title ? `<div class="donut-cell-title">${escapeHtml(title)}</div>` : ""}
+      ${subtitle ? `<div class="donut-cell-subtitle">${escapeHtml(subtitle)}</div>` : ""}
+      <div class="donut-wrap">
+        <svg viewBox="0 0 160 160" width="160" height="160" class="donut-svg" role="img" aria-label="${escapeHtml(title ?? "donut chart")} (no data)">
+          <circle cx="80" cy="80" r="58" fill="none" stroke="var(--bg-elevated)" stroke-width="18" />
+          <text x="80" y="78" text-anchor="middle" class="donut-center-value" font-size="22">--</text>
+          <text x="80" y="96" text-anchor="middle" class="donut-center-label">no data</text>
+        </svg>
+      </div>
+    </div>`;
+  }
+
+  const cx = 80, cy = 80, outerR = 64, innerR = 46;
+  let cursor = 0;
+  const slices = [];
+  const legendRows = [];
+  segments.forEach((seg, i) => {
+    if (seg.value <= 0) return;
+    const fraction = seg.value / total;
+    const startF = cursor;
+    const endF = cursor + fraction;
+    cursor = endF;
+    const color = seg.color ?? DONUT_PALETTE[i % DONUT_PALETTE.length];
+    const pctTxt = (fraction * 100).toFixed(fraction < 0.1 ? 1 : 0);
+    slices.push(`<path d="${donutSlicePath(cx, cy, innerR, outerR, startF, endF)}" fill="${color}" stroke="var(--bg-surface)" stroke-width="1.5"><title>${escapeHtml(seg.label)}: ${seg.value} (${pctTxt}%)</title></path>`);
+    legendRows.push(`<div class="donut-legend-row"><span class="donut-legend-swatch" style="background:${color}"></span><span class="donut-legend-label">${escapeHtml(seg.label)}</span><span class="donut-legend-value">${seg.value} &middot; ${pctTxt}%</span></div>`);
+  });
+
+  return `<div class="donut-cell">
+    ${title ? `<div class="donut-cell-title">${escapeHtml(title)}</div>` : ""}
+    ${subtitle ? `<div class="donut-cell-subtitle">${escapeHtml(subtitle)}</div>` : ""}
+    <div class="donut-wrap">
+      <svg viewBox="0 0 160 160" width="160" height="160" class="donut-svg" role="img" aria-label="${escapeHtml(title ?? "donut chart")}">
+        <circle cx="${cx}" cy="${cy}" r="${(outerR + innerR) / 2}" fill="none" stroke="var(--bg-elevated)" stroke-width="${outerR - innerR}" />
+        ${slices.join("\n        ")}
+        <text x="${cx}" y="${cy - 2}" text-anchor="middle" class="donut-center-value" font-size="26">${escapeHtml(centerValue ?? "")}</text>
+        <text x="${cx}" y="${cy + 16}" text-anchor="middle" class="donut-center-label">${escapeHtml(centerLabel ?? "")}</text>
+      </svg>
+      <div class="donut-legend">${legendRows.join("\n        ")}</div>
+    </div>
+  </div>`;
+}
+
+/**
+ * Render a semi-circular gauge showing a 0..1 value with a colored needle arc.
+ *
+ * @param {number} value - in [0,1]. Clamped. Negative becomes 0; >1 becomes 1.
+ * @param {object} opts
+ * @param {string} opts.valueLabel - text shown big below the gauge (e.g. "62.5%").
+ * @param {string} opts.label - small label under the value (e.g. "total exposure").
+ * @param {string} opts.title - panel title.
+ * @param {string} [opts.subtitle] - optional small subtitle.
+ * @param {string} [opts.accent] - color of the filled arc (default: accent blue).
+ *   Callers pass success/danger tokens to color-code the same shape.
+ * @param {string} [opts.minLabel="0%"], [opts.maxLabel="100%"] - tick labels under the gauge.
+ */
+export function gaugeChart(value, { valueLabel, label, title, subtitle = null, accent = "var(--accent-bright)", minLabel = "0%", maxLabel = "100%" } = {}) {
+  const v = Math.max(0, Math.min(1, value));
+  // Semi-circle geometry: arc spans 180 degrees from (10,80) to (150,80),
+  // passing through (80, 10). Filled arc covers fraction v of that.
+  const cx = 80, cy = 80, r = 64;
+  // 0 -> leftmost (180deg), 1 -> rightmost (0deg). Angle measured clockwise from positive x.
+  // polar() above uses "fraction of full circle starting at 12 o'clock going clockwise" -- for a
+  // half-circle from 9 o'clock to 3 o'clock over the top, that's fractions [0.25 .. 0.75].
+  const startF = 0.25;
+  const endF = 0.25 + 0.5 * v;
+
+  const trackStart = polar(cx, cy, r, 0.25);
+  const trackEnd = polar(cx, cy, r, 0.75);
+  const fillEnd = polar(cx, cy, r, endF);
+  const largeArc = v > 0.5 ? 1 : 0;
+
+  // Tick label baseline
+  return `<div class="gauge-cell">
+    ${title ? `<div class="gauge-cell-title">${escapeHtml(title)}</div>` : ""}
+    ${subtitle ? `<div class="gauge-cell-subtitle">${escapeHtml(subtitle)}</div>` : ""}
+    <svg viewBox="0 0 160 96" width="100%" height="96" role="img" aria-label="${escapeHtml(title ?? "gauge")}: ${escapeHtml(valueLabel ?? "")}">
+      <!-- Track -->
+      <path d="M ${trackStart.x.toFixed(2)} ${trackStart.y.toFixed(2)} A ${r} ${r} 0 0 1 ${trackEnd.x.toFixed(2)} ${trackEnd.y.toFixed(2)}"
+            fill="none" stroke="var(--bg-elevated)" stroke-width="14" stroke-linecap="round" />
+      ${v > 0.001 ? `<!-- Filled arc -->
+      <path d="M ${trackStart.x.toFixed(2)} ${trackStart.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${fillEnd.x.toFixed(2)} ${fillEnd.y.toFixed(2)}"
+            fill="none" stroke="${accent}" stroke-width="14" stroke-linecap="round" />` : ""}
+      <!-- Center value -->
+      <text x="${cx}" y="${cy - 14}" text-anchor="middle" class="gauge-value" font-size="26">${escapeHtml(valueLabel ?? "")}</text>
+      <text x="${cx}" y="${cy + 2}" text-anchor="middle" class="gauge-label">${escapeHtml(label ?? "")}</text>
+      <!-- Tick labels -->
+      <text x="10" y="92" text-anchor="middle" class="chart-axis-label">${escapeHtml(minLabel)}</text>
+      <text x="150" y="92" text-anchor="middle" class="chart-axis-label">${escapeHtml(maxLabel)}</text>
+    </svg>
+  </div>`;
 }

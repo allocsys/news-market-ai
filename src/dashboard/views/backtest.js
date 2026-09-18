@@ -28,8 +28,20 @@ export function renderBacktestView({ backtestRuns, error }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
     <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
-    ${backtestTriggerForm()}
-    ${error ? errorState(error) : backtestRunsList(backtestRuns)}
+
+    <div class="panel" style="margin-bottom:1.5rem">
+      <div class="panel-header"><span class="panel-title">Trigger a new run</span></div>
+      <div class="panel-body">
+        ${backtestTriggerForm()}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Recent runs</span></div>
+      <div class="panel-body">
+        ${error ? errorState(error) : backtestRunsList(backtestRuns)}
+      </div>
+    </div>
   </section>`;
 }
 
