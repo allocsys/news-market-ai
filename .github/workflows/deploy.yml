@@ -323,3 +323,59 @@ jobs:
           if [ -n "$SESSION_TTL_SECONDS" ]; then
             echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS --config wrangler.dashboard.toml
           fi
+
+  # `ingest` Worker (plan.md Step 5) -- own path-filtered job, own
+  # concurrency group (same reasoning as deploy-dashboard above: an
+  # unrelated push must never cancel this Worker's in-flight deploy, and
+  # vice versa). Depends on backend's own `deploy` job, not just `test`,
+  # since backend's deploy job is what provisions the news-market-ai-ingest
+  # and news-market-ai-analyze queues (+ DLQs) this Worker's
+  # wrangler.ingest.toml binds to (via the same ensure-queue composite
+  # action, reused unmodified) -- matters most on a first-ever deploy of
+  # both.
+  deploy-ingest:
+    needs: [changes, deploy]
+    if: always() && needs.deploy.result == 'success' && needs.changes.outputs.ingest == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-news-market-ai-ingest-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Check required secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
+            exit 1
+          fi
+      - name: Deploy ingest Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:ingest
+      - name: Set FINNHUB_API_KEY on the ingest Worker
+        # Same idempotent, non-blocking shape as backend's own
+        # FINNHUB_API_KEY step -- an unset key shouldn't block a first
+        # deploy of everything else. Without it, finnhub.js's fetchLatest
+        # logs a 401 VendorError per ticker and that source is skipped
+        # (see pipeline.js's failure-isolation model) rather than anything
+        # crashing. This Worker is now the primary holder of this secret
+        # for LIVE ingestion (ingest_ticker/ingest_feeds) -- backend still
+        # separately holds its own copy too, for the backfill JOBS job
+        # only (see wrangler.toml's own comment on that known, deliberate
+        # exception).
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: |
+          if [ -z "$FINNHUB_API_KEY" ]; then
+            echo "FINNHUB_API_KEY repo secret not set -- skipping. The ingest Worker is deployed but ingestion will fail (401, logged and skipped) until this is configured."
+            exit 0
+          fi
+          echo "$FINNHUB_API_KEY" | npx wrangler secret put FINNHUB_API_KEY --config wrangler.ingest.toml
