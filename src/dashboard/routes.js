@@ -1,0 +1,153 @@
+import {
+  getRecentTradeDecisions,
+  getAllOpenPositions,
+  getRecentlyClosedPositions,
+  getRecentCheckpoints,
+  getIngestionHealth,
+  getDecisionStats,
+  getRecentPriceBars,
+  getRecentBacktestRuns,
+} from "../storage/d1.js";
+import { parseDashboardParams, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
+import { renderShell } from "./shell.js";
+import { renderSnapshotView } from "./views/snapshot.js";
+import { renderActivityView } from "./views/activity.js";
+import { renderChartsView } from "./views/charts.js";
+import { renderHealthView } from "./views/health.js";
+import { renderDecisionsView } from "./views/decisions.js";
+import { renderPositionsView } from "./views/positions.js";
+import { renderPipelineView } from "./views/pipeline.js";
+import { renderMoreView } from "./views/more.js";
+import { renderBackfillView, renderBackfillConfirmPage } from "./views/backfill.js";
+import { renderBacktestView, renderBacktestConfirmPage } from "./views/backtest.js";
+import { getSessionUsername } from "../auth/session.js";
+
+function isDashboardAuthConfigured(config) {
+  return Boolean(config.dashboardUsername && config.dashboardPassword && config.jwtSecret);
+}
+
+async function checkAuth(request, config) {
+  const sessionUsername = isDashboardAuthConfigured(config) ? await getSessionUsername(request, config) : null;
+  if (isDashboardAuthConfigured(config) && !sessionUsername) return { redirect: "/login" };
+  return { sessionUsername };
+}
+
+function htmlResponse(html) {
+  return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+export async function handleSnapshotRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const params = parseDashboardParams(new URL(request.url).searchParams);
+  const [openPositions, closedPositions, decisionStats] = await Promise.all([
+    getAllOpenPositions(env.DB, { limit: params.positionsLimit }),
+    getRecentlyClosedPositions(env.DB, { limit: 20 }),
+    getDecisionStats(env.DB, { days: params.activityDays }),
+  ]);
+  const bodyHtml = renderSnapshotView({ openPositions, closedPositions, decisionStats });
+  return htmlResponse(renderShell({ activeSection: "snapshot", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleActivityRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const params = parseDashboardParams(new URL(request.url).searchParams);
+  const decisionStats = await getDecisionStats(env.DB, { days: params.activityDays });
+  const bodyHtml = renderActivityView({ decisionStats, params });
+  return htmlResponse(renderShell({ activeSection: "activity", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleChartsRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const params = parseDashboardParams(new URL(request.url).searchParams);
+  const openPositions = await getAllOpenPositions(env.DB, { limit: params.positionsLimit });
+  const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
+  const priceBarsByTicker = Object.fromEntries(
+    await Promise.all(chartTickers.map(async (ticker) => [ticker, await getRecentPriceBars(env.DB, { ticker, limit: 30 })]))
+  );
+  const bodyHtml = renderChartsView({ priceBarsByTicker });
+  return htmlResponse(renderShell({ activeSection: "charts", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleHealthRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const health = await getIngestionHealth(env.DB);
+  const bodyHtml = renderHealthView({ health });
+  return htmlResponse(renderShell({ activeSection: "health", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleDecisionsRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const params = parseDashboardParams(new URL(request.url).searchParams);
+  const decisions = await getRecentTradeDecisions(env.DB, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus });
+  const bodyHtml = renderDecisionsView({ decisions, params });
+  return htmlResponse(renderShell({ activeSection: "decisions", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handlePositionsRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const params = parseDashboardParams(new URL(request.url).searchParams);
+  const [openPositions, closedPositions] = await Promise.all([
+    getAllOpenPositions(env.DB, { limit: params.positionsLimit }),
+    getRecentlyClosedPositions(env.DB, { limit: 20 }),
+  ]);
+  const bodyHtml = renderPositionsView({ openPositions, closedPositions, params });
+  return htmlResponse(renderShell({ activeSection: "positions", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handlePipelineRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const checkpoints = await getRecentCheckpoints(env.DB, { limit: 30 });
+  const bodyHtml = renderPipelineView({ checkpoints });
+  return htmlResponse(renderShell({ activeSection: "pipeline", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleBackfillRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const bodyHtml = renderBackfillView();
+  return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleBackfillConfirmRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const sp = new URL(request.url).searchParams;
+  const from = sp.get("from");
+  const to = sp.get("to");
+  const bodyHtml = renderBackfillConfirmPage({ from, to });
+  return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleBacktestRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const backtestRuns = await getRecentBacktestRuns(env.DB, { limit: 10 });
+  const bodyHtml = renderBacktestView({ backtestRuns });
+  return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleBacktestConfirmRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const sp = new URL(request.url).searchParams;
+  const testStart = sp.get("testStart");
+  const testEnd = sp.get("testEnd");
+  const tickers = sp.get("tickers");
+  const graceDays = sp.get("graceDays");
+  const bodyHtml = renderBacktestConfirmPage({ testStart, testEnd, tickers, graceDays });
+  return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
+
+export async function handleMoreRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
+  const bodyHtml = renderMoreView();
+  return htmlResponse(renderShell({ activeSection: "more", sessionUsername: auth.sessionUsername, bodyHtml }));
+}
