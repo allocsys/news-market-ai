@@ -30,6 +30,11 @@ const STYLE = `
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-subtle: rgba(59, 130, 246, 0.15);
+    /* Focus ring for keyboard focus (buttons/links styled as buttons). --accent-subtle is
+       only 15% alpha -- fine as a soft glow on inputs, which ALSO change to a solid --accent
+       border on focus, but far below design.md's 3:1 non-text contrast when it is the only
+       focus indicator. #60a5fa is ~7:1 against --bg-base and ~6.5:1 against --bg-surface. */
+    --focus-ring: #60a5fa;
 
     --color-success-bg: rgba(16, 185, 129, 0.12);
     --color-success-text: #34d399;
@@ -251,7 +256,7 @@ const STYLE = `
   }
   .filter-form button:hover, .btn:hover { background: var(--accent-hover); }
   .filter-form button:focus-visible, .btn:focus-visible {
-    outline: none; box-shadow: 0 0 0 2px var(--accent-subtle);
+    outline: 2px solid var(--focus-ring); outline-offset: 2px;
   }
   .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
