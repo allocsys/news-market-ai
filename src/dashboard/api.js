@@ -10,6 +10,11 @@
 // page would make no sense, and this mirrors how POST /backfill and
 // POST /backtest/run (src/index.js) already answer unauthenticated
 // scripted callers with JSON rather than a redirect.
+//
+// JSON responses are built with `new Response(JSON.stringify(...), {...})`,
+// not the static `Response.json(...)` helper -- matches the one existing
+// convention this codebase already uses (and tests) for every other JSON
+// response in src/index.js, rather than introducing a second, unproven one.
 import { checkAuth } from "./routes.js";
 import { parseDashboardParams } from "./helpers.js";
 import {
@@ -23,59 +28,63 @@ import {
   getBacktestRunsData,
 } from "./data.js";
 
+function jsonResponse(body, { status = 200 } = {}) {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
 function unauthorized() {
-  return Response.json({ error: "unauthorized" }, { status: 401 });
+  return jsonResponse({ error: "unauthorized" }, { status: 401 });
 }
 
 export async function handleApiSnapshotRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  return Response.json(await getSnapshotData(env, params));
+  return jsonResponse(await getSnapshotData(env, params));
 }
 
 export async function handleApiActivityRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  return Response.json(await getActivityData(env, params));
+  return jsonResponse(await getActivityData(env, params));
 }
 
 export async function handleApiChartsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  return Response.json(await getChartsData(env, params));
+  return jsonResponse(await getChartsData(env, params));
 }
 
 export async function handleApiHealthRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
-  return Response.json(await getHealthData(env));
+  return jsonResponse(await getHealthData(env));
 }
 
 export async function handleApiDecisionsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  return Response.json(await getDecisionsData(env, params));
+  return jsonResponse(await getDecisionsData(env, params));
 }
 
 export async function handleApiPositionsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  return Response.json(await getPositionsData(env, params));
+  return jsonResponse(await getPositionsData(env, params));
 }
 
 export async function handleApiPipelineRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
-  return Response.json(await getPipelineData(env));
+  return jsonResponse(await getPipelineData(env));
 }
 
 export async function handleApiBacktestRunsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
-  return Response.json(await getBacktestRunsData(env));
+  return jsonResponse(await getBacktestRunsData(env));
 }
