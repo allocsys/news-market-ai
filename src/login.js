@@ -7,7 +7,7 @@
 // page uses. Palette (ink-navy + brass accent) intentionally matches
 // dashboard.js's STYLE so the login -> dashboard transition doesn't jar.
 
-import { escapeHtml } from "./dashboard.js";
+import { escapeHtml } from "./dashboard/helpers.js";
 
 const LOGIN_STYLE = `
   :root { color-scheme: dark; }

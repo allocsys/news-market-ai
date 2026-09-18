@@ -12,7 +12,20 @@
 import { loadConfig } from "./config.js";
 import { runScheduledIngestion, backfillHistoricalNews } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
-import { renderDashboardHtml } from "./dashboard.js";
+import {
+  handleSnapshotRoute,
+  handleActivityRoute,
+  handleChartsRoute,
+  handleHealthRoute,
+  handleDecisionsRoute,
+  handlePositionsRoute,
+  handlePipelineRoute,
+  handleBackfillRoute,
+  handleBackfillConfirmRoute,
+  handleBacktestRoute,
+  handleBacktestConfirmRoute,
+  handleMoreRoute,
+} from "./dashboard/routes.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
 import { renderLoginPage } from "./login.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
@@ -70,13 +83,44 @@ export default {
     const config = loadConfig(env);
 
     if (pathname === "/dashboard") {
-      // Guarded only once login is actually configured -- see
-      // isDashboardAuthConfigured's own header for why an unconfigured
-      // login leaves this route exactly as unauthenticated as before.
-      const sessionUsername = isDashboardAuthConfigured(config) ? await getSessionUsername(request, config) : null;
-      if (isDashboardAuthConfigured(config) && !sessionUsername) return redirect("/login");
-      const html = await renderDashboardHtml(env.DB, { searchParams: url.searchParams, sessionUsername });
-      return htmlResponse(html);
+      return redirect("/dashboard/snapshot");
+    }
+
+    if (pathname === "/dashboard/snapshot") {
+      return handleSnapshotRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/activity") {
+      return handleActivityRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/charts") {
+      return handleChartsRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/health") {
+      return handleHealthRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/decisions") {
+      return handleDecisionsRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/positions") {
+      return handlePositionsRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/pipeline") {
+      return handlePipelineRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/backfill") {
+      return handleBackfillRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/backfill/confirm") {
+      return handleBackfillConfirmRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/backtest") {
+      return handleBacktestRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/backtest/confirm") {
+      return handleBacktestConfirmRoute(request, env, config);
+    }
+    if (pathname === "/dashboard/more") {
+      return handleMoreRoute(request, env, config);
     }
 
     if (pathname === "/login" && request.method === "GET") {
@@ -85,7 +129,7 @@ export default {
       }
       // Already logged in -- no reason to show the form again.
       const sessionUsername = await getSessionUsername(request, config);
-      if (sessionUsername) return redirect("/dashboard");
+      if (sessionUsername) return redirect("/dashboard/snapshot");
       const error = url.searchParams.get("error") === "invalid" ? "Invalid username or password." : null;
       return htmlResponse(renderLoginPage({ error }));
     }
@@ -103,7 +147,7 @@ export default {
         return htmlResponse(renderLoginPage({ error: "Invalid username or password." }), { status: 401 });
       }
       const cookie = await createSessionCookie(username, config);
-      return redirect("/dashboard", { "Set-Cookie": cookie });
+      return redirect("/dashboard/snapshot", { "Set-Cookie": cookie });
     }
 
     if (pathname === "/logout") {
