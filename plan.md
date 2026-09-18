@@ -84,9 +84,8 @@ Dedup on `id`/URL since the same story often gets syndicated across outlets.
 
 ### 2. Storage
 Raw layer: append-only immutable store of normalized JSON + original payload.
-Structured layer: D1, indexed by ticker + published_at (see Deployment section —
-this superseded an earlier Postgres/Neon plan). Optional later: pgvector for
-semantic search over historical news.
+Structured layer: D1, indexed by ticker + published_at (see Deployment section).
+Optional later: pgvector for semantic search over historical news.
 
 ### 3. Analyst Team
 Parallel, role-specific agents producing structured opinions against the shared
@@ -147,6 +146,10 @@ someone adds a feature.
 | KV | 1GB storage, 100K reads/day, 1K writes/day | Too tight for per-request caching; good fit for low-frequency state (LLM key/model cooldowns) |
 | Bundle size | 64 MiB uncompressed | Not a real constraint |
 
+**Planned:** the single Worker below is being split into 4 (dashboard, backend,
+ingest, llm) -- see "Roadmap: Service Split" for the step-by-step plan. Until each
+step lands, the text below describes the current single-Worker system.
+
 **Architecture:** Workers as orchestrator (Cron Triggers drive ingestion + agent
 pipeline) → D1 as structured layer (replaces earlier Postgres/Neon plan) → KV as
 cooldown/rate-limit state + lightweight config → R2 (10GB free) as raw archive
@@ -166,6 +169,38 @@ real plaintext-id leak in the provisioning actions' `create` step output (ids ar
 now masked before printing — see git history on `ensure-d1-database`/
 `ensure-kv-namespace` for detail if ever revisited).
 
+**CI/CD for the 4-Worker split (reviewed `allocsys/ai-campaign-builder`'s
+deploy.yml, 2026-09-18):** that repo deploys 5 frontend apps + 1 backend Worker
+from a single npm-workspaces monorepo (`apps/<name>/`, each with its own
+`wrangler.toml`), which is the closest existing precedent to our upcoming
+dashboard/backend/ingest/llm split. Pattern to carry over once Step 2 starts:
+- **One job per Worker**, each gated on its own `dorny/paths-filter` output
+  (own `apps/<name>/**` OR shared `packages/**`/shared-code path OR the
+  workflow file itself) — mirrors our existing docs-vs-code filter, just
+  split per Worker instead of one filter for the whole repo. `workflow_dispatch`
+  always runs every job (no diff to compare against).
+- **Per-job `concurrency` group** (e.g. `deploy-dashboard-${{ github.ref }}`),
+  deliberately NOT one shared workflow-level group — an unrelated Worker's
+  push must never cancel this Worker's in-flight deploy.
+- **Migrations decoupled into their own job** (`backend-migrate` there, ours
+  stays the existing `migrate` job), gated on a narrower `migrations/**`-only
+  filter. Every Worker job that depends on the DB uses
+  `needs: [changes, migrate]` with `if: always() && ... (needs.migrate.result
+  == 'success' || needs.migrate.result == 'skipped')` — the `always()` is
+  required because GitHub Actions would otherwise skip the dependent job too
+  when `migrate` itself is skipped (no migration in that push).
+- **Secrets stay scoped to the Worker that owns them**, each job fails fast
+  on its own required secrets before deploying, then pushes them via
+  `wrangler secret put` right after deploy. Optional secret groups use a
+  bash `-z` guard inside `run:` and skip cleanly (secrets context is rejected
+  inside a step's `if:`). Maps directly onto our Step 5/6 key-isolation goal:
+  `dashboard`'s job only ever sees `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/
+  `JWT_SECRET`, `ingest`'s only `FINNHUB_API_KEY`, `llm`'s only
+  `GEMINI_API_KEYS` — no job touches a secret it doesn't own.
+- D1/KV provisioning stays exactly our existing `ensure-d1-database`/
+  `ensure-kv-namespace` composite actions, reused unmodified by every Worker
+  job that needs them (only `backend` binds D1 per the rule below).
+
 ## LLM Calling Layer: Multi-Key Gemini Cascade (ported from `madmcp`)
 **Two-axis cascade, model-first:** outer loop tries `[GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS]`
 across every key before stepping down a model tier; inner loop rotates
@@ -184,6 +219,101 @@ a call is tagged for logging.
 
 This cascade underlies every LLM-touching stage (Analyst Team, Researcher Team,
 Trader) — nothing calls the Gemini API directly.
+
+## Roadmap: Service Split (sequential, one PR per step)
+**Why:** one Worker currently runs the cron pipeline, the SSR dashboard, login, and
+long manual jobs. Free-plan limits bite per invocation (10ms CPU, 50 subrequests);
+cron/queue consumers get 15 min wall time; `ctx.waitUntil` only extends ~30s past
+the response, so `/backfill` and `/backtest/run` can be cut off mid-run.
+
+**Target: 4 Workers, connected by queues (not synchronous calls):**
+`dashboard` (UI + login gateway), `backend` (orchestrator: cron, API, migrations),
+`ingest` (fetch + write to D1), `llm` (long-running Gemini stages).
+
+**Rules for every step:**
+- One repo, one `wrangler` config per Worker, shared code imported (never copied).
+- Only `backend` runs D1 migrations; all Workers bind the same D1.
+- Each step ships as its own PR, leaves `main` green, and is verified live before
+  the next starts. Never work on `main` directly; squash-merge.
+- Preserve test contracts: `test/dashboard_refresh.test.js`,
+  `test/index_login.test.js`, `test/index_backfill.test.js` (update deliberately,
+  never silently).
+
+### Step 0 -- Diagnose (no code)
+Confirm the plan tier (free vs paid) and which limit actually fails (CPU,
+subrequests, wall time) via Workers Logs; check `backtest_runs` for rows stuck in
+`running`. **Done when:** the failing limit is written down here.
+
+### Step 1 -- Backend JSON API (no behavior change)
+Extract the data fetching out of `src/dashboard/routes.js` into `/api/*` read
+endpoints (snapshot, activity, charts, health, decisions, positions, pipeline,
+backtest runs), auth-gated by the existing session for now. The SSR dashboard keeps
+working, now calling the same functions. Fix the exposure-understated bug here with
+an aggregate query that ignores the Rows limit (`routes.js`/`d1.js`).
+**Done when:** every dashboard panel's data is reachable via `/api/*`, exposure is
+correct above the Rows filter, tests pass, dashboard unchanged.
+
+### Step 2 -- Dashboard Worker
+New Worker `news-market-ai-dashboard` (own `wrangler` config + CI deploy job) with
+a service binding to `backend`. It owns login, the session cookie, and the UI;
+`/api/*` is proxied same-origin (no CORS). Open decision: server-rendered first
+(reuse `views/*`, keeps tests), static/client-rendered later -- the API is the same
+either way. Move `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, `JWT_SECRET` to this
+Worker; make `backend` private (service binding only), so it fails closed instead
+of serving an open dashboard when login is unconfigured. Cut over, then delete the
+dashboard/login/auth code from `backend`.
+**Done when:** the dashboard works end to end from the new Worker, `backend` serves
+no HTML, the login secrets exist only on `dashboard`, and `dashboard` has its own
+path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above.
+
+### Step 3 -- Job queue for backfill and backtest
+Add a `JOBS` queue (plus dead-letter queue). `POST /backfill` and
+`POST /backtest/run` validate, enqueue, and return the accepted page; a consumer runs
+`backfillHistoricalNews` / `runManualBacktest`. Job status lives in D1
+(`backtest_runs` already persists a `running` row). This removes the `waitUntil`
+30s cut-off. Keep the scripted-JSON response behavior for non-form callers.
+**Done when:** a long backtest completes past 30s, failures land as `failed` rows,
+and `test/index_backfill.test.js` is updated for the enqueue behavior.
+
+### Step 4 -- Cron fan-out (still inside `backend`)
+`scheduled()` becomes a thin scheduler: it enqueues one message per ticker per
+source (`INGEST` queue). The ingest consumer fetches news, price bars and
+fundamentals for that one ticker, writes D1, then enqueues `ANALYZE` for it. The
+analysis consumer runs `runPipelineForTicker`, resumable via `graph/checkpointer.js`
+(Pattern 12). Messages must be idempotent (dedupe on `id`, D1 unique keys) since
+queues deliver at-least-once. Set `max_concurrency` on `ANALYZE` to throttle Gemini.
+Keep `checkOpenPositionExits` as its own message, isolated from ingestion failures.
+Budget: Queues free tier is 10K ops/day (~3 ops per message); estimate the daily
+message count (tickers x stages x 96 runs) before shipping.
+**Done when:** a full cron cycle completes as many small invocations, a crashed
+message retries without duplicating rows or LLM spend, and ops/day fits the budget.
+
+### Step 5 -- Extract `ingest` Worker
+Move the ingest consumer to `news-market-ai-ingest` (own `wrangler` config, CI job).
+It alone holds `FINNHUB_API_KEY` and the EDGAR CIK/name-index KV cache; it consumes
+`INGEST` and produces `ANALYZE`. Shared code (`ingestion/*`, `storage/d1.js`,
+`shared/*`) stays imported, not copied.
+**Done when:** ingestion runs only from `ingest`, `backend` no longer holds
+vendor keys, and `ingest` has its own path-filtered CI job per the "CI/CD for the
+4-Worker split" pattern above (its job is the only one that ever sees
+`FINNHUB_API_KEY`).
+
+### Step 6 -- Extract `llm` Worker
+Move the `ANALYZE` consumer (analysts -> debate -> trader -> risk -> portfolio) to
+`news-market-ai-llm`. It alone holds `GEMINI_API_KEYS` and the cooldown KV
+(`gemini:cooldown:*`); its queue's `max_concurrency` is the Gemini throttle. Raise
+`limits.cpu_ms` there only if the paid plan is in use.
+**Done when:** every LLM call originates from `llm`, no other Worker holds
+Gemini keys, and `llm` has its own path-filtered CI job per the "CI/CD for the
+4-Worker split" pattern above (its job is the only one that ever sees
+`GEMINI_API_KEYS`).
+
+### Step 7 -- Cleanup and docs
+Remove dead code left in `backend`, run a per-Worker secrets audit, and rewrite the
+Deployment and Repo Structure sections above for the 4-Worker layout. Fix stale
+docs: Known Gaps still describes `X-Backfill-Secret`/`BACKFILL_API_SECRET`, but the
+code now gates on the dashboard session.
+**Done when:** this plan describes the system as built, not as planned.
 
 ## Repo Structure
 ```
@@ -230,12 +360,12 @@ and live-traffic verification against GDELT/yfinance/SEC EDGAR/RSS/HTML-scrape
 was double-counting exposure and leaving duplicate open rows) — merged via PR #1
 (commit `5858dff`). Real entity resolution via an opt-in, SEC-backed company-name
 index (`entity_resolution.js#buildCompanyNameIndex`/`matchTickersByName`/
-`getCompanyNameIndex`, gated by `config.entityResolutionUseNameIndex`, default
-false) — wired into GDELT, RSS, and HTML-scrape ingestion, with `kv` threaded
+`getCompanyNameIndex`, gated by `config.entityResolutionUseNameIndex` — now
+defaults **on**, flipped 2026-09-17; see Known Gaps for the live-verification
+caveat) — wired into GDELT, RSS, and HTML-scrape ingestion, with `kv` threaded
 through `collectNewsItems` so the index is cached in production. Fails open on
 any error; `resolveTickers` stays fully backward-compatible when the index is
-omitted; default behavior across all three adapters is byte-for-byte unchanged
-when the flag is off. `structured.js` now has a `config.fakeModel` injection
+omitted. `structured.js` now has a `config.fakeModel` injection
 point (off by default, falls through unchanged to the real Gemini cascade),
 with true end-to-end tests riding it: `callStructured` itself (precedence,
 arg passthrough, JSON-fence stripping, schema validation), `recordAndReflect`'s
@@ -244,18 +374,10 @@ plus a resume-after-crash test proving already-completed stages are never
 re-invoked. checkpoint/resume, memory/reflection, and technical-analyst tests
 are no longer limited to mocks/fakes for the LLM-call path.
 
-**Bugfix (2026-09-17):** the resume-after-crash test above is what caught a
-real off-by-one in `graph/pipeline.js` -- `checkpointer.js#resumeFrom` returns
-the NEXT-NEEDED stage (its own unit tests require this), but pipeline.js's
-block conditions/reassignments were written assuming the last-COMPLETED
-stage instead. A fresh run never noticed (self-consistent within one
-cascading execution), but resuming right after the "analyzed" checkpoint
-skipped the debate block entirely and crashed `runTrader` on an undefined
-verdict. This had been silently red on `main` (CI) since the resume test
-was added, unnoticed because every push since was docs-only and skipped the
-test job (see the CI path-filter fix below). Fixed by realigning every
-block's condition/reassignment to the same next-needed convention
-resumeFrom already uses; CI is green end-to-end again as of this commit.
+**Fixed (2026-09-17):** a resume-after-crash off-by-one in `graph/pipeline.js`
+(block conditions assumed the last-COMPLETED stage instead of `resumeFrom`'s
+actual NEXT-NEEDED convention, skipping the debate block and crashing
+`runTrader`) — realigned; CI green end-to-end again.
 
 ## Known Gaps / Backlog
 - **Entity resolution** now has a real SEC-backed name-matching path, and
@@ -270,24 +392,17 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   tests suggest. Next step: run a live check once network access is reliable,
   and downgrade the default back to off if headline name-matching produces
   more false-positive ticker attributions than expected in practice.
-- **GDELT**: CORRECTION (2026-09-18) — a prior version of this doc claimed the live
-  `articles[]` response shape was "confirmed... after fixing that tool's own
-  error-swallowing bug." That claim does not match this project's actual session
-  history and could not be reproduced: a fresh verification attempt this session
-  got a clean, explicit 429 from GDELT's own rate limiter on every try (immediate,
-  after a 7s wait, and after a 45s wait), never a successful response. The live
-  `articles[]` shape remains **unverified**. **REPLACED** (2026-09-18) as the
-  primary news source by `src/ingestion/sources/finnhub.js` (Finnhub's free
-  `/company-news` endpoint, 60 req/min, explicitly production-permitted unlike
-  NewsAPI's dev-only free tier or Alpha Vantage's 25/day cap) -- unwired from
-  `graph/pipeline.js#collectNewsItems`, but `gdelt.js` and its test coverage are
-  kept in the repo (not deleted) for easy re-enable per an explicit product
-  decision. Finnhub's own field mapping (`headline`/`summary`/`url`/`datetime`/
-  `source`) is written from Finnhub's published docs only -- **not yet
-  live-verified against a real successful response** (blocked on a real
-  `FINNHUB_API_KEY` repo secret being set). Do not upgrade this to "confirmed"
-  without an actual successful fetch in hand -- see the correction directly
-  above for why.
+- **GDELT**: live `articles[]` response shape remains **unverified** — every
+  verification attempt has hit GDELT's own rate limiter (429) rather than a
+  successful response. **REPLACED** (2026-09-18) as the primary news source by
+  `src/ingestion/sources/finnhub.js` (Finnhub's free `/company-news` endpoint,
+  60 req/min, production-permitted unlike NewsAPI's dev-only tier or Alpha
+  Vantage's 25/day cap) — unwired from `graph/pipeline.js#collectNewsItems`,
+  but `gdelt.js` and its tests are kept in the repo for easy re-enable.
+  Finnhub's field mapping (`headline`/`summary`/`url`/`datetime`/`source`) is
+  written from its published docs only and is **not yet live-verified**
+  (blocked on a real `FINNHUB_API_KEY` repo secret). Do not mark either as
+  confirmed without an actual successful fetch in hand.
 - **yfinance** adapter is unofficial/undocumented; daily bars only, no intraday.
 - **EDGAR fundamentals**: only whatever XBRL `us-gaap` tags a filer reports (no
   non-GAAP figures); not rate-limited beyond EDGAR itself (110ms pacing only).
@@ -295,15 +410,12 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   finance-publisher pages (Reuters, WSJ) return bot-challenge 401s in practice;
   pages with no published-time meta tag fall back to fetch-time and are flagged
   unsafe for point-in-time backtesting.
-- **RSS**: general (non-ticker-hinted) feed items previously depended on the thin
-  `COMPANY_DOMAIN_MAP` (3 domains), so most came back with empty `tickers` arrays.
-  Confirmed by direct code read (2026-09-18): `rss.js#fetchLatest` already passes
-  `nameIndex` into `resolveTickers` whenever `config.entityResolutionUseNameIndex`
-  is set, so now that the flag defaults on, untagged feed items get real
-  substring/word-boundary matching against the ~1000-company SEC name index —
-  this item self-resolves as a byproduct of the entity-resolution default flip
-  above, no separate code change needed. Still subject to the same unvalidated-
-  against-live-traffic caveat as that flag until a live check happens.
+- **RSS**: general (non-ticker-hinted) feed items previously depended on the
+  thin `COMPANY_DOMAIN_MAP` (3 domains). Self-resolved as a byproduct of the
+  entity-resolution default flip above — `rss.js#fetchLatest` already passes
+  `nameIndex` into `resolveTickers`, so untagged items now get real
+  substring/word-boundary matching against the SEC name index. Same
+  unvalidated-against-live-traffic caveat as that flag applies here too.
 - **Ingestion throttling**: only EDGAR + the other four adapters have pacing;
   no shared cross-vendor rate limiter, and `ingestPriceBars`/`ingestFundamentals`
   always fetch the full watchlist (no incremental/delta fetching).
