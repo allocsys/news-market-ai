@@ -42,7 +42,7 @@ export function renderHealthView({ health, error }) {
       ${healthDonut}
       <div class="panel">
         <div class="panel-header"><span class="panel-title">Per-source detail</span></div>
-        <div class="panel-body" style="padding:0">
+        <div class="panel-body panel-body-flush">
           <table>
             <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th><th>Status</th></tr></thead>
             <tbody>
