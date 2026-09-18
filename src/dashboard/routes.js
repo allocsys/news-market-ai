@@ -112,8 +112,8 @@ export async function handleChartsRoute(request, env, config) {
 export async function handleHealthRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
-  const health = await getIngestionHealth(env.DB);
-  const bodyHtml = renderHealthView({ health });
+  const healthResult = await safe(getIngestionHealth(env.DB));
+  const bodyHtml = renderHealthView({ health: healthResult.data, error: healthResult.error });
   return htmlResponse(renderShell({ activeSection: "health", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -121,8 +121,8 @@ export async function handleDecisionsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const decisions = await getRecentTradeDecisions(env.DB, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus });
-  const bodyHtml = renderDecisionsView({ decisions, params });
+  const decisionsResult = await safe(getRecentTradeDecisions(env.DB, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus }));
+  const bodyHtml = renderDecisionsView({ decisions: decisionsResult.data ?? [], params, error: decisionsResult.error });
   return htmlResponse(renderShell({ activeSection: "decisions", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -130,19 +130,28 @@ export async function handlePositionsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const [openPositions, closedPositions] = await Promise.all([
-    getAllOpenPositions(env.DB, { limit: params.positionsLimit }),
-    getRecentlyClosedPositions(env.DB, { limit: 20 }),
+  const [openPositionsResult, closedPositionsResult] = await Promise.all([
+    safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit })),
+    safe(getRecentlyClosedPositions(env.DB, { limit: 20 })),
   ]);
-  const bodyHtml = renderPositionsView({ openPositions, closedPositions, params });
+  // Open and closed positions are design.md's own named example of two
+  // sub-panels on one page that must fail independently -- each gets its
+  // own error, not one shared one.
+  const bodyHtml = renderPositionsView({
+    openPositions: openPositionsResult.data ?? [],
+    openPositionsError: openPositionsResult.error,
+    closedPositions: closedPositionsResult.data ?? [],
+    closedPositionsError: closedPositionsResult.error,
+    params,
+  });
   return htmlResponse(renderShell({ activeSection: "positions", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
 export async function handlePipelineRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
-  const checkpoints = await getRecentCheckpoints(env.DB, { limit: 30 });
-  const bodyHtml = renderPipelineView({ checkpoints });
+  const checkpointsResult = await safe(getRecentCheckpoints(env.DB, { limit: 30 }));
+  const bodyHtml = renderPipelineView({ checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error });
   return htmlResponse(renderShell({ activeSection: "pipeline", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -166,8 +175,8 @@ export async function handleBackfillConfirmRoute(request, env, config) {
 export async function handleBacktestRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
-  const backtestRuns = await getRecentBacktestRuns(env.DB, { limit: 10 });
-  const bodyHtml = renderBacktestView({ backtestRuns });
+  const backtestRunsResult = await safe(getRecentBacktestRuns(env.DB, { limit: 10 }));
+  const bodyHtml = renderBacktestView({ backtestRuns: backtestRunsResult.data ?? [], error: backtestRunsResult.error });
   return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
