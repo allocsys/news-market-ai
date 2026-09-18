@@ -18,6 +18,16 @@ A target design direction for the operations dashboard, written from scratch aga
 - **Grid:** 8px base spacing unit throughout (8/16/24/32/48/64). Card and section gaps use multiples of this unit — never arbitrary pixel values.
 - **Content sections:** Group related content into cards or panels with clear headers, not an undifferentiated scroll of tables. Related sections (e.g. open + closed positions) can sit side-by-side in a responsive grid on wide screens, stacking to a single column on mobile.
 
+## Navigation behavior
+
+This is the one point in this spec that is a hard requirement, not a stylistic preference: **every nav item (sidebar entries on desktop, tabs on the mobile bottom bar) must be a real, independently navigable page/view — its own URL/route that can be linked to, bookmarked, and loaded directly — not a same-page `<a href="#section-id">` scroll-to-anchor link.**
+
+- Clicking a nav item loads that section as its own page. Only that section's data needs to be fetched for that request — sections the operator isn't currently viewing should not all be fetched and rendered into one giant page just so anchors can jump between them.
+- The active nav item is derived from the current route, not from scroll position — no scroll-spy/IntersectionObserver logic standing in for real navigation.
+- Direct-linking and refreshing on any section's URL must load that section directly, not the top of a combined page.
+- This applies equally to the desktop sidebar and the mobile bottom tab bar (and any "More" overflow menu) — both are navigation to distinct pages, just presented in different chrome for the viewport size.
+- Implementation can be either separate server-rendered routes (e.g. `GET /dashboard/positions`, `GET /dashboard/decisions`, one per current section) or a client-routed single-page app — either satisfies this requirement. What does NOT satisfy it: one route that renders every section's markup into one document with `id` anchors and a nav bar of `#fragment` links, which is the current implementation and the specific pattern this spec is asking to move away from.
+
 ## Typography
 
 - **One typeface family** (a well-tested system/product UI font: Inter, IBM Plex Sans, or the OS system font stack) for everything — headings, body, and data. Avoid mixing serif display type with monospace data with sans body copy; that mix reads as "assembled," not designed.
