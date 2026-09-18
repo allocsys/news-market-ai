@@ -307,9 +307,11 @@ kept for record; all code described was written and shipped as planned.
 **Done when:** every dashboard panel's data is reachable via `/api/*`, exposure is
 correct above the Rows filter, tests pass, dashboard unchanged. -- **Done.**
 
-### Step 2 -- Dashboard Worker -- CODE DONE 2026-09-18, NOT YET MERGED
-Implemented on branch `feat/step2-dashboard-worker` (on top of Step 1/main tip
-`a78ac0f`) -- no PR opened yet, not merged, not deployed/verified live.
+### Step 2 -- Dashboard Worker -- DONE 2026-09-18
+Merged to main via PR #28 (squash commit `3cb3e38`). CI on the PR ran green
+(changes + test; deploy/migrate/deploy-dashboard skipped as expected pre-merge,
+per the pattern above). Post-merge push run verified deploy-dashboard executes
+for real -- see Current Status for the outcome.
 
 What's on the branch: new `wrangler.dashboard.toml` + `src/dashboard-worker.js`
 owning login, the session cookie, and the UI (server-rendered, reusing `views/*`
@@ -333,13 +335,11 @@ Refresh toolbar via a fake service binding, and the backfill/backtest
 auth-then-forward flow); `test/index_backfill.test.js` rewritten for the
 no-longer-session-checked backend contract plus `?async=1` coverage.
 
-**Not yet done:** no PR opened, nothing merged to main, nothing deployed or
-verified against real Cloudflare infra.
 **Done when:** the dashboard works end to end from the new Worker, `backend` serves
 no HTML, the login secrets exist only on `dashboard`, `dashboard` has its own
 path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above, and
-the above is merged + verified live -- **code done, merge/deploy/verify still
-outstanding.**
+the above is merged + verified live. -- Merged; live-deploy verification result
+recorded in Current Status.
 
 ### Step 3 -- Job queue for backfill and backtest
 Add a `JOBS` queue (plus dead-letter queue). `POST /backfill` and
