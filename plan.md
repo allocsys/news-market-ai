@@ -548,7 +548,7 @@ Gemini keys, and `llm` has its own path-filtered CI job per the "CI/CD for the
 4-Worker split" pattern above (its job is the only one that ever sees
 `GEMINI_API_KEYS`).
 
-**What shipped (PR #32, squash commit pending -- filled in on merge):** new
+**What shipped (PR #32, squash commit `62ce1f8`):** new
 `wrangler.llm.toml` + `src/llm-worker.js` (`news-market-ai-llm`). It consumes
 ANALYZE (moved from `backend`, config unchanged: `max_batch_size = 5`,
 `max_retries = 3`, `max_concurrency = 2` -- the Gemini throttle) AND a new
