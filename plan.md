@@ -84,9 +84,8 @@ Dedup on `id`/URL since the same story often gets syndicated across outlets.
 
 ### 2. Storage
 Raw layer: append-only immutable store of normalized JSON + original payload.
-Structured layer: D1, indexed by ticker + published_at (see Deployment section —
-this superseded an earlier Postgres/Neon plan). Optional later: pgvector for
-semantic search over historical news.
+Structured layer: D1, indexed by ticker + published_at (see Deployment section).
+Optional later: pgvector for semantic search over historical news.
 
 ### 3. Analyst Team
 Parallel, role-specific agents producing structured opinions against the shared
@@ -316,11 +315,6 @@ docs: Known Gaps still describes `X-Backfill-Secret`/`BACKFILL_API_SECRET`, but 
 code now gates on the dashboard session.
 **Done when:** this plan describes the system as built, not as planned.
 
-### Open decisions
-- Dashboard: server-rendered in its own Worker first, or fully static (Step 2).
-- Queues vs Workflows for the per-ticker pipeline (Steps 4-6). Queues assumed.
-- Free vs paid plan (Step 0 answers this; it changes CPU/subrequest headroom).
-
 ## Repo Structure
 ```
 ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
@@ -366,12 +360,12 @@ and live-traffic verification against GDELT/yfinance/SEC EDGAR/RSS/HTML-scrape
 was double-counting exposure and leaving duplicate open rows) — merged via PR #1
 (commit `5858dff`). Real entity resolution via an opt-in, SEC-backed company-name
 index (`entity_resolution.js#buildCompanyNameIndex`/`matchTickersByName`/
-`getCompanyNameIndex`, gated by `config.entityResolutionUseNameIndex`, default
-false) — wired into GDELT, RSS, and HTML-scrape ingestion, with `kv` threaded
+`getCompanyNameIndex`, gated by `config.entityResolutionUseNameIndex` — now
+defaults **on**, flipped 2026-09-17; see Known Gaps for the live-verification
+caveat) — wired into GDELT, RSS, and HTML-scrape ingestion, with `kv` threaded
 through `collectNewsItems` so the index is cached in production. Fails open on
 any error; `resolveTickers` stays fully backward-compatible when the index is
-omitted; default behavior across all three adapters is byte-for-byte unchanged
-when the flag is off. `structured.js` now has a `config.fakeModel` injection
+omitted. `structured.js` now has a `config.fakeModel` injection
 point (off by default, falls through unchanged to the real Gemini cascade),
 with true end-to-end tests riding it: `callStructured` itself (precedence,
 arg passthrough, JSON-fence stripping, schema validation), `recordAndReflect`'s
@@ -380,18 +374,10 @@ plus a resume-after-crash test proving already-completed stages are never
 re-invoked. checkpoint/resume, memory/reflection, and technical-analyst tests
 are no longer limited to mocks/fakes for the LLM-call path.
 
-**Bugfix (2026-09-17):** the resume-after-crash test above is what caught a
-real off-by-one in `graph/pipeline.js` -- `checkpointer.js#resumeFrom` returns
-the NEXT-NEEDED stage (its own unit tests require this), but pipeline.js's
-block conditions/reassignments were written assuming the last-COMPLETED
-stage instead. A fresh run never noticed (self-consistent within one
-cascading execution), but resuming right after the "analyzed" checkpoint
-skipped the debate block entirely and crashed `runTrader` on an undefined
-verdict. This had been silently red on `main` (CI) since the resume test
-was added, unnoticed because every push since was docs-only and skipped the
-test job (see the CI path-filter fix below). Fixed by realigning every
-block's condition/reassignment to the same next-needed convention
-resumeFrom already uses; CI is green end-to-end again as of this commit.
+**Fixed (2026-09-17):** a resume-after-crash off-by-one in `graph/pipeline.js`
+(block conditions assumed the last-COMPLETED stage instead of `resumeFrom`'s
+actual NEXT-NEEDED convention, skipping the debate block and crashing
+`runTrader`) — realigned; CI green end-to-end again.
 
 ## Known Gaps / Backlog
 - **Entity resolution** now has a real SEC-backed name-matching path, and
@@ -406,24 +392,17 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   tests suggest. Next step: run a live check once network access is reliable,
   and downgrade the default back to off if headline name-matching produces
   more false-positive ticker attributions than expected in practice.
-- **GDELT**: CORRECTION (2026-09-18) — a prior version of this doc claimed the live
-  `articles[]` response shape was "confirmed... after fixing that tool's own
-  error-swallowing bug." That claim does not match this project's actual session
-  history and could not be reproduced: a fresh verification attempt this session
-  got a clean, explicit 429 from GDELT's own rate limiter on every try (immediate,
-  after a 7s wait, and after a 45s wait), never a successful response. The live
-  `articles[]` shape remains **unverified**. **REPLACED** (2026-09-18) as the
-  primary news source by `src/ingestion/sources/finnhub.js` (Finnhub's free
-  `/company-news` endpoint, 60 req/min, explicitly production-permitted unlike
-  NewsAPI's dev-only free tier or Alpha Vantage's 25/day cap) -- unwired from
-  `graph/pipeline.js#collectNewsItems`, but `gdelt.js` and its test coverage are
-  kept in the repo (not deleted) for easy re-enable per an explicit product
-  decision. Finnhub's own field mapping (`headline`/`summary`/`url`/`datetime`/
-  `source`) is written from Finnhub's published docs only -- **not yet
-  live-verified against a real successful response** (blocked on a real
-  `FINNHUB_API_KEY` repo secret being set). Do not upgrade this to "confirmed"
-  without an actual successful fetch in hand -- see the correction directly
-  above for why.
+- **GDELT**: live `articles[]` response shape remains **unverified** — every
+  verification attempt has hit GDELT's own rate limiter (429) rather than a
+  successful response. **REPLACED** (2026-09-18) as the primary news source by
+  `src/ingestion/sources/finnhub.js` (Finnhub's free `/company-news` endpoint,
+  60 req/min, production-permitted unlike NewsAPI's dev-only tier or Alpha
+  Vantage's 25/day cap) — unwired from `graph/pipeline.js#collectNewsItems`,
+  but `gdelt.js` and its tests are kept in the repo for easy re-enable.
+  Finnhub's field mapping (`headline`/`summary`/`url`/`datetime`/`source`) is
+  written from its published docs only and is **not yet live-verified**
+  (blocked on a real `FINNHUB_API_KEY` repo secret). Do not mark either as
+  confirmed without an actual successful fetch in hand.
 - **yfinance** adapter is unofficial/undocumented; daily bars only, no intraday.
 - **EDGAR fundamentals**: only whatever XBRL `us-gaap` tags a filer reports (no
   non-GAAP figures); not rate-limited beyond EDGAR itself (110ms pacing only).
@@ -431,15 +410,12 @@ resumeFrom already uses; CI is green end-to-end again as of this commit.
   finance-publisher pages (Reuters, WSJ) return bot-challenge 401s in practice;
   pages with no published-time meta tag fall back to fetch-time and are flagged
   unsafe for point-in-time backtesting.
-- **RSS**: general (non-ticker-hinted) feed items previously depended on the thin
-  `COMPANY_DOMAIN_MAP` (3 domains), so most came back with empty `tickers` arrays.
-  Confirmed by direct code read (2026-09-18): `rss.js#fetchLatest` already passes
-  `nameIndex` into `resolveTickers` whenever `config.entityResolutionUseNameIndex`
-  is set, so now that the flag defaults on, untagged feed items get real
-  substring/word-boundary matching against the ~1000-company SEC name index —
-  this item self-resolves as a byproduct of the entity-resolution default flip
-  above, no separate code change needed. Still subject to the same unvalidated-
-  against-live-traffic caveat as that flag until a live check happens.
+- **RSS**: general (non-ticker-hinted) feed items previously depended on the
+  thin `COMPANY_DOMAIN_MAP` (3 domains). Self-resolved as a byproduct of the
+  entity-resolution default flip above — `rss.js#fetchLatest` already passes
+  `nameIndex` into `resolveTickers`, so untagged items now get real
+  substring/word-boundary matching against the SEC name index. Same
+  unvalidated-against-live-traffic caveat as that flag applies here too.
 - **Ingestion throttling**: only EDGAR + the other four adapters have pacing;
   no shared cross-vendor rate limiter, and `ingestPriceBars`/`ingestFundamentals`
   always fetch the full watchlist (no incremental/delta fetching).
