@@ -272,6 +272,93 @@ function positionsTable(positions, { closed = false } = {}) {
   </table>`;
 }
 
+/**
+ * Renders one metric row for the backtest results table -- on/off/delta,
+ * each formatted per its own convention (percent for cumulativeReturn/
+ * winRate/maxDrawdown, plain 2-decimal for sharpeRatio). `deltaGood` flags
+ * whether a positive delta means "good" for this metric -- true for every
+ * metric here since signalCompare.js#compareSignalOnOff already normalizes
+ * the sign so positive always means "signal looks better" (see that
+ * function's own header), so this is really just a display convenience,
+ * not a second sign convention.
+ */
+function backtestMetricRow(label, on, off, delta, { isPercent = true } = {}) {
+  const fmt = (v) => (isPercent ? (v * 100).toFixed(1) + "%" : v.toFixed(2));
+  const deltaCls = delta > 0 ? "status-approved" : delta < 0 ? "status-rejected" : "status-neutral";
+  return `<tr><td>${escapeHtml(label)}</td><td class="num">${fmt(on)}</td><td class="num">${fmt(off)}</td><td class="num ${deltaCls}">${delta > 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
+}
+
+/** One completed run's on/off/delta comparison table, from its persisted `result.overall` (signalCompare.js#compareSignalOnOff's shape). */
+function backtestResultTable(result) {
+  if (!result) return "";
+  const { on, off, delta } = result.overall;
+  return `<table>
+    <thead><tr><th>Metric</th><th>Signal ON</th><th>Signal OFF (buy &amp; hold)</th><th>Delta</th></tr></thead>
+    <tbody>
+      ${backtestMetricRow("Cumulative return", on.cumulativeReturn, off.cumulativeReturn, delta.cumulativeReturn)}
+      ${backtestMetricRow("Sharpe ratio", on.sharpeRatio, off.sharpeRatio, delta.sharpeRatio, { isPercent: false })}
+      ${backtestMetricRow("Win rate", on.winRate, off.winRate, delta.winRate)}
+      ${backtestMetricRow("Max drawdown", on.maxDrawdown, off.maxDrawdown, delta.maxDrawdown)}
+    </tbody>
+  </table>
+  <p class="note">Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>`;
+}
+
+const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed" };
+
+/** List of persisted backtest_runs rows, newest first -- each with its own <details> disclosure for the full result table once complete. */
+function backtestRunsList(runs) {
+  if (runs.length === 0) return `<p class="empty">No backtest runs yet -- use the form above to trigger one.</p>`;
+  return runs
+    .map((r) => {
+      const statusCls = r.status === "complete" ? "status-approved" : r.status === "failed" ? "status-rejected" : "status-neutral";
+      const summary = `<span class="ticker">${escapeHtml(r.tickers.join(", "))}</span> &middot; ${fmtTime(r.testStart)} &rarr; ${fmtTime(r.testEnd)} &middot; <span class="status ${statusCls}">[${BACKTEST_STATUS_LABEL[r.status] ?? r.status}]</span>`;
+      const body = r.status === "complete"
+        ? backtestResultTable(r.result)
+        : r.status === "failed"
+          ? `<p class="empty">${escapeHtml(r.error ?? "failed with no recorded error message")}</p>`
+          : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
+      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${body}</div></details>`;
+    })
+    .join("\n");
+}
+
+/**
+ * Plain <form method="post" action="/backtest/run"> -- no client JS, a
+ * click is a normal browser POST navigation (src/index.js#fetch's
+ * /backtest/run route reads these exact field names from the body when no
+ * matching query param is present, see that route's own comment). The
+ * secret field is required and unlabeled-safe-default-empty on purpose --
+ * nothing here pre-fills or remembers it.
+ */
+function backtestTriggerForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  return `<form method="post" action="/backtest/run" class="filter-bar">
+    <div class="filter-group">
+      <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
+      <select class="filter-form" name="tickers" style="display:none"></select>
+      <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT" style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.32rem 0.5rem;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:0.8rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Test start</span>
+      <input class="filter-form" type="date" name="testStart" value="${monthAgo}" style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.3rem 0.5rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Test end</span>
+      <input class="filter-form" type="date" name="testEnd" value="${today}" style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.3rem 0.5rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Backtest secret</span>
+      <input class="filter-form" type="password" name="secret" required style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.3rem 0.5rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">&nbsp;</span>
+      <button type="submit">Run backtest</button>
+    </div>
+  </form>`;
+}
+
 function checkpointsTable(checkpoints) {
   if (checkpoints.length === 0) return `<p class="empty">No pipeline activity recorded yet.</p>`;
   const rows = checkpoints
