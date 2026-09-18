@@ -127,7 +127,9 @@ someone adds a feature.
    (tags every fact with its actual filing date, separate from fiscal period) —
    see `storage/d1.js#getFundamentalFactsAsOf`. Residual gap: free/current-only
    sources (yfinance, price data generally) still aren't point-in-time, and EDGAR
-   only covers US-listed XBRL filers.
+   only covers US-listed XBRL filers. (Decided: the dashboard's Charts view
+   deliberately follows this same convention rather than gating just itself --
+   see the comment on `renderChartsView` in `src/dashboard/views/charts.js`.)
 4. **The reflection/memory loop is the easiest place to leak the future** — the
    memory log fed to an agent at simulated `T` must only contain reflections from
    decisions made before `T`, enforced by the same timestamp filter as point 1.
