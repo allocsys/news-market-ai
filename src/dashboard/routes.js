@@ -49,10 +49,10 @@ function currentPath(request) {
 
 /**
  * Wraps a single D1 query promise so a rejection becomes { data: null, error }
- * instead of throwing through the route handler -- design.md's Loading/error/
- * empty-states requirement is that one panel's fetch failing must not blank
- * or 500 the whole page. Callers await this instead of the raw query and
- * never need their own try/catch.
+ * instead of throwing through the route handler, so one panel's failed fetch
+ * shows an inline error rather than blanking or 500ing the whole page.
+ * Callers await this instead of the raw query and never need their own
+ * try/catch.
  */
 async function safe(promise) {
   try {
@@ -145,9 +145,8 @@ export async function handlePositionsRoute(request, env, config) {
     safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit })),
     safe(getRecentlyClosedPositions(env.DB, { limit: 20 })),
   ]);
-  // Open and closed positions are design.md's own named example of two
-  // sub-panels on one page that must fail independently -- each gets its
-  // own error, not one shared one.
+  // Open and closed positions are two sub-panels on one page that must fail
+  // independently -- each gets its own error, not one shared one.
   const bodyHtml = renderPositionsView({
     openPositions: openPositionsResult.data ?? [],
     openPositionsError: openPositionsResult.error,
