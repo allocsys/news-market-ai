@@ -172,8 +172,11 @@ async function handleTriggerRoute(request, env, config, { backendPath, buildQuer
   const built = buildQuery(url.searchParams, fromForm);
   if (built.error) return jsonResponse({ error: built.error }, { status: 400 });
 
+  // Since plan.md Step 3, backend always enqueues onto JOBS and returns an
+  // immediate `{accepted, id, ...}` ack regardless of caller -- no more
+  // `?async=1` distinction to make here (backend ran the real work
+  // synchronously, or via ctx.waitUntil, before Step 3; now it never does).
   const qs = new URLSearchParams(built.params);
-  if (isFormSubmit) qs.set("async", "1");
 
   try {
     const res = await callBackend(env, `${backendPath}?${qs.toString()}`, { method: "POST" });
