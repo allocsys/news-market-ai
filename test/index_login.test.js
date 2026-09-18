@@ -1,10 +1,6 @@
 // Covers src/index.js's dashboard login flow -- GET/POST /login, GET
-// /logout, the session-gated redirect on GET /dashboard, and the new
-// "a valid session cookie authorizes POST /backfill and POST /backtest/run
-// as an alternative to the shared secret" behavior added alongside it (see
-// src/config.js#dashboardUsername's header for why this exists: replaces
-// typing BACKFILL_API_SECRET/BACKTEST_API_SECRET into the dashboard form on
-// every trigger with a one-time login).
+// /logout, the session-gated redirect on GET /dashboard, and the session
+// cookie authorization on POST /backfill and POST /backtest/run.
 //
 // FakeDashboardDb below is a generic empty-result D1 stub (every SELECT
 // this route's renderDashboardHtml call issues comes back empty) -- good
@@ -191,7 +187,7 @@ test("GET /logout clears the session cookie and redirects to /login", async () =
 });
 
 // --------------------------------------------------------------------
-// Session cookie as an alternative to the shared secret on
+// Session cookie authorization on
 // POST /backfill and POST /backtest/run
 // --------------------------------------------------------------------
 
@@ -225,7 +221,7 @@ async function loggedInCookie(env) {
   return cookieValueFrom(response.headers.get("Set-Cookie"));
 }
 
-test("POST /backfill succeeds on a valid session cookie alone, even with BACKFILL_API_SECRET unset", async (t) => {
+test("POST /backfill succeeds on a valid session cookie", async (t) => {
   const env = loginConfiguredEnv({ DB: new FakeNewsDb(), WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" });
   t.mock.method(global, "fetch", async () => ({
     ok: true,
@@ -243,19 +239,19 @@ test("POST /backfill succeeds on a valid session cookie alone, even with BACKFIL
   assert.equal(body.inserted, 1);
 });
 
-test("POST /backfill returns 401 (reachable, just unauthorized) with no session and no secret when the login IS configured -- 503 is reserved for when NEITHER auth path is set up at all", async () => {
-  const env = loginConfiguredEnv({ DB: new FakeNewsDb() }); // no BACKFILL_API_SECRET, no session cookie sent
+test("POST /backfill returns 401 when there is no session and login IS configured -- 503 is reserved for when login isn't configured at all", async () => {
+  const env = loginConfiguredEnv({ DB: new FakeNewsDb() });
   const response = await worker.fetch(new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31", { method: "POST" }), env);
   assert.equal(response.status, 401);
 });
 
-test("POST /backfill returns 503 when NEITHER the secret NOR the dashboard login is configured", async () => {
-  const env = baseEnv({ DB: new FakeNewsDb() }); // no BACKFILL_API_SECRET, no DASHBOARD_*/JWT_SECRET at all
+test("POST /backfill returns 503 when dashboard login is not configured", async () => {
+  const env = baseEnv({ DB: new FakeNewsDb() });
   const response = await worker.fetch(new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31", { method: "POST" }), env);
   assert.equal(response.status, 503);
 });
 
-test("POST /backtest/run returns 401 with a stale/forged cookie (bad signature) and no secret -- a cookie alone isn't a free pass", async () => {
+test("POST /backtest/run returns 401 with a stale/forged cookie (bad signature) -- a cookie alone isn't a free pass", async () => {
   const env = loginConfiguredEnv({ DB: new FakeNewsDb() });
   const response = await worker.fetch(
     new Request("https://worker.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31", {
