@@ -3,6 +3,14 @@ main = "src/index.js"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Private (plan.md Step 2 -- "backend") -- no workers.dev URL, no [[routes]].
+# The only caller that can reach this Worker at all is the `dashboard`
+# Worker's BACKEND service binding (see wrangler.dashboard.toml), which
+# already checked the session cookie before forwarding. This is what makes
+# an unconfigured login fail closed rather than serve an open dashboard --
+# there's no public door here regardless of app-level auth state.
+workers_dev = false
+
 # --- D1 (structured layer: news, analyst opinions, debates, decisions) ---
 [[d1_databases]]
 binding = "DB"
