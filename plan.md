@@ -181,50 +181,50 @@ cooldown/rate-limit state plus lightweight config; R2 (10GB free) remains an
 option as a raw archive layer if D1 storage is ever outgrown, not yet used.
 
 **CI/CD:** `.github/workflows/deploy.yml` runs `test` → `migrate` (push/dispatch
-only) → `deploy`, adapted from `allocsys/ai-campaign-builder`'s pattern but scaled
-down for this repo's single-Worker/no-workspaces layout. Idempotent D1/KV
-provisioning via `.github/actions/ensure-d1-database` / `ensure-kv-namespace`
-(look up by name, create only if missing, never commit real ids to the repo).
-`dorny/paths-filter` gates jobs on docs-only vs. code diffs, and `migrate` only on
-`migrations/**` changes. Required repo secrets: `CLOUDFLARE_API_TOKEN`,
-`CLOUDFLARE_ACCOUNT_ID` (hard requirement for migrate/deploy), `GEMINI_API_KEYS`
-(optional at deploy-success level, pushed via `wrangler secret put`). CI is green
-end-to-end against real Cloudflare infra; a secret-leak audit found and fixed a
-real plaintext-id leak in the provisioning actions' `create` step output (ids are
-now masked before printing — see git history on `ensure-d1-database`/
-`ensure-kv-namespace` for detail if ever revisited).
+only, gated on `migrations/**` changes) → one deploy job per Worker
+(`deploy` for `backend`, `deploy-dashboard`, `deploy-ingest`, `deploy-llm`),
+each with its own `dorny/paths-filter` output (its own source paths, shared
+code paths it bundles, or the workflow file itself) and its own `concurrency`
+group so an unrelated Worker's push never cancels this one's in-flight deploy
+(`workflow_dispatch` always runs every job, bypassing the filters). Idempotent
+D1/KV/queue provisioning via `.github/actions/ensure-d1-database` /
+`ensure-kv-namespace` / `ensure-queue` (look up by name, create only if
+missing, never commit real ids to the repo; each action takes a
+`wrangler-config` input so every Worker's job can patch its own config file --
+added in Step 6 after a Step 5 review found `deploy-ingest` skipping this
+entirely). Every Worker job that depends on the DB uses `needs: [changes,
+migrate]` with `if: always() && (needs.migrate.result == 'success' ||
+needs.migrate.result == 'skipped')` (the `always()` is required so GitHub
+Actions doesn't also skip the dependent job when `migrate` itself is skipped).
 
-**CI/CD for the 4-Worker split (reviewed `allocsys/ai-campaign-builder`'s
-deploy.yml, 2026-09-18):** that repo deploys 5 frontend apps + 1 backend Worker
-from a single npm-workspaces monorepo (`apps/<name>/`, each with its own
-`wrangler.toml`), which is the closest existing precedent to our upcoming
-dashboard/backend/ingest/llm split. Pattern to carry over once Step 2 starts:
-- **One job per Worker**, each gated on its own `dorny/paths-filter` output
-  (own `apps/<name>/**` OR shared `packages/**`/shared-code path OR the
-  workflow file itself) — mirrors our existing docs-vs-code filter, just
-  split per Worker instead of one filter for the whole repo. `workflow_dispatch`
-  always runs every job (no diff to compare against).
-- **Per-job `concurrency` group** (e.g. `deploy-dashboard-${{ github.ref }}`),
-  deliberately NOT one shared workflow-level group — an unrelated Worker's
-  push must never cancel this Worker's in-flight deploy.
-- **Migrations decoupled into their own job** (`backend-migrate` there, ours
-  stays the existing `migrate` job), gated on a narrower `migrations/**`-only
-  filter. Every Worker job that depends on the DB uses
-  `needs: [changes, migrate]` with `if: always() && ... (needs.migrate.result
-  == 'success' || needs.migrate.result == 'skipped')` — the `always()` is
-  required because GitHub Actions would otherwise skip the dependent job too
-  when `migrate` itself is skipped (no migration in that push).
-- **Secrets stay scoped to the Worker that owns them**, each job fails fast
-  on its own required secrets before deploying, then pushes them via
-  `wrangler secret put` right after deploy. Optional secret groups use a
-  bash `-z` guard inside `run:` and skip cleanly (secrets context is rejected
-  inside a step's `if:`). Maps directly onto our Step 5/6 key-isolation goal:
-  `dashboard`'s job only ever sees `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/
-  `JWT_SECRET`, `ingest`'s only `FINNHUB_API_KEY`, `llm`'s only
-  `GEMINI_API_KEYS` — no job touches a secret it doesn't own.
-- D1/KV provisioning stays exactly our existing `ensure-d1-database`/
-  `ensure-kv-namespace` composite actions, reused unmodified by every Worker
-  job that needs them (only `backend` binds D1 per the rule below).
+**Per-Worker secret scoping (the Step 5/6 key-isolation goal, done):** each
+deploy job fails fast on its own required secrets, then pushes them via
+`wrangler secret put --config <its wrangler file>` right after deploy --
+`dashboard`'s job only ever sees `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/
+`JWT_SECRET`/`SESSION_TTL_SECONDS`; `backend`'s only `FINNHUB_API_KEY` (for
+`backfill`, its one remaining vendor-key use); `ingest`'s only
+`FINNHUB_API_KEY`; `llm`'s only `GEMINI_API_KEYS` -- no job touches a secret
+it doesn't own. Required repo secrets regardless of Worker:
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (hard requirement for
+migrate/deploy). Optional secret groups use a bash `-z` guard inside `run:`
+and skip cleanly (the `secrets` context is rejected inside a step's `if:`).
+CI is green end-to-end against real Cloudflare infra as of Step 2's live
+`workflow_dispatch` check; Steps 3-6's own deploy jobs have not yet had the
+same live-deploy check (see each step's own notes, deferred to after Step 7).
+A secret-leak audit (pre-split) found and fixed a real plaintext-id leak in
+the provisioning actions' `create` step output (ids are now masked before
+printing -- see git history on `ensure-d1-database`/`ensure-kv-namespace` for
+detail if ever revisited).
+
+**Design precedent (historical note):** the per-Worker-job/per-Worker-secret
+shape above was adapted from `allocsys/ai-campaign-builder`'s `deploy.yml`
+(reviewed 2026-09-18), which deploys 5 frontend apps + 1 backend Worker from a
+single npm-workspaces monorepo the same way. Carried over: one job per
+Worker gated on its own path filter, one concurrency group per Worker,
+migrations in their own job, and secrets scoped to the job that owns them.
+Not carried over: that repo's npm-workspaces layout (`apps/<name>/**`) --
+this repo keeps a flat `src/` with one `wrangler.<worker>.toml` per Worker
+instead.
 
 ## LLM Calling Layer: Multi-Key Gemini Cascade (ported from `madmcp`)
 **Two-axis cascade, model-first:** outer loop tries `[GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS]`
