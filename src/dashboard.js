@@ -366,14 +366,8 @@ function backtestRunsList(runs) {
  * Plain <form method="post" action="/backtest/run"> -- no client JS, a
  * click is a normal browser POST navigation (src/index.js#fetch's
  * /backtest/run route reads these exact field names from the body when no
- * matching query param is present, see that route's own comment). The
- * secret field is required and unlabeled-safe-default-empty on purpose --
- * nothing here pre-fills or remembers it. Inline colors match the ledger
- * palette (STYLE below) rather than duplicating a CSS class, same
- * shortcut the pre-redesign version took.
+ * matching query param is present, see that route's own comment).
  */
-// Shared date-input inline style -- both trigger forms below use the exact
-// same look, pulled out once rather than repeated per input.
 const DATE_INPUT_STYLE = "background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;width:100%;box-sizing:border-box;";
 
 /**
@@ -396,23 +390,9 @@ function rangePresetButtons(fromId, toId) {
   </div>`;
 }
 
-function backtestTriggerForm(hasSession) {
+function backtestTriggerForm() {
   const today = new Date().toISOString().slice(0, 10);
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  // `hasSession` (src/index.js passes the dashboard login's sessionUsername
-  // through renderDashboardHtml) drops the typed-secret field entirely once
-  // logged in -- the browser's session cookie is sent automatically on this
-  // same-origin POST and authorizes the request server-side (see
-  // src/index.js's /backtest/run route), so re-typing BACKTEST_API_SECRET on
-  // every click would be redundant. Without a session (login not configured,
-  // or not yet logged in on a route that isn't itself gated) this falls back
-  // to the original typed-secret field so the endpoint stays reachable.
-  const secretField = hasSession
-    ? ""
-    : `<div class="filter-group">
-      <span class="filter-label">Backtest secret</span>
-      <input class="filter-form" type="password" name="secret" required style="${DATE_INPUT_STYLE}">
-    </div>`;
   return `<form method="post" action="/backtest/run" class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
@@ -427,7 +407,6 @@ function backtestTriggerForm(hasSession) {
       <span class="filter-label">Test end</span>
       <input class="filter-form" id="backtestEnd" type="date" name="testEnd" value="${today}" style="${DATE_INPUT_STYLE}">
     </div>
-    ${secretField}
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
       <button type="submit">Run backtest</button>
@@ -437,24 +416,16 @@ function backtestTriggerForm(hasSession) {
 
 /**
  * Plain <form method="post" action="/backfill"> -- same zero-build
- * philosophy and dual-caller backend convention as backtestTriggerForm
- * above (src/index.js's /backfill route now reads these exact field names
+ * philosophy and backend convention as backtestTriggerForm above
+ * (src/index.js's /backfill route now reads these exact field names
  * from a urlencoded body when no matching query param is present). Unlike
  * the backtest form, there's no tickers field -- backfillHistoricalNews
  * always covers config.watchlist as a whole (see that function's own
  * header for why it doesn't take a ticker override).
  */
-function backfillTriggerForm(hasSession) {
+function backfillTriggerForm() {
   const today = new Date().toISOString().slice(0, 10);
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  // See backtestTriggerForm's comment above -- same hasSession/no-secret-
-  // field-once-logged-in reasoning, applied to /backfill.
-  const secretField = hasSession
-    ? ""
-    : `<div class="filter-group">
-      <span class="filter-label">Backfill secret</span>
-      <input class="filter-form" type="password" name="secret" required style="${DATE_INPUT_STYLE}">
-    </div>`;
   return `<form method="post" action="/backfill" class="filter-bar">
     ${rangePresetButtons("backfillFrom", "backfillTo")}
     <div class="filter-group">
@@ -465,7 +436,6 @@ function backfillTriggerForm(hasSession) {
       <span class="filter-label">To</span>
       <input class="filter-form" id="backfillTo" type="date" name="to" value="${today}" style="${DATE_INPUT_STYLE}">
     </div>
-    ${secretField}
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
       <button type="submit">Run backfill</button>
@@ -813,10 +783,6 @@ const STYLE = `
     font-size: 0.68rem; color: #6e7787; text-transform: uppercase; letter-spacing: 0.05em;
   }
   .pill-row { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-  /* .pill started as an anchor-only class (GET filter links) -- now also
-     used on <button type="button"> preset elements (rangePresetButtons),
-     so it resets default button chrome (font/appearance) and adds a
-     pointer cursor a plain <a> already gets for free. */
   .pill {
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem;
     color: #c7cbd4; text-decoration: none;
@@ -983,20 +949,6 @@ const STYLE = `
   }
 `;
 
-/**
- * Fetches every section's data in parallel (independent read-only D1
- * queries, no shared transaction needed) and returns a complete, self-
- * contained HTML page. Callers (src/index.js) are responsible for wrapping
- * this in a Response with the right content-type, and for passing the
- * request's URLSearchParams through as `options.searchParams` so filters
- * (see this file's header) work.
- *
- * Price-chart data is a second wave: it needs the distinct tickers from
- * openPositions first, so those getRecentPriceBars calls fire after the
- * first Promise.all resolves, capped at PRICE_CHART_TICKER_LIMIT distinct
- * tickers to bound how many extra D1 reads one dashboard request can
- * trigger.
- */
 const PRICE_CHART_TICKER_LIMIT = 8;
 
 export async function renderDashboardHtml(db, { searchParams, sessionUsername = null } = {}) {
@@ -1045,13 +997,6 @@ export async function renderDashboardHtml(db, { searchParams, sessionUsername = 
 <title>news-market-ai dashboard</title>
 <style>${STYLE}</style>
 <script>
-  // The page's one bit of client JS -- everything else here is a plain
-  // GET link/form navigation (see this file's header). This exists only
-  // because a native <input type="date"> has no "go back N days" affordance
-  // of its own: rangePresetButtons' pill buttons call this on click to fill
-  // a form's two date fields as [today - days, today] rather than making
-  // someone hand-type both. Runs entirely client-side against the DOM the
-  // server already rendered -- no fetch, no state, nothing to fail open/closed on.
   function setDateRange(fromId, toId, days) {
     const to = new Date();
     const from = new Date(Date.now() - days * 86400000);
@@ -1132,14 +1077,14 @@ export async function renderDashboardHtml(db, { searchParams, sessionUsername = 
 
       <section id="backfill">
         <h2>Historical news backfill</h2>
-        <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires either a logged-in dashboard session or the shared backfill secret. rss/scrape sources can't be backfilled this way (see graph/pipeline.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
-        ${backfillTriggerForm(Boolean(sessionUsername))}
+        <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. rss/scrape sources can't be backfilled this way (see graph/pipeline.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
+        ${backfillTriggerForm()}
       </section>
 
       <section id="backtest">
         <h2>Backtest results</h2>
-        <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires either a logged-in dashboard session or the shared backtest secret. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
-        ${backtestTriggerForm(Boolean(sessionUsername))}
+        <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
+        ${backtestTriggerForm()}
         ${backtestRunsList(backtestRuns)}
       </section>
       </main>
