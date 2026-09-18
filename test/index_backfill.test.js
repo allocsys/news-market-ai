@@ -5,43 +5,43 @@
 // checks a session cookie itself -- backend is private (see wrangler.toml,
 // workers_dev = false) and only ever reached via `dashboard`'s BACKEND
 // service binding, which already checked the session one hop up before
-// forwarding (see test/dashboard_worker.test.js for that side). This file
-// now only covers: query-param validation, the synchronous "give me real
-// counts" mode (no ?async=1, what a scripted caller forwarded through
-// dashboard gets), and the ?async=1 fire-and-forget ack mode (what a
-// browser form submission forwarded through dashboard gets).
+// forwarding (see test/dashboard_worker.test.js for that side).
+//
+// Since plan.md Step 3 (JOBS queue), this route no longer runs
+// backfillHistoricalNews itself at all -- synchronously OR via
+// ctx.waitUntil. It only validates the request and enqueues a
+// `{ type: 'backfill', id, from, to }` message onto env.JOBS, returning an
+// immediate `{ accepted, id, from, to }` ack. The actual backfill run
+// (and its real inserted/errorCount) now happens in the queue() consumer --
+// see test/queue_consumer.test.js for that half of the contract.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
 
-class FakeNewsDb {
+/** Minimal fake of the JOBS queue binding (Cloudflare Queues' `send`
+ * producer API) -- captures every enqueued message so a test can assert on
+ * it, same "wrap the real interface, verify what was actually sent" spirit
+ * as test/dashboard_worker.test.js's FakeBackend service-binding wrapper. */
+class FakeJobsQueue {
   constructor() {
-    this.newsItems = [];
+    this.sent = [];
   }
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async run() {
-            if (/INSERT INTO news_items/.test(sql)) {
-              db.newsItems.push({ id: args[0] });
-            }
-          },
-        };
-      },
-    };
+  async send(body) {
+    this.sent.push(body);
   }
 }
 
-function mockFinnhubJson() {
-  return [{ url: "https://finnhub.example.com/story", datetime: 1757941800, headline: "Story about Acme", summary: "A brief summary." }];
+class ThrowingJobsQueue {
+  async send() {
+    throw new Error("simulated queue send failure");
+  }
 }
 
 function baseEnv(overrides = {}) {
   return {
-    DB: new FakeNewsDb(),
+    DB: {},
+    JOBS: new FakeJobsQueue(),
     WATCHLIST_TICKERS: "AAPL",
     FINNHUB_API_KEY: "test-key",
     FINNHUB_API_BASE: "https://fake.test/finnhub",
@@ -49,7 +49,7 @@ function baseEnv(overrides = {}) {
   };
 }
 
-test("POST /backfill returns 400 for a missing or malformed from/to", async () => {
+test("POST /backfill returns 400 for a missing or malformed from/to, without touching the queue", async () => {
   const env = baseEnv();
 
   const missing = await worker.fetch(new Request("https://worker.example/backfill?from=2024-01-01", { method: "POST" }), env);
@@ -57,51 +57,40 @@ test("POST /backfill returns 400 for a missing or malformed from/to", async () =
 
   const malformed = await worker.fetch(new Request("https://worker.example/backfill?from=not-a-date&to=2024-01-31", { method: "POST" }), env);
   assert.equal(malformed.status, 400);
+
+  assert.equal(env.JOBS.sent.length, 0);
 });
 
-test("POST /backfill with a valid range calls backfillHistoricalNews and reports counts synchronously (no ?async=1)", async (t) => {
+test("POST /backfill with a valid range enqueues a backfill job onto JOBS and returns an immediate accepted ack", async () => {
   const env = baseEnv();
-  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const request = new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31", { method: "POST" });
   const response = await worker.fetch(request, env);
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.inserted, 1);
-  assert.equal(body.errorCount, 0);
-  assert.equal(env.DB.newsItems.length, 1);
-});
 
-test("POST /backfill?async=1 returns an immediate accepted ack and runs the real backfill in the background via ctx.waitUntil", async (t) => {
-  const env = baseEnv();
-  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
-
-  const request = new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31&async=1", { method: "POST" });
-
-  // Minimal ExecutionContext stand-in -- captures the promise passed to
-  // ctx.waitUntil() so the test can await it itself instead of racing it.
-  const ctx = { promises: [], waitUntil(p) { this.promises.push(p); } };
-
-  const response = await worker.fetch(request, env, ctx);
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type"), /application\/json/);
   const body = await response.json();
-  assert.deepEqual(body, { accepted: true, from: "2024-01-01", to: "2024-01-31" });
+  assert.equal(body.accepted, true);
+  assert.equal(body.from, "2024-01-01");
+  assert.equal(body.to, "2024-01-31");
+  assert.match(body.id, /^backfill-/);
 
-  // The response above returns before the real backfill finishes -- it only
-  // completes inside ctx.waitUntil, in the background.
-  await Promise.all(ctx.promises);
-  assert.equal(env.DB.newsItems.length, 1);
+  assert.equal(env.JOBS.sent.length, 1);
+  assert.deepEqual(env.JOBS.sent[0], { type: "backfill", id: body.id, from: "2024-01-01", to: "2024-01-31" });
 });
 
-test("POST /backfill returns 500 with the failure message on a real (non-vendor) bug, e.g. a DB write failure", async (t) => {
-  class ThrowingDb extends FakeNewsDb {
-    prepare() {
-      throw new Error("simulated D1 write failure");
-    }
-  }
-  const env = baseEnv({ DB: new ThrowingDb() });
-  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
+test("POST /backfill still enqueues (and ignores) a legacy ?async=1 query param -- harmless leftover from before plan.md Step 3", async () => {
+  const env = baseEnv();
+  const request = new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31&async=1", { method: "POST" });
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.accepted, true);
+  assert.equal(env.JOBS.sent.length, 1);
+});
+
+test("POST /backfill returns 500 with the failure message if enqueueing itself fails (e.g. JOBS unavailable)", async (t) => {
+  const env = baseEnv({ JOBS: new ThrowingJobsQueue() });
 
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
@@ -110,6 +99,6 @@ test("POST /backfill returns 500 with the failure message on a real (non-vendor)
   const response = await worker.fetch(request, env);
   assert.equal(response.status, 500);
   const body = await response.json();
-  assert.match(body.message, /simulated D1 write failure/);
-  assert.ok(errorLogs.some(([msg]) => msg.includes("backfill run failed")));
+  assert.match(body.message, /simulated queue send failure/);
+  assert.ok(errorLogs.some(([msg]) => msg.includes("backfill enqueue failed")));
 });

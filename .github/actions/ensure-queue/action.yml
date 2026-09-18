@@ -1,0 +1,53 @@
+name: 'Ensure Cloudflare Queue exists'
+description: >
+  Idempotently ensures a Cloudflare Queue exists, so CI can be re-run
+  safely without a manual one-time `wrangler queues create` and without
+  `wrangler deploy` failing the first time it sees a `[[queues.producers]]`/
+  `[[queues.consumers]]` block that references a queue that doesn't exist
+  yet on the account.
+
+  Unlike D1 (ensure-d1-database) and KV (ensure-kv-namespace), a queue is
+  referenced in wrangler.toml by NAME, not by a generated id -- there is no
+  placeholder id to look up and patch into this job's checkout. That makes
+  this action simpler: just make sure the name exists, nothing to write
+  back to wrangler.toml.
+
+  GUARD AGAINST A NOISY FAILURE ON RE-RUN: `wrangler queues create <name>`
+  exits non-zero with an "already exists" style message if the queue is
+  already there (unlike D1/KV's create commands, which this repo avoids by
+  checking a list first) -- rather than depend on wrangler's exact list
+  output shape for queues (undocumented here, unlike the KV list quirk
+  ensure-kv-namespace's own header documents), this action just attempts
+  create and treats an "already exists" failure as success, same
+  idempotent-in-effect outcome as the list-then-create pattern used
+  elsewhere in this repo.
+
+inputs:
+  queue-name:
+    description: 'Name of the Cloudflare Queue to ensure exists (matches the `queue = "..."` value in wrangler.toml)'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Create the queue if it doesn't already exist
+      shell: bash
+      run: |
+        set -euo pipefail
+        QUEUE_NAME="${{ inputs.queue-name }}"
+
+        set +e
+        CREATE_OUTPUT=$(npx wrangler queues create "$QUEUE_NAME" 2>&1)
+        CREATE_STATUS=$?
+        set -e
+
+        echo "$CREATE_OUTPUT"
+
+        if [ "$CREATE_STATUS" -eq 0 ]; then
+          echo "Created queue '$QUEUE_NAME'."
+        elif echo "$CREATE_OUTPUT" | grep -qi "already exists"; then
+          echo "Queue '$QUEUE_NAME' already exists -- skipping creation."
+        else
+          echo "::error::'wrangler queues create $QUEUE_NAME' failed (exit $CREATE_STATUS) for a reason other than 'already exists' -- see output above."
+          exit 1
+        fi

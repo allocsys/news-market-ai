@@ -24,6 +24,34 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 binding = "CACHE_KV"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
+# --- Queues (plan.md Step 3) --- POST /backfill and POST /backtest/run
+# validate + enqueue and return immediately; the actual (slow, LLM/vendor-
+# calling) work runs in this Worker's `queue()` consumer instead of inside
+# `ctx.waitUntil` on the original request. This is the fix for the
+# ~30-second cutoff `ctx.waitUntil` only guarantees past the response --
+# a queue consumer is its own separate invocation with its own wall-time
+# budget, not a tail extension of a request that already returned.
+# max_batch_size = 1: each message here is already the heavy, slow item
+# this queue exists for (one full backfill or one full signal-on/off
+# backtest run) -- batching several together would just make one consumer
+# invocation more likely to hit its own CPU/wall-time limit for no benefit.
+# dead_letter_queue only catches an unexpected crash in queue() itself (a
+# genuine bug, e.g. a malformed message) -- ordinary business-logic
+# failures (a bad backtest run, a vendor error mid-backfill) are caught
+# inside queue(), logged/persisted as data (see src/index.js's queue()
+# handler and backtest_runs), then acked, not retried: retrying a call that
+# already spent real Gemini/Finnhub quota on failure would just spend it
+# again for the same result.
+[[queues.producers]]
+queue = "news-market-ai-jobs"
+binding = "JOBS"
+
+[[queues.consumers]]
+queue = "news-market-ai-jobs"
+max_batch_size = 1
+max_retries = 3
+dead_letter_queue = "news-market-ai-jobs-dlq"
+
 # Ingestion cadence -- GDELT updates every 15 min, so no point polling faster.
 [triggers]
 crons = ["*/15 * * * *"]
