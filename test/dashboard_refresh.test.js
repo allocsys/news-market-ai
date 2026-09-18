@@ -3,7 +3,7 @@
 // routes (src/dashboard/routes.js) opt in to it.
 //
 // The Refresh control is deliberately a plain GET <a> back to the same path +
-// query string -- design.md's dashboard is server-rendered with no client-side
+// query string -- the dashboard is server-rendered with no client-side
 // routing, and every section re-reads D1 on each request, so following the link
 // IS the refresh. These tests pin that contract: the eight data-driven sections
 // get it, pages with nothing to go stale (trigger forms, confirm pages, More) don't,

@@ -154,7 +154,7 @@ export default {
 
     if (pathname === "/logout") {
       // GET, not POST -- this is a plain <a href="/logout"> link (see
-      // dashboard.js's rail-meta), same zero-client-JS philosophy as every
+      // dashboard/shell.js's rail-meta), same zero-client-JS philosophy as every
       // other navigation on this page. Clearing a cookie is idempotent and
       // only ever affects the browser making the request, so a bare GET
       // here doesn't carry the usual CSRF-via-GET risk a state-mutating
@@ -197,7 +197,7 @@ export default {
         });
       }
 
-      // Dashboard confirm-page submission (design.md "In-progress" state):
+      // Dashboard confirm-page submission:
       // don't make the operator's browser wait on the full backfill --
       // kick it off in the background and respond immediately with a page
       // confirming the run was accepted, rather than a bare JSON blob or a
@@ -297,7 +297,7 @@ export default {
       const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
       const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
 
-      // Dashboard confirm-page submission (design.md "In-progress" state):
+      // Dashboard confirm-page submission:
       // runManualBacktest already persists a 'running' row before the slow
       // Gemini-backed part starts, so it's safe to let it finish in the
       // background and respond immediately with an accepted/in-progress
