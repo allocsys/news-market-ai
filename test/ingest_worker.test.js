@@ -187,21 +187,22 @@ test("queue() acks an unrecognized message type without processing it", async (t
   assert.ok(errorLogs.some(([msg]) => msg.includes("unrecognized type")));
 });
 
-test("queue() retries (does not ack) on a genuine handler crash -- e.g. env.ANALYZE itself throwing on sendBatch", async (t) => {
-  const db = new FakeIngestDb();
-  const brokenAnalyze = { async sendBatch() { throw new Error("simulated ANALYZE enqueue failure"); } };
-  const env = baseEnv({ DB: db, ANALYZE: brokenAnalyze });
-  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
+test("queue() retries (does not ack) on a genuine handler crash -- e.g. a malformed message with no readable body", async (t) => {
+  const env = baseEnv({ DB: new FakeIngestDb() });
+  const errorLogs = [];
+  t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
-  // ingestTickerData itself succeeds (writes to FakeIngestDb fine) -- the
-  // crash is specifically in the ANALYZE.sendBatch call sitting OUTSIDE
-  // ingest_ticker's own inner try/catch (see src/ingest-worker.js), so it
-  // falls through to this function's outer catch -> message.retry(),
-  // exactly like backend's own analyze branch does for a comparable
-  // outside-the-inner-catch failure.
-  const message = new FakeMessage({ type: "ingest_ticker", ticker: "AAPL", asOf: "2026-09-18T00:00:00.000Z" });
+  // Both ingest_ticker and ingest_feeds wrap their own work in an inner
+  // try/catch that acks on a business-logic failure (see the two tests
+  // above) -- a null message.body is the one thing that crashes BEFORE
+  // either inner try/catch is even reached (`job.type` on a null job
+  // throws immediately), so it's what actually exercises this handler's
+  // own outer catch -> message.retry(), the same safety-net split
+  // backend's queue() has for a comparable unanticipated failure.
+  const message = new FakeMessage(null);
   await worker.queue(batchOf(message), env);
 
   assert.equal(message.acked, false);
   assert.equal(message.retried, true);
+  assert.ok(errorLogs.some(([msg]) => msg.includes("crashed unexpectedly")));
 });
