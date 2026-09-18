@@ -21,6 +21,7 @@ const LOGIN_STYLE = `
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-bright: #60a5fa;
+    --accent-deep: #1d4ed8;
     --accent-subtle: rgba(59, 130, 246, 0.14);
     --accent-glow: rgba(96, 165, 250, 0.22);
     --focus-ring: #60a5fa;
@@ -105,7 +106,7 @@ const LOGIN_STYLE = `
     transition: background 150ms ease, transform 100ms ease;
     box-shadow: 0 2px 8px -2px var(--accent-glow);
   }
-  button:hover { background: linear-gradient(135deg, var(--accent-bright) 0%, var(--accent) 100%); }
+  button:hover { background: linear-gradient(135deg, var(--accent-hover) 0%, var(--accent-deep) 100%); }
   button:active { transform: translateY(1px); }
   button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .error {
@@ -117,10 +118,6 @@ const LOGIN_STYLE = `
   }
   .disabled-note {
     color: var(--text-muted); font-size: 0.8125rem; line-height: 1.6;
-  }
-  .session-hint {
-    margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border-color);
-    font-size: 0.6875rem; color: var(--text-subtle); line-height: 1.6;
   }
 `;
 
@@ -149,8 +146,7 @@ export function renderLoginPage({ error = null, disabled = false } = {}) {
            <input id="password" type="password" name="password" autocomplete="current-password" required>
          </div>
          <button type="submit">Log in</button>
-       </form>
-       <div class="session-hint">Session cookies are HttpOnly + SameSite=Lax, signed with JWT_SECRET. Log out clears the cookie and returns here.</div>`;
+       </form>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
