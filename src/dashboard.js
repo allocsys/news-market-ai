@@ -928,6 +928,21 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>news-market-ai dashboard</title>
 <style>${STYLE}</style>
+<script>
+  // The page's one bit of client JS -- everything else here is a plain
+  // GET link/form navigation (see this file's header). This exists only
+  // because a native <input type="date"> has no "go back N days" affordance
+  // of its own: rangePresetButtons' pill buttons call this on click to fill
+  // a form's two date fields as [today - days, today] rather than making
+  // someone hand-type both. Runs entirely client-side against the DOM the
+  // server already rendered -- no fetch, no state, nothing to fail open/closed on.
+  function setDateRange(fromId, toId, days) {
+    const to = new Date();
+    const from = new Date(Date.now() - days * 86400000);
+    document.getElementById(toId).value = to.toISOString().slice(0, 10);
+    document.getElementById(fromId).value = from.toISOString().slice(0, 10);
+  }
+</script>
 </head>
 <body>
   <div class="shell">
@@ -997,6 +1012,12 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
           ${checkpointsTable(checkpoints)}
         </section>
       </div>
+
+      <section id="backfill">
+        <h2>Historical news backfill</h2>
+        <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires the shared backfill secret. rss/scrape sources can't be backfilled this way (see graph/pipeline.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
+        ${backfillTriggerForm()}
+      </section>
 
       <section id="backtest">
         <h2>Backtest results</h2>
