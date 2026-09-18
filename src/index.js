@@ -10,31 +10,45 @@
 // describes: there is no code path left in this Worker that could serve an
 // unauthenticated dashboard, because there is no dashboard here at all.
 //
-// `scheduled` calls graph/pipeline.js#runScheduledIngestion, fully wired
-// end to end: gdelt/rss/html_scrape news ingestion + yfinance price bars +
-// edgar_fundamentals facts -> analysts (incl. technical, fed by the price
-// bars above) -> debate -> trader -> risk -> portfolio (see that file's
-// header for current caveats and the per-source failure isolation model).
-// Any remaining failure (network, malformed vendor response, LLM cascade
-// exhausted) is caught and logged here rather than left to crash the
-// Worker invocation silently (Adopted Pattern #11).
+// `scheduled` (plan.md Step 4) is now a THIN scheduler, not the pipeline
+// itself: it enqueues one INGEST message per watchlist ticker plus one
+// more for the general (non-ticker-scoped) feeds, and one JOBS message to
+// evaluate open-position exits. It does no fetching, no D1 writes, and no
+// LLM calls itself -- see queue() below for where each of those actually
+// happens, each in its own small invocation with its own fresh CPU/wall-
+// time budget, instead of one big scheduled() invocation doing everything
+// (which is what originally hit the free-tier CPU cap Step 0 diagnosed).
 //
-// `queue` (plan.md Step 3) is the JOBS consumer: POST /backfill and POST
-// /backtest/run below no longer run the actual work inline (synchronously
-// or via ctx.waitUntil) -- they validate, enqueue a message, and return an
-// immediate `{accepted: true, ...}` ack. `queue()` is a separate Worker
-// invocation with its own wall-time budget, which is the actual fix for
-// ctx.waitUntil's ~30-second-past-response cutoff (plan.md's Step 3
-// motivation): a backfill or backtest that used to get cut off mid-run
-// under load now just runs to completion in its own invocation instead.
-// A business-logic failure (bad backtest run, vendor error mid-backfill) is
-// caught inside queue() itself and logged/persisted as data, then acked --
-// not left to the queue's own retry/dead-letter mechanism, which exists
-// only for a genuine crash in queue() (a real bug), not an expected
-// operational failure that already spent real quota once.
+// `queue` handles THREE queues' worth of message types through one
+// handler (Cloudflare Workers routes every consumer for a script through
+// the same queue() export -- there's no need to branch on which physical
+// queue delivered a batch, only on the message's own `type`):
+//   - JOBS (plan.md Step 3): `backfill` / `backtest`, enqueued by POST
+//     /backfill and POST /backtest/run below; `exit_check` (plan.md Step
+//     4), enqueued by scheduled() above, kept on its OWN message so an
+//     exit-check failure is never entangled with an ingestion failure. All
+//     three are ack-and-log on a business-logic failure -- see that
+//     branch's own comment for why retrying wouldn't help any of them.
+//   - INGEST (plan.md Step 4): `ingest_ticker` / `ingest_feeds`, enqueued
+//     by scheduled() above. Fetches + writes D1 for one ticker (or the
+//     general feeds), then enqueues one ANALYZE message per resulting news
+//     item. Also ack-and-log on failure -- a failed ingest has nothing
+//     partial to resume, next cron tick just tries again.
+//   - ANALYZE (plan.md Step 4): `analyze`, enqueued by the INGEST handling
+//     above. Runs runPipelineForTicker for one (ticker, newsItem) pair.
+//     UNLIKE every other type here, a failure is RETRIED, not ack'd -- see
+//     that branch's own comment for why that's actually correct given
+//     checkpointer.js's resume semantics (Adopted Pattern #12).
+//
+// A business-logic failure (bad backtest run, vendor error mid-backfill,
+// etc.) is caught inside its own branch and logged/persisted as data, then
+// acked -- not left to the queue's own retry/dead-letter mechanism, which
+// exists only for a genuine crash in queue() itself (a real bug), not an
+// expected operational failure that already spent real quota once. The
+// ANALYZE branch is the one deliberate exception to this, see above.
 
 import { loadConfig } from "./config.js";
-import { runScheduledIngestion, backfillHistoricalNews } from "./graph/pipeline.js";
+import { backfillHistoricalNews, ingestTickerData, ingestFeedNews, runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
 import {
   handleApiSnapshotRoute,
@@ -159,47 +173,58 @@ export default {
 
   async scheduled(event, env) {
     const config = loadConfig(env);
-    console.log("scheduled run starting", { cron: event.cron, quickModel: config.geminiQuickModel, deepModel: config.geminiDeepModel });
+    const asOf = new Date().toISOString();
+    console.log("scheduled: fanning out cron tick", { cron: event.cron, tickers: config.watchlist.length });
+
+    // INGEST fan-out (plan.md Step 4): one message per watchlist ticker,
+    // batched into a single sendBatch call (one subrequest instead of N --
+    // matters for the Queues ops/day budget, see plan.md's estimate), plus
+    // one more for the general (non-ticker-scoped) feeds. A failure here
+    // is an enqueue failure (env.INGEST.sendBatch/send itself throwing),
+    // not a pipeline failure -- logged, not left to crash this invocation,
+    // same Adopted Pattern #11 reasoning as before, just applied to
+    // "could we even hand off the work" now instead of "did the work
+    // succeed" (that question moved to queue() below).
     try {
-      const results = await runScheduledIngestion(env, config, env.DB);
-      console.log("scheduled run completed", { decisions: results.length });
+      if (config.watchlist.length > 0) {
+        const tickerMessages = config.watchlist.map(({ ticker }) => ({ body: { type: "ingest_ticker", ticker, asOf } }));
+        await env.INGEST.sendBatch(tickerMessages);
+      }
+      await env.INGEST.send({ type: "ingest_feeds", asOf });
     } catch (err) {
-      // Expected for now -- see header comment. Logged, not silently dropped
-      // (plan.md Adopted Pattern #11).
-      console.error("scheduled run failed", { message: err.message });
+      console.error("scheduled: INGEST fan-out failed", { message: err.message });
     }
 
-    // Separate try/catch: a failure evaluating exits on existing positions
-    // should never be conflated with (or block on) an ingestion failure
-    // above -- same Adopted Pattern #11 "surface, don't swallow" reasoning,
-    // applied independently to each concern.
+    // Separate try/catch, own message, own queue (plan.md Step 4): a
+    // failure enqueueing (or later processing, see queue()'s exit_check
+    // branch) the exit check should never be conflated with (or block on)
+    // an ingestion enqueue failure above -- same "surface, don't swallow,
+    // don't conflate" reasoning the old inline scheduled() already applied
+    // between ingestion and exit-checking, now applied one layer earlier,
+    // at enqueue time instead of at execution time.
     try {
-      const closed = await checkOpenPositionExits(env, config, env.DB, { asOf: new Date().toISOString() });
-      console.log("exit check completed", { closed: closed.length, closed });
+      await env.JOBS.send({ type: "exit_check", asOf });
     } catch (err) {
-      console.error("exit check failed", { message: err.message });
+      console.error("scheduled: exit_check enqueue failed", { message: err.message });
     }
   },
 
-  // JOBS consumer (plan.md Step 3). Each message is `{ type: 'backfill', id,
-  // from, to }` or `{ type: 'backtest', id, tickers, testStart, testEnd,
-  // graceDays }`, enqueued by POST /backfill / POST /backtest/run above.
-  // max_batch_size = 1 (wrangler.toml) means `batch.messages` is always a
-  // single-element array in production, but this loops generically anyway
-  // rather than assuming that stays true forever.
+  // Consumer for JOBS, INGEST, and ANALYZE (see module header above for
+  // the full type-by-type breakdown). max_batch_size varies per queue
+  // (wrangler.toml) -- JOBS's is 1, INGEST/ANALYZE's are larger -- so this
+  // loops generically over `batch.messages` rather than assuming any
+  // particular batch size.
   //
   // Per message: a business-logic failure (a bad backtest run,
-  // backfillHistoricalNews throwing on a vendor/DB error) is caught here,
-  // logged, and the message is still acked -- that failure is already the
-  // final, expected outcome (runManualBacktest itself persists it as a
-  // 'failed' backtest_runs row; a failed backfill has nothing else useful
-  // to persist since it made no lasting DB change), and retrying it would
-  // just spend real Gemini/Finnhub quota again for the same result. Only an
-  // unexpected crash in this handler itself (a real bug -- e.g. a malformed
-  // message with no recognizable `type`, or a throw from code we didn't
-  // anticipate) falls through to message.retry(), so wrangler.toml's
-  // max_retries/dead_letter_queue is the safety net for that, not for
-  // ordinary operational failures.
+  // backfillHistoricalNews throwing on a vendor/DB error, a failed ingest,
+  // etc.) is caught inside that message type's own branch, logged, and the
+  // message is still acked -- see each branch's own comment for why
+  // retrying wouldn't help (ANALYZE is the one exception, see its branch).
+  // An unexpected crash in this handler itself (a real bug -- e.g. a
+  // malformed message with no recognizable `type`, or a throw from code we
+  // didn't anticipate) falls through to message.retry(), so wrangler.toml's
+  // max_retries/dead_letter_queue on each queue is the safety net for that,
+  // not for ordinary operational failures.
   async queue(batch, env) {
     const config = loadConfig(env);
     for (const message of batch.messages) {
@@ -221,12 +246,87 @@ export default {
           // for the expected-failure case.
           const outcome = await runManualBacktest(env, config, env.DB, { id, tickers, testStart, testEnd, graceDays });
           console.log("backtest job finished", { id, status: outcome.status, tickers });
+        } else if (job.type === "exit_check") {
+          // Own message, own queue (plan.md Step 4) -- isolated from
+          // INGEST/ANALYZE failures by construction, since this message
+          // only ever arrives via JOBS, a completely separate queue/
+          // consumer path from either. A failure here is logged and acked,
+          // same ack-not-retry reasoning as backfill/backtest above:
+          // checkOpenPositionExits already isolates a single position's
+          // own exit-evaluation failure internally (see that function's
+          // header), so a throw reaching here is a real, unexpected
+          // failure -- but retrying wouldn't recover anything either, the
+          // next scheduled tick re-evaluates every still-open position
+          // regardless.
+          try {
+            const closed = await checkOpenPositionExits(env, config, env.DB, { asOf: job.asOf });
+            console.log("exit_check job completed", { closed: closed.length, closed });
+          } catch (err) {
+            console.error("exit_check job failed", { message: err.message });
+          }
+        } else if (job.type === "ingest_ticker") {
+          // INGEST consumer, per-ticker branch (plan.md Step 4). A failure
+          // is logged and acked, not retried -- there's no partial state
+          // worth resuming (unlike ANALYZE below), the next cron tick's
+          // own ingest_ticker message for this same ticker will simply try
+          // again from scratch.
+          const { ticker, asOf: tickerAsOf } = job;
+          try {
+            const insertedNews = await ingestTickerData(config, env.DB, env.CACHE_KV, { ticker, asOf: tickerAsOf });
+            const analyzeMessages = insertedNews.map((item) => ({
+              body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt },
+            }));
+            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
+            console.log("ingest_ticker job completed", { ticker, newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
+          } catch (err) {
+            console.error("ingest_ticker job failed", { ticker, message: err.message });
+          }
+        } else if (job.type === "ingest_feeds") {
+          // INGEST consumer, general-feeds branch (plan.md Step 4). Unlike
+          // ingest_ticker above, a feed item may resolve to zero, one, or
+          // several tickers (entity resolution, not a single hintTicker) --
+          // so this enqueues one ANALYZE message per (item, ticker) pair,
+          // same loop shape the old runScheduledIngestion used inline.
+          try {
+            const insertedNews = await ingestFeedNews(config, env.DB, env.CACHE_KV);
+            const analyzeMessages = [];
+            for (const item of insertedNews) {
+              for (const ticker of item.tickers) {
+                analyzeMessages.push({ body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt } });
+              }
+            }
+            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
+            console.log("ingest_feeds job completed", { newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
+          } catch (err) {
+            console.error("ingest_feeds job failed", { message: err.message });
+          }
+        } else if (job.type === "analyze") {
+          // ANALYZE consumer (plan.md Step 4). Deliberately NOT wrapped in its
+          // own try/catch the way every branch above is -- a failure here
+          // falls through to this function's own outer catch below, which
+          // calls message.retry() instead of ack()ing. That's the correct,
+          // intentional difference from every other message type in this
+          // handler: runPipelineForTicker is checkpoint-resumable (Adopted
+          // Pattern #12, graph/checkpointer.js) -- a retried ANALYZE message
+          // re-enters resumeFrom and only re-runs whatever stage didn't
+          // finish last time, never re-spending an LLM call on an
+          // already-checkpointed stage, and never double-opening a position
+          // (openPosition's own id-based ON CONFLICT DO NOTHING, see
+          // pipeline.js). So retrying costs nothing extra and can actually
+          // finish the job, unlike backfill/backtest/exit_check/ingest_*
+          // above, where a retry would just redo (and re-spend quota on)
+          // work that's already done. wrangler.toml's max_retries/
+          // dead_letter_queue on the ANALYZE queue is the real safety net
+          // for a persistently failing ticker/item, not a nested try/catch
+          // here.
+          const { runId, ticker, newsItem, asOf: itemAsOf } = job;
+          await runPipelineForTicker(env, config, env.DB, { runId, ticker, newsItem, asOf: itemAsOf });
         } else {
-          console.error("JOBS message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
+          console.error("queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
         }
         message.ack();
       } catch (err) {
-        console.error("JOBS message handler crashed unexpectedly, retrying", { message: err.message });
+        console.error("queue message handler crashed unexpectedly, retrying", { message: err.message });
         message.retry();
       }
     }
