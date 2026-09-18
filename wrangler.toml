@@ -52,32 +52,37 @@ max_batch_size = 1
 max_retries = 3
 dead_letter_queue = "news-market-ai-jobs-dlq"
 
-# --- INGEST / ANALYZE (plan.md Step 4) --- scheduled() no longer runs the
-# pipeline inline; it enqueues one INGEST message per watchlist ticker plus
-# one for the general feeds (src/index.js's `scheduled`), and the INGEST
-# consumer enqueues one ANALYZE message per resulting news item. This turns
+# --- INGEST (produce only, plan.md Step 4, consumer moved to the new
+# `ingest` Worker in Step 5) --- scheduled() no longer runs the pipeline
+# inline; it enqueues one INGEST message per watchlist ticker plus one for
+# the general feeds (src/index.js's `scheduled`). `backend` itself has NO
+# consumer for this queue anymore -- see wrangler.ingest.toml, which is now
+# the only Worker with a `[[queues.consumers]]` block for
+# news-market-ai-ingest (a queue can only have one consumer). This turns
 # one 15-minute cron tick's worth of work into many small invocations, each
 # with its own fresh CPU/wall-time budget, instead of one large scheduled()
 # invocation doing all of it (the free-tier CPU exhaustion Step 0 diagnosed).
-# max_batch_size > 1 here (unlike JOBS's 1) because these messages are each
-# individually small/cheap -- one ticker's finnhub+yfinance+edgar calls, or
-# one ticker's worth of analyst/debate/trade LLM calls -- batching several
-# per consumer invocation is a real efficiency win rather than risking one
-# invocation's own CPU/wall-time limit the way JOBS's much heavier
-# backfill/backtest jobs would.
 [[queues.producers]]
 queue = "news-market-ai-ingest"
 binding = "INGEST"
 
-[[queues.consumers]]
-queue = "news-market-ai-ingest"
-max_batch_size = 10
-max_retries = 3
-dead_letter_queue = "news-market-ai-ingest-dlq"
-
+# --- ANALYZE (produce only) --- `backend`'s own queue() consumes this
+# (the `analyze` branch, running runPipelineForTicker) -- unlike INGEST
+# above, `backend` still both produces AND is the consumer here, since
+# Step 6 (not yet started) is what will eventually move the ANALYZE
+# consumer out to a dedicated `llm` Worker. The new `ingest` Worker
+# (wrangler.ingest.toml) is this queue's OTHER producer -- it enqueues one
+# `analyze` message per resulting news item from its own INGEST consumer.
 [[queues.producers]]
 queue = "news-market-ai-analyze"
 binding = "ANALYZE"
+
+[[queues.consumers]]
+queue = "news-market-ai-analyze"
+max_batch_size = 5
+max_retries = 3
+max_concurrency = 2
+dead_letter_queue = "news-market-ai-analyze-dlq"
 
 # max_concurrency throttles how many ANALYZE consumer invocations run in
 # parallel -- this is the actual Gemini-call throttle plan.md Step 4 calls
