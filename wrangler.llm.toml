@@ -1,0 +1,103 @@
+name = "news-market-ai-llm"
+main = "src/llm-worker.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Private, same "no public door" convention as backend's/ingest's wrangler
+# configs (plan.md Step 2) -- this Worker has no meaningful HTTP surface, it
+# only ever runs via its two queue consumers below.
+workers_dev = false
+
+# --- D1 (same database as every other Worker; only `backend` runs
+# migrations -- see plan.md's Roadmap rule) --- runPipelineForTicker,
+# checkOpenPositionExits and runManualBacktest all read and write D1
+# directly (decisions, checkpoints, positions, backtest_runs).
+[[d1_databases]]
+binding = "DB"
+database_name = "news_market_ai"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# --- KV --- same CACHE_KV namespace the other Workers bind. This Worker is
+# the only one that reads/writes the Gemini cascade's cooldown state
+# (`gemini:cooldown:<model>:<keyIndex>`, src/shared/cooldown.js) -- the
+# keys are prefix-namespaced, so sharing the namespace with backend/ingest's
+# own (unrelated) cache keys doesn't cause collisions. Free tier caps KV
+# writes at 1K/day, so nothing high-frequency belongs in here.
+[[kv_namespaces]]
+binding = "CACHE_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# --- ANALYZE (consume) --- moved here from backend's wrangler.toml
+# unchanged (plan.md Step 6): `ingest` (wrangler.ingest.toml) is now the
+# only producer, `llm` the only consumer. `max_concurrency = 2` is the
+# actual Gemini-call throttle plan.md Step 4 calls for -- each invocation's
+# runPipelineForTicker makes several Gemini calls of its own -- a
+# conservative starting point against the free-tier Gemini quota Adopted
+# Pattern #7 budgets around, not tuned against real traffic yet.
+[[queues.consumers]]
+queue = "news-market-ai-analyze"
+max_batch_size = 5
+max_retries = 3
+max_concurrency = 2
+dead_letter_queue = "news-market-ai-analyze-dlq"
+
+# --- LLM_JOBS (consume) --- NEW in Step 6. `backtest` and `exit_check`
+# messages that used to ride JOBS (consumed by backend) moved here, since
+# both call Gemini (see src/llm-worker.js's header). `backend` PRODUCES onto
+# this queue via its own LLM_JOBS binding (POST /backtest/run, scheduled()).
+# max_batch_size = 1: each `backtest` message is already one full signal-on/
+# off run -- batching several together would just make one invocation more
+# likely to hit its own CPU/wall-time limit for no benefit (same reasoning
+# as JOBS's own block in backend's wrangler.toml). max_concurrency = 1: this
+# queue's Gemini calls share the same keys/cooldown state as ANALYZE's
+# above, so keep it from stacking a second full-speed consumer on top of
+# ANALYZE's own concurrency of 2.
+[[queues.consumers]]
+queue = "news-market-ai-llm-jobs"
+max_batch_size = 1
+max_retries = 3
+max_concurrency = 1
+dead_letter_queue = "news-market-ai-llm-jobs-dlq"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+[vars]
+# Two-tier model strategy (plan.md Adopted Pattern #7): quick/cheap model for
+# high-volume analyst passes, a stronger model reserved for debate + judge +
+# trader, where reasoning quality actually matters. Moved here unchanged from
+# backend's wrangler.toml (Step 6) -- this is now the only Worker that calls
+# Gemini at all.
+GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
+GEMINI_DEEP_MODEL = "gemini-3.5-flash"
+GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite"
+
+# Same watchlist as backend's/ingest's wrangler configs -- config.js's
+# loadConfig reads it for every Worker, and keeping it here means anything
+# in the pipeline that consults config.watchlist sees the same universe the
+# rest of the system does. Keep in sync with backend's WATCHLIST_TICKERS if
+# the watchlist ever changes -- there is no single shared source for this
+# value across Workers, same as ingest/dashboard already don't share `vars`.
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+
+# Secrets -- set via `wrangler secret put GEMINI_API_KEYS --config wrangler.llm.toml`,
+# never committed:
+#   GEMINI_API_KEYS = comma-separated list of Gemini API keys (cascade
+#     rotates through all of them). Moved here from backend (Step 6) -- this
+#     is the ONLY Worker that should hold it. Nothing else in the repo calls
+#     Gemini: runPipelineForTicker (ANALYZE), runManualBacktest (`backtest`)
+#     and checkOpenPositionExits -> settlePositionOutcome -> closeTheLoop
+#     (`exit_check`) all run here, and runManualBacktest never touches
+#     Finnhub (it only reads news already in D1), so this Worker needs no
+#     vendor data key at all.
+#   NOTE: `wrangler secret put` on THIS config does not remove the copy
+#   backend already has on Cloudflare from before this step -- that stale
+#   secret must be deleted from `news-market-ai` separately
+#   (`wrangler secret delete GEMINI_API_KEYS`), see plan.md Step 7's secrets
+#   audit.

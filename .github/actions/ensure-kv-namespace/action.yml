@@ -24,6 +24,16 @@ inputs:
     description: 'Title of the KV namespace (wrangler namespace-create argument -- becomes "<worker-name>-<title>" on the Cloudflare account)'
     required: true
     default: 'CACHE_KV'
+  wrangler-config:
+    description: >
+      Path (relative to the repo root) of the wrangler config file to patch
+      with the real namespace id. Defaults to the backend's 'wrangler.toml'.
+      Same reasoning as ensure-d1-database's input of the same name: each CI
+      job has its own fresh checkout, so every Worker whose config binds this
+      namespace (wrangler.ingest.toml, wrangler.llm.toml) needs its own
+      job-local config patched (plan.md Step 6).
+    required: false
+    default: 'wrangler.toml'
 
 runs:
   using: 'composite'
@@ -33,6 +43,7 @@ runs:
       run: |
         set -euo pipefail
         NS_TITLE="${{ inputs.namespace-title }}"
+        CONFIG_FILE="${{ inputs.wrangler-config }}"
 
         EXISTING_ID=$(npx wrangler kv namespace list | node -e "
           const raw = require('fs').readFileSync(0, 'utf8');
@@ -110,5 +121,5 @@ runs:
           echo "Created KV namespace matching '$NS_TITLE' (id: [masked])."
         fi
 
-        sed -i "s/id = \"REPLACE_WITH_KV_NAMESPACE_ID\"/id = \"$NS_ID\"/" wrangler.toml
-        echo "This job's local wrangler.toml now points at the real KV namespace id (not committed back to the repo -- see this action's description)."
+        sed -i "s/id = \"REPLACE_WITH_KV_NAMESPACE_ID\"/id = \"$NS_ID\"/" "$CONFIG_FILE"
+        echo "This job's local $CONFIG_FILE now points at the real KV namespace id (not committed back to the repo -- see this action's description)."

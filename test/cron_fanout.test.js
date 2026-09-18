@@ -1,51 +1,23 @@
-// Cron fan-out test (plan.md Step 4) -- covers src/index.js's `scheduled`
-// (now a thin scheduler, no more inline pipeline run) and queue()'s
-// `exit_check` and `analyze` message types. test/queue_consumer.test.js
-// already covers JOBS's original `backfill`/`backtest` types plus the
-// generic unrecognized-type/crashed-handler paths -- this file only adds
-// the Step 4 additions, not a re-test of what that file already covers.
+// Cron fan-out test (plan.md Step 4) -- covers src/index.js's `scheduled`,
+// a thin scheduler (no inline pipeline run): it only enqueues.
 //
 // UPDATE (plan.md Step 5): the `ingest_ticker`/`ingest_feeds` queue()
 // tests that used to live here moved to test/ingest_worker.test.js --
 // those message types are no longer handled by src/index.js's queue() at
-// all (see that file's own comment), they're now the new `ingest`
-// Worker's (src/ingest-worker.js) job. scheduled()'s own fan-out tests
-// stay here unchanged -- backend still enqueues onto INGEST, it just no
-// longer consumes it.
+// all, they're the `ingest` Worker's (src/ingest-worker.js) job.
 //
-// SCOPE NOTE on `analyze`: only the retry-on-failure path is covered here.
-// A full success round-trip through runPipelineForTicker needs the same
-// heavyweight FakePipelineDb + config.fakeModel machinery
-// test/checkpoint_resume.test.js already builds and exercises in depth
-// (six agent stages, checkpoint/resume, position open/close) -- duplicating
-// that here would just be the same coverage under a different file name.
-// What THIS file adds that checkpoint_resume.test.js doesn't: proving
-// queue()'s `analyze` branch specifically retries (not acks) on failure,
-// which is the one deliberate behavioral difference from every other
-// message type in this handler (see index.js's own comment on that branch
-// for why that's correct given checkpointer.js's resume semantics).
+// UPDATE (plan.md Step 6): `exit_check` is now enqueued onto LLM_JOBS, not
+// JOBS -- it calls Gemini (settle.js -> closeTheLoop), so its consumer moved
+// to the `llm` Worker (src/llm-worker.js) and JOBS carries `backfill` only.
+// The `exit_check` and `analyze` queue() tests that used to live here
+// (testing backend's queue()) moved to test/llm_worker.test.js, unchanged
+// in behavior -- backend's queue() doesn't handle either type anymore, see
+// test/queue_consumer.test.js for the test proving that. What's left here:
+// scheduled()'s own fan-out tests, which stay backend's job.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
-
-class FakeMessage {
-  constructor(body) {
-    this.body = body;
-    this.acked = false;
-    this.retried = false;
-  }
-  ack() {
-    this.acked = true;
-  }
-  retry() {
-    this.retried = true;
-  }
-}
-
-function batchOf(...messages) {
-  return { messages };
-}
 
 /** Records every message handed to send/sendBatch without actually queueing anything -- stands in for a Cloudflare Queue binding. */
 class FakeQueueBinding {
@@ -94,22 +66,6 @@ class FakeIngestDb {
   }
 }
 
-/** Minimal fake for checkOpenPositionExits: no open positions, so it never reaches closePosition/settlePositionOutcome at all -- just proving the exit_check branch wires through, not exit logic itself (see test/exit_logic.test.js for that). */
-class FakeNoPositionsDb {
-  prepare(sql) {
-    return {
-      bind() {
-        return {
-          async all() {
-            if (/FROM positions/.test(sql)) return { results: [] };
-            throw new Error(`FakeNoPositionsDb: unsupported all() query: ${sql}`);
-          },
-        };
-      },
-    };
-  }
-}
-
 function baseEnv(overrides = {}) {
   return {
     WATCHLIST_TICKERS: "AAPL,MSFT",
@@ -118,6 +74,7 @@ function baseEnv(overrides = {}) {
     INGEST: new FakeQueueBinding(),
     ANALYZE: new FakeQueueBinding(),
     JOBS: new FakeQueueBinding(),
+    LLM_JOBS: new FakeQueueBinding(),
     ...overrides,
   };
 }
@@ -126,7 +83,7 @@ function baseEnv(overrides = {}) {
 // scheduled()
 // ---------------------------------------------------------------------------
 
-test("scheduled() fans out one INGEST message per watchlist ticker, one ingest_feeds message, and one JOBS exit_check message -- no inline pipeline work", async () => {
+test("scheduled() fans out one INGEST message per watchlist ticker, one ingest_feeds message, and one LLM_JOBS exit_check message -- no inline pipeline work", async () => {
   const env = baseEnv({ DB: new FakeIngestDb() });
 
   await worker.scheduled({ cron: "*/15 * * * *" }, env);
@@ -137,9 +94,13 @@ test("scheduled() fans out one INGEST message per watchlist ticker, one ingest_f
   assert.deepEqual(tickerMessages.map((m) => m.ticker).sort(), ["AAPL", "MSFT"]);
   assert.ok(tickerMessages.every((m) => typeof m.asOf === "string"));
 
-  assert.equal(env.JOBS.sent.length, 1);
-  assert.equal(env.JOBS.sent[0].type, "exit_check");
-  assert.ok(typeof env.JOBS.sent[0].asOf === "string");
+  assert.equal(env.LLM_JOBS.sent.length, 1);
+  assert.equal(env.LLM_JOBS.sent[0].type, "exit_check");
+  assert.ok(typeof env.LLM_JOBS.sent[0].asOf === "string");
+
+  // JOBS is backfill-only since Step 6 -- a cron tick must never put anything on it.
+  assert.equal(env.JOBS.sent.length, 0);
+  assert.equal(env.ANALYZE.sent.length, 0);
 });
 
 test("scheduled() logs (not throws) if INGEST fan-out fails, and still attempts the exit_check enqueue -- ingestion and exit-checking stay isolated failure domains", async (t) => {
@@ -152,68 +113,19 @@ test("scheduled() logs (not throws) if INGEST fan-out fails, and still attempts 
   await worker.scheduled({ cron: "*/15 * * * *" }, env);
 
   assert.ok(errorLogs.some(([msg]) => msg.includes("INGEST fan-out failed")));
-  assert.equal(env.JOBS.sent.length, 1); // exit_check enqueue still attempted despite the INGEST failure above
-  assert.equal(env.JOBS.sent[0].type, "exit_check");
+  assert.equal(env.LLM_JOBS.sent.length, 1); // exit_check enqueue still attempted despite the INGEST failure above
+  assert.equal(env.LLM_JOBS.sent[0].type, "exit_check");
 });
 
-// ---------------------------------------------------------------------------
-// queue(): exit_check
-// ---------------------------------------------------------------------------
-
-test("queue() exit_check runs checkOpenPositionExits and acks, isolated from INGEST/ANALYZE entirely (own message, own queue)", async (t) => {
-  const env = baseEnv({ DB: new FakeNoPositionsDb() });
-
-  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
-  await worker.queue(batchOf(message), env);
-
-  assert.equal(message.acked, true);
-  assert.equal(message.retried, false);
-  assert.equal(env.INGEST.sent.length, 0);
-  assert.equal(env.ANALYZE.sent.length, 0);
-});
-
-test("queue() exit_check acks (does not retry) on failure -- next scheduled tick re-evaluates every still-open position regardless", async (t) => {
-  class ThrowingPositionsDb {
-    prepare() {
-      throw new Error("simulated D1 read failure");
-    }
-  }
-  const env = baseEnv({ DB: new ThrowingPositionsDb() });
+test("scheduled() logs (not throws) if the exit_check enqueue fails, without disturbing the INGEST fan-out that already succeeded", async (t) => {
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
-  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
-  await worker.queue(batchOf(message), env);
+  const brokenLlmJobs = { async send() { throw new Error("simulated LLM_JOBS enqueue failure"); } };
+  const env = baseEnv({ DB: new FakeIngestDb(), LLM_JOBS: brokenLlmJobs });
 
-  assert.equal(message.acked, true);
-  assert.equal(message.retried, false);
-  assert.ok(errorLogs.some(([msg]) => msg.includes("exit_check job failed")));
-});
+  await worker.scheduled({ cron: "*/15 * * * *" }, env);
 
-// ---------------------------------------------------------------------------
-// queue(): analyze
-// ---------------------------------------------------------------------------
-
-test("queue() analyze RETRIES (does not ack) on failure -- the one deliberate exception to every other message type in this handler, since runPipelineForTicker is checkpoint-resumable", async (t) => {
-  class ThrowingCheckpointDb {
-    prepare() {
-      throw new Error("simulated D1 failure reading the checkpoint");
-    }
-  }
-  const env = baseEnv({ DB: new ThrowingCheckpointDb() });
-  const errorLogs = [];
-  t.mock.method(console, "error", (...args) => errorLogs.push(args));
-
-  const message = new FakeMessage({
-    type: "analyze",
-    runId: "news-1",
-    ticker: "AAPL",
-    newsItem: { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-09-18T00:00:00.000Z" },
-    asOf: "2026-09-18T00:00:00.000Z",
-  });
-  await worker.queue(batchOf(message), env);
-
-  assert.equal(message.acked, false);
-  assert.equal(message.retried, true);
-  assert.ok(errorLogs.some(([msg]) => msg.includes("crashed unexpectedly")));
+  assert.ok(errorLogs.some(([msg]) => msg.includes("exit_check enqueue failed")));
+  assert.equal(env.INGEST.sent.length, 3); // 2 ingest_ticker + 1 ingest_feeds, unaffected
 });

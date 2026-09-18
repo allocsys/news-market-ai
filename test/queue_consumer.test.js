@@ -1,10 +1,17 @@
 // Covers backend's (src/index.js) `queue()` export -- the JOBS consumer
-// added in plan.md Step 3. POST /backfill and POST /backtest/run
-// (test/index_backfill.test.js, and the corresponding backtest route)
-// enqueue onto JOBS and return immediately; this is where the real work
-// (backfillHistoricalNews / runManualBacktest) actually runs, in its own
-// invocation, decoupled from the ctx.waitUntil ~30s-past-response cutoff
-// that motivated this step.
+// added in plan.md Step 3. POST /backfill (test/index_backfill.test.js)
+// enqueues onto JOBS and returns immediately; this is where the real work
+// (backfillHistoricalNews) actually runs, in its own invocation, decoupled
+// from the ctx.waitUntil ~30s-past-response cutoff that motivated Step 3.
+//
+// UPDATE (plan.md Step 6): JOBS carries `backfill` ONLY now. `backtest` and
+// `exit_check` moved onto a new LLM_JOBS queue consumed by the `llm` Worker
+// (src/llm-worker.js) -- both call Gemini -- and the `backtest` processing
+// test that used to live here moved to test/llm_worker.test.js unchanged in
+// behavior. What stays here: backfill success/failure, the generic
+// unrecognized-type/crashed-handler paths, and a new test proving the moved
+// message types are NOT handled by backend anymore (they must never
+// silently re-spend Gemini quota from a Worker that no longer holds a key).
 //
 // FakeMessage below stands in for a Cloudflare Queues Message object --
 // just enough of its shape (`body`, `ack()`, `retry()`) for these tests to
@@ -14,7 +21,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
-import { getRecentBacktestRuns } from "../src/storage/d1.js";
 
 class FakeMessage {
   constructor(body) {
@@ -45,55 +51,6 @@ class FakeNewsDb {
         return {
           async run() {
             if (/INSERT INTO news_items/.test(sql)) db.newsItems.push({ id: args[0] });
-          },
-        };
-      },
-    };
-  }
-}
-
-// Same narrow in-memory fake as test/storage_backtest_runs.test.js -- this
-// file needs the real insert/complete/fail/list SQL shapes runManualBacktest
-// actually issues, not a hand-guessed one.
-class FakeBacktestRunsDb {
-  constructor() {
-    this.rows = new Map();
-  }
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async run() {
-            if (/INSERT INTO backtest_runs/.test(sql)) {
-              const [id, tickers, testStart, testEnd, trainDays, testDays, graceDays, startedAt] = args;
-              db.rows.set(id, {
-                id, tickers, test_start: testStart, test_end: testEnd, train_days: trainDays, test_days: testDays,
-                grace_days: graceDays, status: "running", result: null, error: null, started_at: startedAt, finished_at: null,
-              });
-              return;
-            }
-            if (/UPDATE backtest_runs SET status = 'complete'/.test(sql)) {
-              const [result, finishedAt, id] = args;
-              const row = db.rows.get(id);
-              if (row) { row.status = "complete"; row.result = result; row.finished_at = finishedAt; }
-              return;
-            }
-            if (/UPDATE backtest_runs SET status = 'failed'/.test(sql)) {
-              const [error, finishedAt, id] = args;
-              const row = db.rows.get(id);
-              if (row) { row.status = "failed"; row.error = error; row.finished_at = finishedAt; }
-              return;
-            }
-            throw new Error(`FakeBacktestRunsDb: unsupported run() query: ${sql}`);
-          },
-          async all() {
-            if (/FROM backtest_runs/.test(sql)) {
-              const [limit] = args;
-              const results = [...db.rows.values()].sort((a, b) => (a.started_at < b.started_at ? 1 : -1)).slice(0, limit);
-              return { results };
-            }
-            throw new Error(`FakeBacktestRunsDb: unsupported all() query: ${sql}`);
           },
         };
       },
@@ -138,34 +95,33 @@ test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and s
   assert.ok(errorLogs.some(([msg]) => msg.includes("backfill job failed")));
 });
 
-test("queue() processes a backtest job: runs runManualBacktest, persists a completed backtest_runs row, then acks", async (t) => {
-  const db = new FakeBacktestRunsDb();
-  const env = { DB: db };
-  // structured.js's config.fakeModel isn't wired through queue() -- this
-  // test only needs runManualBacktest to be CALLED and to persist a row;
-  // it doesn't need the "on signal" side's real Gemini path to succeed, so
-  // a window with no backfilled news (onSignalRunner reads nothing, no LLM
-  // calls) is enough to exercise the whole plumbing without live traffic.
-  const message = new FakeMessage({
-    type: "backtest",
-    id: "backtest-1",
-    tickers: ["AAPL"],
-    testStart: "2024-01-01T00:00:00.000Z",
-    testEnd: "2024-01-02T00:00:00.000Z",
-    graceDays: 0,
-  });
+test("queue() no longer handles the Gemini-calling message types (backtest, exit_check, analyze) -- acks them as unrecognized, does no work", async (t) => {
+  // These moved to the `llm` Worker (plan.md Step 6). If one still reaches
+  // backend (e.g. already sitting on JOBS at the moment of the Step 6
+  // deploy), it must be dropped with a log line, NOT processed -- backend
+  // holds no Gemini key anymore, so "processing" it would just fail deep
+  // inside the cascade after touching D1. env.DB is a bare object with no
+  // methods: any attempt to actually run one of these would throw on first
+  // D1 access and land in the retry path instead of ack, failing the
+  // assertions below.
+  const env = { DB: {} };
+  const errorLogs = [];
+  t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
-  await worker.queue(batchOf(message), env);
+  const backtest = new FakeMessage({ type: "backtest", id: "backtest-1", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", testEnd: "2024-01-02T00:00:00.000Z" });
+  const exitCheck = new FakeMessage({ type: "exit_check", asOf: "2026-09-19T00:00:00.000Z" });
+  const analyze = new FakeMessage({ type: "analyze", runId: "news-1", ticker: "AAPL", newsItem: { id: "news-1", tickers: ["AAPL"] }, asOf: "2026-09-19T00:00:00.000Z" });
+  await worker.queue(batchOf(backtest, exitCheck, analyze), env);
 
-  assert.equal(message.acked, true);
-  assert.equal(message.retried, false);
-  const [run] = await getRecentBacktestRuns(db, { limit: 10 });
-  assert.equal(run.id, "backtest-1");
-  assert.ok(run.status === "complete" || run.status === "failed"); // runManualBacktest never throws -- see its own header
+  for (const message of [backtest, exitCheck, analyze]) {
+    assert.equal(message.acked, true);
+    assert.equal(message.retried, false);
+  }
+  assert.equal(errorLogs.filter(([msg]) => msg.includes("unrecognized type")).length, 3);
 });
 
 test("queue() acks (does not retry) an unrecognized job type, logging the anomaly", async (t) => {
-  const env = { DB: new FakeBacktestRunsDb() };
+  const env = { DB: {} };
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -182,7 +138,7 @@ test("queue() retries (does not ack) a message when the handler itself crashes u
   // the "unrecognized type" case above) -- to actually exercise the retry
   // path we need queue()'s own try/catch to see a real thrown error, e.g.
   // a completely malformed message body that isn't even an object.
-  const env = { DB: new FakeBacktestRunsDb() };
+  const env = { DB: {} };
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
