@@ -52,21 +52,28 @@ function cookieValueFrom(setCookieHeader) {
 // GET /dashboard -- session gate
 // --------------------------------------------------------------------
 
-test("GET /dashboard renders unauthenticated when the login isn't configured (unchanged legacy behavior)", async () => {
+test("GET /dashboard always redirects to /dashboard/snapshot, regardless of auth", async () => {
   const env = baseEnv(); // no DASHBOARD_USERNAME/PASSWORD/JWT_SECRET
   const response = await worker.fetch(new Request("https://worker.example/dashboard"), env);
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("Location"), "/dashboard/snapshot");
+});
+
+test("GET /dashboard/snapshot renders unauthenticated when the login isn't configured (unchanged legacy behavior)", async () => {
+  const env = baseEnv(); // no DASHBOARD_USERNAME/PASSWORD/JWT_SECRET
+  const response = await worker.fetch(new Request("https://worker.example/dashboard/snapshot"), env);
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type"), /text\/html/);
 });
 
-test("GET /dashboard redirects to /login when the login IS configured and there's no session cookie", async () => {
+test("GET /dashboard/snapshot redirects to /login when the login IS configured and there's no session cookie", async () => {
   const env = loginConfiguredEnv();
-  const response = await worker.fetch(new Request("https://worker.example/dashboard"), env);
+  const response = await worker.fetch(new Request("https://worker.example/dashboard/snapshot"), env);
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("Location"), "/login");
 });
 
-test("GET /dashboard renders (not a redirect) with a valid session cookie", async () => {
+test("GET /dashboard/snapshot renders (not a redirect) with a valid session cookie", async () => {
   const env = loginConfiguredEnv();
   const loginResponse = await worker.fetch(
     new Request("https://worker.example/login", {
@@ -79,7 +86,7 @@ test("GET /dashboard renders (not a redirect) with a valid session cookie", asyn
   const cookie = cookieValueFrom(loginResponse.headers.get("Set-Cookie"));
 
   const dashboardResponse = await worker.fetch(
-    new Request("https://worker.example/dashboard", { headers: { Cookie: cookie } }),
+    new Request("https://worker.example/dashboard/snapshot", { headers: { Cookie: cookie } }),
     env,
   );
   assert.equal(dashboardResponse.status, 200);
@@ -122,7 +129,7 @@ test("GET /login redirects straight to /dashboard when already logged in", async
 
   const response = await worker.fetch(new Request("https://worker.example/login", { headers: { Cookie: cookie } }), env);
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard");
+  assert.equal(response.headers.get("Location"), "/dashboard/snapshot");
 });
 
 test("POST /login with correct credentials redirects to /dashboard and sets a session cookie", async () => {
@@ -136,7 +143,7 @@ test("POST /login with correct credentials redirects to /dashboard and sets a se
     env,
   );
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard");
+  assert.equal(response.headers.get("Location"), "/dashboard/snapshot");
   const setCookie = response.headers.get("Set-Cookie");
   assert.match(setCookie, /^nmai_session=/);
   assert.match(setCookie, /HttpOnly/);
