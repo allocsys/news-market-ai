@@ -36,6 +36,22 @@ function htmlResponse(html) {
   return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+/**
+ * Wraps a single D1 query promise so a rejection becomes { data: null, error }
+ * instead of throwing through the route handler -- design.md's Loading/error/
+ * empty-states requirement is that one panel's fetch failing must not blank
+ * or 500 the whole page. Callers await this instead of the raw query and
+ * never need their own try/catch.
+ */
+async function safe(promise) {
+  try {
+    return { data: await promise, error: null };
+  } catch (err) {
+    console.error("dashboard panel query failed", { message: err.message });
+    return { data: null, error: err.message || "failed to load" };
+  }
+}
+
 export async function handleSnapshotRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
