@@ -146,60 +146,85 @@ someone adds a feature.
 | KV | 1GB storage, 100K reads/day, 1K writes/day | Too tight for per-request caching; good fit for low-frequency state (LLM key/model cooldowns) |
 | Bundle size | 64 MiB uncompressed | Not a real constraint |
 
-**Planned:** the single Worker below is being split into 4 (dashboard, backend,
-ingest, llm) -- see "Roadmap: Service Split" for the step-by-step plan. Until each
-step lands, the text below describes the current single-Worker system.
+**Done (2026-09-19):** the system described below is the built, 4-Worker layout
+-- see "Roadmap: Service Split" for the step-by-step history of how it got here.
 
-**Architecture:** Workers as orchestrator (Cron Triggers drive ingestion + agent
-pipeline) → D1 as structured layer (replaces earlier Postgres/Neon plan) → KV as
-cooldown/rate-limit state + lightweight config → R2 (10GB free) as raw archive
-layer if D1 storage is outgrown.
+**Architecture:** four Cloudflare Workers, connected by queues rather than
+synchronous calls, all binding the same D1 database (only `backend` runs
+migrations) and the same `CACHE_KV` namespace:
+- **`dashboard`** (`wrangler.dashboard.toml`) -- the only public-facing Worker:
+  login, session cookies, and the server-rendered UI. Reaches `backend` via a
+  service binding, never a queue (it needs a synchronous response). Holds
+  `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/`JWT_SECRET`/`SESSION_TTL_SECONDS`.
+- **`backend`** (`wrangler.toml`) -- orchestrator: the JSON `/api/*` surface,
+  `POST /backfill` and `POST /backtest/run` (reachable only via `dashboard`'s
+  service binding, private otherwise), the cron trigger (`scheduled()`, which
+  fans out onto `INGEST` and `LLM_JOBS`, nothing else), D1 migrations, and the
+  `JOBS` queue consumer (`backfill` only). Holds `FINNHUB_API_KEY` (needed only
+  for `backfill`'s direct Finnhub call -- see Step 5's documented gap) and no
+  Gemini vars/keys.
+- **`ingest`** (`wrangler.ingest.toml`) -- consumes `INGEST` (`ingest_ticker`/
+  `ingest_feeds`), fetches Finnhub/yfinance/EDGAR/RSS/HTML-scrape data, writes
+  it to D1, and produces onto `ANALYZE`. Holds `FINNHUB_API_KEY` and
+  `EDGAR_USER_AGENT`/`EDGAR_CIK_MAP`; no Gemini vars/keys.
+- **`llm`** (`wrangler.llm.toml`) -- the only Worker that calls Gemini and the
+  only one holding `GEMINI_API_KEYS`. Consumes `ANALYZE` (the Analyst Team ->
+  debate -> trader -> risk -> portfolio pipeline) and `LLM_JOBS` (`backtest`,
+  `exit_check`). Owns the `gemini:cooldown:*` keys in `CACHE_KV`.
+
+Cron Triggers on `backend` drive the whole system: `scheduled()` fans out
+per-ticker/per-feed messages onto `INGEST` and one `exit_check` onto `LLM_JOBS`;
+everything downstream (ingestion, analysis, trading decisions) happens via queue
+consumers in `ingest`/`llm`, never synchronously in the cron handler itself. D1 is
+the structured layer (replaces the earlier Postgres/Neon plan); KV is
+cooldown/rate-limit state plus lightweight config; R2 (10GB free) remains an
+option as a raw archive layer if D1 storage is ever outgrown, not yet used.
 
 **CI/CD:** `.github/workflows/deploy.yml` runs `test` → `migrate` (push/dispatch
-only) → `deploy`, adapted from `allocsys/ai-campaign-builder`'s pattern but scaled
-down for this repo's single-Worker/no-workspaces layout. Idempotent D1/KV
-provisioning via `.github/actions/ensure-d1-database` / `ensure-kv-namespace`
-(look up by name, create only if missing, never commit real ids to the repo).
-`dorny/paths-filter` gates jobs on docs-only vs. code diffs, and `migrate` only on
-`migrations/**` changes. Required repo secrets: `CLOUDFLARE_API_TOKEN`,
-`CLOUDFLARE_ACCOUNT_ID` (hard requirement for migrate/deploy), `GEMINI_API_KEYS`
-(optional at deploy-success level, pushed via `wrangler secret put`). CI is green
-end-to-end against real Cloudflare infra; a secret-leak audit found and fixed a
-real plaintext-id leak in the provisioning actions' `create` step output (ids are
-now masked before printing — see git history on `ensure-d1-database`/
-`ensure-kv-namespace` for detail if ever revisited).
+only, gated on `migrations/**` changes) → one deploy job per Worker
+(`deploy` for `backend`, `deploy-dashboard`, `deploy-ingest`, `deploy-llm`),
+each with its own `dorny/paths-filter` output (its own source paths, shared
+code paths it bundles, or the workflow file itself) and its own `concurrency`
+group so an unrelated Worker's push never cancels this one's in-flight deploy
+(`workflow_dispatch` always runs every job, bypassing the filters). Idempotent
+D1/KV/queue provisioning via `.github/actions/ensure-d1-database` /
+`ensure-kv-namespace` / `ensure-queue` (look up by name, create only if
+missing, never commit real ids to the repo; each action takes a
+`wrangler-config` input so every Worker's job can patch its own config file --
+added in Step 6 after a Step 5 review found `deploy-ingest` skipping this
+entirely). Every Worker job that depends on the DB uses `needs: [changes,
+migrate]` with `if: always() && (needs.migrate.result == 'success' ||
+needs.migrate.result == 'skipped')` (the `always()` is required so GitHub
+Actions doesn't also skip the dependent job when `migrate` itself is skipped).
 
-**CI/CD for the 4-Worker split (reviewed `allocsys/ai-campaign-builder`'s
-deploy.yml, 2026-09-18):** that repo deploys 5 frontend apps + 1 backend Worker
-from a single npm-workspaces monorepo (`apps/<name>/`, each with its own
-`wrangler.toml`), which is the closest existing precedent to our upcoming
-dashboard/backend/ingest/llm split. Pattern to carry over once Step 2 starts:
-- **One job per Worker**, each gated on its own `dorny/paths-filter` output
-  (own `apps/<name>/**` OR shared `packages/**`/shared-code path OR the
-  workflow file itself) — mirrors our existing docs-vs-code filter, just
-  split per Worker instead of one filter for the whole repo. `workflow_dispatch`
-  always runs every job (no diff to compare against).
-- **Per-job `concurrency` group** (e.g. `deploy-dashboard-${{ github.ref }}`),
-  deliberately NOT one shared workflow-level group — an unrelated Worker's
-  push must never cancel this Worker's in-flight deploy.
-- **Migrations decoupled into their own job** (`backend-migrate` there, ours
-  stays the existing `migrate` job), gated on a narrower `migrations/**`-only
-  filter. Every Worker job that depends on the DB uses
-  `needs: [changes, migrate]` with `if: always() && ... (needs.migrate.result
-  == 'success' || needs.migrate.result == 'skipped')` — the `always()` is
-  required because GitHub Actions would otherwise skip the dependent job too
-  when `migrate` itself is skipped (no migration in that push).
-- **Secrets stay scoped to the Worker that owns them**, each job fails fast
-  on its own required secrets before deploying, then pushes them via
-  `wrangler secret put` right after deploy. Optional secret groups use a
-  bash `-z` guard inside `run:` and skip cleanly (secrets context is rejected
-  inside a step's `if:`). Maps directly onto our Step 5/6 key-isolation goal:
-  `dashboard`'s job only ever sees `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/
-  `JWT_SECRET`, `ingest`'s only `FINNHUB_API_KEY`, `llm`'s only
-  `GEMINI_API_KEYS` — no job touches a secret it doesn't own.
-- D1/KV provisioning stays exactly our existing `ensure-d1-database`/
-  `ensure-kv-namespace` composite actions, reused unmodified by every Worker
-  job that needs them (only `backend` binds D1 per the rule below).
+**Per-Worker secret scoping (the Step 5/6 key-isolation goal, done):** each
+deploy job fails fast on its own required secrets, then pushes them via
+`wrangler secret put --config <its wrangler file>` right after deploy --
+`dashboard`'s job only ever sees `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/
+`JWT_SECRET`/`SESSION_TTL_SECONDS`; `backend`'s only `FINNHUB_API_KEY` (for
+`backfill`, its one remaining vendor-key use); `ingest`'s only
+`FINNHUB_API_KEY`; `llm`'s only `GEMINI_API_KEYS` -- no job touches a secret
+it doesn't own. Required repo secrets regardless of Worker:
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (hard requirement for
+migrate/deploy). Optional secret groups use a bash `-z` guard inside `run:`
+and skip cleanly (the `secrets` context is rejected inside a step's `if:`).
+CI is green end-to-end against real Cloudflare infra as of Step 2's live
+`workflow_dispatch` check; Steps 3-6's own deploy jobs have not yet had the
+same live-deploy check (see each step's own notes, deferred to after Step 7).
+A secret-leak audit (pre-split) found and fixed a real plaintext-id leak in
+the provisioning actions' `create` step output (ids are now masked before
+printing -- see git history on `ensure-d1-database`/`ensure-kv-namespace` for
+detail if ever revisited).
+
+**Design precedent (historical note):** the per-Worker-job/per-Worker-secret
+shape above was adapted from `allocsys/ai-campaign-builder`'s `deploy.yml`
+(reviewed 2026-09-18), which deploys 5 frontend apps + 1 backend Worker from a
+single npm-workspaces monorepo the same way. Carried over: one job per
+Worker gated on its own path filter, one concurrency group per Worker,
+migrations in their own job, and secrets scoped to the job that owns them.
+Not carried over: that repo's npm-workspaces layout (`apps/<name>/**`) --
+this repo keeps a flat `src/` with one `wrangler.<worker>.toml` per Worker
+instead.
 
 ## LLM Calling Layer: Multi-Key Gemini Cascade (ported from `madmcp`)
 **Two-axis cascade, model-first:** outer loop tries `[GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS]`
@@ -624,15 +649,75 @@ on LLM_JOBS.
 CI; the stale secret above is the one loose end), and `llm` has its own
 path-filtered CI job (done, `deploy-llm`).
 
-### Step 7 -- Cleanup and docs
+### Step 7 -- Cleanup and docs -- DONE (docs) 2026-09-19, one manual action outstanding
 Remove dead code left in `backend`, run a per-Worker secrets audit, and rewrite the
 Deployment and Repo Structure sections above for the 4-Worker layout. Fix stale
 docs: Known Gaps still describes `X-Backfill-Secret`/`BACKFILL_API_SECRET`, but the
 code now gates on the dashboard session.
-**Done when:** this plan describes the system as built, not as planned.
+
+**Dead-code check in `backend` -- came back clean, not a bug:** `src/index.js`
+imports `backfillHistoricalNews` from `graph/pipeline.js`, which also exports
+`runPipelineForTicker`/`collectNewsItems`/`ingestTickerData`/etc. that `backend`
+itself never calls anymore (moved to `ingest`/`llm` in Steps 5-6). This looked
+like dead weight in backend's bundle at first read, but it isn't removable
+dead code -- those same exports are live, load-bearing code for `llm` (which
+imports `runPipelineForTicker`) and `ingest` (which imports `ingestTickerData`/
+`ingestFeedNews`) from that identical file. Splitting `pipeline.js` into
+per-Worker files to trim backend's bundle would be a real refactor with its
+own risk, not a cleanup; wrangler's bundler (esbuild) also tree-shakes unused
+ESM exports already, so the deployed bundle isn't actually carrying dead
+weight in practice. Left as-is; not flagged as a gap. `backend`'s `wrangler.toml`
+itself has no leftover bindings/vars it doesn't use (confirmed by reading).
+
+**Stale comment fixed:** `src/ingest-worker.js`'s queue() header described
+backend's queue() as still fanning in JOBS/INGEST/ANALYZE through one handler
+-- inaccurate since Step 6 (backend now consumes JOBS/`backfill` only).
+Corrected. `wrangler.ingest.toml`'s comments were all re-read and are accurate
+as written; no changes needed there.
+
+**Secrets audit result:** every Worker's `wrangler secret put` pushes in
+`deploy.yml` match what its own code actually reads, with the one already-
+documented exception (`backend` holding `FINNHUB_API_KEY` for `backfill`
+only -- Step 5's gap, not new). One item is NOT fixable from this repo: an
+earlier deploy left a `GEMINI_API_KEYS` secret sitting on the `backend`
+(`news-market-ai`) Worker in Cloudflare; `deploy.yml` stopped pushing it as
+of Step 6, and nothing in `backend`'s code reads it, but the value itself is
+Cloudflare account state, not a repo file, and no available tool here can
+issue `wrangler secret delete` against live infra. **Manual follow-up still
+required:** run `wrangler secret delete GEMINI_API_KEYS --config wrangler.toml`
+against the `news-market-ai` Worker. Key isolation is correct in code/CI but
+not yet real in the deployed environment until that command runs.
+
+**Docs rewritten:** the Deployment section's "Planned: split into 4" framing
+replaced with the actual built architecture (each Worker, its bindings, its
+secrets); the two CI/CD paragraphs (one describing the old single-deploy-job
+workflow, one describing the 4-Worker split as an upcoming plan "once Step 2
+starts") rewritten as one description of the deploy.yml as it exists today,
+with the `ai-campaign-builder` precedent kept as a historical note rather than
+a forward-looking plan; Repo Structure gained the 4 Worker entry-point files
+(previously only the shared modules were listed); the Known Gaps paragraph
+about `X-Backfill-Secret`/`BACKFILL_API_SECRET` rewritten to describe the
+actual dashboard-session-based auth that replaced it back in Step 2.
+
+**Done when:** this plan describes the system as built, not as planned --
+met for every doc section above. **Still open:** the `GEMINI_API_KEYS`
+secret-deletion action on live Cloudflare infra (manual, listed above), and
+the standing deferred CI/live-deploy check across Steps 3-6 (unchanged from
+before this step, not part of Step 7's own scope).
 
 ## Repo Structure
 ```
+src/index.js          # `backend` Worker entry point (wrangler.toml) -- JSON
+                      # API, /backfill + /backtest/run, cron scheduler, JOBS
+                      # (backfill-only) queue consumer, D1 migrations
+src/dashboard-worker.js  # `dashboard` Worker entry point (wrangler.dashboard.toml)
+                      # -- login, session, SSR UI; calls `backend` via a
+                      # service binding
+src/ingest-worker.js  # `ingest` Worker entry point (wrangler.ingest.toml) --
+                      # INGEST queue consumer (ingest_ticker/ingest_feeds)
+src/llm-worker.js     # `llm` Worker entry point (wrangler.llm.toml) -- ANALYZE
+                      # + LLM_JOBS (backtest/exit_check) queue consumer, the
+                      # only Worker holding GEMINI_API_KEYS
 ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
   errors.js           # typed vendor error taxonomy (Pattern 11)
   date_window.js       # point-in-time cutoff/boundary helpers
@@ -765,15 +850,19 @@ actual NEXT-NEEDED convention, skipping the debate block and crashing
   permanently live-feed/live-page-only — there's no `from`/`to` a feed or
   a scraped page can accept, so they cannot backfill; this is a real gap,
   not an oversight. `backfillHistoricalNews` now has a real operational
-  entry point: `POST /backfill?from=...&to=...` (`src/index.js`), gated
-  behind a required `X-Backfill-Secret` header matched against
-  `BACKFILL_API_SECRET` (`config.js#backfillApiSecret`, no default --
-  stays disabled/503 until explicitly set via `wrangler secret put`, same
-  "disabled, not open" convention as every other unset secret in this
-  project; pushed on deploy the same idempotent way as
-  `GEMINI_API_KEYS`/`FINNHUB_API_KEY`, see `deploy.yml`). Covered by
-  `test/index_backfill.test.js` (auth/validation branches, success, and
-  the genuine-bug-vs-vendor-isolation 500 distinction). The comparable
+  entry point: `POST /backfill?from=...&to=...` (`src/index.js`). As of
+  Step 2, auth is dashboard-session-based, not a header/secret: `dashboard`
+  (`src/dashboard-worker.js`) requires its own login/session cookie before
+  forwarding the request to `backend` over their service binding, and
+  `backend`'s route no longer session-checks itself. The header-based
+  fallback this paragraph used to describe (`X-Backfill-Secret` matched
+  against a `BACKFILL_API_SECRET`/`BACKTEST_API_SECRET` config value) has
+  been removed entirely (see `src/config.js`'s comment on `dashboardUsername`
+  for confirmation) -- `dashboard`'s session is now the only way to call
+  either route. Covered by `test/dashboard_worker.test.js` (the
+  auth-then-forward flow) and `test/index_backfill.test.js` (the
+  no-longer-session-checked backend contract, validation branches, success,
+  and the genuine-bug-vs-vendor-isolation 500 distinction). The comparable
   **no-signal baseline strategy** `signalCompare.js` needed is also now
   built: `src/backtest/noSignalBaseline.js` -- naive equal-weighted
   buy-and-hold across the same ticker universe/window, zero LLM calls,
