@@ -6,20 +6,20 @@ export function backtestTriggerForm() {
   return `<form method="get" action="/dashboard/backtest/confirm" class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
-      <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT" style="background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.34rem 0.5rem;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:0.8rem;width:100%;box-sizing:border-box;">
+      <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT">
     </div>
     ${rangePresetButtons("backtestStart", "backtestEnd")}
     <div class="filter-group">
       <span class="filter-label">Test start</span>
-      <input class="filter-form" id="backtestStart" type="date" name="testStart" value="${monthAgo}" style="${DATE_INPUT_STYLE}">
+      <input class="filter-form ${DATE_INPUT_STYLE}" id="backtestStart" type="date" name="testStart" value="${monthAgo}">
     </div>
     <div class="filter-group">
       <span class="filter-label">Test end</span>
-      <input class="filter-form" id="backtestEnd" type="date" name="testEnd" value="${today}" style="${DATE_INPUT_STYLE}">
+      <input class="filter-form ${DATE_INPUT_STYLE}" id="backtestEnd" type="date" name="testEnd" value="${today}">
     </div>
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
-      <button type="submit">Review &amp; run backtest</button>
+      <button type="submit" class="btn">Review &amp; run backtest</button>
     </div>
   </form>`;
 }
