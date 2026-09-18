@@ -43,14 +43,14 @@ export function renderBacktestConfirmPage({ testStart, testEnd, tickers, graceDa
       <div class="llm-block"><span class="llm-agent">Test End</span> <span class="num">${escapeHtml(testEnd)}</span></div>
       ${graceDays ? `<div class="llm-block"><span class="llm-agent">Grace Days</span> <span class="num">${escapeHtml(graceDays)}</span></div>` : ""}
     </div>
-    <p class="note" style="color: #c1502e; font-weight: 600;">Cost warning: This action makes real Gemini API calls and spends model quota.</p>
+    <p class="note" style="color: var(--color-danger-text); font-weight: 600;">Cost warning: This action makes real Gemini API calls and spends model quota.</p>
     <form method="post" action="/backtest/run" class="filter-bar">
       <input type="hidden" name="testStart" value="${escapeHtml(testStart)}">
       <input type="hidden" name="testEnd" value="${escapeHtml(testEnd)}">
       ${tickers ? `<input type="hidden" name="tickers" value="${escapeHtml(tickers)}">` : ""}
       ${graceDays ? `<input type="hidden" name="graceDays" value="${escapeHtml(graceDays)}">` : ""}
       <div class="filter-group">
-        <button type="submit">Confirm and run backtest</button>
+        <button type="submit" class="btn">Confirm and run backtest</button>
       </div>
     </form>
   </section>`;
