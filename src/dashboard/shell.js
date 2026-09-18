@@ -202,7 +202,7 @@ const STYLE = `
   /* ---- Content + main ---- */
   .content { flex: 1 1 auto; min-width: 0; }
   main {
-    padding: 2rem 2.5rem 6rem;
+    padding: 1.25rem 2.5rem 6rem;
     max-width: 1320px; margin: 0 auto;
   }
 
@@ -210,10 +210,9 @@ const STYLE = `
 
   h2 {
     font-family: var(--font-display);
-    font-size: 1.375rem; font-weight: 600; letter-spacing: -0.02em;
+    font-size: 1.125rem; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-main); line-height: 1.25;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 0.85rem; margin: 0 0 1.25rem;
+    margin: 0 0 0.9rem;
     display: flex; align-items: baseline; gap: 0.75rem;
   }
   h2 .h2-count {
@@ -440,13 +439,12 @@ const STYLE = `
 
   /* ---- Per-page toolbar ---- */
   .page-toolbar {
-    display: flex; align-items: center; justify-content: flex-end; gap: 0.85rem;
-    margin-bottom: 1.5rem;
-    padding: 0.6rem 1rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-card);
+    display: flex; align-items: center; justify-content: flex-end; gap: 0.6rem;
+    margin-bottom: 0.75rem;
+  }
+  .page-toolbar .btn {
+    height: 28px; padding: 0 0.65rem; gap: 0.3rem;
+    font-size: 0.75rem; font-weight: 500;
   }
   .page-toolbar-updated {
     font-family: var(--font-mono); font-size: 0.6875rem;
@@ -672,7 +670,7 @@ const STYLE = `
     }
     .rail .section-nav a:hover::after,
     .rail .section-nav a:focus::after { opacity: 1; }
-    main { padding: 1.75rem 1.5rem 6rem; }
+    main { padding: 1.25rem 1.5rem 6rem; }
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
     .chart-row-3 { grid-template-columns: 1fr; }
     .chart-row-2 { grid-template-columns: 1fr; }
@@ -684,33 +682,37 @@ const STYLE = `
     .rail { display: none; }
     .mobile-header {
       display: flex;
-      flex-direction: column; gap: 0.65rem;
+      flex-direction: row; align-items: center; justify-content: space-between; gap: 0.75rem;
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border-color);
-      padding: 0.85rem 1rem;
+      padding: 0.5rem 1rem;
       position: sticky; top: 0; z-index: 50;
       backdrop-filter: blur(10px);
     }
     .mobile-header .wordmark {
-      flex-direction: row; align-items: center; gap: 0.65rem;
+      flex-direction: row; align-items: center; gap: 0.5rem; padding: 0;
+    }
+    .mobile-header .wordmark-mark {
+      width: 26px; height: 26px; border-radius: 8px; font-size: 0.8rem;
     }
     .mobile-header .wordmark-text { display: flex; }
+    .mobile-header .wordmark-sub { display: none; }
     .mobile-header .rail-meta {
-      display: block; margin-top: 0; border-top: none; padding-top: 0;
-      font-size: 0.6875rem;
+      display: block; margin: 0; border-top: none; padding: 0;
+      font-size: 0.75rem; line-height: 1;
     }
     .content { width: 100%; }
-    main { padding: 1.25rem 1rem 6rem; }
+    main { padding: 0.85rem 1rem 6rem; }
     .stat-grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
     .stat-card { padding: 0.9rem 1rem; }
     .stat-value { font-size: 1.5rem; }
     .filter-bar { gap: 0.85rem; }
-    .page-toolbar { padding: 0.5rem 0.75rem; gap: 0.5rem; }
-    .page-toolbar .btn { min-height: 44px; padding: 0.5rem 0.85rem; }
+    .page-toolbar { justify-content: space-between; gap: 0.5rem; margin-bottom: 0.6rem; }
+    .page-toolbar .btn { height: 32px; padding: 0 0.7rem; }
     .chart-row-2, .chart-row-3 { grid-template-columns: 1fr; }
     .donut-wrap { flex-direction: column; align-items: stretch; }
     .donut-svg { align-self: center; }
-    h2 { font-size: 1.25rem; }
+    h2 { font-size: 1.0625rem; }
 
     /* Fixed bottom navigation bar (min 44x44px touch targets) */
     .bottom-nav {
@@ -904,7 +906,7 @@ function renderMobileHeader(sessionUsername) {
         <span class="wordmark-sub">operations ledger</span>
       </span>
     </div>
-    <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}${sessionUsername ? ` &middot; <span class="rail-meta-row" style="margin:0;display:inline-flex;"><a href="/logout">${ICONS.logout} log out</a> (${escapeHtml(sessionUsername)})</span>` : ""}</div>
+    <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}</div>
   </div>`;
 }
 
