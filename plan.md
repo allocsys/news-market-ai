@@ -649,7 +649,7 @@ on LLM_JOBS.
 CI; the stale secret above is the one loose end), and `llm` has its own
 path-filtered CI job (done, `deploy-llm`).
 
-### Step 7 -- Cleanup and docs -- DONE (docs) 2026-09-19, one manual action outstanding
+### Step 7 -- Cleanup and docs -- DONE 2026-09-19 (PR #33, squash commit `10c9910`)
 Remove dead code left in `backend`, run a per-Worker secrets audit, and rewrite the
 Deployment and Repo Structure sections above for the 4-Worker layout. Fix stale
 docs: Known Gaps still describes `X-Backfill-Secret`/`BACKFILL_API_SECRET`, but the
