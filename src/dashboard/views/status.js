@@ -1,11 +1,10 @@
-// Post-confirmation "run accepted" status view (design.md's Components ->
-// Costly-action confirmation / Loading-error-empty states -> "In-progress"
-// requirement): after the operator hits "Confirm and run", they must land
-// on a page that says the run was accepted and is in progress, not a bare
-// redirect back to an unchanged page. Backfill/backtest runs are kicked off
-// via ctx.waitUntil in src/index.js so this page can respond immediately
-// rather than blocking on the full run (which can be long and would
-// otherwise risk a request timeout on a large date range).
+// Post-confirmation "run accepted" status view: after the operator hits
+// "Confirm and run", they land on a page that says the run was accepted and
+// is in progress, not a bare redirect back to an unchanged page.
+// Backfill/backtest runs are kicked off via ctx.waitUntil in src/index.js so
+// this page can respond immediately rather than blocking on the full run
+// (which can be long and would otherwise risk a request timeout on a large
+// date range).
 
 import { escapeHtml } from "../helpers.js";
 
