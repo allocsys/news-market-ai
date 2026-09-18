@@ -337,7 +337,6 @@ function backtestTriggerForm() {
   return `<form method="post" action="/backtest/run" class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
-      <select class="filter-form" name="tickers" style="display:none"></select>
       <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT" style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.32rem 0.5rem;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:0.8rem;">
     </div>
     <div class="filter-group">
