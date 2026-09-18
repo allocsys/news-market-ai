@@ -581,7 +581,7 @@ function renderMobileHeader(sessionUsername) {
 function renderPageToolbar(refreshHref) {
   if (!refreshHref) return "";
   return `<div class="page-toolbar">
-        <span class="page-toolbar-updated">Updated ${fmtTime(new Date().toISOString())}</span>
+        <span class="page-toolbar-updated">Loaded ${fmtTime(new Date().toISOString())}</span>
         <a href="${escapeHtml(refreshHref)}" class="btn btn-secondary" title="Reload this page with the latest data"><span aria-hidden="true">\u21bb</span> Refresh</a>
       </div>`;
 }
