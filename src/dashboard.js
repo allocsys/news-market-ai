@@ -18,12 +18,21 @@
 // falls back to the default instead of erroring the page.
 //
 // HONEST SCOPE, read before treating this as a complete operations view:
-// 1. Backtest results are NOT shown here -- there is no persisted table for
-//    a completed backtest run (src/backtest/*.js is a pure computation
-//    library today, plan.md's own "signal on/off" checklist item is
-//    explicit that it computes comparisons given return series, it doesn't
-//    run and store one). Rather than fake a section, this dashboard omits
-//    backtest results entirely until that persistence layer exists.
+// 1. Backtest results (migrations/0010_backtest_runs.sql) are now shown,
+//    manual-trigger only: a plain <form method="post" action="/backtest/run">
+//    button, same zero-client-JS philosophy as every other filter/form on
+//    this page -- a click is a normal browser POST navigation, no fetch()/
+//    JS needed. NOT automatic -- there is deliberately no cron/scheduled
+//    wiring to this (see src/backtest/runBacktest.js's header); every run
+//    on the list below was a deliberate, explicit click by someone who
+//    typed the shared secret. The "on" side of a run spends real Gemini
+//    quota (src/backtest/onSignalRunner.js), so this form is intentionally
+//    NOT a one-click no-confirmation action -- it requires the operator to
+//    know and enter BACKTEST_API_SECRET, same gate as curl'ing the route
+//    directly. A run's own outcome only reflects whatever news is ALREADY
+//    backfilled for its window (POST /backfill, a separate manual step) --
+//    a window with nothing backfilled will show a thin/empty "on" side, not
+//    an error.
 // 2. Vendor/ingestion errors are NOT shown per-source -- graph/pipeline.js's
 //    failure isolation only console.error()s a skipped source, which isn't
 //    queryable from D1. What IS shown (getIngestionHealth) is a weaker but
@@ -73,6 +82,7 @@ import {
   getIngestionHealth,
   getDecisionStats,
   getRecentPriceBars,
+  getRecentBacktestRuns,
 } from "./storage/d1.js";
 
 const ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -260,6 +270,92 @@ function positionsTable(positions, { closed = false } = {}) {
     <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th><th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+/**
+ * Renders one metric row for the backtest results table -- on/off/delta,
+ * each formatted per its own convention (percent for cumulativeReturn/
+ * winRate/maxDrawdown, plain 2-decimal for sharpeRatio). `deltaGood` flags
+ * whether a positive delta means "good" for this metric -- true for every
+ * metric here since signalCompare.js#compareSignalOnOff already normalizes
+ * the sign so positive always means "signal looks better" (see that
+ * function's own header), so this is really just a display convenience,
+ * not a second sign convention.
+ */
+function backtestMetricRow(label, on, off, delta, { isPercent = true } = {}) {
+  const fmt = (v) => (isPercent ? (v * 100).toFixed(1) + "%" : v.toFixed(2));
+  const deltaCls = delta > 0 ? "status-approved" : delta < 0 ? "status-rejected" : "status-neutral";
+  return `<tr><td>${escapeHtml(label)}</td><td class="num">${fmt(on)}</td><td class="num">${fmt(off)}</td><td class="num ${deltaCls}">${delta > 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
+}
+
+/** One completed run's on/off/delta comparison table, from its persisted `result.overall` (signalCompare.js#compareSignalOnOff's shape). */
+function backtestResultTable(result) {
+  if (!result) return "";
+  const { on, off, delta } = result.overall;
+  return `<table>
+    <thead><tr><th>Metric</th><th>Signal ON</th><th>Signal OFF (buy &amp; hold)</th><th>Delta</th></tr></thead>
+    <tbody>
+      ${backtestMetricRow("Cumulative return", on.cumulativeReturn, off.cumulativeReturn, delta.cumulativeReturn)}
+      ${backtestMetricRow("Sharpe ratio", on.sharpeRatio, off.sharpeRatio, delta.sharpeRatio, { isPercent: false })}
+      ${backtestMetricRow("Win rate", on.winRate, off.winRate, delta.winRate)}
+      ${backtestMetricRow("Max drawdown", on.maxDrawdown, off.maxDrawdown, delta.maxDrawdown)}
+    </tbody>
+  </table>
+  <p class="note">Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>`;
+}
+
+const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed" };
+
+/** List of persisted backtest_runs rows, newest first -- each with its own <details> disclosure for the full result table once complete. */
+function backtestRunsList(runs) {
+  if (runs.length === 0) return `<p class="empty">No backtest runs yet -- use the form above to trigger one.</p>`;
+  return runs
+    .map((r) => {
+      const statusCls = r.status === "complete" ? "status-approved" : r.status === "failed" ? "status-rejected" : "status-neutral";
+      const summary = `<span class="ticker">${escapeHtml(r.tickers.join(", "))}</span> &middot; ${fmtTime(r.testStart)} &rarr; ${fmtTime(r.testEnd)} &middot; <span class="status ${statusCls}">[${BACKTEST_STATUS_LABEL[r.status] ?? r.status}]</span>`;
+      const body = r.status === "complete"
+        ? backtestResultTable(r.result)
+        : r.status === "failed"
+          ? `<p class="empty">${escapeHtml(r.error ?? "failed with no recorded error message")}</p>`
+          : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
+      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${body}</div></details>`;
+    })
+    .join("\n");
+}
+
+/**
+ * Plain <form method="post" action="/backtest/run"> -- no client JS, a
+ * click is a normal browser POST navigation (src/index.js#fetch's
+ * /backtest/run route reads these exact field names from the body when no
+ * matching query param is present, see that route's own comment). The
+ * secret field is required and unlabeled-safe-default-empty on purpose --
+ * nothing here pre-fills or remembers it.
+ */
+function backtestTriggerForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  return `<form method="post" action="/backtest/run" class="filter-bar">
+    <div class="filter-group">
+      <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
+      <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT" style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.32rem 0.5rem;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:0.8rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Test start</span>
+      <input class="filter-form" type="date" name="testStart" value="${monthAgo}" style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.3rem 0.5rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Test end</span>
+      <input class="filter-form" type="date" name="testEnd" value="${today}" style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.3rem 0.5rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Backtest secret</span>
+      <input class="filter-form" type="password" name="secret" required style="background:#10160f;color:#e8e4d9;border:1px solid #263028;border-radius:4px;padding:0.3rem 0.5rem;">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">&nbsp;</span>
+      <button type="submit">Run backtest</button>
+    </div>
+  </form>`;
 }
 
 function checkpointsTable(checkpoints) {
@@ -644,13 +740,14 @@ const PRICE_CHART_TICKER_LIMIT = 8;
 export async function renderDashboardHtml(db, { searchParams } = {}) {
   const params = parseDashboardParams(searchParams);
 
-  const [decisions, openPositions, closedPositions, checkpoints, health, decisionStats] = await Promise.all([
+  const [decisions, openPositions, closedPositions, checkpoints, health, decisionStats, backtestRuns] = await Promise.all([
     getRecentTradeDecisions(db, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus }),
     getAllOpenPositions(db, { limit: params.positionsLimit }),
     getRecentlyClosedPositions(db, { limit: 20 }),
     getRecentCheckpoints(db, { limit: 30 }),
     getIngestionHealth(db),
     getDecisionStats(db, { days: params.activityDays }),
+    getRecentBacktestRuns(db, { limit: 10 }),
   ]);
 
   const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
@@ -758,7 +855,9 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
 
   <section id="backtest">
     <h2>Backtest results</h2>
-    <p class="note">Not shown -- no backtest run's output is persisted yet (src/backtest/*.js is a computation library, not a stored-results table). See plan.md.</p>
+    <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires the shared backtest secret. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
+    ${backtestTriggerForm()}
+    ${backtestRunsList(backtestRuns)}
   </section>
   </main>
 </body>

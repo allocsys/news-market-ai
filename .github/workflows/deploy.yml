@@ -222,3 +222,19 @@ jobs:
             exit 0
           fi
           echo "$BACKFILL_API_SECRET" | npx wrangler secret put BACKFILL_API_SECRET
+      - name: Set BACKTEST_API_SECRET on the deployed Worker
+        # Same idempotent, non-blocking, disabled-until-set shape as the
+        # BACKFILL_API_SECRET step above -- src/index.js's POST /backtest/run
+        # route stays fully disabled (503) until this is set (see
+        # config.js#backtestApiSecret's header), a deliberately separate
+        # secret from BACKFILL_API_SECRET.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BACKTEST_API_SECRET: ${{ secrets.BACKTEST_API_SECRET }}
+        run: |
+          if [ -z "$BACKTEST_API_SECRET" ]; then
+            echo "BACKTEST_API_SECRET repo secret not set -- skipping. The /backtest/run route stays disabled (503) until this is configured, which is the safe default."
+            exit 0
+          fi
+          echo "$BACKTEST_API_SECRET" | npx wrangler secret put BACKTEST_API_SECRET
