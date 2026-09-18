@@ -461,3 +461,93 @@ export async function runScheduledIngestion(env, config, db) {
   }
   return results;
 }
+
+/**
+ * Step 4 cron fan-out -- one INGEST message per ticker (src/index.js's
+ * `scheduled` sends these instead of calling runScheduledIngestion
+ * directly). Fetches finnhub news, price bars, and fundamentals SCOPED TO
+ * THIS ONE TICKER ONLY (unlike collectNewsItems/runScheduledIngestion's
+ * whole-watchlist sweep above, which remains available unchanged for any
+ * other caller), writes them to D1, and returns the inserted news items so
+ * the INGEST consumer can enqueue one ANALYZE message per item for this
+ * ticker. This is what turns one 15-minute cron tick into N small
+ * invocations instead of one big one (plan.md Step 4's whole point) --
+ * each ticker's finnhub/yfinance/edgar calls, and their D1 writes, happen
+ * in their own Worker invocation with its own fresh CPU budget.
+ *
+ * General (non-ticker-scoped) feeds -- rss, html_scrape -- are NOT part of
+ * this path; see ingestFeedNews below for those. Same failure-isolation
+ * convention as collectNewsItems: a VendorError from any of the three
+ * sub-fetches is logged and that source is skipped, never aborts the
+ * others for this ticker.
+ */
+export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
+  const { items, errors } = await fetchFinnhubLatest(config, { queries: [{ ticker }] }, { kv });
+  for (const { error } of errors) {
+    logSkippedSource("ticker ingest", "finnhub", error);
+  }
+
+  const insertedNews = [];
+  for (const item of items) {
+    await insertNewsItem(db, item);
+    insertedNews.push(item);
+  }
+
+  // Price bars / fundamentals are a strict enhancement, not a hard
+  // dependency of this ticker's news ingestion (same reasoning as
+  // ingestPriceBars/ingestFundamentals's own headers) -- a failure in
+  // either is already logged-and-swallowed inside those functions, so no
+  // extra try/catch is needed here.
+  await ingestPriceBars(config, db, kv, { tickers: [ticker] });
+  await ingestFundamentals(config, db, kv, { tickers: [ticker] });
+
+  return insertedNews;
+}
+
+/**
+ * Step 4 cron fan-out -- the "feeds" half of collectNewsItems (rss +
+ * html_scrape), sent as a single separate INGEST message per cron tick
+ * rather than fanned out per ticker, since neither source has a
+ * per-ticker query mode to begin with (see rss.js/html_scrape.js's own
+ * headers -- a feed/page is fetched once regardless of how many tickers
+ * it might mention). Finnhub is deliberately excluded here -- that's
+ * ingestTickerData's job now, not this one's, to avoid double-fetching/
+ * double-inserting the same finnhub articles from two different fan-out
+ * paths landing in the same cron tick.
+ */
+export async function ingestFeedNews(config, db, kv) {
+  const items = [];
+
+  const sources = [
+    { name: "rss", run: () => fetchRssLatest(config, {}, { kv }) },
+    {
+      name: "scrape",
+      run: async () => {
+        const { items: scraped, errors } = await fetchScrapeLatest(config, {}, { kv });
+        for (const { url, error } of errors) {
+          console.error("scrape vendor failure -- skipping page", { url, message: error.message });
+        }
+        return scraped;
+      },
+    },
+  ];
+
+  for (const { name, run } of sources) {
+    try {
+      items.push(...(await run()));
+    } catch (err) {
+      if (err instanceof VendorError) {
+        logSkippedSource("feed ingest", name, err);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  const insertedNews = [];
+  for (const item of items) {
+    await insertNewsItem(db, item);
+    insertedNews.push(item);
+  }
+  return insertedNews;
+}
