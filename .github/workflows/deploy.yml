@@ -68,6 +68,7 @@ jobs:
       code: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.code == 'true' }}
       migrations: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.migrations == 'true' }}
       dashboard: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
+      ingest: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ingest == 'true' }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_dispatch'
@@ -88,6 +89,15 @@ jobs:
               - 'src/dashboard/**'
               - 'src/login.js'
               - 'src/auth/**'
+              - 'src/config.js'
+              - '.github/workflows/deploy.yml'
+            ingest:
+              - 'src/ingest-worker.js'
+              - 'wrangler.ingest.toml'
+              - 'src/graph/pipeline.js'
+              - 'src/ingestion/**'
+              - 'src/storage/**'
+              - 'src/shared/**'
               - 'src/config.js'
               - '.github/workflows/deploy.yml'
 
