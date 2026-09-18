@@ -1,11 +1,11 @@
 // Shared page chrome (shell, desktop sidebar nav, mobile header & bottom tab bar, CSS style).
 //
-// Design system (v2, "Blueprint"):
+// Design system:
 //   - Premium fintech dark theme. Surfaces use a subtle elevation ladder
 //     (--bg-base -> --bg-surface -> --bg-elevated) instead of a single flat panel.
 //   - Typography: Inter Tight for headings (tighter display weight), Inter for
 //     body, ui-monospace for tabular numerics. Loaded via Google Fonts.
-//   - Sidebar: 248px on desktop, 76px icon-rail on tablet, hidden on mobile
+//   - Sidebar: 248px on desktop, 72px icon-rail on tablet, hidden on mobile
 //     (replaced by a top app bar + bottom tab bar with Lucide-style stroke icons).
 //   - Cards have a 1px hairline border + faint top highlight (premium feel),
 //     no heavy shadows (Cloudflare Worker HTML stays print-friendly).
@@ -55,8 +55,8 @@ const STYLE = `
     --text-subtle: #64748b;
     --text-inverse: #0b1020;
 
-    /* Accent: a brighter blue than v1's #3b82f6 -- on the darker base it
-       reads as a deliberate, "lit" highlight rather than a flat fill. */
+    /* Accent: blue, with a lighter step (--accent-bright) for highlights and
+       darker steps (--accent-hover, --accent-deep) for hover/pressed states. */
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-bright: #60a5fa;
@@ -77,8 +77,7 @@ const STYLE = `
     --color-info-bg: rgba(59, 130, 246, 0.12);
     --color-info-text: #60a5fa;
 
-    /* Chart palette -- extended from v1's two-color (approved/rejected) to a
-       6-step categorical scale used by the new donut/gauge helpers. */
+    /* Chart palette -- 6-step categorical scale used by the donut/gauge helpers. */
     --chart-1: #60a5fa;
     --chart-2: #34d399;
     --chart-3: #fbbf24;
@@ -502,7 +501,7 @@ const STYLE = `
     position: relative; z-index: 1;
   }
 
-  /* ---- Charts (existing v1 SVG charts) ---- */
+  /* ---- Charts (bar chart + sparklines) ---- */
   .chart {
     display: block;
     background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-surface) 100%);
@@ -872,8 +871,8 @@ function renderNav(activeSection) {
 
 // Mobile bottom nav is a curated subset of the most-used sections, with "More"
 // as the overflow. This is intentionally different from the desktop nav so
-// mobile users get single-tap access to the four or five sections they're
-// most likely to check on a phone.
+// mobile users get single-tap access to the five sections they're most
+// likely to check on a phone.
 const MOBILE_NAV_SECTIONS = [
   ["snapshot", "Snapshot", "01"],
   ["decisions", "Decisions", "05"],
