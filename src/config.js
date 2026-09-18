@@ -280,29 +280,6 @@ export function loadConfig(env) {
     // Explicit opt-out remains available ("false") if live behavior turns
     // out to need more false-positive tuning than expected.
     entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX !== "false",
-    // Shared secret required by src/index.js's POST /backfill route
-    // (graph/pipeline.js#backfillHistoricalNews) -- that route triggers
-    // real Finnhub API calls (spends free-tier quota) and D1 writes on
-    // demand, so it must not be reachable by an arbitrary caller the way
-    // the unauthenticated GET /dashboard route is. No default on purpose,
-    // same convention as finnhubApiKey/edgarUserAgent/rssFeeds: an unset
-    // secret means the route stays disabled (503), it never falls back to
-    // "open to anyone." Set via `wrangler secret put BACKFILL_API_SECRET`
-    // (a secret, not a plain var -- same treatment as GEMINI_API_KEYS),
-    // checked against the request's `X-Backfill-Secret` header.
-    backfillApiSecret: env.BACKFILL_API_SECRET || "",
-    // Shared secret required by src/index.js's POST /backtest/run route
-    // (src/backtest/runBacktest.js) -- that route's "signal on" side spends
-    // real Gemini quota and writes to D1 on demand, same reasoning as
-    // backfillApiSecret directly above (and deliberately a SEPARATE secret
-    // from it -- backfill and backtest are two independently-costly
-    // operations, no reason to couple who can trigger one to who can
-    // trigger the other). No default on purpose, same convention as every
-    // other unset-secret-means-disabled value in this file: an unset
-    // secret means the route stays disabled (503), never "open to anyone."
-    // Set via `wrangler secret put BACKTEST_API_SECRET`, checked against
-    // the request's `X-Backtest-Secret` header.
-    backtestApiSecret: env.BACKTEST_API_SECRET || "",
     // Dashboard login (src/index.js's GET/POST /login, src/auth/session.js)
     // -- replaces typing BACKFILL_API_SECRET/BACKTEST_API_SECRET into a
     // dashboard form on every trigger with a one-time login that then
