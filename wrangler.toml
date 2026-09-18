@@ -17,30 +17,34 @@ binding = "DB"
 database_name = "news_market_ai"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
-# --- KV (Gemini cascade cooldown state + lightweight config/flags only --
-# see src/shared/cooldown.js. Free tier caps writes at 1K/day, so nothing
-# high-frequency belongs in here.) ---
+# --- KV (lightweight config/flags + Finnhub's cross-invocation 429 cooldown
+# for the `backfill` job -- see src/shared/cooldown.js. The Gemini cascade's
+# cooldown keys are NOT written from this Worker anymore (plan.md Step 6:
+# no Gemini calls originate here). Free tier caps writes at 1K/day, so
+# nothing high-frequency belongs in here.) ---
 [[kv_namespaces]]
 binding = "CACHE_KV"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
-# --- Queues (plan.md Step 3) --- POST /backfill and POST /backtest/run
-# validate + enqueue and return immediately; the actual (slow, LLM/vendor-
-# calling) work runs in this Worker's `queue()` consumer instead of inside
-# `ctx.waitUntil` on the original request. This is the fix for the
-# ~30-second cutoff `ctx.waitUntil` only guarantees past the response --
-# a queue consumer is its own separate invocation with its own wall-time
-# budget, not a tail extension of a request that already returned.
+# --- Queues (plan.md Step 3) --- POST /backfill validates + enqueues and
+# returns immediately; the actual (slow, vendor-calling) work runs in this
+# Worker's `queue()` consumer instead of inside `ctx.waitUntil` on the
+# original request. This is the fix for the ~30-second cutoff
+# `ctx.waitUntil` only guarantees past the response -- a queue consumer is
+# its own separate invocation with its own wall-time budget, not a tail
+# extension of a request that already returned.
+# Since plan.md Step 6, JOBS carries `backfill` ONLY -- `backtest` and
+# `exit_check` moved to the LLM_JOBS queue below (both call Gemini, which
+# now lives exclusively in the `llm` Worker).
 # max_batch_size = 1: each message here is already the heavy, slow item
-# this queue exists for (one full backfill or one full signal-on/off
-# backtest run) -- batching several together would just make one consumer
-# invocation more likely to hit its own CPU/wall-time limit for no benefit.
+# this queue exists for (one full backfill) -- batching several together
+# would just make one consumer invocation more likely to hit its own
+# CPU/wall-time limit for no benefit.
 # dead_letter_queue only catches an unexpected crash in queue() itself (a
 # genuine bug, e.g. a malformed message) -- ordinary business-logic
-# failures (a bad backtest run, a vendor error mid-backfill) are caught
-# inside queue(), logged/persisted as data (see src/index.js's queue()
-# handler and backtest_runs), then acked, not retried: retrying a call that
-# already spent real Gemini/Finnhub quota on failure would just spend it
+# failures (a vendor error mid-backfill) are caught inside queue(), logged
+# (see src/index.js's queue() handler), then acked, not retried: retrying a
+# call that already spent real Finnhub quota on failure would just spend it
 # again for the same result.
 [[queues.producers]]
 queue = "news-market-ai-jobs"
@@ -66,23 +70,18 @@ dead_letter_queue = "news-market-ai-jobs-dlq"
 queue = "news-market-ai-ingest"
 binding = "INGEST"
 
-# --- ANALYZE (produce only) --- `backend`'s own queue() consumes this
-# (the `analyze` branch, running runPipelineForTicker) -- unlike INGEST
-# above, `backend` still both produces AND is the consumer here, since
-# Step 6 (not yet started) is what will eventually move the ANALYZE
-# consumer out to a dedicated `llm` Worker. The new `ingest` Worker
-# (wrangler.ingest.toml) is this queue's OTHER producer -- it enqueues one
-# `analyze` message per resulting news item from its own INGEST consumer.
+# --- LLM_JOBS (produce only, plan.md Step 6) --- `backend` enqueues
+# `backtest` (POST /backtest/run) and `exit_check` (scheduled()) here; the
+# `llm` Worker (wrangler.llm.toml) is the only consumer. Both message types
+# used to ride JOBS with this Worker as their consumer, but both call
+# Gemini (backtest via the real pipeline over backfilled news, exit_check
+# via a reflection per closed position), so they moved with the rest of the
+# LLM work. No producer binding for ANALYZE is needed here anymore: the
+# `ingest` Worker is its only producer (wrangler.ingest.toml), `llm` its
+# only consumer -- `backend` neither produces nor consumes it after Step 6.
 [[queues.producers]]
-queue = "news-market-ai-analyze"
-binding = "ANALYZE"
-
-[[queues.consumers]]
-queue = "news-market-ai-analyze"
-max_batch_size = 5
-max_retries = 3
-max_concurrency = 2
-dead_letter_queue = "news-market-ai-analyze-dlq"
+queue = "news-market-ai-llm-jobs"
+binding = "LLM_JOBS"
 
 # Ingestion cadence -- GDELT updates every 15 min, so no point polling faster.
 [triggers]
@@ -103,12 +102,8 @@ head_sampling_rate = 1
 invocation_logs = true
 
 [vars]
-# Two-tier model strategy (plan.md Adopted Pattern #7): quick/cheap model for
-# high-volume analyst passes, a stronger model reserved for debate + judge +
-# trader, where reasoning quality actually matters.
-GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
-GEMINI_DEEP_MODEL = "gemini-3.5-flash"
-GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite"
+# GEMINI_QUICK_MODEL / GEMINI_DEEP_MODEL / GEMINI_FALLBACK_MODELS moved to
+# wrangler.llm.toml (plan.md Step 6) -- this Worker no longer calls Gemini.
 
 # Watchlist for GDELT ingestion (src/ingestion/sources/gdelt.js) -- one
 # GDELT DOC API query per ticker, comma-separated. See src/config.js for
@@ -126,7 +121,6 @@ WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
 # not touching that function).
 
 # Secrets -- set via `wrangler secret put <NAME>`, never committed:
-#   GEMINI_API_KEYS = comma-separated list of Gemini API keys (cascade rotates through all of them)
 #   FINNHUB_API_KEY = STILL held here too (not just on wrangler.ingest.toml)
 #     -- POST /backfill's JOBS `backfill` job (src/index.js's queue(),
 #     plan.md Step 3) calls graph/pipeline.js#backfillHistoricalNews
@@ -135,3 +129,9 @@ WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
 #     vendor keys" goal -- see that step's own plan.md section for why
 #     moving backfill's consumer isn't in scope here (JOBS can only have
 #     one consumer Worker; splitting it would be a larger redesign).
+#   GEMINI_API_KEYS -- NO LONGER held here (moved to wrangler.llm.toml,
+#     plan.md Step 6). deploy.yml no longer pushes it to this Worker, but a
+#     copy set by an earlier deploy still exists on Cloudflare until it is
+#     deleted (`wrangler secret delete GEMINI_API_KEYS`) -- nothing in this
+#     Worker reads it anymore, so it's dead weight, not a live dependency.
+#     Tracked for plan.md Step 7's secrets audit.
