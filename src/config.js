@@ -169,6 +169,22 @@ export function loadConfig(env) {
     // Same reasoning as gdeltMinRequestIntervalMs -- no documented rate limit
     // on this unofficial endpoint, so this defaults to 0, not a guess.
     yfinanceMinRequestIntervalMs: Number(env.YFINANCE_MIN_REQUEST_INTERVAL_MS) || 0,
+    // Live incident (2026-09-18): yfinance's 429s were NOT the few-hundred-ms
+    // blips shared/retry.js's exponential backoff exists for -- they persisted
+    // across every 15-minute cron tick for hours straight, same "probably a
+    // shared/rate-limited egress IP" suspicion already documented for GDELT
+    // above. Retrying in-process on every single tick (withRetry's backoff)
+    // just re-failed after burning several seconds of wall time per ticker,
+    // repeated on every invocation -- observed in production as scheduled runs
+    // dying with outcome "exceededCpu" before ever reaching Finnhub/Gemini.
+    // yfinance.js now skips a 429'd ticker's retry ladder entirely (fails fast,
+    // see that file's shouldRetry override) and records a cross-invocation KV
+    // cooldown via shared/cooldown.js#setVendorCooldown instead, keyed per
+    // ticker -- later invocations within this window skip that ticker
+    // outright rather than re-attempting a call already known to be blocked.
+    // 900s (15 min, one cron cycle) is a starting point, not tuned against how
+    // long the underlying block actually lasts.
+    yfinanceCooldownSeconds: Number(env.YFINANCE_COOLDOWN_SECONDS) || 900,
     // RSS feeds (ingestion/sources/rss.js) and standalone article pages to
     // scrape (ingestion/sources/html_scrape.js) -- "TICKER|url" pairs, or a
     // bare url when the source isn't ticker-scoped (see parseTickerUrlList

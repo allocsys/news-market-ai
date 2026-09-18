@@ -303,10 +303,14 @@ export async function collectNewsItems(config, kv) {
  * header) is logged and swallowed -- price data is a strict enhancement to
  * the pipeline, not a hard dependency (runPipelineForTicker already
  * tolerates an empty getPriceBarsAsOf result), so one bad yfinance request
- * should not block news ingestion or the pipeline run.
+ * should not block news ingestion or the pipeline run. `kv` (typically
+ * env.CACHE_KV, same as ingestFundamentals below) is passed through to
+ * fetchDailyBars for its cross-invocation 429 cooldown -- omitting it still
+ * works, it just means every invocation retries every ticker regardless of
+ * a recent 429 (fails open, same convention as edgar_cik_lookup.js).
  */
-export async function ingestPriceBars(config, db) {
-  const { bars, errors } = await fetchDailyBars(config);
+export async function ingestPriceBars(config, db, kv) {
+  const { bars, errors } = await fetchDailyBars(config, {}, { kv });
   for (const { error } of errors) {
     logSkippedSource("price bar ingestion", "yfinance", error);
   }
@@ -443,7 +447,7 @@ export async function backfillHistoricalNews(config, db, { from, to, kv } = {}) 
  * function, it's logged and that source is skipped.
  */
 export async function runScheduledIngestion(env, config, db) {
-  await ingestPriceBars(config, db);
+  await ingestPriceBars(config, db, env.CACHE_KV);
   await ingestFundamentals(config, db, env.CACHE_KV);
 
   const items = await collectNewsItems(config, env.CACHE_KV);
