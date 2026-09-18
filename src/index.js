@@ -217,9 +217,10 @@ export default {
     }
   },
 
-  // Consumer for JOBS, INGEST, and ANALYZE (see module header above for
-  // the full type-by-type breakdown). max_batch_size varies per queue
-  // (wrangler.toml) -- JOBS's is 1, INGEST/ANALYZE's are larger -- so this
+  // Consumer for JOBS and ANALYZE (see module header above for the full
+  // type-by-type breakdown; INGEST's consumer moved to the new `ingest`
+  // Worker in Step 5, src/ingest-worker.js). max_batch_size varies per
+  // queue (wrangler.toml) -- JOBS's is 1, ANALYZE's is larger -- so this
   // loops generically over `batch.messages` rather than assuming any
   // particular batch size.
   //
