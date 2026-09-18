@@ -1,4 +1,4 @@
-import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE, backtestRunsList } from "../helpers.js";
+import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE, backtestRunsList, errorState } from "../helpers.js";
 
 export function backtestTriggerForm() {
   const today = new Date().toISOString().slice(0, 10);
@@ -24,12 +24,12 @@ export function backtestTriggerForm() {
   </form>`;
 }
 
-export function renderBacktestView({ backtestRuns }) {
+export function renderBacktestView({ backtestRuns, error }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
     <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
     ${backtestTriggerForm()}
-    ${backtestRunsList(backtestRuns)}
+    ${error ? errorState(error) : backtestRunsList(backtestRuns)}
   </section>`;
 }
 
