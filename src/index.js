@@ -19,26 +19,34 @@
 // time budget, instead of one big scheduled() invocation doing everything
 // (which is what originally hit the free-tier CPU cap Step 0 diagnosed).
 //
-// `queue` handles THREE queues' worth of message types through one
-// handler (Cloudflare Workers routes every consumer for a script through
-// the same queue() export -- there's no need to branch on which physical
-// queue delivered a batch, only on the message's own `type`):
+// `queue` handles TWO queues' worth of message types through one handler
+// (Cloudflare Workers routes every consumer for a script through the same
+// queue() export -- there's no need to branch on which physical queue
+// delivered a batch, only on the message's own `type`):
 //   - JOBS (plan.md Step 3): `backfill` / `backtest`, enqueued by POST
 //     /backfill and POST /backtest/run below; `exit_check` (plan.md Step
 //     4), enqueued by scheduled() above, kept on its OWN message so an
 //     exit-check failure is never entangled with an ingestion failure. All
 //     three are ack-and-log on a business-logic failure -- see that
 //     branch's own comment for why retrying wouldn't help any of them.
-//   - INGEST (plan.md Step 4): `ingest_ticker` / `ingest_feeds`, enqueued
-//     by scheduled() above. Fetches + writes D1 for one ticker (or the
-//     general feeds), then enqueues one ANALYZE message per resulting news
-//     item. Also ack-and-log on failure -- a failed ingest has nothing
-//     partial to resume, next cron tick just tries again.
-//   - ANALYZE (plan.md Step 4): `analyze`, enqueued by the INGEST handling
-//     above. Runs runPipelineForTicker for one (ticker, newsItem) pair.
-//     UNLIKE every other type here, a failure is RETRIED, not ack'd -- see
-//     that branch's own comment for why that's actually correct given
+//   - ANALYZE (plan.md Step 4): `analyze`, enqueued by the new `ingest`
+//     Worker's own INGEST consumer (src/ingest-worker.js, plan.md Step 5 --
+//     this Worker no longer consumes INGEST itself, see wrangler.toml).
+//     Runs runPipelineForTicker for one (ticker, newsItem) pair. UNLIKE
+//     every other type here, a failure is RETRIED, not ack'd -- see that
+//     branch's own comment for why that's actually correct given
 //     checkpointer.js's resume semantics (Adopted Pattern #12).
+//
+// `ingest_ticker` / `ingest_feeds` (the INGEST queue's message types) moved
+// entirely to the new `ingest` Worker (plan.md Step 5, src/ingest-worker.js)
+// -- this Worker's scheduled() still ENQUEUES them (see below, unchanged),
+// it just no longer consumes them itself. That Worker alone now holds
+// FINNHUB_API_KEY for live ingestion and the EDGAR CIK/name-index KV cache
+// (see wrangler.ingest.toml) -- with one known, deliberate exception: this
+// Worker still separately holds its own FINNHUB_API_KEY too, because the
+// `backfill` JOBS job below calls Finnhub directly via
+// backfillHistoricalNews, and JOBS has no consumer to move that to without
+// a larger redesign (see wrangler.toml's own comment on this).
 //
 // A business-logic failure (bad backtest run, vendor error mid-backfill,
 // etc.) is caught inside its own branch and logged/persisted as data, then
