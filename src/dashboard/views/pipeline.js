@@ -24,7 +24,7 @@ export function renderPipelineView({ checkpoints, error }) {
     }).join("");
 
   const stagePanel = checkpoints.length === 0 ? "" : `<div class="panel" style="margin-bottom:1.5rem">
-    <div class="panel-header"><span class="panel-title">Stage distribution</span><span style="font-size:0.6875rem;color:var(--text-muted);font-family:var(--font-mono)">${checkpoints.length} ticker${checkpoints.length === 1 ? "" : "s"} in flight</span></div>
+    <div class="panel-header"><span class="panel-title">Stage distribution</span><span style="font-size:0.6875rem;color:var(--text-muted);font-family:var(--font-mono)">${checkpoints.length} recent checkpoint${checkpoints.length === 1 ? "" : "s"}</span></div>
     <div class="panel-body">${stageRows || `<p class="empty">No checkpoints recorded.</p>`}</div>
   </div>`;
 
