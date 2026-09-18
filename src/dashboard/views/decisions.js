@@ -55,9 +55,9 @@ export function renderDecisionsView({ decisions, params, error }) {
           ${decisions.length === 0 ? `<p class="empty">No decisions match this filter.</p>` : (() => {
             const longs = decisions.filter((d) => d.thesis?.direction === "long").length;
             const shorts = decisions.filter((d) => d.thesis?.direction === "short").length;
-            const neutral = decisions.length - longs - shorts;
+            const neutral = decisions.length - longs - shorts; // "other": neutral OR no thesis recorded
             const total = decisions.length || 1;
-            const bar = (count, color) => `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.6rem"><span style="font-size:0.75rem;color:var(--text-muted);min-width:60px">${escapeHtml(color === "var(--color-success-text)" ? "Long" : color === "var(--color-danger-text)" ? "Short" : "Neutral")}</span><div style="flex:1;height:8px;background:var(--bg-elevated);border-radius:4px;overflow:hidden"><div style="width:${(count/total*100).toFixed(1)}%;height:100%;background:${color};border-radius:4px"></div></div><span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-main);min-width:48px;text-align:right">${count} (${(count/total*100).toFixed(0)}%)</span></div>`;
+            const bar = (count, color) => `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.6rem"><span style="font-size:0.75rem;color:var(--text-muted);min-width:60px">${escapeHtml(color === "var(--color-success-text)" ? "Long" : color === "var(--color-danger-text)" ? "Short" : "Other")}</span><div style="flex:1;height:8px;background:var(--bg-elevated);border-radius:4px;overflow:hidden"><div style="width:${(count/total*100).toFixed(1)}%;height:100%;background:${color};border-radius:4px"></div></div><span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-main);min-width:48px;text-align:right">${count} (${(count/total*100).toFixed(0)}%)</span></div>`;
             return bar(longs, "var(--color-success-text)") + bar(shorts, "var(--color-danger-text)") + (neutral > 0 ? bar(neutral, "var(--chart-6)") : "");
           })()}
         </div>
