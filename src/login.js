@@ -1,61 +1,78 @@
 // Server-rendered login page for src/index.js's GET/POST /login routes --
-// zero client JS (same philosophy as dashboard.js, minus that file's one
-// setDateRange script, which has no reason to exist here). Deliberately
-// its own small file/style rather than importing dashboard.js's STYLE:
-// this page is one centered card, not a data-dense multi-section layout,
-// so sharing the full ledger stylesheet would pull in far more than this
-// page uses. Palette (ink-navy + brass accent) intentionally matches
-// dashboard.js's STYLE so the login -> dashboard transition doesn't jar.
+// zero client JS (same philosophy as dashboard.js). Deliberately its own
+// small file/style rather than importing shell.js's STYLE: this page is
+// one centered card, not a data-dense multi-section layout. Palette uses
+// the new professional product dark theme and Inter typography matching shell.js.
 
 import { escapeHtml } from "./dashboard/helpers.js";
 
 const LOGIN_STYLE = `
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg-base: #090d16;
+    --bg-surface: #0f172a;
+    --border-color: #1e293b;
+    --text-main: #f1f5f9;
+    --text-muted: #94a3b8;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-subtle: rgba(59, 130, 246, 0.15);
+    --color-danger-bg: rgba(239, 68, 68, 0.12);
+    --color-danger-text: #f87171;
+    --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
   * { box-sizing: border-box; }
   body {
-    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+    font-family: var(--font-sans);
     margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    background: #0a0d12; color: #d9d4c4;
+    background: var(--bg-base); color: var(--text-main);
   }
   .card {
-    width: 100%; max-width: 340px; margin: 1.5rem;
-    background: #0d1118; border: 1px solid #232b35; padding: 2rem 2rem 2.25rem;
+    width: 100%; max-width: 360px; margin: 1.5rem;
+    background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 10px;
+    padding: 2rem 2rem 2.25rem;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
   }
   .wordmark-main {
-    font-size: 1.05rem; font-weight: 600; color: #efe9d8;
-    border-bottom: 2px double #b8944f; padding-bottom: 0.55rem; margin-bottom: 1.5rem;
+    font-size: 1.125rem; font-weight: 600; color: var(--text-main);
+    border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem; margin-bottom: 1.5rem;
   }
   .wordmark-sub {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase;
-    color: #6e7787; display: block; margin-top: 0.3rem;
+    font-family: var(--font-sans);
+    font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-muted); display: block; margin-top: 0.35rem; font-weight: 500;
   }
   label {
-    display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 0.68rem; color: #6e7787; text-transform: uppercase; letter-spacing: 0.05em;
-    margin-bottom: 0.4rem;
+    display: block; font-family: var(--font-sans);
+    font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+    margin-bottom: 0.5rem;
   }
-  .field { margin-bottom: 1.1rem; }
+  .field { margin-bottom: 1.25rem; }
   input {
-    width: 100%; background: #0a0d12; color: #d9d4c4; border: 1px solid #2c3644;
-    padding: 0.55rem 0.6rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 0.9rem;
+    width: 100%; background: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-color);
+    padding: 0.6rem 0.75rem; font-family: var(--font-sans);
+    font-size: 0.9375rem; border-radius: 6px;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
   }
-  input:focus { outline: none; border-color: #b8944f; }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-subtle); }
   button {
-    width: 100%; margin-top: 0.4rem;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.82rem; font-weight: 600;
-    color: #0a0d12; background: #b8944f; border: none; padding: 0.6rem; cursor: pointer;
+    width: 100%; margin-top: 0.5rem;
+    font-family: var(--font-sans); font-size: 0.875rem; font-weight: 600;
+    color: #ffffff; background: var(--accent); border: none; padding: 0.625rem 1rem; border-radius: 6px; cursor: pointer;
+    height: 40px;
+    transition: background 150ms ease, box-shadow 150ms ease;
   }
-  button:hover { background: #cba764; }
+  button:hover { background: var(--accent-hover); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-subtle); }
   .error {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    color: #e8b4a0; background: #241512; border: 1px solid #c1502e;
-    font-size: 0.82rem; padding: 0.6rem 0.75rem; margin-bottom: 1.1rem;
+    font-family: var(--font-sans);
+    color: var(--color-danger-text); background: var(--color-danger-bg); border: 1px solid var(--color-danger-text);
+    font-size: 0.875rem; padding: 0.75rem 1rem; margin-bottom: 1.25rem; border-radius: 6px;
+    font-weight: 500;
   }
   .disabled-note {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    color: #7c8698; font-size: 0.8rem; line-height: 1.5;
+    font-family: var(--font-sans);
+    color: var(--text-muted); font-size: 0.875rem; line-height: 1.5;
   }
 `;
 
@@ -92,6 +109,9 @@ export function renderLoginPage({ error = null, disabled = false } = {}) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>news-market-ai &mdash; login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>${LOGIN_STYLE}</style>
 </head>
 <body>

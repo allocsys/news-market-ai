@@ -14,6 +14,6 @@ export function renderRunAcceptedPage({ title, detail, backLink, backLabel }) {
     <h2>${escapeHtml(title)} accepted</h2>
     <p class="note">${escapeHtml(detail)}</p>
     <p class="note">The run is in progress in the background -- this page does not wait for it to finish, so nothing further will happen here.</p>
-    <p class="note">Check back on <a href="${escapeHtml(backLink)}" style="color:#6f92b8;">${escapeHtml(backLabel)}</a> in a minute or two; results will appear there once the run completes.</p>
+    <p class="note">Check back on <a href="${escapeHtml(backLink)}" style="color:var(--color-info-text);">${escapeHtml(backLabel)}</a> in a minute or two; results will appear there once the run completes.</p>
   </section>`;
 }
