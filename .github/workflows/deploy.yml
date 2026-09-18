@@ -32,7 +32,8 @@
 #   - Fail-fast secret-presence checks before touching Cloudflare, so a
 #     misconfigured repo fails with a clear message instead of a confusing
 #     wrangler error deep in a deploy step.
-#   - GEMINI_API_KEYS pushed via `wrangler secret put` after a successful
+#   - GEMINI_API_KEYS (pushed by the `deploy-llm` job since plan.md Step 6, no
+#     longer by the backend `deploy` job) pushed via `wrangler secret put` after a successful
 #     deploy, same idempotent-on-repeat-run shape as ai-campaign-builder's
 #     JWT_SECRET/VISION_*/B2_* secret-push steps.
 #
@@ -69,6 +70,7 @@ jobs:
       migrations: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.migrations == 'true' }}
       dashboard: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
       ingest: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ingest == 'true' }}
+      llm: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.llm == 'true' }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_dispatch'
@@ -95,6 +97,24 @@ jobs:
               - 'src/ingest-worker.js'
               - 'wrangler.ingest.toml'
               - 'src/graph/pipeline.js'
+              - 'src/ingestion/**'
+              - 'src/storage/**'
+              - 'src/shared/**'
+              - 'src/config.js'
+              - '.github/workflows/deploy.yml'
+            llm:
+              # Broader than the other Workers' filters on purpose: llm-worker.js
+              # imports graph/pipeline.js, exit_check.js and backtest/runBacktest.js,
+              # which between them pull in agents/, llm/, backtest/, storage/,
+              # shared/ and (via pipeline.js's ingestion imports) ingestion/ --
+              # a change to any of those changes what gets bundled into this Worker.
+              - 'src/llm-worker.js'
+              - 'wrangler.llm.toml'
+              - 'src/graph/**'
+              - 'src/agents/**'
+              - 'src/llm/**'
+              - 'src/backtest/**'
+              - 'src/schemas/**'
               - 'src/ingestion/**'
               - 'src/storage/**'
               - 'src/shared/**'
@@ -224,30 +244,30 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Ensure LLM_JOBS queue exists (plan.md Step 6)
+        uses: ./.github/actions/ensure-queue
+        with:
+          queue-name: news-market-ai-llm-jobs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Ensure LLM_JOBS dead-letter queue exists (plan.md Step 6)
+        uses: ./.github/actions/ensure-queue
+        with:
+          queue-name: news-market-ai-llm-jobs-dlq
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy
-      - name: Set GEMINI_API_KEYS on the deployed Worker
-        # Required for the pipeline to do anything useful (every LLM call
-        # goes through src/llm/gemini/client.js's cascade), but pushing the
-        # secret is still kept out of the fail-fast check above: a first
-        # deploy that stands up the Worker/D1/KV/cron trigger but hasn't
-        # configured a Gemini key yet should still succeed rather than
-        # blocking on infra that's unrelated to whether a key is set.
-        # `wrangler secret put` is idempotent against a repeat run with the
-        # same value, same as ai-campaign-builder's equivalent steps.
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-        run: |
-          if [ -z "$GEMINI_API_KEYS" ]; then
-            echo "GEMINI_API_KEYS repo secret not set -- skipping. The Worker is deployed but the Gemini cascade will fail until this is configured."
-            exit 0
-          fi
-          echo "$GEMINI_API_KEYS" | npx wrangler secret put GEMINI_API_KEYS
+      # (No GEMINI_API_KEYS push here anymore -- plan.md Step 6 moved every
+      # Gemini call into the `llm` Worker, so the `deploy-llm` job below is the
+      # only job that ever sees that secret. A copy pushed to this Worker by an
+      # earlier deploy still exists on Cloudflare until deleted; see
+      # wrangler.toml's secrets comment and plan.md Step 7's secrets audit.)
       - name: Set FINNHUB_API_KEY on the deployed Worker
         # Same idempotent, non-blocking shape as the GEMINI_API_KEYS step
         # above -- Finnhub replaced GDELT as the news source (2026-09-18,
@@ -353,6 +373,26 @@ jobs:
             echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
             exit 1
           fi
+      - name: Ensure D1 database exists (patches wrangler.ingest.toml)
+        # Added in plan.md Step 6: this job binds D1 + CACHE_KV but, as first
+        # written in Step 5, never resolved their placeholder ids -- the
+        # ensure-* actions only patched wrangler.toml, and each job has its own
+        # checkout, so `wrangler deploy --config wrangler.ingest.toml` here would
+        # have shipped REPLACE_WITH_* ids. The actions now take a
+        # `wrangler-config` input.
+        uses: ./.github/actions/ensure-d1-database
+        with:
+          wrangler-config: wrangler.ingest.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Ensure CACHE_KV namespace exists (patches wrangler.ingest.toml)
+        uses: ./.github/actions/ensure-kv-namespace
+        with:
+          wrangler-config: wrangler.ingest.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy ingest Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -379,3 +419,73 @@ jobs:
             exit 0
           fi
           echo "$FINNHUB_API_KEY" | npx wrangler secret put FINNHUB_API_KEY --config wrangler.ingest.toml
+
+  # `llm` Worker (plan.md Step 6) -- own path-filtered job, own concurrency
+  # group (same reasoning as deploy-dashboard/deploy-ingest above: an
+  # unrelated push must never cancel this Worker's in-flight deploy, and vice
+  # versa), and the ONLY job that ever sees GEMINI_API_KEYS. Depends on
+  # backend's own `deploy` job, not just `test`, since backend's deploy job
+  # is what provisions the news-market-ai-analyze / news-market-ai-llm-jobs
+  # queues (+ DLQs) this Worker's wrangler.llm.toml consumes from (via the
+  # same ensure-queue composite action, reused unmodified), and the D1/KV
+  # resources it then resolves for itself below.
+  deploy-llm:
+    needs: [changes, deploy]
+    if: always() && needs.deploy.result == 'success' && needs.changes.outputs.llm == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-news-market-ai-llm-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Check required secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
+            exit 1
+          fi
+      - name: Ensure D1 database exists (patches wrangler.llm.toml)
+        uses: ./.github/actions/ensure-d1-database
+        with:
+          wrangler-config: wrangler.llm.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Ensure CACHE_KV namespace exists (patches wrangler.llm.toml)
+        uses: ./.github/actions/ensure-kv-namespace
+        with:
+          wrangler-config: wrangler.llm.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy llm Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:llm
+      - name: Set GEMINI_API_KEYS on the llm Worker
+        # Required for the pipeline to do anything useful (every LLM call
+        # goes through src/llm/gemini/client.js's cascade), but pushing the
+        # secret is still kept out of the fail-fast check above: a first
+        # deploy that stands up the Worker/queues hasn't configured a Gemini
+        # key yet should still succeed rather than blocking on infra that's
+        # unrelated to whether a key is set. `wrangler secret put` is
+        # idempotent against a repeat run with the same value, same as
+        # ai-campaign-builder's equivalent steps. Moved here from backend's
+        # deploy job (plan.md Step 6) -- this is now the ONLY job that
+        # touches GEMINI_API_KEYS.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+        run: |
+          if [ -z "$GEMINI_API_KEYS" ]; then
+            echo "GEMINI_API_KEYS repo secret not set -- skipping. The llm Worker is deployed but the Gemini cascade will fail until this is configured."
+            exit 0
+          fi
+          echo "$GEMINI_API_KEYS" | npx wrangler secret put GEMINI_API_KEYS --config wrangler.llm.toml
