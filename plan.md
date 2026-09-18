@@ -455,9 +455,8 @@ before merging (same deferral as Step 3, per this session's instruction --
 to be checked once, after Step 7); no live deploy verification against real
 Cloudflare infra yet either -- both outstanding for whenever that check happens.
 
-### Step 5 -- Extract `ingest` Worker -- DONE 2026-09-19 (pending merge)
-Built on `feat/step5-ingest-worker`, not yet merged to main as of this write-up
--- PR number/squash commit to be filled in once merged.
+### Step 5 -- Extract `ingest` Worker -- DONE 2026-09-19
+Merged to main via PR #31 (squash commit `7ace9be`).
 
 New `wrangler.ingest.toml` + `src/ingest-worker.js` (`news-market-ai-ingest`
 Worker): owns the INGEST queue's consumer -- `ingest_ticker`/`ingest_feeds`
