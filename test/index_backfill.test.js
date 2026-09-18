@@ -16,6 +16,20 @@ import worker from "../src/index.js";
 import { createSessionCookie } from "../src/auth/session.js";
 import { loadConfig } from "../src/config.js";
 
+/**
+ * createSessionCookie returns the FULL Set-Cookie header string ("nmai_session=<token>;
+ * Path=/; HttpOnly; ..."), not just the token -- this pulls out just the
+ * "nmai_session=<token>" pair so it can be sent as-is in a request's Cookie
+ * header. Passing the raw createSessionCookie() return straight into a
+ * `Cookie: nmai_session=${cookie}` template (as an earlier version of this
+ * file did) double-prefixes the cookie name and produces a Cookie value
+ * getSessionUsername can never verify -- every session-authenticated test
+ * below depends on going through this helper instead.
+ */
+function sessionCookieHeader(setCookieString) {
+  return setCookieString.split(";")[0];
+}
+
 class FakeNewsDb {
   constructor() {
     this.newsItems = [];
@@ -80,12 +94,12 @@ test("POST /backfill returns 401 when there's no session cookie, or an invalid/f
 test("POST /backfill returns 400 for a missing or malformed from/to", async (t) => {
   const env = baseEnv({ DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "pw", JWT_SECRET: "secret" });
   const config = loadConfig(env);
-  const cookie = await createSessionCookie("admin", config);
+  const cookie = sessionCookieHeader(await createSessionCookie("admin", config));
 
   const missing = await worker.fetch(
     new Request("https://worker.example/backfill?from=2024-01-01", { 
         method: "POST", 
-        headers: { Cookie: `nmai_session=${cookie}` } 
+        headers: { Cookie: cookie } 
     }),
     env,
   );
@@ -94,7 +108,7 @@ test("POST /backfill returns 400 for a missing or malformed from/to", async (t) 
   const malformed = await worker.fetch(
     new Request("https://worker.example/backfill?from=not-a-date&to=2024-01-31", { 
         method: "POST", 
-        headers: { Cookie: `nmai_session=${cookie}` } 
+        headers: { Cookie: cookie } 
     }),
     env,
   );
@@ -104,13 +118,13 @@ test("POST /backfill returns 400 for a missing or malformed from/to", async (t) 
 test("POST /backfill with a valid session cookie and valid range calls backfillHistoricalNews and reports counts", async (t) => {
   const env = baseEnv({ DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "pw", JWT_SECRET: "secret" });
   const config = loadConfig(env);
-  const cookie = await createSessionCookie("admin", config);
+  const cookie = sessionCookieHeader(await createSessionCookie("admin", config));
   
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const request = new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31", {
     method: "POST",
-    headers: { Cookie: `nmai_session=${cookie}` },
+    headers: { Cookie: cookie },
   });
 
   const response = await worker.fetch(request, env);
@@ -124,14 +138,14 @@ test("POST /backfill with a valid session cookie and valid range calls backfillH
 test("POST /backfill accepts a form-encoded body (no secret field) -- dashboard's backfillTriggerForm submits this way", async (t) => {
   const env = baseEnv({ DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "pw", JWT_SECRET: "secret" });
   const config = loadConfig(env);
-  const cookie = await createSessionCookie("admin", config);
+  const cookie = sessionCookieHeader(await createSessionCookie("admin", config));
   
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const body = new URLSearchParams({ from: "2024-01-01", to: "2024-01-31" });
   const request = new Request("https://worker.example/backfill", {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", Cookie: `nmai_session=${cookie}` },
+    headers: { "content-type": "application/x-www-form-urlencoded", Cookie: cookie },
     body: body.toString(),
   });
 
@@ -145,7 +159,7 @@ test("POST /backfill accepts a form-encoded body (no secret field) -- dashboard'
 test("POST /backfill's query string still wins over a form field when both are present", async (t) => {
   const env = baseEnv({ DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "pw", JWT_SECRET: "secret" });
   const config = loadConfig(env);
-  const cookie = await createSessionCookie("admin", config);
+  const cookie = sessionCookieHeader(await createSessionCookie("admin", config));
   
   t.mock.method(global, "fetch", async (fetchUrl) => {
     assert.match(String(fetchUrl), /from=2024-02-01/);
@@ -155,7 +169,7 @@ test("POST /backfill's query string still wins over a form field when both are p
   const body = new URLSearchParams({ from: "2024-01-01", to: "2024-01-31" });
   const request = new Request("https://worker.example/backfill?from=2024-02-01&to=2024-02-28", {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", Cookie: `nmai_session=${cookie}` },
+    headers: { "content-type": "application/x-www-form-urlencoded", Cookie: cookie },
     body: body.toString(),
   });
 
@@ -171,7 +185,7 @@ test("POST /backfill returns 500 with the failure message on a real (non-vendor)
   }
   const env = baseEnv({ DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "pw", JWT_SECRET: "secret", DB: new ThrowingDb() });
   const config = loadConfig(env);
-  const cookie = await createSessionCookie("admin", config);
+  const cookie = sessionCookieHeader(await createSessionCookie("admin", config));
   
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
@@ -180,7 +194,7 @@ test("POST /backfill returns 500 with the failure message on a real (non-vendor)
 
   const request = new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31", {
     method: "POST",
-    headers: { Cookie: `nmai_session=${cookie}` },
+    headers: { Cookie: cookie },
   });
 
   const response = await worker.fetch(request, env);
