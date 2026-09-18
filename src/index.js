@@ -57,15 +57,31 @@ export default {
           headers: { "content-type": "application/json" },
         });
       }
-      if (request.headers.get("X-Backfill-Secret") !== config.backfillApiSecret) {
+
+      // Same dual-caller convention as /backtest/run below: a scripted/curl
+      // caller sends the secret as X-Backfill-Secret + from/to as query
+      // params; the dashboard's plain <form method="post"> trigger (added
+      // alongside the backtest one, see src/dashboard.js#backfillTriggerForm)
+      // has no way to set a custom header, so its fields (including the
+      // secret) arrive as a urlencoded body instead. Query string takes
+      // precedence when both are present; body is the fallback for
+      // whichever fields the query string didn't supply.
+      const contentType = request.headers.get("content-type") || "";
+      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
+        ? await request.formData()
+        : null;
+      const fromForm = (key) => (form ? form.get(key) : null);
+
+      const secret = request.headers.get("X-Backfill-Secret") ?? fromForm("secret");
+      if (secret !== config.backfillApiSecret) {
         return new Response(JSON.stringify({ error: "unauthorized" }), {
           status: 401,
           headers: { "content-type": "application/json" },
         });
       }
 
-      const from = url.searchParams.get("from");
-      const to = url.searchParams.get("to");
+      const from = url.searchParams.get("from") ?? fromForm("from");
+      const to = url.searchParams.get("to") ?? fromForm("to");
       if (!isPlausibleDateString(from) || !isPlausibleDateString(to)) {
         return new Response(JSON.stringify({ error: "from/to query params are required, as YYYY-MM-DD" }), {
           status: 400,
