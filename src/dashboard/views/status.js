@@ -7,7 +7,7 @@
 // rather than blocking on the full run (which can be long and would
 // otherwise risk a request timeout on a large date range).
 
-import { escapeHtml } from "./helpers.js";
+import { escapeHtml } from "../helpers.js";
 
 export function renderRunAcceptedPage({ title, detail, backLink, backLabel }) {
   return `<section id="run-accepted">
