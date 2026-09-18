@@ -18,10 +18,17 @@ export function errorState(message) {
   return `<p class="empty error-inline">Couldn't load this section${message ? `: ${escapeHtml(message)}` : ""}.</p>`;
 }
 
-export function statusBadge(status) {
+// `status` drives the color/icon (must be "approved", "rejected", or anything else for
+// neutral); `label` is the text actually shown and defaults to `status` for call sites
+// (like decisions) where the raw status doubles as the display text. Callers with their
+// own status vocabulary (e.g. backtest's complete/running/failed) must map to
+// approved/rejected/neutral explicitly rather than passing their label through as
+// `status` -- passing a label through as status is exactly what silently collapsed
+// every backtest run to the same "neutral / \u2014" badge previously.
+export function statusBadge(status, label = status) {
   const cls = status === "approved" ? "status-approved" : status === "rejected" ? "status-rejected" : "status-neutral";
   const icon = status === "approved" ? "\u2713" : status === "rejected" ? "\u2715" : "\u2014";
-  return `<span class="status ${cls}"><span>${icon}</span> ${escapeHtml(status)}</span>`;
+  return `<span class="status ${cls}"><span>${icon}</span> ${escapeHtml(label)}</span>`;
 }
 
 export const ACTIVITY_DAYS_OPTIONS = [7, 14, 30, 60];
@@ -175,8 +182,8 @@ export function backtestRunsList(runs) {
   if (runs.length === 0) return `<p class="empty">No backtest runs yet -- use the form above to trigger one.</p>`;
   return runs
     .map((r) => {
-      const statusCls = r.status === "complete" ? "status-approved" : r.status === "failed" ? "status-rejected" : "status-neutral";
-      const summary = `<span class="ticker">${escapeHtml(r.tickers.join(", "))}</span> &middot; ${fmtTime(r.testStart)} &rarr; ${fmtTime(r.testEnd)} &middot; ${statusBadge(BACKTEST_STATUS_LABEL[r.status] ?? r.status)}`;
+      const semanticStatus = r.status === "complete" ? "approved" : r.status === "failed" ? "rejected" : "neutral";
+      const summary = `<span class="ticker">${escapeHtml(r.tickers.join(", "))}</span> &middot; ${fmtTime(r.testStart)} &rarr; ${fmtTime(r.testEnd)} &middot; ${statusBadge(semanticStatus, BACKTEST_STATUS_LABEL[r.status] ?? r.status)}`;
       const body = r.status === "complete"
         ? backtestResultTable(r.result)
         : r.status === "failed"
