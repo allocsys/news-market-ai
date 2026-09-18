@@ -749,6 +749,89 @@ const STYLE = `
     .bottom-nav .nav-index { display: none; }
   }
 
+  /* ---- Mini stat rows (big number + label, used inside panels) ---- */
+  .mini-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 1rem 1.5rem; }
+  .mini-stat { min-width: 0; }
+  .mini-stat-value {
+    font-family: var(--font-display); font-size: 1.5rem; font-weight: 600;
+    font-variant-numeric: tabular-nums; line-height: 1.2; color: var(--text-main);
+  }
+  .mini-stat-label {
+    font-size: 0.6875rem; color: var(--text-muted); margin-top: 0.15rem;
+    text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+  }
+  .panel-body-flush { padding: 0; }
+
+  /* ---- Mobile: tables become stacked cards -------------------------------------
+     Below 768px a 5-7 column table can't fit, and horizontal scrolling hides the
+     columns that matter. Instead every row (.table-wrap tables and the health
+     table in .panel-body-flush) renders as a card: the .cell-title cell (ticker /
+     source / metric) is the heading, and every other cell is a label + value pair
+     in a 2-column grid. Labels come from each td's data-label (the header row is
+     visually hidden but kept for screen readers). .cell-wide spans both columns;
+     grid-auto-flow: dense back-fills gaps left by wide cells. Pure CSS, no JS. */
+  @media (max-width: 767px) {
+    .table-wrap {
+      max-height: none; overflow: visible;
+      border: none; border-radius: 0; background: transparent; box-shadow: none;
+      margin-bottom: 1rem;
+    }
+    :is(.table-wrap, .panel-body-flush) table,
+    :is(.table-wrap, .panel-body-flush) tbody { display: block; width: 100%; }
+    :is(.table-wrap, .panel-body-flush) thead {
+      position: absolute; width: 1px; height: 1px; overflow: hidden;
+      clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+    }
+    :is(.table-wrap, .panel-body-flush) tr {
+      --card-bg: var(--bg-surface);
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-flow: row dense; align-items: start; gap: 0.75rem 1rem;
+      padding: 0.9rem 1rem; margin-bottom: 0.75rem;
+      background: var(--card-bg); border: 1px solid var(--border-color);
+      border-radius: var(--radius-md); box-shadow: var(--shadow-card);
+    }
+    /* Cards nested inside another surface (panel / expanded backtest run) step up one shade. */
+    .panel :is(.table-wrap, .panel-body-flush) tr,
+    .llm-answer-body :is(.table-wrap, .panel-body-flush) tr { --card-bg: var(--bg-elevated); box-shadow: none; }
+    :is(.table-wrap, .panel-body-flush) tbody tr:hover { background: var(--card-bg); }
+    :is(.table-wrap, .panel-body-flush) tr.stale-row { border-color: rgba(245, 158, 11, 0.35); }
+    .panel-body-flush { padding: 0.75rem 0.75rem 0.05rem; }
+
+    :is(.table-wrap, .panel-body-flush) td {
+      display: block; padding: 0; border: none; min-width: 0; overflow-wrap: anywhere;
+    }
+    :is(.table-wrap, .panel-body-flush) td[data-label]::before {
+      content: attr(data-label); display: block; margin-bottom: 0.2rem;
+      font-family: var(--font-sans); font-size: 0.625rem; font-weight: 600;
+      letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-muted);
+    }
+    :is(.table-wrap, .panel-body-flush) td.cell-wide { grid-column: 1 / -1; }
+    :is(.table-wrap, .panel-body-flush) td.cell-title {
+      grid-column: 1 / -1; padding-bottom: 0.65rem;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 1rem; font-weight: 600;
+    }
+
+    /* Backtest metric rows: Metric title + ON / OFF / Delta as three tiles. */
+    :is(.table-wrap, .panel-body-flush) tr.rt-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    :is(.table-wrap, .panel-body-flush) td.status-approved,
+    :is(.table-wrap, .panel-body-flush) td.status-rejected,
+    :is(.table-wrap, .panel-body-flush) td.status-neutral { padding: 0.3rem 0.5rem; border-radius: var(--radius-sm); }
+    :is(.table-wrap, .panel-body-flush) td.status-approved::before,
+    :is(.table-wrap, .panel-body-flush) td.status-rejected::before,
+    :is(.table-wrap, .panel-body-flush) td.status-neutral::before { color: inherit; opacity: 0.75; }
+
+    /* Full-width, thumb-sized disclosure rows (LLM reasoning, backtest runs). */
+    .llm-answer summary {
+      display: flex; flex-wrap: wrap; align-items: center;
+      gap: 0.3rem 0.5rem; width: 100%; min-height: 44px;
+    }
+
+    /* Mini stats: fixed column count on phones (set per call site via --cols). */
+    .mini-stats { grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 0.85rem 0.75rem; }
+    .mini-stat-value { font-size: 1.375rem; }
+  }
+
   @media (min-width: 1024px) {
     .mobile-header { display: none; }
     .bottom-nav { display: none; }
