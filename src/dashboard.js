@@ -1031,13 +1031,13 @@ export async function renderDashboardHtml(db, { searchParams, sessionUsername = 
 
       <section id="backfill">
         <h2>Historical news backfill</h2>
-        <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires the shared backfill secret. rss/scrape sources can't be backfilled this way (see graph/pipeline.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
+        <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires either a logged-in dashboard session or the shared backfill secret. rss/scrape sources can't be backfilled this way (see graph/pipeline.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
         ${backfillTriggerForm(Boolean(sessionUsername))}
       </section>
 
       <section id="backtest">
         <h2>Backtest results</h2>
-        <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires the shared backtest secret. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
+        <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires either a logged-in dashboard session or the shared backtest secret. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
         ${backtestTriggerForm(Boolean(sessionUsername))}
         ${backtestRunsList(backtestRuns)}
       </section>
