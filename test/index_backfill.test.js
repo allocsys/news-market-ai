@@ -106,6 +106,57 @@ test("POST /backfill with a correct secret and valid range calls backfillHistori
   assert.equal(env.DB.newsItems.length, 1);
 });
 
+test("POST /backfill accepts a form-encoded body (secret/from/to as form fields, no X-Backfill-Secret header) -- the dashboard's backfillTriggerForm submits this way since a plain <form> can't set a custom header", async (t) => {
+  const env = baseEnv({ BACKFILL_API_SECRET: "correct-secret" });
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
+
+  const body = new URLSearchParams({ secret: "correct-secret", from: "2024-01-01", to: "2024-01-31" });
+  const request = new Request("https://worker.example/backfill", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 200);
+  const responseBody = await response.json();
+  assert.equal(responseBody.inserted, 1);
+  assert.equal(env.DB.newsItems.length, 1);
+});
+
+test("POST /backfill's query string still wins over a form field when both are present", async (t) => {
+  const env = baseEnv({ BACKFILL_API_SECRET: "correct-secret" });
+  t.mock.method(global, "fetch", async (fetchUrl) => {
+    // finnhub.js builds its request URL from the resolved from/to -- assert
+    // the query string's dates (not the form body's) actually made it through.
+    assert.match(String(fetchUrl), /from=2024-02-01/);
+    return { ok: true, status: 200, json: async () => mockFinnhubJson() };
+  });
+
+  const body = new URLSearchParams({ secret: "correct-secret", from: "2024-01-01", to: "2024-01-31" });
+  const request = new Request("https://worker.example/backfill?from=2024-02-01&to=2024-02-28", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 200);
+});
+
+test("POST /backfill returns 401 for a form-encoded request with a wrong secret", async () => {
+  const env = baseEnv({ BACKFILL_API_SECRET: "correct-secret" });
+  const body = new URLSearchParams({ secret: "wrong-secret", from: "2024-01-01", to: "2024-01-31" });
+  const request = new Request("https://worker.example/backfill", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 401);
+});
+
 test("POST /backfill returns 500 with the failure message on a real (non-vendor) bug, e.g. a DB write failure", async (t) => {
   // A network/vendor failure is NOT what should hit this path -- finnhub.js
   // isolates per-ticker VendorErrors internally, so backfillHistoricalNews

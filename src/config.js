@@ -303,5 +303,35 @@ export function loadConfig(env) {
     // Set via `wrangler secret put BACKTEST_API_SECRET`, checked against
     // the request's `X-Backtest-Secret` header.
     backtestApiSecret: env.BACKTEST_API_SECRET || "",
+    // Dashboard login (src/index.js's GET/POST /login, src/auth/session.js)
+    // -- replaces typing BACKFILL_API_SECRET/BACKTEST_API_SECRET into a
+    // dashboard form on every trigger with a one-time login that then
+    // authorizes both actions via a session cookie (see /backfill and
+    // /backtest/run's own comments on the two accepted auth paths). A
+    // single operator credential pair, not a user table -- same "no
+    // default without an explicit reason" convention as every other
+    // secret in this file: unset means the LOGIN feature stays inactive
+    // (GET /dashboard remains unauthenticated, exactly as it always has
+    // been) rather than either being silently open with a guessable
+    // default or silently locking everyone out of a dashboard that used
+    // to be public. See src/index.js's dashboard route for the exact
+    // isDashboardAuthConfigured() gate this powers.
+    dashboardUsername: env.DASHBOARD_USERNAME || "",
+    dashboardPassword: env.DASHBOARD_PASSWORD || "",
+    // HMAC signing key for the session JWT (src/auth/jwt.js). No default,
+    // same reasoning as dashboardUsername/dashboardPassword above -- and
+    // deliberately a THIRD secret, not reused from backfillApiSecret/
+    // backtestApiSecret, since a session-signing key and an API-trigger
+    // shared secret are different security boundaries with no reason to
+    // be coupled (same "separately rotatable" reasoning backfillApiSecret's
+    // own header gives for not reusing backtestApiSecret).
+    jwtSecret: env.JWT_SECRET || "",
+    // How long a login session lasts before the cookie's JWT expires and
+    // /login is required again (src/auth/session.js#createSessionCookie).
+    // 24h is a starting point for a single-operator internal tool logged
+    // into once a day at most, not tuned against anything real yet --
+    // same untuned-placeholder caveat as maxPositionHoldDays/
+    // MAX_PORTFOLIO_RISK_PCT elsewhere in this file.
+    sessionTtlSeconds: Number(env.SESSION_TTL_SECONDS) || 86400,
   };
 }
