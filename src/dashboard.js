@@ -354,6 +354,30 @@ function backtestRunsList(runs) {
  * palette (STYLE below) rather than duplicating a CSS class, same
  * shortcut the pre-redesign version took.
  */
+// Shared date-input inline style -- both trigger forms below use the exact
+// same look, pulled out once rather than repeated per input.
+const DATE_INPUT_STYLE = "background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;";
+
+/**
+ * Quick-range preset buttons for a pair of <input type="date"> fields,
+ * identified by their `fromId`/`toId` DOM ids. Plain type="button"
+ * (never submits the form) that calls setDateRange (this file's one
+ * inline <script>, see STYLE/renderDashboardHtml) to fill both dates as
+ * [today - days, today] -- picking a plausible window without hand-typing
+ * two dates was the whole point of adding this. Styled with the existing
+ * .pill class (previously anchor-only, used for GET filter links) --
+ * .pill itself is visual-only (border/background/color), so it renders
+ * the same on a <button>; STYLE picked up one small addition
+ * (cursor: pointer) to make that dual use feel right.
+ */
+function rangePresetButtons(fromId, toId) {
+  const buttons = RANGE_PRESET_DAYS.map((d) => `<button type="button" class="pill" onclick="setDateRange('${fromId}','${toId}',${d})">${d}d</button>`).join("");
+  return `<div class="filter-group">
+    <span class="filter-label">Quick range</span>
+    <div class="pill-row">${buttons}</div>
+  </div>`;
+}
+
 function backtestTriggerForm() {
   const today = new Date().toISOString().slice(0, 10);
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
@@ -362,21 +386,55 @@ function backtestTriggerForm() {
       <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
       <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT" style="background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.34rem 0.5rem;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:0.8rem;">
     </div>
+    ${rangePresetButtons("backtestStart", "backtestEnd")}
     <div class="filter-group">
       <span class="filter-label">Test start</span>
-      <input class="filter-form" type="date" name="testStart" value="${monthAgo}" style="background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;">
+      <input class="filter-form" id="backtestStart" type="date" name="testStart" value="${monthAgo}" style="${DATE_INPUT_STYLE}">
     </div>
     <div class="filter-group">
       <span class="filter-label">Test end</span>
-      <input class="filter-form" type="date" name="testEnd" value="${today}" style="background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;">
+      <input class="filter-form" id="backtestEnd" type="date" name="testEnd" value="${today}" style="${DATE_INPUT_STYLE}">
     </div>
     <div class="filter-group">
       <span class="filter-label">Backtest secret</span>
-      <input class="filter-form" type="password" name="secret" required style="background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;">
+      <input class="filter-form" type="password" name="secret" required style="${DATE_INPUT_STYLE}">
     </div>
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
       <button type="submit">Run backtest</button>
+    </div>
+  </form>`;
+}
+
+/**
+ * Plain <form method="post" action="/backfill"> -- same zero-build
+ * philosophy and dual-caller backend convention as backtestTriggerForm
+ * above (src/index.js's /backfill route now reads these exact field names
+ * from a urlencoded body when no matching query param is present). Unlike
+ * the backtest form, there's no tickers field -- backfillHistoricalNews
+ * always covers config.watchlist as a whole (see that function's own
+ * header for why it doesn't take a ticker override).
+ */
+function backfillTriggerForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  return `<form method="post" action="/backfill" class="filter-bar">
+    ${rangePresetButtons("backfillFrom", "backfillTo")}
+    <div class="filter-group">
+      <span class="filter-label">From</span>
+      <input class="filter-form" id="backfillFrom" type="date" name="from" value="${monthAgo}" style="${DATE_INPUT_STYLE}">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">To</span>
+      <input class="filter-form" id="backfillTo" type="date" name="to" value="${today}" style="${DATE_INPUT_STYLE}">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Backfill secret</span>
+      <input class="filter-form" type="password" name="secret" required style="${DATE_INPUT_STYLE}">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">&nbsp;</span>
+      <button type="submit">Run backfill</button>
     </div>
   </form>`;
 }
