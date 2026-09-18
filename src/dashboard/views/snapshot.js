@@ -1,6 +1,6 @@
 import { renderSummaryCards, donutChart, gaugeChart, errorState, positionsTable } from "../helpers.js";
 
-export function renderSnapshotView({ openPositions, closedPositions, decisionStats, error }) {
+export function renderSnapshotView({ openPositions, closedPositions, decisionStats, totalExposurePct, error }) {
   if (error) {
     return `<section id="snapshot">
       <h2>Portfolio snapshot</h2>
@@ -12,7 +12,9 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
   const longCount = openPositions.filter((p) => p.direction === "long").length;
   const shortCount = openPositions.filter((p) => p.direction === "short").length;
   const otherCount = openPositions.length - longCount - shortCount;
-  const totalExposurePct = openPositions.reduce((sum, p) => sum + (p.positionSizePct ?? 0), 0) * 100;
+  // totalExposurePct comes in as a prop (storage/d1.js#getOpenPositionsExposureTotal,
+  // an unbounded aggregate) -- see helpers.js#renderSummaryCards's own comment for why
+  // this is no longer derived from the (Rows-limited) openPositions array here.
   // Counts of open positions by direction only. There is deliberately no "cash" slice:
   // cash is an exposure quantity (100% - total exposure), not a position count, so mixing it
   // into a count-based donut fabricated a proportion. The Open exposure gauge next to this
@@ -51,7 +53,7 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
     <h2>Portfolio snapshot</h2>
     <p class="note">Live state of the book right now: open positions, total exposure, and the all-time approval rate of trade decisions. All three panels read D1 directly on each page load, so the Refresh link in the toolbar above is what re-fetches them.</p>
 
-    ${renderSummaryCards({ openPositions, closedPositions, decisionStats })}
+    ${renderSummaryCards({ openPositions, closedPositions, decisionStats, totalExposurePct })}
 
     <div class="chart-row-3">
       ${donutChart(compositionSegments, {

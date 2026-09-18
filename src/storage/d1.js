@@ -667,6 +667,24 @@ export async function getAllOpenPositions(db, { limit = 50 } = {}) {
 }
 
 /**
+ * Total exposure across EVERY open position, not just whatever page of them
+ * `getAllOpenPositions` happened to fetch -- previously the dashboard summed
+ * the (Rows-limited) `getAllOpenPositions` result client-side, which quietly
+ * understated total exposure once the real open-position count exceeded the
+ * Rows filter (plan.md Step 1). This is a plain aggregate with no LIMIT and
+ * no asOf, same "give me the current state" convention as every other
+ * Dashboard-only read in this section -- there is no page size to exceed
+ * because there is no row-shaped result, just a sum and a count.
+ */
+export async function getOpenPositionsExposureTotal(db) {
+  const row = await db
+    .prepare(`SELECT COALESCE(SUM(position_size_pct), 0) AS total_pct, COUNT(*) AS count FROM positions WHERE closed_at IS NULL`)
+    .first();
+
+  return { totalPct: row?.total_pct ?? 0, count: row?.count ?? 0 };
+}
+
+/**
  * Most recently closed positions. Dashboard-only, see section header.
  * `exitPrice` (migrations/0009_positions_exit_price.sql) is now recorded
  * by closePosition when computable -- nullable for rows closed before that

@@ -1,0 +1,221 @@
+// Covers src/dashboard/api.js's 8 JSON /api/* routes (wired into
+// src/index.js -- see that file's "JSON API layer" block).
+//
+// Two DB fakes are used, same split-purpose convention as
+// test/dashboard_refresh.test.js vs. this file's own exposure test:
+//   - FakeDashboardDb: a generic empty-result D1 stub (same shape as
+//     dashboard_refresh.test.js/index_login.test.js's own copy) -- good
+//     enough to prove each route authenticates correctly, returns 200,
+//     JSON content-type, and the right top-level shape. Its prepare()
+//     supports BOTH `.prepare(sql).all()` directly (getDecisionStats'
+//     totals query does this, no .bind() call) and
+//     `.prepare(sql).bind(...).all()` (every other query here), by having
+//     bind() return the same object all()/first()/run() live on.
+//   - FakeExposureDb: a positions-aware fake, purpose-built to regression-
+//     test the actual bug Step 1 fixed -- total exposure must reflect
+//     EVERY open position, not just the ones a Rows-limited fetch returned.
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import worker from "../src/index.js";
+import { createSessionCookie } from "../src/auth/session.js";
+import { loadConfig } from "../src/config.js";
+
+function sessionCookieHeader(setCookieString) {
+  return setCookieString.split(";")[0];
+}
+
+class FakeDashboardDb {
+  prepare() {
+    return {
+      bind() {
+        return this;
+      },
+      async all() {
+        return { results: [] };
+      },
+      async first() {
+        return undefined;
+      },
+      async run() {},
+    };
+  }
+}
+
+/**
+ * Positions-aware fake for the exposure regression test. `positions` is a
+ * flat array of `{ positionSizePct, closedAt }` (closedAt omitted/undefined
+ * means still open). Dispatches on the SQL text the same way
+ * storage/d1.js's real queries are shaped -- distinguishing the unbounded
+ * SUM aggregate (getOpenPositionsExposureTotal) from the LIMIT-bound row
+ * fetch (getAllOpenPositions) is the whole point of this fake.
+ */
+class FakeExposureDb {
+  constructor(positions) {
+    this.positions = positions;
+  }
+  prepare(sql) {
+    const db = this;
+    const handle = {
+      _args: [],
+      bind(...args) {
+        handle._args = args;
+        return handle;
+      },
+      async all() {
+        if (/FROM positions WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT/.test(sql)) {
+          const limit = handle._args[handle._args.length - 1];
+          const open = db.positions.filter((p) => p.closedAt == null);
+          const rows = (limit != null ? open.slice(0, limit) : open).map((p, i) => ({
+            id: `pos-${i}`,
+            ticker: p.ticker ?? "AAPL",
+            trade_thesis_id: `thesis-${i}`,
+            position_size_pct: p.positionSizePct,
+            direction: p.direction ?? "long",
+            entry_price: null,
+            stop_loss_pct: null,
+            take_profit_pct: null,
+            opened_at: new Date(Date.UTC(2026, 0, i + 1)).toISOString(),
+          }));
+          return { results: rows };
+        }
+        if (/FROM positions WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT/.test(sql)) {
+          return { results: [] };
+        }
+        // Anything else this test doesn't care about (e.g. getDecisionStats'
+        // two queries, when this fake is reused for /api/snapshot) -- empty
+        // is a valid, harmless result for all of them.
+        return { results: [] };
+      },
+      async first() {
+        if (/SUM\(position_size_pct\)/.test(sql)) {
+          const open = db.positions.filter((p) => p.closedAt == null);
+          const totalPct = open.reduce((sum, p) => sum + p.positionSizePct, 0);
+          return { total_pct: totalPct, count: open.length };
+        }
+        return undefined;
+      },
+      async run() {},
+    };
+    return handle;
+  }
+}
+
+function baseEnv(overrides = {}) {
+  return { DB: new FakeDashboardDb(), ...overrides };
+}
+
+function loginConfiguredEnv(overrides = {}) {
+  return baseEnv({
+    DASHBOARD_USERNAME: "admin",
+    DASHBOARD_PASSWORD: "correct-horse-battery-staple",
+    JWT_SECRET: "test-jwt-signing-key",
+    ...overrides,
+  });
+}
+
+async function loggedInCookie(env) {
+  const config = loadConfig(env);
+  return sessionCookieHeader(await createSessionCookie("admin", config));
+}
+
+async function apiFetch(path, env, { cookie } = {}) {
+  const headers = cookie ? { Cookie: cookie } : {};
+  return worker.fetch(new Request(`https://worker.example${path}`, { headers }), env);
+}
+
+// One entry per /api/* route, with the top-level keys its data.js function
+// returns (see src/dashboard/data.js) -- used to assert response shape
+// without pinning to exact values, which the generic FakeDashboardDb can't
+// meaningfully provide anyway.
+const API_ROUTES = [
+  { path: "/api/snapshot", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "error"] },
+  { path: "/api/activity", keys: ["decisionStats", "error"] },
+  { path: "/api/charts", keys: ["priceBarsByTicker", "error"] },
+  { path: "/api/health", keys: ["health", "error"] },
+  { path: "/api/decisions", keys: ["decisions", "error"] },
+  { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct"] },
+  { path: "/api/pipeline", keys: ["checkpoints", "error"] },
+  { path: "/api/backtest-runs", keys: ["backtestRuns", "error"] },
+];
+
+// --------------------------------------------------------------------
+// Auth gating -- reuses routes.js's own checkAuth, so this pins the
+// JSON-specific behavior on top of it (401 JSON, not a redirect).
+// --------------------------------------------------------------------
+
+for (const { path } of API_ROUTES) {
+  test(`GET ${path} returns 401 JSON when login is configured and there's no session cookie`, async () => {
+    const response = await apiFetch(path, loginConfiguredEnv());
+    assert.equal(response.status, 401);
+    assert.match(response.headers.get("content-type"), /application\/json/);
+    const body = await response.json();
+    assert.equal(body.error, "unauthorized");
+  });
+
+  test(`GET ${path} renders (200 JSON) when login isn't configured at all -- matches the SSR dashboard's own unauthenticated-when-unconfigured behavior`, async () => {
+    const response = await apiFetch(path, baseEnv());
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /application\/json/);
+  });
+
+  test(`GET ${path} returns 200 JSON with the expected top-level shape given a valid session cookie`, async () => {
+    const env = loginConfiguredEnv();
+    const cookie = await loggedInCookie(env);
+    const response = await apiFetch(path, env, { cookie });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /application\/json/);
+    const body = await response.json();
+    assert.deepEqual(Object.keys(body).sort(), API_ROUTES.find((r) => r.path === path).keys.sort());
+  });
+}
+
+test("GET /api/snapshot returns 401 with a stale/forged session cookie (bad signature) -- a cookie alone isn't a free pass", async () => {
+  const response = await apiFetch("/api/snapshot", loginConfiguredEnv(), { cookie: "nmai_session=not.a.valid.jwt" });
+  assert.equal(response.status, 401);
+  const body = await response.json();
+  assert.equal(body.error, "unauthorized");
+});
+
+// --------------------------------------------------------------------
+// Exposure regression test (the actual bug Step 1 fixed): total exposure
+// must reflect EVERY open position, not just the Rows-limited page of
+// them a plain array fetch returns. 20 open positions at 2% each = 40%
+// true total; the old (buggy) behavior -- summing only the 10 rows a
+// positionsLimit=10 fetch returns -- would report 20% instead.
+// --------------------------------------------------------------------
+
+function twentyOpenPositionsAtTwoPercentEach() {
+  return Array.from({ length: 20 }, () => ({ positionSizePct: 0.02 }));
+}
+
+test("GET /api/positions?positionsLimit=10 reports total exposure across ALL open positions, not just the 10 fetched rows", async () => {
+  const env = loginConfiguredEnv({ DB: new FakeExposureDb(twentyOpenPositionsAtTwoPercentEach()) });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/positions?positionsLimit=10", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.openPositions.length, 10, "openPositions itself IS still Rows-limited -- only the exposure total isn't");
+  assert.equal(Number(body.totalExposurePct.toFixed(1)), 40, "20 positions x 2% = 40% total, not 10 x 2% = 20%");
+  assert.equal(body.openPositionsError, null);
+});
+
+test("GET /api/snapshot?positionsLimit=10 reports the same full-book total exposure as /api/positions, not the Rows-limited sum", async () => {
+  const env = loginConfiguredEnv({ DB: new FakeExposureDb(twentyOpenPositionsAtTwoPercentEach()) });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/snapshot?positionsLimit=10", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.openPositions.length, 10);
+  assert.equal(Number(body.totalExposurePct.toFixed(1)), 40);
+});
+
+test("GET /api/positions with zero open positions reports 0% total exposure, not NaN or an error", async () => {
+  const env = loginConfiguredEnv({ DB: new FakeExposureDb([]) });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/positions", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.openPositions.length, 0);
+  assert.equal(body.totalExposurePct, 0);
+});
