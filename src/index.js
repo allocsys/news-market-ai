@@ -48,7 +48,7 @@
 // ANALYZE branch is the one deliberate exception to this, see above.
 
 import { loadConfig } from "./config.js";
-import { backfillHistoricalNews, ingestTickerData, ingestFeedNews, runPipelineForTicker } from "./graph/pipeline.js";
+import { backfillHistoricalNews, runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
 import {
   handleApiSnapshotRoute,
@@ -263,42 +263,6 @@ export default {
             console.log("exit_check job completed", { closed: closed.length, closed });
           } catch (err) {
             console.error("exit_check job failed", { message: err.message });
-          }
-        } else if (job.type === "ingest_ticker") {
-          // INGEST consumer, per-ticker branch (plan.md Step 4). A failure
-          // is logged and acked, not retried -- there's no partial state
-          // worth resuming (unlike ANALYZE below), the next cron tick's
-          // own ingest_ticker message for this same ticker will simply try
-          // again from scratch.
-          const { ticker, asOf: tickerAsOf } = job;
-          try {
-            const insertedNews = await ingestTickerData(config, env.DB, env.CACHE_KV, { ticker, asOf: tickerAsOf });
-            const analyzeMessages = insertedNews.map((item) => ({
-              body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt },
-            }));
-            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
-            console.log("ingest_ticker job completed", { ticker, newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
-          } catch (err) {
-            console.error("ingest_ticker job failed", { ticker, message: err.message });
-          }
-        } else if (job.type === "ingest_feeds") {
-          // INGEST consumer, general-feeds branch (plan.md Step 4). Unlike
-          // ingest_ticker above, a feed item may resolve to zero, one, or
-          // several tickers (entity resolution, not a single hintTicker) --
-          // so this enqueues one ANALYZE message per (item, ticker) pair,
-          // same loop shape the old runScheduledIngestion used inline.
-          try {
-            const insertedNews = await ingestFeedNews(config, env.DB, env.CACHE_KV);
-            const analyzeMessages = [];
-            for (const item of insertedNews) {
-              for (const ticker of item.tickers) {
-                analyzeMessages.push({ body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt } });
-              }
-            }
-            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
-            console.log("ingest_feeds job completed", { newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
-          } catch (err) {
-            console.error("ingest_feeds job failed", { message: err.message });
           }
         } else if (job.type === "analyze") {
           // ANALYZE consumer (plan.md Step 4). Deliberately NOT wrapped in its
