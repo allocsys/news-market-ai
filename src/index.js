@@ -10,28 +10,42 @@
 // describes: there is no code path left in this Worker that could serve an
 // unauthenticated dashboard, because there is no dashboard here at all.
 //
-// `scheduled` calls graph/pipeline.js#runScheduledIngestion, fully wired
-// end to end: gdelt/rss/html_scrape news ingestion + yfinance price bars +
-// edgar_fundamentals facts -> analysts (incl. technical, fed by the price
-// bars above) -> debate -> trader -> risk -> portfolio (see that file's
-// header for current caveats and the per-source failure isolation model).
-// Any remaining failure (network, malformed vendor response, LLM cascade
-// exhausted) is caught and logged here rather than left to crash the
-// Worker invocation silently (Adopted Pattern #11).
+// `scheduled` (plan.md Step 4) is now a THIN scheduler, not the pipeline
+// itself: it enqueues one INGEST message per watchlist ticker plus one
+// more for the general (non-ticker-scoped) feeds, and one JOBS message to
+// evaluate open-position exits. It does no fetching, no D1 writes, and no
+// LLM calls itself -- see queue() below for where each of those actually
+// happens, each in its own small invocation with its own fresh CPU/wall-
+// time budget, instead of one big scheduled() invocation doing everything
+// (which is what originally hit the free-tier CPU cap Step 0 diagnosed).
 //
-// `queue` (plan.md Step 3) is the JOBS consumer: POST /backfill and POST
-// /backtest/run below no longer run the actual work inline (synchronously
-// or via ctx.waitUntil) -- they validate, enqueue a message, and return an
-// immediate `{accepted: true, ...}` ack. `queue()` is a separate Worker
-// invocation with its own wall-time budget, which is the actual fix for
-// ctx.waitUntil's ~30-second-past-response cutoff (plan.md's Step 3
-// motivation): a backfill or backtest that used to get cut off mid-run
-// under load now just runs to completion in its own invocation instead.
-// A business-logic failure (bad backtest run, vendor error mid-backfill) is
-// caught inside queue() itself and logged/persisted as data, then acked --
-// not left to the queue's own retry/dead-letter mechanism, which exists
-// only for a genuine crash in queue() (a real bug), not an expected
-// operational failure that already spent real quota once.
+// `queue` handles THREE queues' worth of message types through one
+// handler (Cloudflare Workers routes every consumer for a script through
+// the same queue() export -- there's no need to branch on which physical
+// queue delivered a batch, only on the message's own `type`):
+//   - JOBS (plan.md Step 3): `backfill` / `backtest`, enqueued by POST
+//     /backfill and POST /backtest/run below; `exit_check` (plan.md Step
+//     4), enqueued by scheduled() above, kept on its OWN message so an
+//     exit-check failure is never entangled with an ingestion failure. All
+//     three are ack-and-log on a business-logic failure -- see that
+//     branch's own comment for why retrying wouldn't help any of them.
+//   - INGEST (plan.md Step 4): `ingest_ticker` / `ingest_feeds`, enqueued
+//     by scheduled() above. Fetches + writes D1 for one ticker (or the
+//     general feeds), then enqueues one ANALYZE message per resulting news
+//     item. Also ack-and-log on failure -- a failed ingest has nothing
+//     partial to resume, next cron tick just tries again.
+//   - ANALYZE (plan.md Step 4): `analyze`, enqueued by the INGEST handling
+//     above. Runs runPipelineForTicker for one (ticker, newsItem) pair.
+//     UNLIKE every other type here, a failure is RETRIED, not ack'd -- see
+//     that branch's own comment for why that's actually correct given
+//     checkpointer.js's resume semantics (Adopted Pattern #12).
+//
+// A business-logic failure (bad backtest run, vendor error mid-backfill,
+// etc.) is caught inside its own branch and logged/persisted as data, then
+// acked -- not left to the queue's own retry/dead-letter mechanism, which
+// exists only for a genuine crash in queue() itself (a real bug), not an
+// expected operational failure that already spent real quota once. The
+// ANALYZE branch is the one deliberate exception to this, see above.
 
 import { loadConfig } from "./config.js";
 import { backfillHistoricalNews, ingestTickerData, ingestFeedNews, runPipelineForTicker } from "./graph/pipeline.js";
