@@ -15,7 +15,7 @@ import { checkOpenPositionExits } from "./graph/exit_check.js";
 import { renderDashboardHtml } from "./dashboard.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
 import { renderLoginPage } from "./login.js";
-import { SESSION_COOKIE_NAME, getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
+import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
 
 /**
  * Basic YYYY-MM-DD shape check -- just enough to reject obvious garbage
@@ -73,11 +73,8 @@ export default {
       // Guarded only once login is actually configured -- see
       // isDashboardAuthConfigured's own header for why an unconfigured
       // login leaves this route exactly as unauthenticated as before.
-      if (isDashboardAuthConfigured(config)) {
-        const sessionUsername = await getSessionUsername(request, config);
-        if (!sessionUsername) return redirect("/login");
-      }
       const sessionUsername = isDashboardAuthConfigured(config) ? await getSessionUsername(request, config) : null;
+      if (isDashboardAuthConfigured(config) && !sessionUsername) return redirect("/login");
       const html = await renderDashboardHtml(env.DB, { searchParams: url.searchParams, sessionUsername });
       return htmlResponse(html);
     }
