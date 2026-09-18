@@ -346,14 +346,38 @@ path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above, and
 the above is merged + verified live. -- Merged; live-deploy verification result
 recorded in Current Status.
 
-### Step 3 -- Job queue for backfill and backtest
-Add a `JOBS` queue (plus dead-letter queue). `POST /backfill` and
-`POST /backtest/run` validate, enqueue, and return the accepted page; a consumer runs
-`backfillHistoricalNews` / `runManualBacktest`. Job status lives in D1
-(`backtest_runs` already persists a `running` row). This removes the `waitUntil`
-30s cut-off. Keep the scripted-JSON response behavior for non-form callers.
+### Step 3 -- Job queue for backfill and backtest -- DONE 2026-09-18
+Merged to main via PR #29 (squash commit `32f229d`).
+
+What's on main: `JOBS` queue + `news-market-ai-jobs-dlq` dead-letter queue in
+`wrangler.toml` (`max_batch_size = 1`, `max_retries = 3` -- each message is
+already one full backfill or one full signal-on/off backtest run, so batching
+wouldn't help). New `ensure-queue` composite action (same idempotent
+look-up-by-name-or-create pattern as `ensure-d1-database`/`ensure-kv-namespace`),
+wired into `deploy.yml` so the queue + DLQ are provisioned before deploy.
+`POST /backfill` and `POST /backtest/run` in `src/index.js` now validate and
+enqueue instead of running synchronously or via `ctx.waitUntil`; a new `queue()`
+consumer runs `backfillHistoricalNews` / `runManualBacktest`, catching
+business-logic failures internally and persisting them as `failed` rows in
+`backtest_runs` rather than retrying (retrying would re-spend Gemini/Finnhub
+quota for a result that's already known). `dashboard-worker.js` dropped the
+now-meaningless `?async=1` flag since the backend always enqueues now. Test
+contracts updated deliberately: `test/index_backfill.test.js` rewritten for the
+enqueue behavior; new `test/queue_consumer.test.js` covers backfill
+success/failure, backtest job persistence, unrecognized job types, and the
+crash-retry path.
+
+CI on PR #29 was still queued/in-progress at merge time -- deliberately not
+blocked on, per instruction, to be checked after Step 7 instead of per-step
+from here on.
+
+**Still open (not yet done):** live verification that a real long backtest
+actually survives past the old 30s cutoff against live Cloudflare infra, the
+same kind of `workflow_dispatch` check Step 2 got. Not done this session.
 **Done when:** a long backtest completes past 30s, failures land as `failed` rows,
-and `test/index_backfill.test.js` is updated for the enqueue behavior.
+and `test/index_backfill.test.js` is updated for the enqueue behavior. --
+Code-level criteria met (tests + failure-handling); live-past-30s verification
+still outstanding.
 
 ### Step 4 -- Cron fan-out (still inside `backend`)
 `scheduled()` becomes a thin scheduler: it enqueues one message per ticker per
