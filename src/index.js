@@ -34,7 +34,7 @@
 // operational failure that already spent real quota once.
 
 import { loadConfig } from "./config.js";
-import { runScheduledIngestion, backfillHistoricalNews } from "./graph/pipeline.js";
+import { backfillHistoricalNews, ingestTickerData, ingestFeedNews, runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
 import {
   handleApiSnapshotRoute,
