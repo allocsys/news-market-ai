@@ -84,20 +84,6 @@ max_retries = 3
 max_concurrency = 2
 dead_letter_queue = "news-market-ai-analyze-dlq"
 
-# max_concurrency throttles how many ANALYZE consumer invocations run in
-# parallel -- this is the actual Gemini-call throttle plan.md Step 4 calls
-# for (each invocation's runPipelineForTicker makes several Gemini calls of
-# its own), not max_batch_size, which only bounds messages per invocation,
-# not how many invocations run at once. 2 is a conservative starting point
-# against the free-tier Gemini quota this project budgets around (Adopted
-# Pattern #7) -- raise it once real usage shows headroom.
-[[queues.consumers]]
-queue = "news-market-ai-analyze"
-max_batch_size = 5
-max_retries = 3
-max_concurrency = 2
-dead_letter_queue = "news-market-ai-analyze-dlq"
-
 # Ingestion cadence -- GDELT updates every 15 min, so no point polling faster.
 [triggers]
 crons = ["*/15 * * * *"]
