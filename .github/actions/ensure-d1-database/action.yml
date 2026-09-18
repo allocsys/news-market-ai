@@ -24,6 +24,17 @@ inputs:
     description: 'Name of the D1 database (must match wrangler.toml database_name)'
     required: true
     default: 'news_market_ai'
+  wrangler-config:
+    description: >
+      Path (relative to the repo root) of the wrangler config file to patch
+      with the real database_id. Defaults to the backend's 'wrangler.toml'.
+      Every Worker that binds D1 needs its OWN job-local config patched:
+      each CI job has its own fresh checkout, so patching wrangler.toml in
+      one job does nothing for wrangler.ingest.toml/wrangler.llm.toml in
+      another (plan.md Step 6 -- Step 5's deploy-ingest job was missing this
+      and would have deployed with the placeholder id).
+    required: false
+    default: 'wrangler.toml'
 
 runs:
   using: 'composite'
@@ -33,6 +44,7 @@ runs:
       run: |
         set -euo pipefail
         DB_NAME="${{ inputs.database-name }}"
+        CONFIG_FILE="${{ inputs.wrangler-config }}"
 
         # Defensive JSON parsing: wrangler's --json output shape has varied
         # across versions/subcommands (bare array vs {"result": [...]}, and
@@ -92,5 +104,5 @@ runs:
           echo "Created D1 database '$DB_NAME' (id: [masked])."
         fi
 
-        sed -i "s/database_id = \".*\"/database_id = \"$DB_ID\"/" wrangler.toml
-        echo "This job's local wrangler.toml now points at the real database_id (not committed back to the repo -- see this action's description)."
+        sed -i "s/database_id = \".*\"/database_id = \"$DB_ID\"/" "$CONFIG_FILE"
+        echo "This job's local $CONFIG_FILE now points at the real database_id (not committed back to the repo -- see this action's description)."
