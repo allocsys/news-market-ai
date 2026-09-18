@@ -538,7 +538,7 @@ path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above
 original wording, met in every other respect, and the gap is documented
 rather than silently claimed closed.
 
-### Step 6 -- Extract `llm` Worker
+### Step 6 -- Extract `llm` Worker -- DONE 2026-09-19 (PR #32)
 Move the `ANALYZE` consumer (analysts -> debate -> trader -> risk -> portfolio) to
 `news-market-ai-llm`. It alone holds `GEMINI_API_KEYS` and the cooldown KV
 (`gemini:cooldown:*`); its queue's `max_concurrency` is the Gemini throttle. Raise
@@ -547,6 +547,82 @@ Move the `ANALYZE` consumer (analysts -> debate -> trader -> risk -> portfolio) 
 Gemini keys, and `llm` has its own path-filtered CI job per the "CI/CD for the
 4-Worker split" pattern above (its job is the only one that ever sees
 `GEMINI_API_KEYS`).
+
+**What shipped (PR #32, squash commit pending -- filled in on merge):** new
+`wrangler.llm.toml` + `src/llm-worker.js` (`news-market-ai-llm`). It consumes
+ANALYZE (moved from `backend`, config unchanged: `max_batch_size = 5`,
+`max_retries = 3`, `max_concurrency = 2` -- the Gemini throttle) AND a new
+`news-market-ai-llm-jobs` queue (+ `-dlq`, `max_batch_size = 1`,
+`max_concurrency = 1`) carrying `backtest` and `exit_check`. Binds D1 and the
+same CACHE_KV namespace as the other Workers (the Gemini cascade's
+`gemini:cooldown:*` keys are prefix-namespaced, and only this Worker's code
+path writes them now); holds `GEMINI_API_KEYS` and the Gemini model vars, no
+vendor data key.
+
+**Scope was wider than "move the ANALYZE consumer" -- found by reading the call
+graph, not assumed:** `backend`'s JOBS consumer also ran `backtest`
+(`runManualBacktest` -> `onSignalRunner` -> `runPipelineForTicker`) and
+`exit_check` (`checkOpenPositionExits` -> `settlePositionOutcome` ->
+`closeTheLoop` -> `callStructured`, one reflection LLM call per closed
+position). Both call Gemini, so moving only ANALYZE would have left `backend`
+holding Gemini keys and missed this step's own done-when. A queue can only
+have one consumer Worker and JOBS's has to stay in `backend` for `backfill`
+(Finnhub), so those two types moved onto the new LLM_JOBS queue instead --
+the same class of problem Step 5 hit with `backfill`, but cheap enough here to
+close in full rather than document as a gap. `runManualBacktest` never calls
+Finnhub (reads D1 only), so `llm` needs no vendor data key. `backend` now
+PRODUCES onto LLM_JOBS (`POST /backtest/run`, `scheduled()`'s exit_check) but
+consumes only JOBS, which carries `backfill` alone; its ANALYZE producer/
+consumer blocks, ANALYZE handling, Gemini model vars and `GEMINI_API_KEYS` push
+were removed.
+
+**`deploy.yml`:** path-filtered `deploy-llm` job (own concurrency group,
+depends on backend's `deploy` job, the only job that ever sees
+`GEMINI_API_KEYS`); backend's `deploy` job now provisions the LLM_JOBS queue +
+DLQ and no longer pushes `GEMINI_API_KEYS`. The `llm` path filter is broader
+than the other Workers' (`src/graph/**`, `src/agents/**`, `src/llm/**`,
+`src/backtest/**`, `src/schemas/**`, `src/ingestion/**`, `src/storage/**`,
+`src/shared/**`) because `llm-worker.js` transitively bundles all of them.
+
+**Also fixed -- latent Step 5 bug, found while writing the llm job:**
+`ensure-d1-database`/`ensure-kv-namespace` hard-coded `sed ... wrangler.toml`,
+and `deploy-ingest` never ran them at all. Each CI job has its own checkout, so
+`wrangler deploy --config wrangler.ingest.toml` would have shipped the
+`REPLACE_WITH_*` placeholder ids. Both actions now take a `wrangler-config`
+input (default `wrangler.toml`, so backend's job is unchanged), and
+`deploy-ingest`/`deploy-llm` each patch their own config. Found by static
+reading; Step 5 was never live-deployed, so this is unproven either way until
+the post-Step-7 check.
+
+**Test contract updated deliberately:** new `test/llm_worker.test.js`
+(`backtest` moved from `test/queue_consumer.test.js`, `exit_check`/`analyze`
+moved from `test/cron_fanout.test.js`, plus unrecognized-type/crashed-handler
+paths), new `test/index_backtest_enqueue.test.js` (`/backtest/run` -> LLM_JOBS,
+never JOBS), `test/queue_consumer.test.js` gained a test that `backend`'s
+`queue()` acks the three moved types as unrecognized without processing, and
+`test/cron_fanout.test.js`'s `scheduled()` tests now assert `exit_check` lands
+on LLM_JOBS.
+
+**Rollout notes / still open:**
+- A `backtest`/`exit_check` message already on JOBS at the moment `backend`
+  deploys is acked-and-dropped as unrecognized (no forwarder added --
+  `exit_check` re-enqueues every 15 min, a dropped backtest would need
+  resubmitting). Between backend's and `llm`'s deploys, ANALYZE/LLM_JOBS just
+  accumulate, then drain.
+- **Stale secret:** deploys no longer push `GEMINI_API_KEYS` to
+  `news-market-ai`, but a copy set by an earlier deploy stays on that Worker
+  until deleted (`wrangler secret delete GEMINI_API_KEYS`). Nothing reads it
+  any more, but key isolation isn't real until it's gone -- Step 7's secrets
+  audit item.
+- Tests were NOT run locally for this step (sandbox had no network); verified
+  by reading plus the PR's CI `test` job only. CI on this PR is otherwise
+  deferred to after Step 7, same as Steps 3-5. Known baseline: the 2
+  pre-existing `dashboard_worker` POST /backfill failures on `main`.
+- No live-deploy verification (same deferral).
+**Done when:** every LLM call originates from `llm` (done -- ANALYZE,
+`backtest`, `exit_check`), no other Worker holds Gemini keys (done in code and
+CI; the stale secret above is the one loose end), and `llm` has its own
+path-filtered CI job (done, `deploy-llm`).
 
 ### Step 7 -- Cleanup and docs
 Remove dead code left in `backend`, run a per-Worker secrets audit, and rewrite the
