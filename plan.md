@@ -185,6 +185,39 @@ a call is tagged for logging.
 This cascade underlies every LLM-touching stage (Analyst Team, Researcher Team,
 Trader) — nothing calls the Gemini API directly.
 
+## Roadmap: Service Split (sequential, one PR per step)
+**Why:** one Worker currently runs the cron pipeline, the SSR dashboard, login, and
+long manual jobs. Free-plan limits bite per invocation (10ms CPU, 50 subrequests);
+cron/queue consumers get 15 min wall time; `ctx.waitUntil` only extends ~30s past
+the response, so `/backfill` and `/backtest/run` can be cut off mid-run.
+
+**Target: 4 Workers, connected by queues (not synchronous calls):**
+`dashboard` (UI + login gateway), `backend` (orchestrator: cron, API, migrations),
+`ingest` (fetch + write to D1), `llm` (long-running Gemini stages).
+
+**Rules for every step:**
+- One repo, one `wrangler` config per Worker, shared code imported (never copied).
+- Only `backend` runs D1 migrations; all Workers bind the same D1.
+- Each step ships as its own PR, leaves `main` green, and is verified live before
+  the next starts. Never work on `main` directly; squash-merge.
+- Preserve test contracts: `test/dashboard_refresh.test.js`,
+  `test/index_login.test.js`, `test/index_backfill.test.js` (update deliberately,
+  never silently).
+
+### Step 0 -- Diagnose (no code)
+Confirm the plan tier (free vs paid) and which limit actually fails (CPU,
+subrequests, wall time) via Workers Logs; check `backtest_runs` for rows stuck in
+`running`. **Done when:** the failing limit is written down here.
+
+### Step 1 -- Backend JSON API (no behavior change)
+Extract the data fetching out of `src/dashboard/routes.js` into `/api/*` read
+endpoints (snapshot, activity, charts, health, decisions, positions, pipeline,
+backtest runs), auth-gated by the existing session for now. The SSR dashboard keeps
+working, now calling the same functions. Fix the exposure-understated bug here with
+an aggregate query that ignores the Rows limit (`routes.js`/`d1.js`).
+**Done when:** every dashboard panel's data is reachable via `/api/*`, exposure is
+correct above the Rows filter, tests pass, dashboard unchanged.
+
 ## Repo Structure
 ```
 ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
