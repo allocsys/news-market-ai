@@ -17,6 +17,15 @@
 // than trusting the query string directly, so a malformed/hostile param
 // falls back to the default instead of erroring the page.
 //
+// VISUAL REDESIGN (2026-09-18): markup structure and STYLE below were
+// overhauled top to bottom -- a serif "ledger" masthead, a fixed left
+// index rail (was a flat scrolling pill nav), and ledger-styled panels
+// (hairline rules, no card-shadow/border-radius kit) replacing the
+// previous SaaS-card stat grid. This was a pure presentation pass: every
+// render*/table/chart function below emits the exact same class names it
+// did before, so no data-fetching, filter, or query-param logic changed --
+// only STYLE and the top-level shell markup in renderDashboardHtml.
+//
 // HONEST SCOPE, read before treating this as a complete operations view:
 // 1. Backtest results are NOT shown here -- there is no persisted table for
 //    a completed backtest run (src/backtest/*.js is a pure computation
@@ -159,7 +168,10 @@ const NAV_SECTIONS = [
 ];
 
 function renderNav() {
-  const links = NAV_SECTIONS.map(([id, label]) => `<a href="#${id}">${escapeHtml(label)}</a>`).join("");
+  const links = NAV_SECTIONS.map(([id, label], i) => {
+    const n = String(i + 1).padStart(2, "0");
+    return `<a href="#${id}"><span class="nav-index">${n}</span>${escapeHtml(label)}</a>`;
+  }).join("");
   return `<nav class="section-nav">${links}</nav>`;
 }
 
@@ -304,14 +316,14 @@ function renderSummaryCards({ openPositions, closedPositions, decisionStats }) {
 
   return `<div class="stat-grid">
     ${statCard(openPositions.length, "Open positions", `${longCount} long / ${shortCount} short`, "#c9a24b")}
-    ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %", "#6b8f71")}
-    ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`, "#7d9bb8")}
-    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`, "#a85c4a")}
+    ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %", "#4f9d6e")}
+    ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`, "#6f92b8")}
+    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`, "#c1502e")}
   </div>`;
 }
 
-const CHART_STATUS_COLORS = { approved: "#6b8f71", rejected: "#a85c4a" };
-const CHART_STATUS_FALLBACK = "#8b9490";
+const CHART_STATUS_COLORS = { approved: "#4f9d6e", rejected: "#c1502e" };
+const CHART_STATUS_FALLBACK = "#8b93a0";
 
 /**
  * Stacked SVG bar chart: trade decisions per UTC calendar day, split by
@@ -427,7 +439,7 @@ function priceSparkline(bars, { width = 240, height = 64 } = {}) {
   const last = closes[closes.length - 1];
   const up = last >= first;
   const changePct = first !== 0 ? (((last - first) / first) * 100).toFixed(1) : "0.0";
-  const color = up ? "#6b8f71" : "#a85c4a";
+  const color = up ? "#4f9d6e" : "#c1502e";
 
   return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" class="sparkline" role="img" aria-label="Recent close price trend">
       <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" />
@@ -450,176 +462,236 @@ function priceChartsGrid(tickerBars) {
   return `<div class="chart-cell-grid">${cells}</div>`;
 }
 
+// --------------------------------------------------------------------
+// STYLE
+//
+// Design direction: an "operations ledger", not a SaaS admin template.
+// Palette is ink-navy with a parchment/gold rule (not the AI-generated
+// defaults of cream+terracotta or near-black+neon) -- deep blue-black
+// panels, a single warm brass accent for the masthead rule and active
+// states, ledger green/rust red for long/short and approved/rejected
+// (a real financial-statement convention, not a generic traffic light).
+// Serif for the wordmark and section headings (a financial-statement
+// register), monospace kept for all data/labels (it earns its place on
+// a data-dense page like this), system sans for body copy. Layout is a
+// fixed left index rail (numbered like a ledger's table of contents)
+// instead of the old flat top pill bar -- collapses to a slim top strip
+// on narrow viewports. No border-radius, no drop shadows: rules and
+// hairlines carry the structure instead, the way a printed statement
+// would.
+// --------------------------------------------------------------------
+
 const STYLE = `
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    margin: 0; padding: 0 0 4rem;
-    background: #0d1210; color: #e8e4d9;
-    line-height: 1.4;
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+    margin: 0; padding: 0;
+    background: #0a0d12; color: #d9d4c4;
+    line-height: 1.45;
   }
-  .ticker-strip {
-    display: flex; align-items: baseline; gap: 0.9rem;
-    padding: 0.85rem 2rem;
-    border-bottom: 1px solid #c9a24b;
-    background: #10160f;
-  }
-  .ticker-strip .mark { color: #c9a24b; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; letter-spacing: 0.02em; }
-  h1 { font-size: 1.15rem; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
-  .subtitle { color: #7d8a7f; margin: 0; font-size: 0.82rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 
-  .section-nav {
-    position: sticky; top: 0; z-index: 10;
-    display: flex; flex-wrap: wrap; gap: 1.1rem;
-    padding: 0.6rem 2rem; margin-bottom: 2.25rem;
-    background: rgba(13,18,16,0.92); backdrop-filter: blur(6px);
-    border-bottom: 1px solid #1c231d;
+  .shell { display: flex; min-height: 100vh; }
+
+  /* ---- Left index rail ---- */
+  .rail {
+    flex: 0 0 240px;
+    position: sticky; top: 0; align-self: flex-start;
+    height: 100vh; overflow-y: auto;
+    background: #0d1118;
+    border-right: 1px solid #232b35;
+    padding: 1.75rem 1.5rem;
+    display: flex; flex-direction: column; gap: 2rem;
   }
-  .section-nav a {
-    color: #9aa69b; text-decoration: none; font-size: 0.8rem;
+  .wordmark { display: flex; flex-direction: column; gap: 0.15rem; }
+  .wordmark-main {
+    font-size: 1.15rem; font-weight: 600; letter-spacing: 0.01em;
+    color: #efe9d8; border-bottom: 2px double #b8944f; padding-bottom: 0.55rem;
+  }
+  .wordmark-sub {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    letter-spacing: 0.02em; padding: 0.2rem 0;
-    border-bottom: 1px solid transparent;
-    transition: color 0.12s ease, border-color 0.12s ease;
+    font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: #6e7787; margin-top: 0.5rem;
   }
-  .section-nav a:hover { color: #c9a24b; border-color: #c9a24b; }
 
-  main { padding: 0 2rem; }
-  section { margin-bottom: 2.9rem; scroll-margin-top: 3.2rem; }
-  h2 { font-size: 1rem; font-weight: 600; border-bottom: 1px solid #263028; padding-bottom: 0.55rem; margin-bottom: 0.85rem; letter-spacing: 0.01em; }
-  .note { color: #7d8a7f; font-size: 0.8rem; margin: 0.25rem 0 1rem; max-width: 66ch; line-height: 1.55; }
-
-  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
-  th, td {
-    text-align: left; padding: 0.55rem 0.7rem;
-    border-bottom: 1px solid #1c231d;
+  .section-nav { display: flex; flex-direction: column; gap: 0.15rem; }
+  .section-nav a {
+    display: flex; align-items: baseline; gap: 0.6rem;
+    color: #9aa3b0; text-decoration: none;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.82rem; letter-spacing: 0.01em;
+    padding: 0.4rem 0.1rem;
+    border-bottom: 1px solid #171d26;
+    transition: color 0.12s ease, padding-left 0.12s ease;
   }
-  th { color: #7d8a7f; font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
-  td.num { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #cfd6c8; font-size: 0.83rem; }
-  td.ticker { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; color: #f0ede2; }
+  .section-nav a:hover { color: #eadfb8; padding-left: 0.3rem; }
+  .nav-index { color: #4a5566; font-size: 0.72rem; }
+
+  .rail-meta {
+    margin-top: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.68rem; line-height: 1.7; color: #4a5566;
+    border-top: 1px solid #1c232c; padding-top: 1rem;
+  }
+
+  .content { flex: 1 1 auto; min-width: 0; }
+  main { padding: 2.75rem 3rem 6rem; max-width: 1180px; }
+
+  section { margin-bottom: 3.4rem; scroll-margin-top: 1.5rem; }
+  h2 {
+    font-family: Georgia, "Iowan Old Style", serif;
+    font-size: 1.3rem; font-weight: 400; font-style: italic;
+    color: #efe9d8;
+    border-bottom: 1px solid #232b35; padding-bottom: 0.6rem; margin: 0 0 1rem;
+  }
+  .note {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #7c8698; font-size: 0.82rem; margin: 0 0 1.1rem; max-width: 68ch; line-height: 1.6;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  th, td { text-align: left; padding: 0.62rem 0.75rem; border-bottom: 1px solid #171d26; }
+  th {
+    color: #6e7787; font-weight: 600; font-size: 0.68rem;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    border-bottom: 1px solid #2c3644;
+  }
+  td.num { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #c7cbd4; font-size: 0.83rem; font-variant-numeric: tabular-nums; }
+  td.ticker { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; color: #f2ecd8; }
   tbody tr { transition: background 0.1s ease; }
-  tbody tr:hover { background: #131a13; }
-  .empty { color: #55605a; font-style: italic; font-size: 0.86rem; }
+  tbody tr:hover { background: #10151d; }
+  .empty { color: #4a5566; font-style: italic; font-size: 0.86rem; font-family: Georgia, serif; }
+
   .status { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.82rem; }
-  .status-approved { color: #6b8f71; }
-  .status-rejected { color: #a85c4a; }
-  .status-neutral { color: #8b9490; }
-  /* MOBILE-FIRST (2026-09-18, live device report): this used to be
-     "grid-template-columns: 1fr 1fr 1fr" here with a max-width:900px
-     override collapsing it to 1fr -- on a live phone (narrow viewport,
-     well under 900px) the 3-column layout was still rendering uncollapsed,
-     squeezing every word in the Open Positions / Recently Closed / Recent
-     Pipeline Activity cells onto its own line. Root cause not fully
-     isolated (device/browser-specific viewport reporting is the leading
-     suspect, not a CSS logic error -- the override rule itself was
-     correctly written and ordered), but a max-width override is only ever
-     as reliable as that reporting. Flipped to mobile-first: the base rule
-     below is now the narrow-screen-safe default (single column, always
-     correct with zero dependency on a media query actually matching), and
-     the min-width override further down opts INTO 3 columns only once a
-     wide viewport is confirmed -- an unmatched media query now degrades to
-     the safe layout instead of the broken one. */
-  .grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
-  .grid > section { min-width: 0; } /* lets a wide table's min-content shrink instead of forcing its column past the viewport */
+  .status-approved { color: #4f9d6e; }
+  .status-rejected { color: #c1502e; }
+  .status-neutral { color: #8b93a0; }
+
+  .grid { display: grid; grid-template-columns: 1fr; gap: 1.75rem; }
+  .grid > section { min-width: 0; margin-bottom: 0; }
 
   /* LLM answer disclosure (migrations/0008_trade_decisions_llm_answers.sql) -- native <details>, no client JS */
   .llm-answer summary {
-    cursor: pointer; color: #7d9bb8; font-size: 0.8rem;
+    cursor: pointer; color: #6f92b8; font-size: 0.8rem;
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     list-style: none; width: fit-content;
   }
   .llm-answer summary::-webkit-details-marker { display: none; }
   .llm-answer summary::before { content: "\\25b8 "; }
   .llm-answer[open] summary::before { content: "\\25be "; }
-  .llm-answer summary:hover { color: #a9c3db; }
+  .llm-answer summary:hover { color: #9bb8d6; }
   .llm-answer-body {
-    margin-top: 0.5rem; padding: 0.7rem 0.85rem;
-    background: #0d1210; border: 1px solid #263028; border-radius: 5px;
-    max-width: 52ch; display: flex; flex-direction: column; gap: 0.5rem;
+    margin-top: 0.55rem; padding: 0.8rem 0.95rem;
+    background: #0d1118; border: 1px solid #232b35; border-left: 2px solid #2c3644;
+    max-width: 54ch; display: flex; flex-direction: column; gap: 0.55rem;
   }
-  .llm-block { font-size: 0.8rem; line-height: 1.5; color: #cfd6c8; }
+  .llm-block { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 0.8rem; line-height: 1.55; color: #c7cbd4; }
   .llm-agent {
     display: inline-block; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
-    color: #0d1210; background: #7d9bb8; border-radius: 3px;
-    padding: 0.08rem 0.4rem; margin-right: 0.4rem; vertical-align: middle;
+    font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: #0a0d12; background: #6f92b8;
+    padding: 0.1rem 0.42rem; margin-right: 0.45rem; vertical-align: middle;
   }
-  .llm-agent-bull { background: #6b8f71; }
-  .llm-agent-bear { background: #a85c4a; }
-  .llm-justification { color: #7d8a7f; font-style: italic; }
+  .llm-agent-bull { background: #4f9d6e; }
+  .llm-agent-bear { background: #c1502e; }
+  .llm-justification { color: #6e7787; font-style: italic; }
 
-  tr.stale-row td { color: #8b8060; }
+  tr.stale-row td { color: #a68a52; }
   .stale-flag {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.72rem;
-    color: #0d1210; background: #c9a24b; border-radius: 3px; padding: 0.12rem 0.4rem;
-    letter-spacing: 0.03em;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.7rem;
+    color: #0a0d12; background: #b8944f; padding: 0.14rem 0.42rem; letter-spacing: 0.04em;
   }
-  .ok-flag {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.72rem;
-    color: #6b8f71; letter-spacing: 0.03em;
-  }
+  .ok-flag { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.7rem; color: #4f9d6e; letter-spacing: 0.03em; }
 
   /* Filters -- plain GET links/forms, no client JS */
-  .filter-bar { display: flex; flex-wrap: wrap; gap: 1.75rem; align-items: flex-end; margin-bottom: 1rem; }
-  .filter-group { display: flex; flex-direction: column; gap: 0.35rem; }
-  .filter-label { font-size: 0.72rem; color: #7d8a7f; text-transform: uppercase; letter-spacing: 0.04em; }
+  .filter-bar { display: flex; flex-wrap: wrap; gap: 2rem; align-items: flex-end; margin-bottom: 1.1rem; }
+  .filter-group { display: flex; flex-direction: column; gap: 0.4rem; }
+  .filter-label {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.68rem; color: #6e7787; text-transform: uppercase; letter-spacing: 0.05em;
+  }
   .pill-row { display: flex; gap: 0.4rem; }
   .pill {
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem;
-    color: #cfd6c8; text-decoration: none;
-    padding: 0.28rem 0.65rem; border-radius: 999px;
-    border: 1px solid #263028; background: #10160f;
-    transition: border-color 0.12s ease, color 0.12s ease;
+    color: #c7cbd4; text-decoration: none;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid #2c3644; background: #0d1118;
+    transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
   }
-  .pill:hover { border-color: #7d8a7f; }
-  .pill-active { color: #0d1210; background: #c9a24b; border-color: #c9a24b; font-weight: 600; }
+  .pill:hover { border-color: #6e7787; }
+  .pill-active { color: #0a0d12; background: #b8944f; border-color: #b8944f; font-weight: 600; }
   .filter-form select {
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.8rem;
-    background: #10160f; color: #e8e4d9; border: 1px solid #263028;
-    border-radius: 4px; padding: 0.32rem 0.5rem;
+    background: #0d1118; color: #d9d4c4; border: 1px solid #2c3644;
+    padding: 0.34rem 0.5rem;
   }
   .filter-form button {
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem; font-weight: 600;
-    color: #0d1210; background: #c9a24b; border: none; border-radius: 4px;
-    padding: 0.35rem 0.8rem; cursor: pointer;
+    color: #0a0d12; background: #b8944f; border: none;
+    padding: 0.38rem 0.85rem; cursor: pointer;
   }
-  .filter-form button:hover { background: #ddb75c; }
+  .filter-form button:hover { background: #cba764; }
 
-  /* Summary stat cards */
-  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+  /* ---- Summary "ledger line" cards (replaces the old rounded SaaS-card grid) ---- */
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border-top: 1px solid #2c3644; border-left: 1px solid #232b35; }
   .stat-card {
-    background: #10160f; border: 1px solid #263028; border-left: 3px solid var(--accent, #263028);
-    border-radius: 6px; padding: 0.95rem 1.05rem;
+    border-right: 1px solid #232b35; border-bottom: 1px solid #232b35;
+    padding: 1.1rem 1.3rem 1.25rem;
+    position: relative;
   }
-  .stat-value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 1.55rem; font-weight: 600; color: #e8e4d9; font-variant-numeric: tabular-nums; }
-  .stat-label { font-size: 0.78rem; color: #7d8a7f; margin-top: 0.2rem; }
-  .stat-sub { font-size: 0.74rem; color: #55605a; margin-top: 0.4rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .stat-card::before {
+    content: ""; position: absolute; top: -1px; left: 0; right: 0; height: 2px;
+    background: var(--accent, #2c3644);
+  }
+  .stat-value {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 1.9rem; font-weight: 600;
+    color: #efe9d8; font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .stat-label {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 0.8rem; color: #9aa3b0; margin-top: 0.5rem;
+  }
+  .stat-sub {
+    font-size: 0.72rem; color: #545e6d; margin-top: 0.5rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
 
   /* Charts (server-rendered inline SVG, no client JS/library) */
-  .chart { display: block; background: #10160f; border: 1px solid #263028; border-radius: 6px; }
-  .chart-gridline { stroke: #1c231d; stroke-width: 1; }
-  .chart-axis-label { fill: #55605a; font-size: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-  .chart-legend { display: flex; gap: 1.1rem; margin-top: 0.65rem; font-size: 0.78rem; color: #7d8a7f; }
-  .legend-item { display: inline-flex; align-items: center; gap: 0.35rem; }
-  .legend-swatch { width: 0.65rem; height: 0.65rem; border-radius: 2px; display: inline-block; }
-  .chart-cell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.25rem; }
-  .chart-cell { background: #10160f; border: 1px solid #263028; border-radius: 6px; padding: 0.85rem 0.95rem; }
-  .chart-cell-title { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em; margin-bottom: 0.45rem; font-size: 0.86rem; }
+  .chart { display: block; background: #0d1118; border: 1px solid #232b35; }
+  .chart-gridline { stroke: #1c232c; stroke-width: 1; }
+  .chart-axis-label { fill: #545e6d; font-size: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .chart-legend { display: flex; gap: 1.2rem; margin-top: 0.7rem; font-size: 0.78rem; color: #7c8698; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .legend-item { display: inline-flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch { width: 0.62rem; height: 0.62rem; display: inline-block; }
+  .chart-cell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0; border-top: 1px solid #232b35; border-left: 1px solid #232b35; }
+  .chart-cell { border-right: 1px solid #232b35; border-bottom: 1px solid #232b35; padding: 1rem 1.1rem; }
+  .chart-cell-title {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; letter-spacing: 0.02em;
+    margin-bottom: 0.5rem; font-size: 0.86rem; color: #efe9d8;
+  }
   .sparkline { display: block; }
-  .sparkline-meta { display: flex; gap: 0.6rem; align-items: baseline; margin-top: 0.4rem; font-size: 0.78rem; }
+  .sparkline-meta { display: flex; gap: 0.65rem; align-items: baseline; margin-top: 0.45rem; font-size: 0.78rem; }
 
   @media (max-width: 900px) {
+    .shell { flex-direction: column; }
+    .rail {
+      position: static; height: auto; width: 100%; flex: none;
+      flex-direction: row; align-items: center; gap: 1.4rem;
+      padding: 1rem 1.25rem; overflow-x: auto; white-space: nowrap;
+      border-right: none; border-bottom: 1px solid #232b35;
+    }
+    .wordmark { flex-direction: row; align-items: baseline; gap: 0.6rem; }
+    .wordmark-main { border-bottom: none; padding-bottom: 0; }
+    .wordmark-sub { margin-top: 0; }
+    .section-nav { flex-direction: row; gap: 0.9rem; }
+    .section-nav a { border-bottom: none; padding: 0; }
+    .rail-meta { display: none; }
+    main { padding: 1.75rem 1.25rem 4rem; }
     .stat-grid { grid-template-columns: 1fr 1fr; }
-    main { padding: 0 1.25rem; }
-    .ticker-strip { padding: 0.85rem 1.25rem; flex-wrap: wrap; }
-    .section-nav { padding: 0.6rem 1.25rem; overflow-x: auto; }
-    .filter-bar { gap: 1.1rem; }
+    .filter-bar { gap: 1.2rem; }
   }
 
-  /* Opt INTO the 3-column layout only once a wide viewport is confirmed --
-     see the mobile-first note on the base .grid rule above for why this
-     replaced a max-width override. */
   @media (min-width: 901px) {
     .grid { grid-template-columns: 1fr 1fr 1fr; }
   }
@@ -663,11 +735,6 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
     ${pillLinks("Rows", DECISION_LIMIT_OPTIONS, params.decisionLimit, "decisionLimit", params)}
   </div>`;
 
-  const activityFilterBar = `<div class="filter-bar">
-    ${pillLinks("Window", ACTIVITY_DAYS_OPTIONS.map((d) => `${d}d`), `${params.activityDays}d`, "__activityDaysDisplay", params)}
-  </div>`;
-  // The pill labels above are display strings ("7d"); build the real links
-  // manually since pillLinks assumes label === query value for non-display cases.
   const activityFilterBarReal = `<div class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Window</span>
@@ -692,75 +759,81 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
 <style>${STYLE}</style>
 </head>
 <body>
-  <div class="ticker-strip">
-    <h1>news-market-ai</h1>
-    <span class="mark">&bull;</span>
-    <p class="subtitle">live &mdash; generated ${fmtTime(new Date().toISOString())} &mdash; architecture &amp; known gaps in plan.md</p>
+  <div class="shell">
+    <aside class="rail">
+      <div class="wordmark">
+        <span class="wordmark-main">news-market-ai</span>
+        <span class="wordmark-sub">operations ledger</span>
+      </div>
+      ${renderNav()}
+      <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md</div>
+    </aside>
+    <div class="content">
+      <main>
+
+      <section id="snapshot">
+        <h2>Portfolio snapshot</h2>
+        ${renderSummaryCards({ openPositions, closedPositions, decisionStats })}
+      </section>
+
+      <section id="activity">
+        <h2>Decision activity</h2>
+        <p class="note">Trade decisions per UTC calendar day, stacked by status. A zero-height day means the pipeline produced no decisions that day -- it doesn't distinguish "quiet market" from "run failed before reaching this stage" (see Recent pipeline activity below for that).</p>
+        ${activityFilterBarReal}
+        ${decisionsActivityChart(decisionStats.daily, params.activityDays)}
+      </section>
+
+      <section id="charts">
+        <h2>Price charts</h2>
+        <p class="note">Recent daily closes (yfinance, unadjusted) for tickers with an open position, up to ${PRICE_CHART_TICKER_LIMIT} charted. Not point-in-time-gated -- this is "what the price actually is right now", same convention as the rest of this dashboard.</p>
+        ${priceChartsGrid(priceBarsByTicker)}
+      </section>
+
+      <section id="health">
+        <h2>Ingestion health</h2>
+        <p class="note">Last-ingested timestamp + row count per source. Not a per-vendor error log (none is persisted yet) -- a stale timestamp is the strongest signal available here. "Stale" below just means no new rows in over ${STALE_INGESTION_HOURS}h, a fixed heuristic, not a per-source SLA.</p>
+        <table>
+          <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th><th>Status</th></tr></thead>
+          <tbody>
+            ${healthRow("News (gdelt/rss/scrape)", health.news)}
+            ${healthRow("Price bars (yfinance)", health.priceBars)}
+            ${healthRow("Fundamentals (EDGAR)", health.fundamentals)}
+          </tbody>
+        </table>
+      </section>
+
+      <section id="decisions">
+        <h2>Recent trade decisions</h2>
+        <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Expand "LLM reasoning" on a row to see the Analyst Team's opinions, the bull/bear debate, the judge's verdict, and the trader's rationale that produced it -- rows from before this feature shipped show "not recorded" instead.</p>
+        ${decisionsFilterBar}
+        ${decisionsTable(decisions)}
+      </section>
+
+      <div class="grid">
+        <section id="positions">
+          <h2>Open positions (${openPositions.length})</h2>
+          ${positionsFilterBar}
+          ${positionsTable(openPositions)}
+        </section>
+        <section>
+          <h2>Recently closed (${closedPositions.length})</h2>
+          <p class="note">No exit price is recorded on close -- realized return can't be shown, only how/when a position closed.</p>
+          ${positionsTable(closedPositions, { closed: true })}
+        </section>
+        <section id="pipeline">
+          <h2>Recent pipeline activity</h2>
+          <p class="note">Latest completed stage per run. A stuck/crashed run just stops appearing here, not shown as a failure.</p>
+          ${checkpointsTable(checkpoints)}
+        </section>
+      </div>
+
+      <section id="backtest">
+        <h2>Backtest results</h2>
+        <p class="note">Not shown -- no backtest run's output is persisted yet (src/backtest/*.js is a computation library, not a stored-results table). See plan.md.</p>
+      </section>
+      </main>
+    </div>
   </div>
-  ${renderNav()}
-  <main>
-
-  <section id="snapshot">
-    <h2>Portfolio snapshot</h2>
-    ${renderSummaryCards({ openPositions, closedPositions, decisionStats })}
-  </section>
-
-  <section id="activity">
-    <h2>Decision activity</h2>
-    <p class="note">Trade decisions per UTC calendar day, stacked by status. A zero-height day means the pipeline produced no decisions that day -- it doesn't distinguish "quiet market" from "run failed before reaching this stage" (see Recent pipeline activity below for that).</p>
-    ${activityFilterBarReal}
-    ${decisionsActivityChart(decisionStats.daily, params.activityDays)}
-  </section>
-
-  <section id="charts">
-    <h2>Price charts</h2>
-    <p class="note">Recent daily closes (yfinance, unadjusted) for tickers with an open position, up to ${PRICE_CHART_TICKER_LIMIT} charted. Not point-in-time-gated -- this is "what the price actually is right now", same convention as the rest of this dashboard.</p>
-    ${priceChartsGrid(priceBarsByTicker)}
-  </section>
-
-  <section id="health">
-    <h2>Ingestion health</h2>
-    <p class="note">Last-ingested timestamp + row count per source. Not a per-vendor error log (none is persisted yet) -- a stale timestamp is the strongest signal available here. "Stale" below just means no new rows in over ${STALE_INGESTION_HOURS}h, a fixed heuristic, not a per-source SLA.</p>
-    <table>
-      <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th><th>Status</th></tr></thead>
-      <tbody>
-        ${healthRow("News (gdelt/rss/scrape)", health.news)}
-        ${healthRow("Price bars (yfinance)", health.priceBars)}
-        ${healthRow("Fundamentals (EDGAR)", health.fundamentals)}
-      </tbody>
-    </table>
-  </section>
-
-  <section id="decisions">
-    <h2>Recent trade decisions</h2>
-    <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Expand "LLM reasoning" on a row to see the Analyst Team's opinions, the bull/bear debate, the judge's verdict, and the trader's rationale that produced it -- rows from before this feature shipped show "not recorded" instead.</p>
-    ${decisionsFilterBar}
-    ${decisionsTable(decisions)}
-  </section>
-
-  <div class="grid">
-    <section id="positions">
-      <h2>Open positions (${openPositions.length})</h2>
-      ${positionsFilterBar}
-      ${positionsTable(openPositions)}
-    </section>
-    <section>
-      <h2>Recently closed (${closedPositions.length})</h2>
-      <p class="note">No exit price is recorded on close -- realized return can't be shown, only how/when a position closed.</p>
-      ${positionsTable(closedPositions, { closed: true })}
-    </section>
-    <section id="pipeline">
-      <h2>Recent pipeline activity</h2>
-      <p class="note">Latest completed stage per run. A stuck/crashed run just stops appearing here, not shown as a failure.</p>
-      ${checkpointsTable(checkpoints)}
-    </section>
-  </div>
-
-  <section id="backtest">
-    <h2>Backtest results</h2>
-    <p class="note">Not shown -- no backtest run's output is persisted yet (src/backtest/*.js is a computation library, not a stored-results table). See plan.md.</p>
-  </section>
-  </main>
 </body>
 </html>`;
 }
