@@ -38,10 +38,11 @@ export default {
   },
 
   // Consumer for INGEST only (wrangler.ingest.toml's single
-  // `[[queues.consumers]]` block) -- unlike backend's queue(), which fans
-  // in JOBS/INGEST/ANALYZE through one handler, this Worker only ever
-  // receives `ingest_ticker` / `ingest_feeds` messages, so there's no
-  // third branch to dispatch on.
+  // `[[queues.consumers]]` block) -- unlike backend's queue(), which (as of
+  // Step 6) consumes only JOBS (`backfill` only; `backtest`/`exit_check`
+  // moved to `llm`'s LLM_JOBS queue), this Worker only ever receives
+  // `ingest_ticker` / `ingest_feeds` messages, so there's no third branch
+  // to dispatch on.
   async queue(batch, env) {
     const config = loadConfig(env);
     for (const message of batch.messages) {
