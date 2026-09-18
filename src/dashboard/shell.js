@@ -60,6 +60,7 @@ const STYLE = `
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-bright: #60a5fa;
+    --accent-deep: #1d4ed8;
     --accent-subtle: rgba(59, 130, 246, 0.14);
     --accent-glow: rgba(96, 165, 250, 0.22);
     --focus-ring: #60a5fa;
@@ -408,7 +409,7 @@ const STYLE = `
     text-decoration: none;
   }
   .filter-form button:hover, .btn:hover {
-    background: linear-gradient(135deg, var(--accent-bright) 0%, var(--accent) 100%);
+    background: linear-gradient(135deg, var(--accent-hover) 0%, var(--accent-deep) 100%);
   }
   .filter-form button:active, .btn:active { transform: translateY(1px); }
   .filter-form button:focus-visible, .btn:focus-visible {
@@ -731,8 +732,8 @@ const STYLE = `
     .bottom-nav a {
       display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 0.18rem; color: var(--text-muted); text-decoration: none;
-      font-size: 0.625rem; font-weight: 500;
-      padding: 0.25rem 0.7rem; min-height: 48px; min-width: 56px;
+      font-size: 0.6875rem; font-weight: 500;
+      padding: 0.25rem 0.5rem; min-height: 48px; min-width: 56px;
       border-bottom: none; flex-shrink: 0;
       border-top: 2px solid transparent;
       transition: color 150ms ease;
