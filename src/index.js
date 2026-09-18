@@ -249,8 +249,83 @@ export default {
           // for the expected-failure case.
           const outcome = await runManualBacktest(env, config, env.DB, { id, tickers, testStart, testEnd, graceDays });
           console.log("backtest job finished", { id, status: outcome.status, tickers });
+        } else if (job.type === "exit_check") {
+          // Own message, own queue (plan.md Step 4) -- isolated from
+          // INGEST/ANALYZE failures by construction, since this message
+          // only ever arrives via JOBS, a completely separate queue/
+          // consumer path from either. A failure here is logged and acked,
+          // same ack-not-retry reasoning as backfill/backtest above:
+          // checkOpenPositionExits already isolates a single position's
+          // own exit-evaluation failure internally (see that function's
+          // header), so a throw reaching here is a real, unexpected
+          // failure -- but retrying wouldn't recover anything either, the
+          // next scheduled tick re-evaluates every still-open position
+          // regardless.
+          try {
+            const closed = await checkOpenPositionExits(env, config, env.DB, { asOf: job.asOf });
+            console.log("exit_check job completed", { closed: closed.length, closed });
+          } catch (err) {
+            console.error("exit_check job failed", { message: err.message });
+          }
+        } else if (job.type === "ingest_ticker") {
+          // INGEST consumer, per-ticker branch (plan.md Step 4). A failure
+          // is logged and acked, not retried -- there's no partial state
+          // worth resuming (unlike ANALYZE below), the next cron tick's
+          // own ingest_ticker message for this same ticker will simply try
+          // again from scratch.
+          const { ticker, asOf: tickerAsOf } = job;
+          try {
+            const insertedNews = await ingestTickerData(config, env.DB, env.CACHE_KV, { ticker, asOf: tickerAsOf });
+            const analyzeMessages = insertedNews.map((item) => ({
+              body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt },
+            }));
+            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
+            console.log("ingest_ticker job completed", { ticker, newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
+          } catch (err) {
+            console.error("ingest_ticker job failed", { ticker, message: err.message });
+          }
+        } else if (job.type === "ingest_feeds") {
+          // INGEST consumer, general-feeds branch (plan.md Step 4). Unlike
+          // ingest_ticker above, a feed item may resolve to zero, one, or
+          // several tickers (entity resolution, not a single hintTicker) --
+          // so this enqueues one ANALYZE message per (item, ticker) pair,
+          // same loop shape the old runScheduledIngestion used inline.
+          try {
+            const insertedNews = await ingestFeedNews(config, env.DB, env.CACHE_KV);
+            const analyzeMessages = [];
+            for (const item of insertedNews) {
+              for (const ticker of item.tickers) {
+                analyzeMessages.push({ body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt } });
+              }
+            }
+            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
+            console.log("ingest_feeds job completed", { newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
+          } catch (err) {
+            console.error("ingest_feeds job failed", { message: err.message });
+          }
+        } else if (job.type === "analyze") {
+          // ANALYZE consumer (plan.md Step 4). Deliberately NOT wrapped in its
+          // own try/catch the way every branch above is -- a failure here
+          // falls through to this function's own outer catch below, which
+          // calls message.retry() instead of ack()ing. That's the correct,
+          // intentional difference from every other message type in this
+          // handler: runPipelineForTicker is checkpoint-resumable (Adopted
+          // Pattern #12, graph/checkpointer.js) -- a retried ANALYZE message
+          // re-enters resumeFrom and only re-runs whatever stage didn't
+          // finish last time, never re-spending an LLM call on an
+          // already-checkpointed stage, and never double-opening a position
+          // (openPosition's own id-based ON CONFLICT DO NOTHING, see
+          // pipeline.js). So retrying costs nothing extra and can actually
+          // finish the job, unlike backfill/backtest/exit_check/ingest_*
+          // above, where a retry would just redo (and re-spend quota on)
+          // work that's already done. wrangler.toml's max_retries/
+          // dead_letter_queue on the ANALYZE queue is the real safety net
+          // for a persistently failing ticker/item, not a nested try/catch
+          // here.
+          const { runId, ticker, newsItem, asOf: itemAsOf } = job;
+          await runPipelineForTicker(env, config, env.DB, { runId, ticker, newsItem, asOf: itemAsOf });
         } else {
-          console.error("JOBS message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
+          console.error("queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
         }
         message.ack();
       } catch (err) {
