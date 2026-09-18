@@ -146,14 +146,39 @@ someone adds a feature.
 | KV | 1GB storage, 100K reads/day, 1K writes/day | Too tight for per-request caching; good fit for low-frequency state (LLM key/model cooldowns) |
 | Bundle size | 64 MiB uncompressed | Not a real constraint |
 
-**Planned:** the single Worker below is being split into 4 (dashboard, backend,
-ingest, llm) -- see "Roadmap: Service Split" for the step-by-step plan. Until each
-step lands, the text below describes the current single-Worker system.
+**Done (2026-09-19):** the system described below is the built, 4-Worker layout
+-- see "Roadmap: Service Split" for the step-by-step history of how it got here.
 
-**Architecture:** Workers as orchestrator (Cron Triggers drive ingestion + agent
-pipeline) → D1 as structured layer (replaces earlier Postgres/Neon plan) → KV as
-cooldown/rate-limit state + lightweight config → R2 (10GB free) as raw archive
-layer if D1 storage is outgrown.
+**Architecture:** four Cloudflare Workers, connected by queues rather than
+synchronous calls, all binding the same D1 database (only `backend` runs
+migrations) and the same `CACHE_KV` namespace:
+- **`dashboard`** (`wrangler.dashboard.toml`) -- the only public-facing Worker:
+  login, session cookies, and the server-rendered UI. Reaches `backend` via a
+  service binding, never a queue (it needs a synchronous response). Holds
+  `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/`JWT_SECRET`/`SESSION_TTL_SECONDS`.
+- **`backend`** (`wrangler.toml`) -- orchestrator: the JSON `/api/*` surface,
+  `POST /backfill` and `POST /backtest/run` (reachable only via `dashboard`'s
+  service binding, private otherwise), the cron trigger (`scheduled()`, which
+  fans out onto `INGEST` and `LLM_JOBS`, nothing else), D1 migrations, and the
+  `JOBS` queue consumer (`backfill` only). Holds `FINNHUB_API_KEY` (needed only
+  for `backfill`'s direct Finnhub call -- see Step 5's documented gap) and no
+  Gemini vars/keys.
+- **`ingest`** (`wrangler.ingest.toml`) -- consumes `INGEST` (`ingest_ticker`/
+  `ingest_feeds`), fetches Finnhub/yfinance/EDGAR/RSS/HTML-scrape data, writes
+  it to D1, and produces onto `ANALYZE`. Holds `FINNHUB_API_KEY` and
+  `EDGAR_USER_AGENT`/`EDGAR_CIK_MAP`; no Gemini vars/keys.
+- **`llm`** (`wrangler.llm.toml`) -- the only Worker that calls Gemini and the
+  only one holding `GEMINI_API_KEYS`. Consumes `ANALYZE` (the Analyst Team ->
+  debate -> trader -> risk -> portfolio pipeline) and `LLM_JOBS` (`backtest`,
+  `exit_check`). Owns the `gemini:cooldown:*` keys in `CACHE_KV`.
+
+Cron Triggers on `backend` drive the whole system: `scheduled()` fans out
+per-ticker/per-feed messages onto `INGEST` and one `exit_check` onto `LLM_JOBS`;
+everything downstream (ingestion, analysis, trading decisions) happens via queue
+consumers in `ingest`/`llm`, never synchronously in the cron handler itself. D1 is
+the structured layer (replaces the earlier Postgres/Neon plan); KV is
+cooldown/rate-limit state plus lightweight config; R2 (10GB free) remains an
+option as a raw archive layer if D1 storage is ever outgrown, not yet used.
 
 **CI/CD:** `.github/workflows/deploy.yml` runs `test` → `migrate` (push/dispatch
 only) → `deploy`, adapted from `allocsys/ai-campaign-builder`'s pattern but scaled
