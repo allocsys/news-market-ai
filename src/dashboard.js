@@ -18,12 +18,21 @@
 // falls back to the default instead of erroring the page.
 //
 // HONEST SCOPE, read before treating this as a complete operations view:
-// 1. Backtest results are NOT shown here -- there is no persisted table for
-//    a completed backtest run (src/backtest/*.js is a pure computation
-//    library today, plan.md's own "signal on/off" checklist item is
-//    explicit that it computes comparisons given return series, it doesn't
-//    run and store one). Rather than fake a section, this dashboard omits
-//    backtest results entirely until that persistence layer exists.
+// 1. Backtest results (migrations/0010_backtest_runs.sql) are now shown,
+//    manual-trigger only: a plain <form method="post" action="/backtest/run">
+//    button, same zero-client-JS philosophy as every other filter/form on
+//    this page -- a click is a normal browser POST navigation, no fetch()/
+//    JS needed. NOT automatic -- there is deliberately no cron/scheduled
+//    wiring to this (see src/backtest/runBacktest.js's header); every run
+//    on the list below was a deliberate, explicit click by someone who
+//    typed the shared secret. The "on" side of a run spends real Gemini
+//    quota (src/backtest/onSignalRunner.js), so this form is intentionally
+//    NOT a one-click no-confirmation action -- it requires the operator to
+//    know and enter BACKTEST_API_SECRET, same gate as curl'ing the route
+//    directly. A run's own outcome only reflects whatever news is ALREADY
+//    backfilled for its window (POST /backfill, a separate manual step) --
+//    a window with nothing backfilled will show a thin/empty "on" side, not
+//    an error.
 // 2. Vendor/ingestion errors are NOT shown per-source -- graph/pipeline.js's
 //    failure isolation only console.error()s a skipped source, which isn't
 //    queryable from D1. What IS shown (getIngestionHealth) is a weaker but
@@ -73,6 +82,7 @@ import {
   getIngestionHealth,
   getDecisionStats,
   getRecentPriceBars,
+  getRecentBacktestRuns,
 } from "./storage/d1.js";
 
 const ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
