@@ -227,13 +227,18 @@ const STYLE = `
   .pill-active { color: #ffffff; background: var(--accent); border-color: var(--accent); font-weight: 600; }
   
   .filter-form { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
-  .filter-form select, .date-input {
+  /* ".filter-form select" covers a <select> nested in a .filter-form container (not
+     currently used by any view). Backfill/backtest's trigger forms instead apply
+     "filter-form" directly to each <input> -- so "input.filter-form" is also needed
+     here, sharing this rule with .date-input so every input on these forms (text or
+     date) looks identical, which is what the forms already visually assume. */
+  .filter-form select, input.filter-form, .date-input {
     font-family: var(--font-sans); font-size: 0.875rem;
     background: var(--bg-surface); color: var(--text-main); border: 1px solid var(--border-color);
-    padding: 0.5rem 0.75rem; border-radius: 6px;
+    padding: 0.5rem 0.75rem; border-radius: 6px; width: 100%; box-sizing: border-box;
     transition: border-color 150ms ease, box-shadow 150ms ease;
   }
-  .filter-form select:focus, .date-input:focus {
+  .filter-form select:focus, input.filter-form:focus, .date-input:focus {
     outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-subtle);
   }
@@ -322,6 +327,13 @@ const STYLE = `
       padding: 1.25rem 0.5rem;
       align-items: center;
       gap: 1.5rem;
+      /* Base .rail sets overflow-y: auto, which per spec forces overflow-x to compute
+         as auto too (a UA can't scroll one axis and show the other outside its box) --
+         that silently clips the hover/focus tooltip below, which is positioned outside
+         the 72px rail via left: calc(100% + 12px). At this icon-only width the nav list
+         (9 items) comfortably fits without scrolling, so overflow: visible is safe here
+         and is what actually lets the tooltip render instead of being clipped. */
+      overflow: visible;
     }
     .rail .wordmark, .rail .rail-meta, .rail .section-nav a .nav-label { display: none; }
     .rail .section-nav { width: 100%; align-items: center; gap: 0.35rem; }
@@ -483,22 +495,24 @@ const STYLE = `
 `;
 
 export const NAV_SECTIONS = [
-  ["snapshot", "Snapshot"],
-  ["activity", "Activity"],
-  ["charts", "Charts"],
-  ["health", "Health"],
-  ["decisions", "Decisions"],
-  ["positions", "Positions"],
-  ["pipeline", "Pipeline"],
-  ["backfill", "Backfill"],
-  ["backtest", "Backtest"],
+  ["snapshot", "Snapshot", "SN"],
+  ["activity", "Activity", "AC"],
+  ["charts", "Charts", "CH"],
+  ["health", "Health", "HE"],
+  ["decisions", "Decisions", "DC"],
+  ["positions", "Positions", "PO"],
+  ["pipeline", "Pipeline", "PL"],
+  ["backfill", "Backfill", "BF"],
+  ["backtest", "Backtest", "BT"],
 ];
 
 function renderNav(activeSection) {
-  const links = NAV_SECTIONS.map(([id, label], i) => {
+  // Each section's rail abbreviation is an explicit, hand-picked two-letter code (not a
+  // mechanical label.slice(0,2)) specifically so no two sections ever collide on the
+  // tablet icon rail -- e.g. "Backfill"/"Backtest" would otherwise both reduce to "BA".
+  const links = NAV_SECTIONS.map(([id, label, abbr], i) => {
     const n = String(i + 1).padStart(2, "0");
     const active = activeSection === id;
-    const abbr = label.slice(0, 2).toUpperCase();
     return `<a href="/dashboard/${id}"${active ? ' class="active"' : ""} data-label="${escapeHtml(label)}"><span class="nav-index">${n}</span><span class="nav-icon">${escapeHtml(abbr)}</span><span class="nav-label">${escapeHtml(label)}</span></a>`;
   }).join("");
   return `<nav class="section-nav">${links}</nav>`;
