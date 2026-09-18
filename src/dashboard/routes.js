@@ -26,7 +26,9 @@ function isDashboardAuthConfigured(config) {
   return Boolean(config.dashboardUsername && config.dashboardPassword && config.jwtSecret);
 }
 
-async function checkAuth(request, config) {
+// Exported so src/dashboard/api.js's /api/* JSON handlers can reuse the exact
+// same session check instead of duplicating it (plan.md Step 1).
+export async function checkAuth(request, config) {
   const sessionUsername = isDashboardAuthConfigured(config) ? await getSessionUsername(request, config) : null;
   if (isDashboardAuthConfigured(config) && !sessionUsername) return { redirect: "/login" };
   return { sessionUsername };
