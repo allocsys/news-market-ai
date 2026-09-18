@@ -272,6 +272,19 @@ const STYLE = `
 
   .error-inline { color: var(--color-danger-text) !important; }
 
+  /* Per-page toolbar: last-updated time + Refresh link (see renderShell's refreshHref).
+     The Refresh control is a plain <a class="btn">, so it needs the underline removed
+     that <button>-based .btn variants never had. */
+  a.btn { text-decoration: none; }
+  .page-toolbar {
+    display: flex; align-items: center; justify-content: flex-end; gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .page-toolbar-updated {
+    font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
   /* ---- Summary stat cards ---- */
   .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
   .stat-card {
@@ -427,6 +440,8 @@ const STYLE = `
     main { padding: 1.5rem 1rem 6rem; }
     .stat-grid { grid-template-columns: 1fr; }
     .filter-bar { gap: 1rem; }
+    /* 44px minimum touch target on mobile, per design.md. */
+    .page-toolbar .btn { min-height: 44px; }
 
     /* Fixed bottom navigation bar (min 44x44px touch targets per design.md) */
     .bottom-nav {
@@ -549,7 +564,24 @@ function renderMobileHeader(sessionUsername) {
   </div>`;
 }
 
-export function renderShell({ activeSection, sessionUsername, bodyHtml }) {
+/**
+ * Renders the per-page toolbar shown above a section's content: when the page was
+ * generated, plus a Refresh control. Refresh is a plain GET link back to this same
+ * page (path + query string, so active filters survive) -- no client JS, matching
+ * design.md's zero-JS navigation model. Every section is a fresh server render that
+ * reads D1 on each request, so following the link is what re-fetches the data.
+ * Returns "" when no refreshHref is given, so pages that shouldn't offer it (forms,
+ * confirm pages, the run-accepted status page) render exactly as before.
+ */
+function renderPageToolbar(refreshHref) {
+  if (!refreshHref) return "";
+  return `<div class="page-toolbar">
+        <span class="page-toolbar-updated">Updated ${fmtTime(new Date().toISOString())}</span>
+        <a href="${escapeHtml(refreshHref)}" class="btn btn-secondary" title="Reload this page with the latest data"><span aria-hidden="true">\u21bb</span> Refresh</a>
+      </div>`;
+}
+
+export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -582,6 +614,7 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml }) {
     </aside>
     <div class="content">
       <main>
+      ${renderPageToolbar(refreshHref)}
       ${bodyHtml}
       </main>
     </div>
