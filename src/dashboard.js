@@ -505,7 +505,23 @@ const STYLE = `
   .status-approved { color: #6b8f71; }
   .status-rejected { color: #a85c4a; }
   .status-neutral { color: #8b9490; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; }
+  // MOBILE-FIRST (2026-09-18, live device report): this used to be
+  // "grid-template-columns: 1fr 1fr 1fr" here with a max-width:900px
+  // override collapsing it to 1fr -- on a live phone (narrow viewport,
+  // well under 900px) the 3-column layout was still rendering uncollapsed,
+  // squeezing every word in the Open Positions / Recently Closed / Recent
+  // Pipeline Activity cells onto its own line. Root cause not fully
+  // isolated (device/browser-specific viewport reporting is the leading
+  // suspect, not a CSS logic error -- the override rule itself was
+  // correctly written and ordered), but a max-width override is only ever
+  // as reliable as that reporting. Flipped to mobile-first: the base rule
+  // below is now the narrow-screen-safe default (single column, always
+  // correct with zero dependency on a media query actually matching), and
+  // the min-width override further down opts INTO 3 columns only once a
+  // wide viewport is confirmed -- an unmatched media query now degrades to
+  // the safe layout instead of the broken one.
+  .grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+  .grid > section { min-width: 0; } /* lets a wide table's min-content shrink instead of forcing its column past the viewport */
 
   /* LLM answer disclosure (migrations/0008_trade_decisions_llm_answers.sql) -- native <details>, no client JS */
   .llm-answer summary {
@@ -594,12 +610,18 @@ const STYLE = `
   .sparkline-meta { display: flex; gap: 0.6rem; align-items: baseline; margin-top: 0.4rem; font-size: 0.78rem; }
 
   @media (max-width: 900px) {
-    .grid { grid-template-columns: 1fr; }
     .stat-grid { grid-template-columns: 1fr 1fr; }
     main { padding: 0 1.25rem; }
     .ticker-strip { padding: 0.85rem 1.25rem; flex-wrap: wrap; }
     .section-nav { padding: 0.6rem 1.25rem; overflow-x: auto; }
     .filter-bar { gap: 1.1rem; }
+  }
+
+  /* Opt INTO the 3-column layout only once a wide viewport is confirmed --
+     see the mobile-first note on the base .grid rule above for why this
+     replaced a max-width override. */
+  @media (min-width: 901px) {
+    .grid { grid-template-columns: 1fr 1fr 1fr; }
   }
 `;
 
