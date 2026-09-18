@@ -9,6 +9,8 @@
     "deploy": "wrangler deploy",
     "dev:dashboard": "wrangler dev --config wrangler.dashboard.toml",
     "deploy:dashboard": "wrangler deploy --config wrangler.dashboard.toml",
+    "dev:ingest": "wrangler dev --config wrangler.ingest.toml",
+    "deploy:ingest": "wrangler deploy --config wrangler.ingest.toml",
     "test": "node --test $(find test -name '*.test.js')",
     "db:migrate:local": "wrangler d1 migrations apply news_market_ai --local",
     "db:migrate:remote": "wrangler d1 migrations apply news_market_ai --remote"

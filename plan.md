@@ -455,15 +455,89 @@ before merging (same deferral as Step 3, per this session's instruction --
 to be checked once, after Step 7); no live deploy verification against real
 Cloudflare infra yet either -- both outstanding for whenever that check happens.
 
-### Step 5 -- Extract `ingest` Worker
-Move the ingest consumer to `news-market-ai-ingest` (own `wrangler` config, CI job).
-It alone holds `FINNHUB_API_KEY` and the EDGAR CIK/name-index KV cache; it consumes
-`INGEST` and produces `ANALYZE`. Shared code (`ingestion/*`, `storage/d1.js`,
-`shared/*`) stays imported, not copied.
-**Done when:** ingestion runs only from `ingest`, `backend` no longer holds
-vendor keys, and `ingest` has its own path-filtered CI job per the "CI/CD for the
-4-Worker split" pattern above (its job is the only one that ever sees
-`FINNHUB_API_KEY`).
+### Step 5 -- Extract `ingest` Worker -- DONE 2026-09-19 (pending merge)
+Built on `feat/step5-ingest-worker`, not yet merged to main as of this write-up
+-- PR number/squash commit to be filled in once merged.
+
+New `wrangler.ingest.toml` + `src/ingest-worker.js` (`news-market-ai-ingest`
+Worker): owns the INGEST queue's consumer -- `ingest_ticker`/`ingest_feeds`
+handling moved here VERBATIM from `backend`'s queue() (same functions called,
+same ack-on-business-failure/retry-on-crash convention, see that file's own
+header). Binds D1 directly (not a service binding -- there's no synchronous
+caller waiting on a response the way `dashboard`->`backend` has one, and
+plan.md's Roadmap rule is "all Workers bind the same D1", not "only backend
+touches D1") plus its own CACHE_KV binding (EDGAR CIK lookup cache, entity-
+resolution SEC name-index cache, Finnhub/yfinance's cross-invocation 429
+cooldown -- all now exercised only from this Worker). Consumes
+`news-market-ai-ingest`, produces onto `news-market-ai-analyze` -- `backend`'s
+`scheduled()` is unchanged and still enqueues onto INGEST, it just no longer
+consumes it (a queue can only have one consumer Worker, so `backend`'s
+`[[queues.consumers]]` block for `news-market-ai-ingest` was removed from
+`wrangler.toml`, its producer block kept).
+
+`backend` trimmed accordingly: `ingest_ticker`/`ingest_feeds` branches and
+their `ingestTickerData`/`ingestFeedNews` imports removed from `src/index.js`'s
+queue() (dead code after the consumer binding was removed -- Cloudflare would
+never route those message types to this Worker again regardless), module
+header comment updated to describe the reduced two-queue (JOBS + ANALYZE)
+responsibility. `EDGAR_USER_AGENT`/`EDGAR_CIK_MAP` vars removed from
+`wrangler.toml` (moved to `wrangler.ingest.toml`) -- `backend` no longer calls
+EDGAR directly.
+
+**Known, deliberate gap against this step's original "done when" wording**
+("backend no longer holds vendor keys"): `backend` STILL separately holds its
+own `FINNHUB_API_KEY`, because `POST /backfill`'s JOBS-queue `backfill` job
+(plan.md Step 3, `src/index.js`'s queue()) calls
+`graph/pipeline.js#backfillHistoricalNews` directly, which hits Finnhub itself
+-- and JOBS has exactly one consumer (`backend`), so moving that call to
+`ingest` isn't possible without either a second queue for backfill jobs
+specifically or some other larger redesign, which is out of scope for this
+step's size (comparable to Step 2's dashboard extraction, not a bigger
+rewrite). Flagged explicitly in `wrangler.toml`'s own secrets comment,
+`wrangler.ingest.toml`'s own comment, and `src/index.js`'s module header --
+not silently left unmentioned. A future step (or a dedicated backfill-queue
+redesign) could close this; not attempted here.
+
+`package.json` gained `dev:ingest`/`deploy:ingest` scripts, same pattern as
+`dashboard`'s. `deploy.yml` gained a path-filtered `deploy-ingest` job (own
+concurrency group, depends on `backend`'s own `deploy` job since that job
+provisions the `news-market-ai-ingest`/`news-market-ai-analyze` queues +
+DLQs this Worker's `wrangler.ingest.toml` binds to, via the same `ensure-queue`
+composite action reused unmodified) that pushes `FINNHUB_API_KEY` scoped to
+`--config wrangler.ingest.toml`, same idempotent non-blocking shape as every
+other per-Worker secret push in this file. Path filter watches
+`src/ingest-worker.js`, `wrangler.ingest.toml`, `src/graph/pipeline.js`,
+`src/ingestion/**`, `src/storage/**`, `src/shared/**`, `src/config.js`, and
+the workflow file itself.
+
+Test contract updated deliberately: the `ingest_ticker`/`ingest_feeds`
+`queue()` tests that used to live in `test/cron_fanout.test.js` (testing
+`backend`'s queue(), plan.md Step 4) moved to a new `test/ingest_worker.test.js`
+unchanged in behavior/assertions -- the underlying `ingestTickerData`/
+`ingestFeedNews` functions didn't change at all, only which Worker's queue()
+calls them -- plus two new tests for the unrecognized-type and genuine-crash-
+retry paths (a null message body, since both message types' own inner
+try/catch already covers their business-logic failures, so a null body is
+what actually reaches the outer catch). `test/cron_fanout.test.js`'s own
+scope note and header comment updated to describe what's left there
+(`scheduled()`'s own fan-out tests, `exit_check`, `analyze`) versus what moved.
+**Verified locally** (cloned the branch, `npm ci && npm test`): 340 tests,
+338 pass, 2 fail -- confirmed via the same run against `main` that those
+same 2 failures pre-date this step entirely (unrelated `dashboard_worker`
+backfill tests, not touched by Step 5). The two new/moved test files
+(`test/cron_fanout.test.js`, `test/ingest_worker.test.js`) pass 100% in
+isolation (10/10).
+
+CI on the PR not chased individually, same deferral as Steps 3/4 (checked
+once, after Step 7, per standing instruction). No live-deploy verification
+yet either -- same deferral.
+**Done when:** ingestion runs only from `ingest` (done), `ingest` has its own
+path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above
+(done, `deploy-ingest`), and `FINNHUB_API_KEY`/EDGAR identity are held there
+(done) -- **with the one exception above** (`backend` also still holds
+`FINNHUB_API_KEY`, for `backfill` only): not fully met by the letter of the
+original wording, met in every other respect, and the gap is documented
+rather than silently claimed closed.
 
 ### Step 6 -- Extract `llm` Worker
 Move the `ANALYZE` consumer (analysts -> debate -> trader -> risk -> portfolio) to

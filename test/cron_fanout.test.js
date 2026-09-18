@@ -1,10 +1,17 @@
 // Cron fan-out test (plan.md Step 4) -- covers src/index.js's `scheduled`
-// (now a thin scheduler, no more inline pipeline run) and queue()'s four
-// new message types: `ingest_ticker`, `ingest_feeds`, `exit_check`, and
-// `analyze`. test/queue_consumer.test.js already covers JOBS's original
-// `backfill`/`backtest` types plus the generic unrecognized-type/crashed-
-// handler paths -- this file only adds the Step 4 additions, not a
-// re-test of what that file already covers.
+// (now a thin scheduler, no more inline pipeline run) and queue()'s
+// `exit_check` and `analyze` message types. test/queue_consumer.test.js
+// already covers JOBS's original `backfill`/`backtest` types plus the
+// generic unrecognized-type/crashed-handler paths -- this file only adds
+// the Step 4 additions, not a re-test of what that file already covers.
+//
+// UPDATE (plan.md Step 5): the `ingest_ticker`/`ingest_feeds` queue()
+// tests that used to live here moved to test/ingest_worker.test.js --
+// those message types are no longer handled by src/index.js's queue() at
+// all (see that file's own comment), they're now the new `ingest`
+// Worker's (src/ingest-worker.js) job. scheduled()'s own fan-out tests
+// stay here unchanged -- backend still enqueues onto INGEST, it just no
+// longer consumes it.
 //
 // SCOPE NOTE on `analyze`: only the retry-on-failure path is covered here.
 // A full success round-trip through runPipelineForTicker needs the same
@@ -53,11 +60,7 @@ class FakeQueueBinding {
   }
 }
 
-function mockFinnhubJson() {
-  return [{ url: "https://finnhub.example.com/story", datetime: 1757941800, headline: "Story about Acme", summary: "A brief summary." }];
-}
-
-/** Minimal in-memory fake covering news_items/news_item_tickers (insertNewsItem), price_bars (insertPriceBar), and fundamental_facts (insertFundamentalFacts, via db.batch) -- enough for ingestTickerData/ingestFeedNews to run without throwing, not a general D1 emulator (same convention as test/ingestion_wiring.test.js's FakeDb). */
+/** Minimal in-memory fake covering news_items/news_item_tickers (insertNewsItem) -- enough for scheduled()'s own tests below, which never reach D1 at all (scheduled() only enqueues, see its own header) but still need a DB value in baseEnv() for shape parity with the rest of this file's env objects. */
 class FakeIngestDb {
   constructor() {
     this.newsItems = [];
@@ -151,81 +154,6 @@ test("scheduled() logs (not throws) if INGEST fan-out fails, and still attempts 
   assert.ok(errorLogs.some(([msg]) => msg.includes("INGEST fan-out failed")));
   assert.equal(env.JOBS.sent.length, 1); // exit_check enqueue still attempted despite the INGEST failure above
   assert.equal(env.JOBS.sent[0].type, "exit_check");
-});
-
-// ---------------------------------------------------------------------------
-// queue(): ingest_ticker / ingest_feeds
-// ---------------------------------------------------------------------------
-
-test("queue() ingest_ticker fetches+writes news for that one ticker, enqueues one ANALYZE message per resulting item, then acks", async (t) => {
-  const db = new FakeIngestDb();
-  const env = baseEnv({ DB: db });
-
-  t.mock.method(global, "fetch", async (url) => {
-    if (String(url).includes("finnhub")) return { ok: true, status: 200, json: async () => mockFinnhubJson() };
-    // yfinance/edgar calls hit the same mock -- an unexpected response
-    // shape becomes a logged VendorError and is skipped, same convention
-    // as every other ingestion adapter (see their own headers), so this
-    // doesn't need per-vendor mock shapes to avoid crashing the test.
-    return { ok: true, status: 200, json: async () => ({}) };
-  });
-
-  const message = new FakeMessage({ type: "ingest_ticker", ticker: "AAPL", asOf: "2026-09-18T00:00:00.000Z" });
-  await worker.queue(batchOf(message), env);
-
-  assert.equal(db.newsItems.length, 1);
-  assert.equal(env.ANALYZE.sent.length, 1);
-  assert.equal(env.ANALYZE.sent[0].type, "analyze");
-  assert.equal(env.ANALYZE.sent[0].ticker, "AAPL");
-  assert.equal(message.acked, true);
-  assert.equal(message.retried, false);
-});
-
-test("queue() ingest_ticker acks (does not retry) on a business-logic failure -- next cron tick's own message tries again", async (t) => {
-  class ThrowingDb {
-    prepare() {
-      throw new Error("simulated D1 write failure");
-    }
-  }
-  const env = baseEnv({ DB: new ThrowingDb() });
-  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
-  const errorLogs = [];
-  t.mock.method(console, "error", (...args) => errorLogs.push(args));
-
-  const message = new FakeMessage({ type: "ingest_ticker", ticker: "AAPL", asOf: "2026-09-18T00:00:00.000Z" });
-  await worker.queue(batchOf(message), env);
-
-  assert.equal(message.acked, true);
-  assert.equal(message.retried, false);
-  assert.ok(errorLogs.some(([msg]) => msg.includes("ingest_ticker job failed")));
-});
-
-test("queue() ingest_feeds fans ANALYZE messages out per (item, ticker) pair, since a general feed item may resolve to several tickers", async (t) => {
-  const db = new FakeIngestDb();
-  const env = baseEnv({ DB: db, RSS_FEED_URLS: "AAPL|https://fake.test/feed.xml,MSFT|https://fake.test/feed.xml" });
-
-  t.mock.method(global, "fetch", async () => ({
-    ok: true,
-    status: 200,
-    text: async () => `<?xml version="1.0"?><rss><channel><item>
-        <title>Story mentioning the ticker</title>
-        <link>https://news.example.com/story</link>
-        <pubDate>Tue, 15 Sep 2026 14:30:00 GMT</pubDate>
-        <description>Body text.</description>
-      </item></channel></rss>`,
-  }));
-
-  const message = new FakeMessage({ type: "ingest_feeds", asOf: "2026-09-18T00:00:00.000Z" });
-  await worker.queue(batchOf(message), env);
-
-  // Two feed entries (AAPL-hinted, MSFT-hinted) with distinct URLs share
-  // the exact same mocked XML across both fetch calls, so each becomes its
-  // own inserted item -- one ANALYZE message per item, each hinted to its
-  // own feed's ticker.
-  assert.equal(db.newsItems.length, 2);
-  assert.equal(env.ANALYZE.sent.length, 2);
-  assert.deepEqual(env.ANALYZE.sent.map((m) => m.ticker).sort(), ["AAPL", "MSFT"]);
-  assert.equal(message.acked, true);
 });
 
 // ---------------------------------------------------------------------------
