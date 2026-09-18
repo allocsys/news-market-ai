@@ -123,6 +123,12 @@ const ACTIVITY_DAYS_OPTIONS = [7, 14, 30, 60];
 const DECISION_STATUS_OPTIONS = ["all", "approved", "rejected"];
 const DECISION_LIMIT_OPTIONS = [10, 20, 50, 100];
 const POSITIONS_LIMIT_OPTIONS = [10, 25, 50, 100];
+// Quick-range presets for the backfill/backtest trigger forms' date
+// inputs (setDateRange, defined once in STYLE/renderDashboardHtml's inline
+// <script> below) -- picking a plausible window without hand-typing two
+// dates was the whole point of adding these buttons. Same days-back
+// convention for both forms so one mental model covers both.
+const RANGE_PRESET_DAYS = [7, 14, 30, 90];
 const STALE_INGESTION_HOURS = 26; // a bit over one day -- gives a daily cron room without false-alarming on normal jitter
 
 function pickFromOptions(raw, options, fallback) {
@@ -176,6 +182,7 @@ const NAV_SECTIONS = [
   ["decisions", "Decisions"],
   ["positions", "Positions"],
   ["pipeline", "Pipeline"],
+  ["backfill", "Backfill"],
   ["backtest", "Backtest"],
 ];
 
