@@ -184,9 +184,8 @@ export default {
       }
 
       const contentType = request.headers.get("content-type") || "";
-      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
-        ? await request.formData()
-        : null;
+      const isFormSubmit = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data");
+      const form = isFormSubmit ? await request.formData() : null;
       const fromForm = (key) => (form ? form.get(key) : null);
 
       const from = url.searchParams.get("from") ?? fromForm("from");
@@ -198,6 +197,28 @@ export default {
         });
       }
 
+      // Dashboard confirm-page submission (design.md "In-progress" state):
+      // don't make the operator's browser wait on the full backfill --
+      // kick it off in the background and respond immediately with a page
+      // confirming the run was accepted, rather than a bare JSON blob or a
+      // redirect to a page that looks unchanged.
+      if (isFormSubmit) {
+        ctx.waitUntil(
+          backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV })
+            .then((result) => console.log("backfill run completed", { from, to, inserted: result.inserted, errorCount: result.errors.length }))
+            .catch((err) => console.error("backfill run failed", { from, to, message: err.message }))
+        );
+        const bodyHtml = renderRunAcceptedPage({
+          title: "Backfill",
+          detail: `Backfilling historical news from ${from} to ${to}.`,
+          backLink: "/dashboard/backfill",
+          backLabel: "Backfill",
+        });
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername, bodyHtml }));
+      }
+
+      // Scripted/API caller (no form body) -- keep the original synchronous
+      // JSON response so nothing outside the dashboard UI breaks.
       try {
         const result = await backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV });
         console.log("backfill run completed", { from, to, inserted: result.inserted, errorCount: result.errors.length });
