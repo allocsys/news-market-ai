@@ -343,6 +343,16 @@ export function decisionsActivityChart(daily, days) {
   <div class="chart-legend">${legend}</div>`;
 }
 
+// Small non-cryptographic string hash (FNV-1a, 32-bit) -- used only to derive a stable SVG element id.
+function shortHash(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
 export function priceSparkline(bars, { width = 240, height = 72 } = {}) {
   if (!bars || bars.length < 2) return `<p class="empty">not enough price history</p>`;
 
@@ -367,12 +377,12 @@ export function priceSparkline(bars, { width = 240, height = 72 } = {}) {
   const changePct = first !== 0 ? (((last - first) / first) * 100).toFixed(1) : "0.0";
   const color = up ? "var(--color-success-text)" : "var(--color-danger-text)";
   const fillColor = up ? "rgba(16, 185, 129, 0.14)" : "rgba(239, 68, 68, 0.14)";
-  const gradId = `spark-${Math.random().toString(36).slice(2, 9)}`;
+  const gradId = `spark-${shortHash(points + fillColor)}`;
   // Area fill polygon: line points + bottom-right + bottom-left of plot area
   const lastX = ((closes.length - 1) * stepX).toFixed(1);
   const areaPoints = `0,${height - padY} ${points} ${lastX},${height - padY}`;
 
-  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" class="sparkline" role="img" aria-label="Recent close price trend">
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="${height}" class="sparkline" role="img" aria-label="Recent close price trend">
       <defs>
         <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="${fillColor}" />
@@ -380,7 +390,7 @@ export function priceSparkline(bars, { width = 240, height = 72 } = {}) {
         </linearGradient>
       </defs>
       <polygon points="${areaPoints}" fill="url(#${gradId})" stroke="none" />
-      <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" />
+      <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
     </svg>
     <div class="sparkline-meta">
       <span class="num">$${last.toFixed(2)}</span>
