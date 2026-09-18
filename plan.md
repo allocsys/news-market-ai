@@ -257,12 +257,50 @@ earlier the same day recorded `status: failed` correctly after ~37s, so failure
 recording works in general; this run just never completed or errored out.
 **Done when:** the failing limit is written down here. -- Done: CPU time, free tier.
 
-### Step 1 -- Backend JSON API (no behavior change)
-Extract the data fetching out of `src/dashboard/routes.js` into `/api/*` read
-endpoints (snapshot, activity, charts, health, decisions, positions, pipeline,
-backtest runs), auth-gated by the existing session for now. The SSR dashboard keeps
-working, now calling the same functions. Fix the exposure-understated bug here with
-an aggregate query that ignores the Rows limit (`routes.js`/`d1.js`).
+### Step 1 -- Backend JSON API (no behavior change) -- IN PROGRESS 2026-09-18
+Investigation done, code not yet written (ran out of budget mid-session; next
+agent picks up here, no need to re-derive any of this):
+
+- **Exposure bug, confirmed, 3 call sites, all duplicate the same buggy sum:**
+  `openPositions.reduce((sum,p)=>sum+(p.positionSizePct??0),0)*100` computed over
+  an array fetched with `limit: params.positionsLimit` (default 50) --
+  `helpers.js#renderSummaryCards` (~line 249), `views/snapshot.js` (~line 15,
+  duplicated inline rather than calling renderSummaryCards's own copy), and
+  `views/positions.js`'s exposure gauge (~line 48). All three understate total
+  exposure once open positions exceed the Rows filter.
+- **Fix plan:** add one new dashboard-only aggregate read in `storage/d1.js`,
+  e.g. `getOpenPositionsExposureTotal(db)` -> `SELECT COALESCE(SUM(position_size_pct),0)
+  AS total_pct, COUNT(*) AS count FROM positions WHERE closed_at IS NULL` (no
+  LIMIT, no asOf -- same "Dashboard-only reads" section/convention as
+  `getAllOpenPositions` etc., not the agent-facing asOf-gated
+  `getOpenPositionsRiskPctAsOf`). Thread the result through as an explicit
+  `totalExposurePct` prop into `renderSummaryCards` and both view files instead
+  of each recomputing it from the (limited) `openPositions` array.
+- **Extraction plan:** new `src/dashboard/data.js` holding one data-fetching
+  function per section (`getSnapshotData`, `getActivityData`, `getChartsData`,
+  `getHealthData`, `getDecisionsData`, `getPositionsData`, `getPipelineData`,
+  `getBacktestRunsData`) -- literally the D1-fetching body of each
+  `handle*Route` in `routes.js` today, minus the HTML render call. `routes.js`'s
+  existing handlers call these same functions for SSR (no behavior change);
+  new `src/dashboard/api.js` exposes `/api/snapshot`, `/api/activity`,
+  `/api/charts`, `/api/health`, `/api/decisions`, `/api/positions`,
+  `/api/pipeline`, `/api/backtest-runs`, each auth-gated via the existing
+  `checkAuth`/`getSessionUsername` session check (reuse, don't duplicate),
+  returning `Response.json(...)`. Wire the 8 new routes into `src/index.js`
+  next to the existing `/dashboard/*` block.
+- **Test contract confirmed safe:** `test/dashboard_refresh.test.js` uses a
+  generic `FakeDashboardDb` (empty `.all()`/`.first()`/`.run()`) and only
+  asserts the Refresh-link/Loaded-time toolbar markup per section -- extracting
+  the fetch logic into `data.js` functions that `routes.js` still calls
+  changes nothing this test observes, as long as `handle*Route` keeps calling
+  `renderShell`/`render*View` the same way. Have not yet re-checked
+  `test/index_login.test.js` / `test/index_backfill.test.js` line-by-line
+  against the new `/api/*` routes in `index.js` -- do that before opening the
+  PR, not after.
+- **Not started:** no branch created yet, no code written yet. Plan's own
+  rule (one PR per step, never work on main directly) applies -- create
+  `feat/step1-api-layer` (or similar) off current main tip before writing any
+  of the above.
 **Done when:** every dashboard panel's data is reachable via `/api/*`, exposure is
 correct above the Rows filter, tests pass, dashboard unchanged.
 
