@@ -76,8 +76,9 @@ export async function signJwt(payload, secret, { expiresInSeconds }) {
  * "authenticated or not" (see auth/session.js#getSessionUsername). The
  * signature check itself uses crypto.subtle.verify, which does a
  * constant-time comparison internally -- unlike this codebase's plain
- * `!==` secret comparisons elsewhere (BACKFILL_API_SECRET et al), this
- * one doesn't need a manual timing-safe compare, Web Crypto already does it.
+ * `!==` dashboard-login check (POST /login's username/password comparison
+ * in src/index.js), this one doesn't need a manual timing-safe compare,
+ * Web Crypto already does it.
  */
 export async function verifyJwt(token, secret) {
   if (typeof token !== "string") return null;

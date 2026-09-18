@@ -280,35 +280,12 @@ export function loadConfig(env) {
     // Explicit opt-out remains available ("false") if live behavior turns
     // out to need more false-positive tuning than expected.
     entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX !== "false",
-    // Shared secret required by src/index.js's POST /backfill route
-    // (graph/pipeline.js#backfillHistoricalNews) -- that route triggers
-    // real Finnhub API calls (spends free-tier quota) and D1 writes on
-    // demand, so it must not be reachable by an arbitrary caller the way
-    // the unauthenticated GET /dashboard route is. No default on purpose,
-    // same convention as finnhubApiKey/edgarUserAgent/rssFeeds: an unset
-    // secret means the route stays disabled (503), it never falls back to
-    // "open to anyone." Set via `wrangler secret put BACKFILL_API_SECRET`
-    // (a secret, not a plain var -- same treatment as GEMINI_API_KEYS),
-    // checked against the request's `X-Backfill-Secret` header.
-    backfillApiSecret: env.BACKFILL_API_SECRET || "",
-    // Shared secret required by src/index.js's POST /backtest/run route
-    // (src/backtest/runBacktest.js) -- that route's "signal on" side spends
-    // real Gemini quota and writes to D1 on demand, same reasoning as
-    // backfillApiSecret directly above (and deliberately a SEPARATE secret
-    // from it -- backfill and backtest are two independently-costly
-    // operations, no reason to couple who can trigger one to who can
-    // trigger the other). No default on purpose, same convention as every
-    // other unset-secret-means-disabled value in this file: an unset
-    // secret means the route stays disabled (503), never "open to anyone."
-    // Set via `wrangler secret put BACKTEST_API_SECRET`, checked against
-    // the request's `X-Backtest-Secret` header.
-    backtestApiSecret: env.BACKTEST_API_SECRET || "",
     // Dashboard login (src/index.js's GET/POST /login, src/auth/session.js)
-    // -- replaces typing BACKFILL_API_SECRET/BACKTEST_API_SECRET into a
-    // dashboard form on every trigger with a one-time login that then
-    // authorizes both actions via a session cookie (see /backfill and
-    // /backtest/run's own comments on the two accepted auth paths). A
-    // single operator credential pair, not a user table -- same "no
+    // -- a one-time login that then authorizes POST /backfill and POST
+    // /backtest/run via a session cookie; it is now the ONLY way to call
+    // either route (the shared BACKFILL_API_SECRET/BACKTEST_API_SECRET
+    // fallback that used to exist alongside it has been removed entirely).
+    // A single operator credential pair, not a user table -- same "no
     // default without an explicit reason" convention as every other
     // secret in this file: unset means the LOGIN feature stays inactive
     // (GET /dashboard remains unauthenticated, exactly as it always has
@@ -319,12 +296,10 @@ export function loadConfig(env) {
     dashboardUsername: env.DASHBOARD_USERNAME || "",
     dashboardPassword: env.DASHBOARD_PASSWORD || "",
     // HMAC signing key for the session JWT (src/auth/jwt.js). No default,
-    // same reasoning as dashboardUsername/dashboardPassword above -- and
-    // deliberately a THIRD secret, not reused from backfillApiSecret/
-    // backtestApiSecret, since a session-signing key and an API-trigger
-    // shared secret are different security boundaries with no reason to
-    // be coupled (same "separately rotatable" reasoning backfillApiSecret's
-    // own header gives for not reusing backtestApiSecret).
+    // same reasoning as dashboardUsername/dashboardPassword above -- a
+    // separately rotatable secret from those two, since a session-signing
+    // key and a login credential are different security boundaries with
+    // no reason to be coupled.
     jwtSecret: env.JWT_SECRET || "",
     // How long a login session lasts before the cookie's JWT expires and
     // /login is required again (src/auth/session.js#createSessionCookie).
