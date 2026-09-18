@@ -379,18 +379,82 @@ and `test/index_backfill.test.js` is updated for the enqueue behavior. --
 Code-level criteria met (tests + failure-handling); live-past-30s verification
 still outstanding.
 
-### Step 4 -- Cron fan-out (still inside `backend`)
-`scheduled()` becomes a thin scheduler: it enqueues one message per ticker per
-source (`INGEST` queue). The ingest consumer fetches news, price bars and
-fundamentals for that one ticker, writes D1, then enqueues `ANALYZE` for it. The
-analysis consumer runs `runPipelineForTicker`, resumable via `graph/checkpointer.js`
-(Pattern 12). Messages must be idempotent (dedupe on `id`, D1 unique keys) since
-queues deliver at-least-once. Set `max_concurrency` on `ANALYZE` to throttle Gemini.
-Keep `checkOpenPositionExits` as its own message, isolated from ingestion failures.
-Budget: Queues free tier is 10K ops/day (~3 ops per message); estimate the daily
-message count (tickers x stages x 96 runs) before shipping.
-**Done when:** a full cron cycle completes as many small invocations, a crashed
-message retries without duplicating rows or LLM spend, and ops/day fits the budget.
+### Step 4 -- Cron fan-out (still inside `backend`) -- SHIPPED 2026-09-18, NOT YET MERGED
+Built on branch `feat/step4-cron-fanout` (not on main yet -- see Current Status
+for why CI/merge is deliberately deferred this session, same as Step 3).
+
+`scheduled()` (`src/index.js`) is now a thin scheduler: it enqueues one
+`ingest_ticker` message per watchlist ticker plus one `ingest_feeds` message
+(both onto the new `INGEST` queue), batched via one `sendBatch` call for the
+per-ticker messages, and separately enqueues one `exit_check` message onto
+the existing `JOBS` queue -- own message, own queue, isolated from ingestion
+failures by construction, per this step's own requirement. It does no
+fetching, no D1 writes, and no LLM calls itself anymore.
+
+`queue()`'s INGEST consumer (`ingest_ticker` branch) calls new
+`graph/pipeline.js#ingestTickerData`: fetches finnhub news, price bars
+(yfinance), and fundamentals (EDGAR) SCOPED TO THAT ONE TICKER (via each
+adapter's existing `queries`/`tickers` override param -- `ingestPriceBars`/
+`ingestFundamentals` gained an optional `{tickers}` override for this), writes
+them to D1, then enqueues one `analyze` message per resulting news item onto
+the new `ANALYZE` queue. General (non-ticker-scoped) feeds -- rss,
+html_scrape -- have no per-ticker query mode, so they're handled separately by
+a new `ingestFeedNews` and the `ingest_feeds` branch, run once per cron tick
+rather than fanned out per ticker; this enqueues one `analyze` message per
+(item, ticker) pair since a general feed item may resolve to several tickers.
+`collectNewsItems`/`runScheduledIngestion` (the original whole-watchlist sweep)
+are left completely unchanged for any other caller -- Step 4 added new,
+separately-scoped functions rather than modifying those.
+
+`queue()`'s ANALYZE consumer (`analyze` branch) runs `runPipelineForTicker`
+for one (ticker, newsItem) pair. This is the ONE deliberate exception to every
+other message type's ack-and-log-on-failure convention: a failure here is
+RETRIED, not acked, because `runPipelineForTicker` is checkpoint-resumable
+(Adopted Pattern #12, `graph/checkpointer.js`) -- a retried message re-enters
+`resumeFrom` and only re-runs whatever stage didn't finish, never re-spending
+an LLM call on an already-checkpointed stage, and never double-opening a
+position (`openPosition`'s own id-based `ON CONFLICT DO NOTHING`). Every other
+new branch (`exit_check`, `ingest_ticker`, `ingest_feeds`) acks and logs on
+failure, same convention Step 3's `backfill`/`backtest` already established --
+there's no partial state worth resuming, the next cron tick just tries again.
+
+`wrangler.toml`: new `news-market-ai-ingest` + `news-market-ai-analyze` queues
+(plus their own dead-letter queues), each with its own `[[queues.producers]]`/
+`[[queues.consumers]]` block. `INGEST`'s `max_batch_size = 10` (vs. JOBS's 1)
+since these messages are individually small/cheap. `ANALYZE`'s
+`max_concurrency = 2` is the actual Gemini-call throttle this step calls for
+(each invocation's `runPipelineForTicker` makes several Gemini calls of its
+own) -- a conservative starting point against the free-tier Gemini quota
+Adopted Pattern #7 budgets around, not tuned against real traffic yet.
+`deploy.yml` provisions both new queues + both new DLQs before deploy, same
+`ensure-queue` composite action Step 3 already added (reused unmodified).
+
+Test contract: new `test/cron_fanout.test.js` covers `scheduled()`'s fan-out
+shape (right message types/counts, isolated failure domains) and `queue()`'s
+four new branches, including proving `analyze` specifically retries where
+every other branch acks. Does not duplicate `test/checkpoint_resume.test.js`'s
+existing full-success-path coverage of `runPipelineForTicker` itself.
+
+**Ops/day budget check:** current `WATCHLIST_TICKERS` default is 3 tickers.
+Per 15-minute cron tick (96 ticks/day): 3 `ingest_ticker` + 1 `ingest_feeds` +
+1 `exit_check` = 5 guaranteed messages, before any `analyze` fan-out --
+96 x 5 = 480 messages/day x ~3 ops/message (Cloudflare's own estimate) =
+~1,440 ops/day just for the guaranteed floor. `analyze` messages add on top of
+that proportional to actual news volume (one message per inserted item per
+mentioned ticker) -- even at a generous 50 news items/day system-wide, that's
+at most another ~150 ops/day. Total stays comfortably under the 10K ops/day
+free-tier ceiling at this watchlist size; re-check this arithmetic before
+growing the watchlist substantially.
+
+**Done when:** a full cron cycle completes as many small invocations (done --
+see above), a crashed message retries without duplicating rows or LLM spend
+(done for ANALYZE specifically, by design -- see above; not yet exercised
+against a REAL crash/retry in live Cloudflare infra), and ops/day fits the
+budget (done, by the arithmetic above -- not yet confirmed against real
+Workers Observability numbers). **Still open:** no PR opened yet, no CI run
+yet, no live deploy verification yet -- per this session's instruction, CI/
+merge is being deferred until after Step 7 rather than chased per-step; see
+Current Status.
 
 ### Step 5 -- Extract `ingest` Worker
 Move the ingest consumer to `news-market-ai-ingest` (own `wrangler` config, CI job).
