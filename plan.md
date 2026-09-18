@@ -260,6 +260,26 @@ It alone holds `FINNHUB_API_KEY` and the EDGAR CIK/name-index KV cache; it consu
 **Done when:** ingestion runs only from `ingest`, and `backend` no longer holds
 vendor keys.
 
+### Step 6 -- Extract `llm` Worker
+Move the `ANALYZE` consumer (analysts -> debate -> trader -> risk -> portfolio) to
+`news-market-ai-llm`. It alone holds `GEMINI_API_KEYS` and the cooldown KV
+(`gemini:cooldown:*`); its queue's `max_concurrency` is the Gemini throttle. Raise
+`limits.cpu_ms` there only if the paid plan is in use.
+**Done when:** every LLM call originates from `llm`, and no other Worker holds
+Gemini keys.
+
+### Step 7 -- Cleanup and docs
+Remove dead code left in `backend`, run a per-Worker secrets audit, and rewrite the
+Deployment and Repo Structure sections above for the 4-Worker layout. Fix stale
+docs: Known Gaps still describes `X-Backfill-Secret`/`BACKFILL_API_SECRET`, but the
+code now gates on the dashboard session.
+**Done when:** this plan describes the system as built, not as planned.
+
+### Open decisions
+- Dashboard: server-rendered in its own Worker first, or fully static (Step 2).
+- Queues vs Workflows for the per-ticker pipeline (Steps 4-6). Queues assumed.
+- Free vs paid plan (Step 0 answers this; it changes CPU/subrequest headroom).
+
 ## Repo Structure
 ```
 ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
