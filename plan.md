@@ -264,7 +264,8 @@ Worker; make `backend` private (service binding only), so it fails closed instea
 of serving an open dashboard when login is unconfigured. Cut over, then delete the
 dashboard/login/auth code from `backend`.
 **Done when:** the dashboard works end to end from the new Worker, `backend` serves
-no HTML, and the login secrets exist only on `dashboard`.
+no HTML, the login secrets exist only on `dashboard`, and `dashboard` has its own
+path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above.
 
 ### Step 3 -- Job queue for backfill and backtest
 Add a `JOBS` queue (plus dead-letter queue). `POST /backfill` and
@@ -293,16 +294,20 @@ Move the ingest consumer to `news-market-ai-ingest` (own `wrangler` config, CI j
 It alone holds `FINNHUB_API_KEY` and the EDGAR CIK/name-index KV cache; it consumes
 `INGEST` and produces `ANALYZE`. Shared code (`ingestion/*`, `storage/d1.js`,
 `shared/*`) stays imported, not copied.
-**Done when:** ingestion runs only from `ingest`, and `backend` no longer holds
-vendor keys.
+**Done when:** ingestion runs only from `ingest`, `backend` no longer holds
+vendor keys, and `ingest` has its own path-filtered CI job per the "CI/CD for the
+4-Worker split" pattern above (its job is the only one that ever sees
+`FINNHUB_API_KEY`).
 
 ### Step 6 -- Extract `llm` Worker
 Move the `ANALYZE` consumer (analysts -> debate -> trader -> risk -> portfolio) to
 `news-market-ai-llm`. It alone holds `GEMINI_API_KEYS` and the cooldown KV
 (`gemini:cooldown:*`); its queue's `max_concurrency` is the Gemini throttle. Raise
 `limits.cpu_ms` there only if the paid plan is in use.
-**Done when:** every LLM call originates from `llm`, and no other Worker holds
-Gemini keys.
+**Done when:** every LLM call originates from `llm`, no other Worker holds
+Gemini keys, and `llm` has its own path-filtered CI job per the "CI/CD for the
+4-Worker split" pattern above (its job is the only one that ever sees
+`GEMINI_API_KEYS`).
 
 ### Step 7 -- Cleanup and docs
 Remove dead code left in `backend`, run a per-Worker secrets audit, and rewrite the
