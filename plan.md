@@ -801,15 +801,19 @@ actual NEXT-NEEDED convention, skipping the debate block and crashing
   permanently live-feed/live-page-only — there's no `from`/`to` a feed or
   a scraped page can accept, so they cannot backfill; this is a real gap,
   not an oversight. `backfillHistoricalNews` now has a real operational
-  entry point: `POST /backfill?from=...&to=...` (`src/index.js`), gated
-  behind a required `X-Backfill-Secret` header matched against
-  `BACKFILL_API_SECRET` (`config.js#backfillApiSecret`, no default --
-  stays disabled/503 until explicitly set via `wrangler secret put`, same
-  "disabled, not open" convention as every other unset secret in this
-  project; pushed on deploy the same idempotent way as
-  `GEMINI_API_KEYS`/`FINNHUB_API_KEY`, see `deploy.yml`). Covered by
-  `test/index_backfill.test.js` (auth/validation branches, success, and
-  the genuine-bug-vs-vendor-isolation 500 distinction). The comparable
+  entry point: `POST /backfill?from=...&to=...` (`src/index.js`). As of
+  Step 2, auth is dashboard-session-based, not a header/secret: `dashboard`
+  (`src/dashboard-worker.js`) requires its own login/session cookie before
+  forwarding the request to `backend` over their service binding, and
+  `backend`'s route no longer session-checks itself. The header-based
+  fallback this paragraph used to describe (`X-Backfill-Secret` matched
+  against a `BACKFILL_API_SECRET`/`BACKTEST_API_SECRET` config value) has
+  been removed entirely (see `src/config.js`'s comment on `dashboardUsername`
+  for confirmation) -- `dashboard`'s session is now the only way to call
+  either route. Covered by `test/dashboard_worker.test.js` (the
+  auth-then-forward flow) and `test/index_backfill.test.js` (the
+  no-longer-session-checked backend contract, validation branches, success,
+  and the genuine-bug-vs-vendor-isolation 500 distinction). The comparable
   **no-signal baseline strategy** `signalCompare.js` needed is also now
   built: `src/backtest/noSignalBaseline.js` -- naive equal-weighted
   buy-and-hold across the same ticker universe/window, zero LLM calls,
