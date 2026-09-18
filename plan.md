@@ -649,12 +649,61 @@ on LLM_JOBS.
 CI; the stale secret above is the one loose end), and `llm` has its own
 path-filtered CI job (done, `deploy-llm`).
 
-### Step 7 -- Cleanup and docs
+### Step 7 -- Cleanup and docs -- DONE (docs) 2026-09-19, one manual action outstanding
 Remove dead code left in `backend`, run a per-Worker secrets audit, and rewrite the
 Deployment and Repo Structure sections above for the 4-Worker layout. Fix stale
 docs: Known Gaps still describes `X-Backfill-Secret`/`BACKFILL_API_SECRET`, but the
 code now gates on the dashboard session.
-**Done when:** this plan describes the system as built, not as planned.
+
+**Dead-code check in `backend` -- came back clean, not a bug:** `src/index.js`
+imports `backfillHistoricalNews` from `graph/pipeline.js`, which also exports
+`runPipelineForTicker`/`collectNewsItems`/`ingestTickerData`/etc. that `backend`
+itself never calls anymore (moved to `ingest`/`llm` in Steps 5-6). This looked
+like dead weight in backend's bundle at first read, but it isn't removable
+dead code -- those same exports are live, load-bearing code for `llm` (which
+imports `runPipelineForTicker`) and `ingest` (which imports `ingestTickerData`/
+`ingestFeedNews`) from that identical file. Splitting `pipeline.js` into
+per-Worker files to trim backend's bundle would be a real refactor with its
+own risk, not a cleanup; wrangler's bundler (esbuild) also tree-shakes unused
+ESM exports already, so the deployed bundle isn't actually carrying dead
+weight in practice. Left as-is; not flagged as a gap. `backend`'s `wrangler.toml`
+itself has no leftover bindings/vars it doesn't use (confirmed by reading).
+
+**Stale comment fixed:** `src/ingest-worker.js`'s queue() header described
+backend's queue() as still fanning in JOBS/INGEST/ANALYZE through one handler
+-- inaccurate since Step 6 (backend now consumes JOBS/`backfill` only).
+Corrected. `wrangler.ingest.toml`'s comments were all re-read and are accurate
+as written; no changes needed there.
+
+**Secrets audit result:** every Worker's `wrangler secret put` pushes in
+`deploy.yml` match what its own code actually reads, with the one already-
+documented exception (`backend` holding `FINNHUB_API_KEY` for `backfill`
+only -- Step 5's gap, not new). One item is NOT fixable from this repo: an
+earlier deploy left a `GEMINI_API_KEYS` secret sitting on the `backend`
+(`news-market-ai`) Worker in Cloudflare; `deploy.yml` stopped pushing it as
+of Step 6, and nothing in `backend`'s code reads it, but the value itself is
+Cloudflare account state, not a repo file, and no available tool here can
+issue `wrangler secret delete` against live infra. **Manual follow-up still
+required:** run `wrangler secret delete GEMINI_API_KEYS --config wrangler.toml`
+against the `news-market-ai` Worker. Key isolation is correct in code/CI but
+not yet real in the deployed environment until that command runs.
+
+**Docs rewritten:** the Deployment section's "Planned: split into 4" framing
+replaced with the actual built architecture (each Worker, its bindings, its
+secrets); the two CI/CD paragraphs (one describing the old single-deploy-job
+workflow, one describing the 4-Worker split as an upcoming plan "once Step 2
+starts") rewritten as one description of the deploy.yml as it exists today,
+with the `ai-campaign-builder` precedent kept as a historical note rather than
+a forward-looking plan; Repo Structure gained the 4 Worker entry-point files
+(previously only the shared modules were listed); the Known Gaps paragraph
+about `X-Backfill-Secret`/`BACKFILL_API_SECRET` rewritten to describe the
+actual dashboard-session-based auth that replaced it back in Step 2.
+
+**Done when:** this plan describes the system as built, not as planned --
+met for every doc section above. **Still open:** the `GEMINI_API_KEYS`
+secret-deletion action on live Cloudflare infra (manual, listed above), and
+the standing deferred CI/live-deploy check across Steps 3-6 (unchanged from
+before this step, not part of Step 7's own scope).
 
 ## Repo Structure
 ```
