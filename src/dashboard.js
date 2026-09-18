@@ -740,13 +740,14 @@ const PRICE_CHART_TICKER_LIMIT = 8;
 export async function renderDashboardHtml(db, { searchParams } = {}) {
   const params = parseDashboardParams(searchParams);
 
-  const [decisions, openPositions, closedPositions, checkpoints, health, decisionStats] = await Promise.all([
+  const [decisions, openPositions, closedPositions, checkpoints, health, decisionStats, backtestRuns] = await Promise.all([
     getRecentTradeDecisions(db, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus }),
     getAllOpenPositions(db, { limit: params.positionsLimit }),
     getRecentlyClosedPositions(db, { limit: 20 }),
     getRecentCheckpoints(db, { limit: 30 }),
     getIngestionHealth(db),
     getDecisionStats(db, { days: params.activityDays }),
+    getRecentBacktestRuns(db, { limit: 10 }),
   ]);
 
   const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
@@ -854,7 +855,9 @@ export async function renderDashboardHtml(db, { searchParams } = {}) {
 
   <section id="backtest">
     <h2>Backtest results</h2>
-    <p class="note">Not shown -- no backtest run's output is persisted yet (src/backtest/*.js is a computation library, not a stored-results table). See plan.md.</p>
+    <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires the shared backtest secret. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
+    ${backtestTriggerForm()}
+    ${backtestRunsList(backtestRuns)}
   </section>
   </main>
 </body>
