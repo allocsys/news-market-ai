@@ -777,11 +777,16 @@ const STYLE = `
     font-size: 0.68rem; color: #6e7787; text-transform: uppercase; letter-spacing: 0.05em;
   }
   .pill-row { display: flex; gap: 0.4rem; }
+  /* .pill started as an anchor-only class (GET filter links) -- now also
+     used on <button type="button"> preset elements (rangePresetButtons),
+     so it resets default button chrome (font/appearance) and adds a
+     pointer cursor a plain <a> already gets for free. */
   .pill {
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem;
     color: #c7cbd4; text-decoration: none;
     padding: 0.3rem 0.7rem;
     border: 1px solid #2c3644; background: #0d1118;
+    cursor: pointer; appearance: none;
     transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
   }
   .pill:hover { border-color: #6e7787; }
