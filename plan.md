@@ -257,9 +257,9 @@ earlier the same day recorded `status: failed` correctly after ~37s, so failure
 recording works in general; this run just never completed or errored out.
 **Done when:** the failing limit is written down here. -- Done: CPU time, free tier.
 
-### Step 1 -- Backend JSON API (no behavior change) -- IN PROGRESS 2026-09-18
-Investigation done, code not yet written (ran out of budget mid-session; next
-agent picks up here, no need to re-derive any of this):
+### Step 1 -- Backend JSON API (no behavior change) -- DONE 2026-09-18
+Merged to main via PR #27 (squash commit `a78ac0f`). Investigation notes below
+kept for record; all code described was written and shipped as planned.
 
 - **Exposure bug, confirmed, 3 call sites, all duplicate the same buggy sum:**
   `openPositions.reduce((sum,p)=>sum+(p.positionSizePct??0),0)*100` computed over
@@ -297,25 +297,49 @@ agent picks up here, no need to re-derive any of this):
   `test/index_login.test.js` / `test/index_backfill.test.js` line-by-line
   against the new `/api/*` routes in `index.js` -- do that before opening the
   PR, not after.
-- **Not started:** no branch created yet, no code written yet. Plan's own
-  rule (one PR per step, never work on main directly) applies -- create
-  `feat/step1-api-layer` (or similar) off current main tip before writing any
-  of the above.
+- Shipped on `feat/step1-api-layer`, squash-merged as PR #27. `src/dashboard/data.js`
+  (per-section fetchers incl. `getOpenPositionsExposureTotal`), `src/dashboard/api.js`
+  (8 `/api/*` handlers reusing `checkAuth`), wired into `src/index.js`, JSON
+  responses matched to the codebase's existing `new Response(JSON.stringify(...))`
+  convention, and `test/dashboard_api.test.js` added (auth gating + the exposure
+  regression test). `routes.js`/view files updated to take `totalExposurePct` as
+  an explicit prop instead of recomputing it from the Rows-limited array.
 **Done when:** every dashboard panel's data is reachable via `/api/*`, exposure is
-correct above the Rows filter, tests pass, dashboard unchanged.
+correct above the Rows filter, tests pass, dashboard unchanged. -- **Done.**
 
-### Step 2 -- Dashboard Worker
-New Worker `news-market-ai-dashboard` (own `wrangler` config + CI deploy job) with
-a service binding to `backend`. It owns login, the session cookie, and the UI;
-`/api/*` is proxied same-origin (no CORS). Open decision: server-rendered first
-(reuse `views/*`, keeps tests), static/client-rendered later -- the API is the same
-either way. Move `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, `JWT_SECRET` to this
-Worker; make `backend` private (service binding only), so it fails closed instead
-of serving an open dashboard when login is unconfigured. Cut over, then delete the
-dashboard/login/auth code from `backend`.
+### Step 2 -- Dashboard Worker -- CODE DONE 2026-09-18, NOT YET MERGED
+Implemented on branch `feat/step2-dashboard-worker` (on top of Step 1/main tip
+`a78ac0f`) -- no PR opened yet, not merged, not deployed/verified live.
+
+What's on the branch: new `wrangler.dashboard.toml` + `src/dashboard-worker.js`
+owning login, the session cookie, and the UI (server-rendered, reusing `views/*`
+as planned); `backend`'s `src/index.js`/`src/dashboard/routes.js` trimmed to drop
+all HTML/login and now reachable only via service binding (`workers_dev = false`
+in `wrangler.toml`) -- unconfigured login now fails closed everywhere rather than
+serving an open dashboard (fixed a stale disabled-notice copy in `login.js` to
+match). `package.json` gained dev/deploy scripts for the new Worker.
+`deploy.yml` gained a path-filtered `deploy-dashboard` job (own concurrency
+group, owns only `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/`JWT_SECRET`/
+`SESSION_TTL_SECONDS`, depends on backend's deploy job) and dropped the now-
+obsolete "set dashboard login secrets" step from backend's job, per the
+"CI/CD for the 4-Worker split" pattern above.
+`POST /backfill`/`POST /backtest/run` on `backend` no longer session-check
+themselves (the dashboard does that one hop up); a new `?async=1` fire-and-forget
+ack mode was added for the dashboard's browser-form submissions.
+Test contracts updated deliberately, not silently: `test/index_login.test.js`
+and `test/dashboard_refresh.test.js` removed and consolidated into a new
+`test/dashboard_worker.test.js` (login/session flow, section rendering +
+Refresh toolbar via a fake service binding, and the backfill/backtest
+auth-then-forward flow); `test/index_backfill.test.js` rewritten for the
+no-longer-session-checked backend contract plus `?async=1` coverage.
+
+**Not yet done:** no PR opened, nothing merged to main, nothing deployed or
+verified against real Cloudflare infra.
 **Done when:** the dashboard works end to end from the new Worker, `backend` serves
-no HTML, the login secrets exist only on `dashboard`, and `dashboard` has its own
-path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above.
+no HTML, the login secrets exist only on `dashboard`, `dashboard` has its own
+path-filtered CI job per the "CI/CD for the 4-Worker split" pattern above, and
+the above is merged + verified live -- **code done, merge/deploy/verify still
+outstanding.**
 
 ### Step 3 -- Job queue for backfill and backtest
 Add a `JOBS` queue (plus dead-letter queue). `POST /backfill` and

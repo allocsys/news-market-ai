@@ -67,6 +67,7 @@ jobs:
     outputs:
       code: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.code == 'true' }}
       migrations: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.migrations == 'true' }}
+      dashboard: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_dispatch'
@@ -81,6 +82,14 @@ jobs:
               - '!**/*.md'
             migrations:
               - 'migrations/**'
+            dashboard:
+              - 'src/dashboard-worker.js'
+              - 'wrangler.dashboard.toml'
+              - 'src/dashboard/**'
+              - 'src/login.js'
+              - 'src/auth/**'
+              - 'src/config.js'
+              - '.github/workflows/deploy.yml'
 
   test:
     needs: changes
@@ -205,24 +214,45 @@ jobs:
             exit 0
           fi
           echo "$FINNHUB_API_KEY" | npx wrangler secret put FINNHUB_API_KEY
-      - name: Set dashboard login secrets on the deployed Worker
-        # Same idempotent, non-blocking shape as the secrets above.
-        # UPDATE: this login is now the ONLY way to trigger POST /backfill
-        # and POST /backtest/run -- the former BACKFILL_API_SECRET/
-        # BACKTEST_API_SECRET shared-secret fallback has been removed
-        # entirely (session-only auth), so unlike before, an unconfigured
-        # login now means those two routes are simply unreachable (401/503)
-        # rather than reachable via a separate secret. All THREE of these
-        # must be set together for the login to work at all (see
-        # config.js#dashboardUsername's header and src/index.js's
-        # isDashboardAuthConfigured) -- so this step pushes them as one unit
-        # and skips the whole step unless all three are present, rather than
-        # partially configuring a login that could never succeed.
-        # SESSION_TTL_SECONDS is a plain (non-secret) var with its own
-        # code-level default (config.js), so it's only pushed here -- via
-        # the same `wrangler secret put` mechanism, simplest given this repo
-        # has no separate `wrangler var put` step -- when the repo actually
-        # wants to override that default.
+
+  # `dashboard` Worker (plan.md Step 2) -- own path-filtered job, own
+  # concurrency group (an unrelated backend-only push must never cancel an
+  # in-flight dashboard deploy, and vice versa -- see plan.md's "CI/CD for
+  # the 4-Worker split" section), own secrets. Depends on backend's own
+  # `deploy` job (not just `test`/`migrate`) so the BACKEND service-binding
+  # target exists before this Worker that binds to it is deployed --
+  # matters most on a first-ever deploy of both.
+  deploy-dashboard:
+    needs: [changes, deploy]
+    if: always() && needs.deploy.result == 'success' && needs.changes.outputs.dashboard == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-news-market-ai-dashboard-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Check required secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
+            exit 1
+          fi
+      - name: Deploy dashboard Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:dashboard
+      - name: Set login secrets on the dashboard Worker
+        # Unlike backend's now-removed equivalent step, these three are the
+        # ONLY way the login can ever work -- dashboard has no "stays
+        # unauthenticated" fallback (plan.md Step 2: an unconfigured login
+        # fails closed, 503, everywhere). Same idempotent `wrangler secret
+        # put` shape, scoped to this Worker's own wrangler config.
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -232,12 +262,12 @@ jobs:
           SESSION_TTL_SECONDS: ${{ secrets.SESSION_TTL_SECONDS }}
         run: |
           if [ -z "$DASHBOARD_USERNAME" ] || [ -z "$DASHBOARD_PASSWORD" ] || [ -z "$JWT_SECRET" ]; then
-            echo "DASHBOARD_USERNAME/DASHBOARD_PASSWORD/JWT_SECRET not all set -- skipping. GET /dashboard stays unauthenticated (as it always has been) until all three are configured."
+            echo "DASHBOARD_USERNAME/DASHBOARD_PASSWORD/JWT_SECRET not all set -- skipping. The dashboard Worker is deployed but every /dashboard/* route returns 503 (disabled) until all three are configured."
             exit 0
           fi
-          echo "$DASHBOARD_USERNAME" | npx wrangler secret put DASHBOARD_USERNAME
-          echo "$DASHBOARD_PASSWORD" | npx wrangler secret put DASHBOARD_PASSWORD
-          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET
+          echo "$DASHBOARD_USERNAME" | npx wrangler secret put DASHBOARD_USERNAME --config wrangler.dashboard.toml
+          echo "$DASHBOARD_PASSWORD" | npx wrangler secret put DASHBOARD_PASSWORD --config wrangler.dashboard.toml
+          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET --config wrangler.dashboard.toml
           if [ -n "$SESSION_TTL_SECONDS" ]; then
-            echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS
+            echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS --config wrangler.dashboard.toml
           fi

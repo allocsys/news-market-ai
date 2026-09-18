@@ -134,7 +134,7 @@ const LOGIN_STYLE = `
 export function renderLoginPage({ error = null, disabled = false } = {}) {
   const body = disabled
     ? `<p class="disabled-note">${escapeHtml(error ?? "Dashboard login is not configured.")}</p>
-       <p class="disabled-note" style="margin-top:0.9rem;">The dashboard itself is still reachable unauthenticated until DASHBOARD_USERNAME, DASHBOARD_PASSWORD, and JWT_SECRET are all set.</p>`
+       <p class="disabled-note" style="margin-top:0.9rem;">The dashboard is unreachable until DASHBOARD_USERNAME, DASHBOARD_PASSWORD, and JWT_SECRET are all set on this Worker (plan.md Step 2 -- an unconfigured login now fails closed rather than serving an open dashboard).</p>`
     : `${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
        <form method="post" action="/login">
          <div class="field">
