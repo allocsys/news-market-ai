@@ -1,6 +1,6 @@
-import { buildQuery, ACTIVITY_DAYS_OPTIONS, decisionsActivityChart } from "../helpers.js";
+import { buildQuery, ACTIVITY_DAYS_OPTIONS, decisionsActivityChart, errorState } from "../helpers.js";
 
-export function renderActivityView({ decisionStats, params }) {
+export function renderActivityView({ decisionStats, params, error }) {
   const activityFilterBarReal = `<div class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Window</span>
@@ -16,6 +16,6 @@ export function renderActivityView({ decisionStats, params }) {
     <h2>Decision activity</h2>
     <p class="note">Trade decisions per UTC calendar day, stacked by status. A zero-height day means the pipeline produced no decisions that day -- it doesn't distinguish "quiet market" from "run failed before reaching this stage" (see Recent pipeline activity below for that).</p>
     ${activityFilterBarReal}
-    ${decisionsActivityChart(decisionStats.daily, params.activityDays)}
+    ${error ? errorState(error) : decisionsActivityChart(decisionStats.daily, params.activityDays)}
   </section>`;
 }
