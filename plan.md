@@ -239,10 +239,23 @@ the response, so `/backfill` and `/backtest/run` can be cut off mid-run.
   `test/index_login.test.js`, `test/index_backfill.test.js` (update deliberately,
   never silently).
 
-### Step 0 -- Diagnose (no code)
-Confirm the plan tier (free vs paid) and which limit actually fails (CPU,
-subrequests, wall time) via Workers Logs; check `backtest_runs` for rows stuck in
-`running`. **Done when:** the failing limit is written down here.
+### Step 0 -- Diagnose (no code) -- DONE 2026-09-18
+Confirmed via Workers Observability: **free tier**, and **CPU time** is the limit
+actually failing (not subrequests, not wall time). The `*/15 * * * *` cron has hit
+`outcome: exceededCpu` on nearly every tick since 2026-09-17 15:21 -- many events
+report `cpuTimeMs: 10` exactly, the free tier's 10ms cap (a paid/unbound Worker
+caps at 30s soft / 5min hard, so this pins the account as free). Wall times stay
+under ~5.6s, nowhere near the 15-minute cron ceiling, so it's pure CPU exhaustion
+in-pipeline, not a slow external call. Timing lines up with the entity-resolution
+default flip to `true` on 2026-09-17 -- a plausible but unconfirmed root cause,
+worth checking before Step 4's fan-out ships.
+
+Also checked `backtest_runs` for stuck rows: found one --
+`backtest-1789756783629-bxavoi` (AAPL), started 2026-09-18T18:39:43Z, still
+`status: running` with `finished_at: null` as of this check. A separate run from
+earlier the same day recorded `status: failed` correctly after ~37s, so failure
+recording works in general; this run just never completed or errored out.
+**Done when:** the failing limit is written down here. -- Done: CPU time, free tier.
 
 ### Step 1 -- Backend JSON API (no behavior change)
 Extract the data fetching out of `src/dashboard/routes.js` into `/api/*` read
