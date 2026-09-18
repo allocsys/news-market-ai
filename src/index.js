@@ -26,6 +26,16 @@ import {
   handleBacktestConfirmRoute,
   handleMoreRoute,
 } from "./dashboard/routes.js";
+import {
+  handleApiSnapshotRoute,
+  handleApiActivityRoute,
+  handleApiChartsRoute,
+  handleApiHealthRoute,
+  handleApiDecisionsRoute,
+  handleApiPositionsRoute,
+  handleApiPipelineRoute,
+  handleApiBacktestRunsRoute,
+} from "./dashboard/api.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
 import { renderLoginPage } from "./login.js";
 import { renderShell } from "./dashboard/shell.js";
@@ -123,6 +133,34 @@ export default {
     }
     if (pathname === "/dashboard/more") {
       return handleMoreRoute(request, env, config);
+    }
+
+    // JSON API layer (plan.md Step 1) -- same data each /dashboard/* SSR
+    // page renders, as Response.json(...) instead of HTML, for a future
+    // client-rendered dashboard (Step 2) or any other scripted caller.
+    if (pathname === "/api/snapshot") {
+      return handleApiSnapshotRoute(request, env, config);
+    }
+    if (pathname === "/api/activity") {
+      return handleApiActivityRoute(request, env, config);
+    }
+    if (pathname === "/api/charts") {
+      return handleApiChartsRoute(request, env, config);
+    }
+    if (pathname === "/api/health") {
+      return handleApiHealthRoute(request, env, config);
+    }
+    if (pathname === "/api/decisions") {
+      return handleApiDecisionsRoute(request, env, config);
+    }
+    if (pathname === "/api/positions") {
+      return handleApiPositionsRoute(request, env, config);
+    }
+    if (pathname === "/api/pipeline") {
+      return handleApiPipelineRoute(request, env, config);
+    }
+    if (pathname === "/api/backtest-runs") {
+      return handleApiBacktestRunsRoute(request, env, config);
     }
 
     if (pathname === "/login" && request.method === "GET") {
