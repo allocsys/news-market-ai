@@ -35,12 +35,12 @@
 //    this page -- a click is a normal browser POST navigation, no fetch()/
 //    JS needed. NOT automatic -- there is deliberately no cron/scheduled
 //    wiring to this (see src/backtest/runBacktest.js's header); every run
-//    on the list below was a deliberate, explicit click by someone who
-//    typed the shared secret. The "on" side of a run spends real Gemini
-//    quota (src/backtest/onSignalRunner.js), so this form is intentionally
-//    NOT a one-click no-confirmation action -- it requires the operator to
-//    know and enter BACKTEST_API_SECRET, same gate as curl'ing the route
-//    directly. A run's own outcome only reflects whatever news is ALREADY
+//    on the list below was a deliberate, explicit click by someone logged
+//    into the dashboard. The "on" side of a run spends real Gemini quota
+//    (src/backtest/onSignalRunner.js), so this form is intentionally NOT a
+//    one-click no-confirmation action -- it requires an active dashboard
+//    login session, the only way in now (see backtestTriggerForm/
+//    backfillTriggerForm below). A run's own outcome only reflects whatever news is ALREADY
 //    backfilled for its window (POST /backfill, a separate manual step) --
 //    a window with nothing backfilled will show a thin/empty "on" side, not
 //    an error.
