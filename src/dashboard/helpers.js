@@ -536,14 +536,15 @@ export function gaugeChart(value, { valueLabel, label, title, subtitle = null, a
   const cx = 80, cy = 80, r = 64;
   // 0 -> leftmost (180deg), 1 -> rightmost (0deg). Angle measured clockwise from positive x.
   // polar() above uses "fraction of full circle starting at 12 o'clock going clockwise" -- for a
-  // half-circle from 9 o'clock to 3 o'clock over the top, that's fractions [0.25 .. 0.75].
-  const startF = 0.25;
-  const endF = 0.25 + 0.5 * v;
+  // half-circle from 9 o'clock to 3 o'clock over the top, that's fractions [0.75 .. 1.25] (polar() just wraps past 1).
+  const startF = 0.75;
+  const endF = 0.75 + 0.5 * v;
 
-  const trackStart = polar(cx, cy, r, 0.25);
-  const trackEnd = polar(cx, cy, r, 0.75);
+  const trackStart = polar(cx, cy, r, startF);
+  const trackEnd = polar(cx, cy, r, 1.25);
   const fillEnd = polar(cx, cy, r, endF);
-  const largeArc = v > 0.5 ? 1 : 0;
+  // The fill spans at most 180deg (half the ring), so it is never the "large" arc.
+  const largeArc = 0;
 
   // Tick label baseline
   return `<div class="gauge-cell">
