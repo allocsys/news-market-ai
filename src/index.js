@@ -109,17 +109,32 @@ export default {
           headers: { "content-type": "application/json" },
         });
       }
-      if (request.headers.get("X-Backtest-Secret") !== config.backtestApiSecret) {
+
+      // Two callers need to reach this route: a scripted/curl caller (query
+      // string + X-Backtest-Secret header, same convention as /backfill),
+      // and src/dashboard.js's plain <form method="post"> trigger button --
+      // a browser form has no way to set a custom header, so its fields
+      // (including the secret) arrive as a urlencoded body instead. Query
+      // string takes precedence when both are present; body is the fallback
+      // for whichever fields the query string didn't supply.
+      const contentType = request.headers.get("content-type") || "";
+      const form = contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")
+        ? await request.formData()
+        : null;
+      const fromForm = (key) => (form ? form.get(key) : null);
+
+      const secret = request.headers.get("X-Backtest-Secret") ?? fromForm("secret");
+      if (secret !== config.backtestApiSecret) {
         return new Response(JSON.stringify({ error: "unauthorized" }), {
           status: 401,
           headers: { "content-type": "application/json" },
         });
       }
 
-      const testStart = url.searchParams.get("testStart");
-      const testEnd = url.searchParams.get("testEnd");
-      const tickersParam = url.searchParams.get("tickers");
-      const graceDaysParam = url.searchParams.get("graceDays");
+      const testStart = url.searchParams.get("testStart") ?? fromForm("testStart");
+      const testEnd = url.searchParams.get("testEnd") ?? fromForm("testEnd");
+      const tickersParam = url.searchParams.get("tickers") ?? fromForm("tickers");
+      const graceDaysParam = url.searchParams.get("graceDays") ?? fromForm("graceDays");
 
       if (!isPlausibleDateString((testStart || "").slice(0, 10)) || !isPlausibleDateString((testEnd || "").slice(0, 10))) {
         return new Response(JSON.stringify({ error: "testStart/testEnd query params are required, as YYYY-MM-DD (or a full ISO timestamp)" }), {
