@@ -147,6 +147,10 @@ someone adds a feature.
 | KV | 1GB storage, 100K reads/day, 1K writes/day | Too tight for per-request caching; good fit for low-frequency state (LLM key/model cooldowns) |
 | Bundle size | 64 MiB uncompressed | Not a real constraint |
 
+**Planned:** the single Worker below is being split into 4 (dashboard, backend,
+ingest, llm) -- see "Roadmap: Service Split" for the step-by-step plan. Until each
+step lands, the text below describes the current single-Worker system.
+
 **Architecture:** Workers as orchestrator (Cron Triggers drive ingestion + agent
 pipeline) → D1 as structured layer (replaces earlier Postgres/Neon plan) → KV as
 cooldown/rate-limit state + lightweight config → R2 (10GB free) as raw archive
