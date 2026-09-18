@@ -291,5 +291,17 @@ export function loadConfig(env) {
     // (a secret, not a plain var -- same treatment as GEMINI_API_KEYS),
     // checked against the request's `X-Backfill-Secret` header.
     backfillApiSecret: env.BACKFILL_API_SECRET || "",
+    // Shared secret required by src/index.js's POST /backtest/run route
+    // (src/backtest/runBacktest.js) -- that route's "signal on" side spends
+    // real Gemini quota and writes to D1 on demand, same reasoning as
+    // backfillApiSecret directly above (and deliberately a SEPARATE secret
+    // from it -- backfill and backtest are two independently-costly
+    // operations, no reason to couple who can trigger one to who can
+    // trigger the other). No default on purpose, same convention as every
+    // other unset-secret-means-disabled value in this file: an unset
+    // secret means the route stays disabled (503), never "open to anyone."
+    // Set via `wrangler secret put BACKTEST_API_SECRET`, checked against
+    // the request's `X-Backtest-Secret` header.
+    backtestApiSecret: env.BACKTEST_API_SECRET || "",
   };
 }
