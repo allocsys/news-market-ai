@@ -136,8 +136,8 @@ export default {
     }
 
     // JSON API layer (plan.md Step 1) -- same data each /dashboard/* SSR
-    // page renders, as Response.json(...) instead of HTML, for a future
-    // client-rendered dashboard (Step 2) or any other scripted caller.
+    // page renders, as JSON instead of HTML, for a future client-rendered
+    // dashboard (Step 2) or any other scripted caller.
     if (pathname === "/api/snapshot") {
       return handleApiSnapshotRoute(request, env, config);
     }
