@@ -1,0 +1,91 @@
+name = "news-market-ai-ingest"
+main = "src/ingest-worker.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Private, same "no public door" convention as backend's wrangler.toml
+# (plan.md Step 2) -- this Worker has no meaningful HTTP surface, it only
+# ever runs via its INGEST queue consumer below.
+workers_dev = false
+
+# --- D1 (same database as every other Worker; only `backend` runs
+# migrations -- see plan.md's Roadmap rule) --- ingestTickerData/
+# ingestFeedNews (src/graph/pipeline.js) write straight to D1
+# (insertNewsItem/insertPriceBar/insertFundamentalFacts).
+[[d1_databases]]
+binding = "DB"
+database_name = "news_market_ai"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# --- KV --- this Worker is now the ONLY one that touches the EDGAR CIK
+# lookup cache (edgar_cik_lookup.js) and the entity-resolution SEC
+# name-index cache (entity_resolution.js), plus Finnhub/yfinance's
+# cross-invocation 429 cooldown (shared/cooldown.js) -- all of which ride
+# this same CACHE_KV binding, same namespace `backend`/`dashboard` use.
+[[kv_namespaces]]
+binding = "CACHE_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# --- INGEST (consume) --- `backend`'s scheduled() (src/index.js) still
+# PRODUCES onto this same queue via its own INGEST binding; this Worker is
+# now the only consumer. Same max_batch_size/max_retries/DLQ as backend's
+# former consumer block for this queue (moved, not changed) -- see
+# wrangler.toml's own history/comments there for why those values were
+# chosen (plan.md Step 4).
+[[queues.consumers]]
+queue = "news-market-ai-ingest"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "news-market-ai-ingest-dlq"
+
+# --- ANALYZE (produce) --- ingestTickerData/ingestFeedNews's callers
+# (queue() below) enqueue one `analyze` message per resulting news item/
+# ticker pair here, same as backend's former INGEST consumer did.
+[[queues.producers]]
+queue = "news-market-ai-analyze"
+binding = "ANALYZE"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+[vars]
+# Same watchlist as backend's wrangler.toml -- used by entity resolution
+# (rss.js/html_scrape.js's fetchLatest) to decide which tickers a
+# non-ticker-hinted feed item might mention, and as the fallback ticker
+# list for EDGAR fundamentals when edgarCikMap is empty (see config.js).
+# Keep in sync with backend's WATCHLIST_TICKERS if the watchlist ever
+# changes -- there is no single shared source for this value across
+# Workers, same as dashboard/backend already don't share `vars` today.
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+
+# SEC EDGAR requires a descriptive User-Agent identifying the requester
+# (https://www.sec.gov/os/webmaster-faq#developers) -- not a secret, just an
+# identifying string. Moved here from backend's wrangler.toml (Step 5) --
+# this is now the only Worker that calls EDGAR at all.
+EDGAR_USER_AGENT = "news-market-ai contact@allocsys.dev"
+
+# Hardcoded CIK overrides for the current watchlist -- see backend's
+# wrangler.toml's (now-removed) copy of this comment for the full "why" on
+# skipping SEC's full company_tickers.json fetch/parse for a 3-ticker
+# watchlist. Moved here unchanged (Step 5).
+# Format: TICKER|CIK, comma-separated.
+EDGAR_CIK_MAP = "AAPL|0000320193,MSFT|0000789019,TSLA|0001318605"
+
+# Secrets -- set via `wrangler secret put FINNHUB_API_KEY --config wrangler.ingest.toml`,
+# never committed:
+#   FINNHUB_API_KEY -- moved here from backend's wrangler.toml (Step 5).
+#   This Worker is now the only one that calls Finnhub for LIVE ingestion
+#   (ingest_ticker/ingest_feeds). NOTE (known, deliberate gap -- see
+#   plan.md's Step 5 section): `backend` STILL separately holds its own
+#   FINNHUB_API_KEY, because POST /backfill's JOBS-queue `backfill` job
+#   (src/index.js's queue(), plan.md Step 3) also calls Finnhub directly
+#   (graph/pipeline.js#backfillHistoricalNews) and JOBS has no consumer
+#   here to move that job to without a larger redesign (a queue can only
+#   have one consumer Worker) -- out of scope for this step, flagged for a
+#   future cleanup rather than silently left unmentioned.
