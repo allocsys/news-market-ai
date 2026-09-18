@@ -173,25 +173,39 @@ export default {
 
   async scheduled(event, env) {
     const config = loadConfig(env);
-    console.log("scheduled run starting", { cron: event.cron, quickModel: config.geminiQuickModel, deepModel: config.geminiDeepModel });
+    const asOf = new Date().toISOString();
+    console.log("scheduled: fanning out cron tick", { cron: event.cron, tickers: config.watchlist.length });
+
+    // INGEST fan-out (plan.md Step 4): one message per watchlist ticker,
+    // batched into a single sendBatch call (one subrequest instead of N --
+    // matters for the Queues ops/day budget, see plan.md's estimate), plus
+    // one more for the general (non-ticker-scoped) feeds. A failure here
+    // is an enqueue failure (env.INGEST.sendBatch/send itself throwing),
+    // not a pipeline failure -- logged, not left to crash this invocation,
+    // same Adopted Pattern #11 reasoning as before, just applied to
+    // "could we even hand off the work" now instead of "did the work
+    // succeed" (that question moved to queue() below).
     try {
-      const results = await runScheduledIngestion(env, config, env.DB);
-      console.log("scheduled run completed", { decisions: results.length });
+      if (config.watchlist.length > 0) {
+        const tickerMessages = config.watchlist.map(({ ticker }) => ({ body: { type: "ingest_ticker", ticker, asOf } }));
+        await env.INGEST.sendBatch(tickerMessages);
+      }
+      await env.INGEST.send({ type: "ingest_feeds", asOf });
     } catch (err) {
-      // Expected for now -- see header comment. Logged, not silently dropped
-      // (plan.md Adopted Pattern #11).
-      console.error("scheduled run failed", { message: err.message });
+      console.error("scheduled: INGEST fan-out failed", { message: err.message });
     }
 
-    // Separate try/catch: a failure evaluating exits on existing positions
-    // should never be conflated with (or block on) an ingestion failure
-    // above -- same Adopted Pattern #11 "surface, don't swallow" reasoning,
-    // applied independently to each concern.
+    // Separate try/catch, own message, own queue (plan.md Step 4): a
+    // failure enqueueing (or later processing, see queue()'s exit_check
+    // branch) the exit check should never be conflated with (or block on)
+    // an ingestion enqueue failure above -- same "surface, don't swallow,
+    // don't conflate" reasoning the old inline scheduled() already applied
+    // between ingestion and exit-checking, now applied one layer earlier,
+    // at enqueue time instead of at execution time.
     try {
-      const closed = await checkOpenPositionExits(env, config, env.DB, { asOf: new Date().toISOString() });
-      console.log("exit check completed", { closed: closed.length, closed });
+      await env.JOBS.send({ type: "exit_check", asOf });
     } catch (err) {
-      console.error("exit check failed", { message: err.message });
+      console.error("scheduled: exit_check enqueue failed", { message: err.message });
     }
   },
 
