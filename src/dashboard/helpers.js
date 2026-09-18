@@ -15,12 +15,13 @@ export function fmtTime(iso) {
 }
 
 export function errorState(message) {
-  return `<p class="empty" style="color:#c1502e;">Couldn't load this section${message ? `: ${escapeHtml(message)}` : ""}.</p>`;
+  return `<p class="empty error-inline">Couldn't load this section${message ? `: ${escapeHtml(message)}` : ""}.</p>`;
 }
 
 export function statusBadge(status) {
   const cls = status === "approved" ? "status-approved" : status === "rejected" ? "status-rejected" : "status-neutral";
-  return `<span class="status ${cls}">[${escapeHtml(status)}]</span>`;
+  const icon = status === "approved" ? "\u2713" : status === "rejected" ? "\u2715" : "\u2014";
+  return `<span class="status ${cls}"><span>${icon}</span> ${escapeHtml(status)}</span>`;
 }
 
 export const ACTIVITY_DAYS_OPTIONS = [7, 14, 30, 60];
@@ -175,7 +176,7 @@ export function backtestRunsList(runs) {
   return runs
     .map((r) => {
       const statusCls = r.status === "complete" ? "status-approved" : r.status === "failed" ? "status-rejected" : "status-neutral";
-      const summary = `<span class="ticker">${escapeHtml(r.tickers.join(", "))}</span> &middot; ${fmtTime(r.testStart)} &rarr; ${fmtTime(r.testEnd)} &middot; <span class="status ${statusCls}">[${BACKTEST_STATUS_LABEL[r.status] ?? r.status}]</span>`;
+      const summary = `<span class="ticker">${escapeHtml(r.tickers.join(", "))}</span> &middot; ${fmtTime(r.testStart)} &rarr; ${fmtTime(r.testEnd)} &middot; ${statusBadge(BACKTEST_STATUS_LABEL[r.status] ?? r.status)}`;
       const body = r.status === "complete"
         ? backtestResultTable(r.result)
         : r.status === "failed"
@@ -186,7 +187,9 @@ export function backtestRunsList(runs) {
     .join("\n");
 }
 
-export const DATE_INPUT_STYLE = "background:#0d1118;color:#d9d4c4;border:1px solid #2c3644;padding:0.32rem 0.5rem;width:100%;box-sizing:border-box;";
+// Replaced inline style string with class name "date-input" (defined in shell.js STYLE).
+// Call sites in views will switch from style="${DATE_INPUT_STYLE}" to class="date-input" as needed.
+export const DATE_INPUT_STYLE = "date-input";
 
 export function rangePresetButtons(fromId, toId) {
   const buttons = RANGE_PRESET_DAYS.map((d) => `<button type="button" class="pill" onclick="setDateRange('${fromId}','${toId}',${d})">${d}d</button>`).join("");
@@ -207,7 +210,7 @@ export function checkpointsTable(checkpoints) {
   </table></div>`;
 }
 
-export function statCard(value, label, sub = null, accent = "#7d8a7f") {
+export function statCard(value, label, sub = null, accent = "var(--accent)") {
   return `<div class="stat-card" style="--accent:${accent}">
     <div class="stat-value">${escapeHtml(value)}</div>
     <div class="stat-label">${escapeHtml(label)}</div>
@@ -231,15 +234,15 @@ export function renderSummaryCards({ openPositions, closedPositions, decisionSta
   const takeProfits = closedPositions.filter((p) => p.closeReason === "take_profit").length;
 
   return `<div class="stat-grid">
-    ${statCard(openPositions.length, "Open positions", `${longCount} long / ${shortCount} short`, "#c9a24b")}
-    ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %", "#4f9d6e")}
-    ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`, "#6f92b8")}
-    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`, "#c1502e")}
+    ${statCard(openPositions.length, "Open positions", `${longCount} long / ${shortCount} short`, "var(--accent)")}
+    ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %", "var(--color-success-text)")}
+    ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`, "var(--color-info-text)")}
+    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`, "var(--color-danger-text)")}
   </div>`;
 }
 
-export const CHART_STATUS_COLORS = { approved: "#4f9d6e", rejected: "#c1502e" };
-export const CHART_STATUS_FALLBACK = "#8b93a0";
+export const CHART_STATUS_COLORS = { approved: "var(--color-success-text)", rejected: "var(--color-danger-text)" };
+export const CHART_STATUS_FALLBACK = "var(--text-muted)";
 
 export function decisionsActivityChart(daily, days) {
   const width = 640;
@@ -336,7 +339,7 @@ export function priceSparkline(bars, { width = 240, height = 64 } = {}) {
   const last = closes[closes.length - 1];
   const up = last >= first;
   const changePct = first !== 0 ? (((last - first) / first) * 100).toFixed(1) : "0.0";
-  const color = up ? "#4f9d6e" : "#c1502e";
+  const color = up ? "var(--color-success-text)" : "var(--color-danger-text)";
 
   return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" class="sparkline" role="img" aria-label="Recent close price trend">
       <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" />
