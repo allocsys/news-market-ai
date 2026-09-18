@@ -1,4 +1,4 @@
-// Covers the per-page Refresh link + "Updated" time the dashboard shell renders
+// Covers the per-page Refresh link + "Loaded" time the dashboard shell renders
 // above a section's content (src/dashboard/shell.js#renderPageToolbar), and which
 // routes (src/dashboard/routes.js) opt in to it.
 //
@@ -56,10 +56,10 @@ function refreshHrefIn(html) {
 const REFRESHABLE_SECTIONS = ["snapshot", "activity", "charts", "health", "decisions", "positions", "pipeline", "backtest"];
 
 for (const section of REFRESHABLE_SECTIONS) {
-  test(`GET /dashboard/${section} renders a Refresh link back to itself, plus an Updated time`, async () => {
+  test(`GET /dashboard/${section} renders a Refresh link back to itself, plus a Loaded time`, async () => {
     const html = await getHtml(`/dashboard/${section}`);
     assert.equal(refreshHrefIn(html), `/dashboard/${section}`);
-    assert.match(html, /<span class="page-toolbar-updated">Updated \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC<\/span>/);
+    assert.match(html, /<span class="page-toolbar-updated">Loaded \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC<\/span>/);
   });
 }
 
