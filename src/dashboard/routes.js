@@ -56,12 +56,21 @@ export async function handleSnapshotRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const [openPositions, closedPositions, decisionStats] = await Promise.all([
-    getAllOpenPositions(env.DB, { limit: params.positionsLimit }),
-    getRecentlyClosedPositions(env.DB, { limit: 20 }),
-    getDecisionStats(env.DB, { days: params.activityDays }),
+  const [openPositionsResult, closedPositionsResult, decisionStatsResult] = await Promise.all([
+    safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit })),
+    safe(getRecentlyClosedPositions(env.DB, { limit: 20 })),
+    safe(getDecisionStats(env.DB, { days: params.activityDays })),
   ]);
-  const bodyHtml = renderSnapshotView({ openPositions, closedPositions, decisionStats });
+  // The stat grid is one combined panel drawn from all three queries, so a
+  // failure in any of them is reported as one error for the section --
+  // there's no meaningful way to show a "half stat grid".
+  const error = openPositionsResult.error || closedPositionsResult.error || decisionStatsResult.error || null;
+  const bodyHtml = renderSnapshotView({
+    openPositions: openPositionsResult.data ?? [],
+    closedPositions: closedPositionsResult.data ?? [],
+    decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} },
+    error,
+  });
   return htmlResponse(renderShell({ activeSection: "snapshot", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -69,8 +78,8 @@ export async function handleActivityRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const decisionStats = await getDecisionStats(env.DB, { days: params.activityDays });
-  const bodyHtml = renderActivityView({ decisionStats, params });
+  const decisionStatsResult = await safe(getDecisionStats(env.DB, { days: params.activityDays }));
+  const bodyHtml = renderActivityView({ decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} }, params, error: decisionStatsResult.error });
   return htmlResponse(renderShell({ activeSection: "activity", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
@@ -78,12 +87,25 @@ export async function handleChartsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return new Response(null, { status: 302, headers: { Location: auth.redirect } });
   const params = parseDashboardParams(new URL(request.url).searchParams);
-  const openPositions = await getAllOpenPositions(env.DB, { limit: params.positionsLimit });
-  const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
-  const priceBarsByTicker = Object.fromEntries(
-    await Promise.all(chartTickers.map(async (ticker) => [ticker, await getRecentPriceBars(env.DB, { ticker, limit: 30 })]))
-  );
-  const bodyHtml = renderChartsView({ priceBarsByTicker });
+  const openPositionsResult = await safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit }));
+  let priceBarsByTicker = {};
+  const error = openPositionsResult.error;
+  if (!error) {
+    const openPositions = openPositionsResult.data ?? [];
+    const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
+    const entries = await Promise.all(
+      chartTickers.map(async (ticker) => {
+        const result = await safe(getRecentPriceBars(env.DB, { ticker, limit: 30 }));
+        return [ticker, result];
+      })
+    );
+    // A single ticker's price-bar fetch failing shouldn't blank the whole
+    // grid -- skip that cell rather than erroring the whole Charts section.
+    priceBarsByTicker = Object.fromEntries(
+      entries.filter(([, result]) => !result.error).map(([ticker, result]) => [ticker, result.data])
+    );
+  }
+  const bodyHtml = renderChartsView({ priceBarsByTicker, error });
   return htmlResponse(renderShell({ activeSection: "charts", sessionUsername: auth.sessionUsername, bodyHtml }));
 }
 
