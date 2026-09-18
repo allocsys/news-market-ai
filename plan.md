@@ -239,6 +239,27 @@ Add a `JOBS` queue (plus dead-letter queue). `POST /backfill` and
 **Done when:** a long backtest completes past 30s, failures land as `failed` rows,
 and `test/index_backfill.test.js` is updated for the enqueue behavior.
 
+### Step 4 -- Cron fan-out (still inside `backend`)
+`scheduled()` becomes a thin scheduler: it enqueues one message per ticker per
+source (`INGEST` queue). The ingest consumer fetches news, price bars and
+fundamentals for that one ticker, writes D1, then enqueues `ANALYZE` for it. The
+analysis consumer runs `runPipelineForTicker`, resumable via `graph/checkpointer.js`
+(Pattern 12). Messages must be idempotent (dedupe on `id`, D1 unique keys) since
+queues deliver at-least-once. Set `max_concurrency` on `ANALYZE` to throttle Gemini.
+Keep `checkOpenPositionExits` as its own message, isolated from ingestion failures.
+Budget: Queues free tier is 10K ops/day (~3 ops per message); estimate the daily
+message count (tickers x stages x 96 runs) before shipping.
+**Done when:** a full cron cycle completes as many small invocations, a crashed
+message retries without duplicating rows or LLM spend, and ops/day fits the budget.
+
+### Step 5 -- Extract `ingest` Worker
+Move the ingest consumer to `news-market-ai-ingest` (own `wrangler` config, CI job).
+It alone holds `FINNHUB_API_KEY` and the EDGAR CIK/name-index KV cache; it consumes
+`INGEST` and produces `ANALYZE`. Shared code (`ingestion/*`, `storage/d1.js`,
+`shared/*`) stays imported, not copied.
+**Done when:** ingestion runs only from `ingest`, and `backend` no longer holds
+vendor keys.
+
 ## Repo Structure
 ```
 ingestion/           # GDELT, EDGAR, RSS, yfinance adapters -> normalized JSON
