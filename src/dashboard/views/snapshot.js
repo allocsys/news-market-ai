@@ -13,18 +13,15 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
   const shortCount = openPositions.filter((p) => p.direction === "short").length;
   const otherCount = openPositions.length - longCount - shortCount;
   const totalExposurePct = openPositions.reduce((sum, p) => sum + (p.positionSizePct ?? 0), 0) * 100;
-  // Cash is the implied remainder of the book -- "no position" is the default state,
-  // so we surface it here as its own slice so the donut always has a meaningful shape
-  // even when the book is light.
-  const cashPctEquivalent = Math.max(0, 100 - totalExposurePct);
-  // Convert the percentage-point "cash" into a count-equivalent so the donut's units
-  // are consistent (counts of book slots, not raw exposure %). This is documented in
-  // the subtitle so the reader knows what they're looking at.
+  // Counts of open positions by direction only. There is deliberately no "cash" slice:
+  // cash is an exposure quantity (100% - total exposure), not a position count, so mixing it
+  // into a count-based donut fabricated a proportion. The Open exposure gauge next to this
+  // donut is the real deployed-vs-undeployed picture. With no open positions the donut
+  // renders its own "no data" state.
   const compositionSegments = [
     { label: `Long (${longCount})`, value: longCount, color: "var(--color-success-text)" },
     { label: `Short (${shortCount})`, value: shortCount, color: "var(--color-danger-text)" },
     ...(otherCount > 0 ? [{ label: `Other (${otherCount})`, value: otherCount, color: "var(--color-warning-text)" }] : []),
-    { label: `Cash (slots)`, value: Math.max(1, Math.round(cashPctEquivalent / 10)), color: "var(--chart-6)" },
   ];
 
   // --- Gauge data: total exposure ----------------------------------------------
@@ -61,7 +58,7 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
         centerValue: String(openPositions.length),
         centerLabel: "open",
         title: "Book composition",
-        subtitle: "long / short / cash slots",
+        subtitle: "open positions by direction",
       })}
       ${gaugeChart(exposureFraction, {
         valueLabel: totalExposurePct.toFixed(1) + "%",
