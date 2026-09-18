@@ -719,23 +719,24 @@ const STYLE = `
       position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
       background: rgba(13, 19, 32, 0.92);
       border-top: 1px solid var(--border-color);
-      display: flex;
-      overflow-x: auto; white-space: nowrap;
-      -webkit-overflow-scrolling: touch;
-      padding: 0.4rem 0.5rem;
+      display: flex; align-items: stretch;
+      padding: 0.4rem 0.25rem;
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       /* iOS safe area */
       padding-bottom: calc(0.4rem + env(safe-area-inset-bottom, 0px));
     }
-    .bottom-nav::-webkit-scrollbar { height: 3px; }
-    .bottom-nav::-webkit-scrollbar-thumb { background: var(--border-strong); }
+    /* Every tab gets an equal share of the bar (flex: 1 1 0), so the six items
+       are evenly spaced edge to edge regardless of label length, and the active
+       indicator always spans the same width. No horizontal scrolling: labels
+       truncate with an ellipsis on very narrow screens instead. */
     .bottom-nav a {
-      display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+      display: flex; flex: 1 1 0; min-width: 0;
+      flex-direction: column; align-items: center; justify-content: center;
       gap: 0.18rem; color: var(--text-muted); text-decoration: none;
-      font-size: 0.6875rem; font-weight: 500;
-      padding: 0.25rem 0.5rem; min-height: 48px; min-width: 56px;
-      border-bottom: none; flex-shrink: 0;
+      font-size: 0.6875rem; font-weight: 500; text-align: center;
+      padding: 0.25rem 0.125rem; min-height: 48px;
+      border-bottom: none;
       border-top: 2px solid transparent;
       transition: color 150ms ease;
     }
@@ -747,6 +748,9 @@ const STYLE = `
       border-top-color: var(--accent-bright);
     }
     .bottom-nav a .nav-icon { opacity: 1; }
+    .bottom-nav a > span:not(.nav-icon) {
+      max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .bottom-nav .nav-index { display: none; }
   }
 
