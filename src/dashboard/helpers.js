@@ -245,8 +245,11 @@ export function statCard(value, label, sub = null, accent = "var(--accent)") {
   </div>`;
 }
 
-export function renderSummaryCards({ openPositions, closedPositions, decisionStats }) {
-  const totalExposurePct = openPositions.reduce((sum, p) => sum + (p.positionSizePct ?? 0), 0) * 100;
+// `totalExposurePct` is passed in (from storage/d1.js#getOpenPositionsExposureTotal,
+// an unbounded aggregate) rather than derived from `openPositions` here -- that array
+// is capped by the Rows filter, so summing it client-side understated total exposure
+// once real open-position count exceeded the filter (plan.md Step 1).
+export function renderSummaryCards({ openPositions, closedPositions, decisionStats, totalExposurePct }) {
   const longCount = openPositions.filter((p) => p.direction === "long").length;
   const shortCount = openPositions.filter((p) => p.direction === "short").length;
 
