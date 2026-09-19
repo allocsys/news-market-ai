@@ -1,0 +1,51 @@
+# Path filters for .github/workflows/deploy.yml's `changes` job.
+#
+# Lives in its own file (instead of inline in the workflow) because the
+# `changes` job evaluates the SAME definitions several times, each against a
+# different baseline commit: the last commit whose corresponding deploy job
+# actually succeeded. See the comment on the `changes` job for why.
+
+code:
+  - '**'
+  - '!*.md'
+  - '!**/*.md'
+migrations:
+  - 'migrations/**'
+dashboard:
+  - 'src/dashboard-worker.js'
+  - 'wrangler.dashboard.toml'
+  - 'src/dashboard/**'
+  - 'src/login.js'
+  - 'src/auth/**'
+  - 'src/config.js'
+  - '.github/workflows/deploy.yml'
+  - '.github/path-filters.yml'
+ingest:
+  - 'src/ingest-worker.js'
+  - 'wrangler.ingest.toml'
+  - 'src/graph/pipeline.js'
+  - 'src/ingestion/**'
+  - 'src/storage/**'
+  - 'src/shared/**'
+  - 'src/config.js'
+  - '.github/workflows/deploy.yml'
+  - '.github/path-filters.yml'
+llm:
+  # Broader than the other Workers' filters on purpose: llm-worker.js
+  # imports graph/pipeline.js, exit_check.js and backtest/runBacktest.js,
+  # which between them pull in agents/, llm/, backtest/, storage/,
+  # shared/ and (via pipeline.js's ingestion imports) ingestion/ --
+  # a change to any of those changes what gets bundled into this Worker.
+  - 'src/llm-worker.js'
+  - 'wrangler.llm.toml'
+  - 'src/graph/**'
+  - 'src/agents/**'
+  - 'src/llm/**'
+  - 'src/backtest/**'
+  - 'src/schemas/**'
+  - 'src/ingestion/**'
+  - 'src/storage/**'
+  - 'src/shared/**'
+  - 'src/config.js'
+  - '.github/workflows/deploy.yml'
+  - '.github/path-filters.yml'
