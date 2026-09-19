@@ -17,6 +17,18 @@ binding = "DB"
 database_name = "news_market_ai"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
+# --- D1 (environment-split, plan.md "Backtest / Live Isolation" redesign,
+# provisioned 2026-09-19, M1) --- ingest writes INPUTS_DB
+# (news_items/news_item_revisions/news_item_tickers/price_bars/
+# fundamental_facts, migrations/inputs/). No LIVE_DB/SIM_DB binding --
+# ingest never touches run state. Real id committed directly -- see
+# wrangler.toml's own comment on why (ensure-d1-database's patch step is
+# multi-block-unsafe).
+[[d1_databases]]
+binding = "INPUTS_DB"
+database_name = "news-market-ai-inputs"
+database_id = "c14d62d9-62bb-403f-8792-1c627e076d1a"
+
 # --- KV --- this Worker is now the ONLY one that touches the EDGAR CIK
 # lookup cache (edgar_cik_lookup.js) and the entity-resolution SEC
 # name-index cache (entity_resolution.js), plus Finnhub/yfinance's
