@@ -1,7 +1,7 @@
 // entity_resolution_wiring.test.js -- covers the opt-in
 // config.entityResolutionUseNameIndex wiring added this session to
 // gdelt.js/rss.js/html_scrape.js's fetchLatest, plus
-// graph/pipeline.js#collectNewsItems threading `kv` through to them so the
+// ingestion/ingest.js#collectNewsItems threading `kv` through to them so the
 // name index actually gets cached in production. Complements
 // entity_resolution.test.js (pure logic) and edgar_cik_lookup.test.js
 // (fetchTickerDirectory) -- this file is specifically about the three
@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { fetchLatest as fetchGdeltLatest } from "../src/ingestion/sources/gdelt.js";
 import { fetchLatest as fetchRssLatest } from "../src/ingestion/sources/rss.js";
 import { fetchLatest as fetchScrapeLatest } from "../src/ingestion/sources/html_scrape.js";
-import { collectNewsItems } from "../src/graph/pipeline.js";
+import { collectNewsItems } from "../src/ingestion/ingest.js";
 
 const EDGAR_UA = "test-suite contact@example.com";
 const TICKER_URL = "https://fake.test/company_tickers.json";
@@ -147,7 +147,7 @@ test("html_scrape.fetchLatest resolves tickers via the name index when enabled",
 });
 
 // ---------------------------------------------------------------------------
-// graph/pipeline.js#collectNewsItems -- kv threading
+// ingestion/ingest.js#collectNewsItems -- kv threading
 // ---------------------------------------------------------------------------
 
 test("collectNewsItems threads kv through to finnhub/rss/scrape so a warm name-index cache is shared across all three (no re-fetch of SEC's file)", async (t) => {

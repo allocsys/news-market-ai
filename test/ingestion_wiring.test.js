@@ -1,20 +1,20 @@
 // ingestion_wiring test (plan.md open item: wire GDELT/yfinance/rss/
-// html_scrape/edgar_fundamentals into graph/pipeline.js end-to-end -- the
-// WIRING half specifically, see pipeline.js's header for why the LIVE
+// html_scrape/edgar_fundamentals into ingestion/ingest.js end-to-end -- the
+// WIRING half specifically, see ingestion/ingest.js's header for why the LIVE
 // spot-check half is a separate, currently-blocked item).
 //
-// Covers graph/pipeline.js#collectNewsItems, #ingestPriceBars, and
+// Covers ingestion/ingest.js#collectNewsItems, #ingestPriceBars, and
 // #ingestFundamentals against mocked global.fetch and a minimal in-memory
 // fake of the price_bars/fundamental_facts tables -- same conventions as
 // price_bars_pointintime.test.js and fundamentals_pointintime.test.js.
-// Does NOT exercise runScheduledIngestion end-to-end, since that also
+// (runScheduledIngestion no longer exists -- deleted in M2.) The old note: it did not exercise the full loop, since that also
 // calls runPipelineForTicker, which needs live Gemini calls across six
 // agent modules -- same documented scope limit as
 // checkpoint_resume.test.js's header.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectNewsItems, ingestPriceBars, ingestFundamentals, backfillHistoricalNews } from "../src/graph/pipeline.js";
+import { collectNewsItems, ingestPriceBars, ingestFundamentals, backfillHistoricalNews } from "../src/ingestion/ingest.js";
 import { fetchLatest as fetchFinnhubLatest } from "../src/ingestion/sources/finnhub.js";
 import { VendorError } from "../src/shared/errors.js";
 

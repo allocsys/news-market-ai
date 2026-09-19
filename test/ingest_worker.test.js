@@ -3,7 +3,7 @@
 // (M2: env.DB is gone from this Worker -- ingestion writes env.INPUTS_DB.)
 // tests that used to live in test/cron_fanout.test.js against
 // src/index.js's queue() -- moved here unchanged in behavior/assertions,
-// since the underlying code (src/graph/pipeline.js#ingestTickerData /
+// since the underlying code (src/ingestion/ingest.js#ingestTickerData /
 // #ingestFeedNews) didn't change at all in this step, only which Worker's
 // queue() calls it. Plus one unrecognized-type/crash-retry pair for parity
 // with backend's own queue() test coverage (test/queue_consumer.test.js),

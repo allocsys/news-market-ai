@@ -1,5 +1,5 @@
 // Covers backend's (src/index.js) POST /backfill route -- the operational
-// entry point wired onto graph/pipeline.js#backfillHistoricalNews.
+// entry point wired onto ingestion/ingest.js#backfillHistoricalNews.
 //
 // Since plan.md Step 2 (dashboard Worker split), this route no longer
 // checks a session cookie itself -- backend is private (see wrangler.toml,
