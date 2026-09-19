@@ -345,7 +345,11 @@ namespace, so three D1s and a second KV isolate state but add no quota.
   reference it. **The owner deletes the actual Cloudflare `news_market_ai` D1
   resource out of band** -- nothing in the repo does. PR #44 was already closed
   (unmerged, 2026-09-19, superseded by the SimClock isolation design). The root
-  `migrations/0001-0012` files are still in the tree but nothing applies them.
+  `migrations/0001-0012` (the retired pre-split schema) are deleted too; nothing
+  read them (tests and CI use only `migrations/{inputs,state,sim}`), and a test
+  keeps `migrations/` free of root-level `.sql` files. Some code comments still
+  cite them by name (`config.js`, `exit.js`, `edgar_fundamentals.js`); git
+  history has the files.
 Since M2/M2b the engine, ingest and LLM Workers already read and write
 `live`/`inputs`; M4a moved the last readers (the dashboard) over, and M5 removed
 the old DB's binding.
@@ -591,8 +595,8 @@ graph/               # orchestration
   exit_check.js         # stop-loss / take-profit / time-based exits
 backtest/            # point-in-time harness, walk-forward, signal on/off comparison
 dashboard/           # operational dashboard
-migrations/          # inputs/, state/, sim/ = the three live schemas; the root
-                      # 0001-0012 are the retired pre-split schema (nothing applies them, M5)
+migrations/          # inputs/, state/, sim/ -- the three environment schemas
+                      # (the pre-split root 0001-0012 were deleted in M5)
 config/
 tests/
 ```
