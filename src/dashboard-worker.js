@@ -216,15 +216,21 @@ async function renderLlmCall(request, env, config, id) {
 
   // A backtest's calls are logged under its own run id, so the id alone isn't
   // enough to find one -- the list page's `?env=` has to travel with it.
-  const callEnv = parseEnvParam(new URL(request.url).searchParams);
+  const url = new URL(request.url);
+  const callEnv = parseEnvParam(url.searchParams);
 
-  const shell = (bodyHtml, status = 200) =>
-    htmlResponse(renderShell({ activeSection: "llm", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: callEnv }), { status });
+  const shell = (bodyHtml, status = 200, shellEnv = callEnv) =>
+    htmlResponse(renderShell({ activeSection: "llm", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: shellEnv }), { status });
 
   if (!/^\d+$/.test(id)) return shell(renderLlmCallView({ call: null, env: callEnv }), 404);
   try {
     const call = await fetchBackendJson(env, `/api/llm-calls/${id}${envSuffix(callEnv)}`);
-    return shell(renderLlmCallView({ call, env: callEnv }));
+    // Same healing as every other env-aware page: what actually resolved
+    // (call.resolvedEnv), not just what the URL asked for, drives the
+    // selector bar, the nav links, and the view's own env-scoped links.
+    const resolvedEnv = call.resolvedEnv ?? callEnv;
+    const envBar = await envSelectorFor(env, { resolvedEnv, envError: call.envError ?? null, url });
+    return shell(envBar + renderLlmCallView({ call, env: resolvedEnv }), 200, resolvedEnv);
   } catch (err) {
     if (err.status === 404) return shell(renderLlmCallView({ call: null, env: callEnv }), 404);
     console.error("dashboard llm call backend fetch failed", { id, message: err.message });
