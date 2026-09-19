@@ -1,5 +1,6 @@
 // Test for the new `ingest` Worker's queue() (plan.md Step 5,
 // src/ingest-worker.js). These are the exact `ingest_ticker`/`ingest_feeds`
+// (M2: env.DB is gone from this Worker -- ingestion writes env.INPUTS_DB.)
 // tests that used to live in test/cron_fanout.test.js against
 // src/index.js's queue() -- moved here unchanged in behavior/assertions,
 // since the underlying code (src/graph/pipeline.js#ingestTickerData /
@@ -97,7 +98,7 @@ function baseEnv(overrides = {}) {
 
 test("queue() ingest_ticker fetches+writes news for that one ticker, enqueues one ANALYZE message per resulting item, then acks", async (t) => {
   const db = new FakeIngestDb();
-  const env = baseEnv({ DB: db });
+  const env = baseEnv({ INPUTS_DB: db });
 
   t.mock.method(global, "fetch", async (url) => {
     if (String(url).includes("finnhub")) return { ok: true, status: 200, json: async () => mockFinnhubJson() };
@@ -125,7 +126,7 @@ test("queue() ingest_ticker acks (does not retry) on a business-logic failure --
       throw new Error("simulated D1 write failure");
     }
   }
-  const env = baseEnv({ DB: new ThrowingDb() });
+  const env = baseEnv({ INPUTS_DB: new ThrowingDb() });
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
@@ -144,7 +145,7 @@ test("queue() ingest_ticker acks (does not retry) on a business-logic failure --
 
 test("queue() ingest_feeds fans ANALYZE messages out per (item, ticker) pair, since a general feed item may resolve to several tickers", async (t) => {
   const db = new FakeIngestDb();
-  const env = baseEnv({ DB: db, RSS_FEED_URLS: "AAPL|https://fake.test/feed.xml,MSFT|https://fake.test/feed.xml" });
+  const env = baseEnv({ INPUTS_DB: db, RSS_FEED_URLS: "AAPL|https://fake.test/feed.xml,MSFT|https://fake.test/feed.xml" });
 
   t.mock.method(global, "fetch", async () => ({
     ok: true,
@@ -175,7 +176,7 @@ test("queue() ingest_feeds fans ANALYZE messages out per (item, ticker) pair, si
 // ---------------------------------------------------------------------------
 
 test("queue() acks an unrecognized message type without processing it", async (t) => {
-  const env = baseEnv({ DB: new FakeIngestDb() });
+  const env = baseEnv({ INPUTS_DB: new FakeIngestDb() });
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -188,7 +189,7 @@ test("queue() acks an unrecognized message type without processing it", async (t
 });
 
 test("queue() retries (does not ack) on a genuine handler crash -- e.g. a malformed message with no readable body", async (t) => {
-  const env = baseEnv({ DB: new FakeIngestDb() });
+  const env = baseEnv({ INPUTS_DB: new FakeIngestDb() });
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 

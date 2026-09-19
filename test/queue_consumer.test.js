@@ -64,7 +64,8 @@ function mockFinnhubJson() {
 
 test("queue() processes a backfill job: runs the real backfill, then acks the message", async (t) => {
   const db = new FakeNewsDb();
-  const env = { DB: db, WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
+  // M2: news writes go to INPUTS_DB; env.DB is only the (best-effort) job_progress reporter until M2b.
+  const env = { DB: {}, INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const message = new FakeMessage({ type: "backfill", id: "backfill-1", from: "2024-01-01", to: "2024-01-31" });
@@ -81,7 +82,7 @@ test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and s
       throw new Error("simulated D1 write failure");
     }
   }
-  const env = { DB: new ThrowingDb(), WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
+  const env = { DB: {}, INPUTS_DB: new ThrowingDb(), WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const errorLogs = [];
