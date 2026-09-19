@@ -120,10 +120,8 @@ export async function failJob(db, { id, error, detail = null, now = nowIso() }) 
     .run();
 }
 
-/** One job, with JSON columns parsed and keys camelCased for the API. Null if there's no such id. */
-export async function getJob(db, id) {
-  const row = await db.prepare(`SELECT ${JOB_COLUMNS} FROM job_progress WHERE id = ?`).bind(id).first();
-  if (!row) return null;
+/** A job_progress row with JSON columns parsed and keys camelCased for the API. */
+function rowToJob(row) {
   return {
     id: row.id,
     type: row.type,
@@ -141,6 +139,44 @@ export async function getJob(db, id) {
     updatedAt: row.updated_at,
     finishedAt: row.finished_at ?? null,
   };
+}
+
+/** One job, with JSON columns parsed and keys camelCased for the API. Null if there's no such id. */
+export async function getJob(db, id) {
+  const row = await db.prepare(`SELECT ${JOB_COLUMNS} FROM job_progress WHERE id = ?`).bind(id).first();
+  return row ? rowToJob(row) : null;
+}
+
+/**
+ * How long a 'queued'/'running' row may go without an update before it's
+ * treated as dead. A consumer killed by an uncatchable isolate kill (e.g.
+ * exceededCpu -- see plan.md) never writes 'failed', so its row stays
+ * 'running' forever; without this cutoff every such orphan would show a
+ * phantom "in progress" bar on the dashboard indefinitely. Live jobs tick far
+ * more often than this (progress writes are throttled to ~1.5s, and even a
+ * slow LLM step in a backtest finishes well inside it).
+ */
+export const ACTIVE_JOB_MAX_IDLE_MS = 15 * 60 * 1000;
+
+/**
+ * The most recently created job of `type` that is still in flight (status
+ * 'queued' or 'running') and has ticked within `maxIdleMs`. Null if none.
+ * This is what lets the backfill/backtest pages show a progress bar for a
+ * job that was submitted earlier -- the by-id lookup (getJob) only works
+ * for whoever still holds the id from the original form submit.
+ * `now` is injectable so the idle cutoff is testable without real waiting.
+ */
+export async function getActiveJob(db, type, { maxIdleMs = ACTIVE_JOB_MAX_IDLE_MS, now = nowIso() } = {}) {
+  const cutoff = new Date(Date.parse(now) - maxIdleMs).toISOString();
+  const row = await db
+    .prepare(
+      `SELECT ${JOB_COLUMNS} FROM job_progress
+       WHERE type = ? AND status IN ('queued', 'running') AND updated_at >= ?
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .bind(type, cutoff)
+    .first();
+  return row ? rowToJob(row) : null;
 }
 
 /**
