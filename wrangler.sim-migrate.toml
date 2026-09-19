@@ -1,0 +1,28 @@
+# Migration-only config for SIM_DB's second migration source.
+#
+# SIM_DB needs migrations from TWO directories: migrations/state/ (the
+# schema shared with LIVE_DB -- positions/trade_decisions/.../job_progress)
+# and migrations/sim/ (the sim-exclusive backtest_runs registry). Wrangler's
+# `migrations_dir` is one path per [[d1_databases]] binding, so a single
+# config can't apply both. wrangler.toml's own SIM_DB block sets
+# migrations_dir = "migrations/state" (the primary schema, and what
+# `wrangler dev`/`deploy` should auto-apply locally); this file is a second,
+# migration-only config that points the SAME binding/database at
+# migrations/sim/ instead, and is used ONLY by the
+# db:migrate:{local,remote}:sim npm scripts (see package.json) as a second
+# `wrangler d1 migrations apply` pass against the same database. Applying
+# both directories to one DB is safe and idempotent: d1_migrations
+# bookkeeping keys on migration filename, and the two directories' filenames
+# don't collide (0001_init.sql vs 0001_backtest_runs.sql) -- verified
+# locally before wiring this in (see PR description).
+#
+# Not used for `wrangler dev`/`deploy` -- no `main`, no other bindings. Kept
+# minimal on purpose.
+name = "news-market-ai-sim-migrate"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "SIM_DB"
+database_name = "news-market-ai-sim"
+database_id = "55a8fab8-9f30-4c1f-9393-d5393af669fb"
+migrations_dir = "migrations/sim"

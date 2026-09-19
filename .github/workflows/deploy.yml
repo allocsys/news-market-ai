@@ -219,10 +219,21 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Apply D1 migrations (remote)
+        # db:migrate:remote:all covers all four D1 databases: the legacy
+        # `news_market_ai` DB (migrations/, unchanged) plus the three
+        # environment-split DBs added in M1 -- INPUTS_DB (migrations/inputs/),
+        # LIVE_DB (migrations/state/), and SIM_DB (migrations/state/ +
+        # migrations/sim/, two passes -- see wrangler.sim-migrate.toml).
+        # These three were previously migrated by hand only (see
+        # wrangler.toml's own comment history); each `wrangler d1 migrations
+        # apply` call is idempotent against already-applied migrations
+        # (tracked per database in its own d1_migrations table, keyed by
+        # filename), so this is a safe no-op today and only starts mattering
+        # once M3+ adds new files under migrations/sim/ or migrations/state/.
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npm run db:migrate:remote
+        run: npm run db:migrate:remote:all
 
   deploy:
     needs: [test, migrate]
