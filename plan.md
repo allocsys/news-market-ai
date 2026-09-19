@@ -553,6 +553,29 @@ work on `main` directly.
   its wrangler file's "Secrets" comment, or add the smoke test below.
 - **Config drift:** `wrangler.dashboard.toml` enables `[observability.logs]` but the
   live dashboard Worker had logs off. The toml is the intended state; re-enable.
+- **Live pipeline produced no analysis after the M4 cutover (found 2026-09-20,
+  fixed on `fix/ingest-enqueue-new-items-only`).** `LIVE_DB` was empty (no
+  decisions, positions, checkpoints or LLM calls) while `INPUTS_DB` held 427 news
+  items, and `llm` ran only `exit_check`. Cause: every `ingest_ticker` tick threw
+  `batch message count of 163 exceeds limit of 100 (10206)` from
+  `ANALYZE.sendBatch` (Cloudflare Queues caps a batch at 100 messages / 256 KB);
+  the handler caught it, logged it and acked, so nothing ever reached ANALYZE.
+  **Second trap, fixed together:** `ingestTickerData`/`ingestFeedNews` returned
+  every fetched item, not just new ones (Finnhub returns a trailing window and
+  `insertNewsItem` said nothing about conflicts), so chunking alone would have
+  re-enqueued ~160 items per ticker every 15 minutes. Now `insertNewsItem` returns
+  `{ inserted, newTickers }` (from D1 `meta.changes`), the ingest functions return
+  `{ fetched, fresh }` (an item is fresh for a ticker when its `news_items` row or
+  its `(item, ticker)` association is new), and `ingestion/enqueue.js#sendInChunks`
+  sends in chunks of at most 100 messages / 200 KB, continues past a failed chunk
+  and reports it. **Open consequences:** (1) the items ingested before the fix
+  are stored but were never analyzed and are no longer detected as new; analyzing
+  them is LLM spend and the owner's call. (2) A queue failure after the D1 write is
+  logged (count + `ticker:runId` labels) but not retried, since a re-run would see
+  those items as already stored. (3) The per-tick cost of re-running
+  `insertNewsItem` over the whole trailing window (3-4 D1 statements per item) is
+  unchanged; if it shows up in CPU or D1 numbers, pre-filter existing ids with one
+  batched `SELECT` per ticker.
 
 ## Repo Structure
 ```
