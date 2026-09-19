@@ -294,6 +294,24 @@ Until M4 live still runs on the old schema and can re-accumulate overlapping
 positions. The `*/15` cron is disabled (owner, 2026-09-19), so live ingest is
 paused; don't run backtests on the old DB.
 
+**M1 code — done on `m1/state-store-foundation`, no PR yet (2026-09-19):**
+`migrations/inputs/`, `migrations/state/`, `migrations/sim/` (the split
+described above); `test/helpers/sqlite_d1.js` (a real `node:sqlite`-backed D1
+adapter, not a hand-written fake, so the migration SQL and RunStore's own
+queries actually run); `src/storage/run_store.js` (`RunStore`, `readOnly`,
+`commitThesis`); `src/storage/inputs_view.js` (re-exports the unchanged
+inputs readers/writers from `d1.js` under the new import path). 433 old tests
+still pass; +28 new (`run_store.test.js`, `sqlite_d1_adapter.test.js`,
+`inputs_view.test.js`) covering out-of-order `asOf`, the risk-ceiling
+rejection (incl. the "own replaced position isn't double-counted" case), the
+partial-unique-index backstop, run isolation, `deleteRun`'s `'live'` refusal,
+and a local count confirming `commitThesis` stays at exactly 3 prepared
+statements. **Still open:** whether Cloudflare counts each statement inside
+a `batch()` toward the 50-queries-per-invocation Free cap is NOT settled by
+this — `node:sqlite` has no such cap to measure against, so this needs a real
+deployment to check. Not yet done: provisioning the three D1s / KV namespace,
+pushing the branch, opening the PR.
+
 ### Overlapping open positions (separate live bug, found during this check)
 Not caused by backtests. 23 of the 24 open AAPL positions were opened by the
 live pipeline (09-17 13:12 → 09-18 18:41), all overlapping. Mechanism (from
