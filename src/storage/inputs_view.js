@@ -173,8 +173,8 @@ export async function getPriceBarsAsOf(db, { ticker, asOf, limit = 200 }) {
 /**
  * One row per (ticker, tag, fiscalYear, fiscalPeriod, form) -- a restated
  * figure (10-K/A) for a period already covered by an earlier filing is a
- * NEW row, not an overwrite. See migrations/0005_fundamental_facts.sql's
- * header for why: this is what lets getFundamentalFactsAsOf reconstruct the
+ * NEW row, not an overwrite. See the fundamental_facts table in
+ * migrations/inputs/ for why: this is what lets getFundamentalFactsAsOf reconstruct the
  * value that was actually known at a given point in time, restatements
  * included, instead of only ever storing today's (possibly since-corrected)
  * figure.
