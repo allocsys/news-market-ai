@@ -1,10 +1,17 @@
-// LLM call log (migrations/0012_llm_calls.sql): what was sent to Gemini and
-// what came back, for the automatic pipeline and manual backtests alike.
+// LLM call log (the `llm_calls` table in migrations/state/): what was sent to
+// Gemini and what came back, for the automatic pipeline and manual backtests
+// alike.
 //
 //   WRITE  agents/utils/structured.js#callStructured -> recordLlmCall, in the
 //          `llm` Worker only.
 //   READ   `backend`'s /api/llm-calls (src/dashboard/api.js) -> the dashboard's
 //          "LLM calls" page. `dashboard` never touches D1 itself.
+//
+// M2b: this module holds NO SQL. The table lives in the state schema, so every
+// statement against it is a RunStore method (storage/run_store.js:
+// insertLlmCall / pruneLlmCalls / getRecentLlmCalls / getLlmCall), scoped by
+// the store's env_run_id. What stays here is the pure part -- constants,
+// secret redaction, clipping, row <-> object mapping -- which RunStore imports.
 //
 // LOGGING IS BEST-EFFORT, ON PURPOSE (same rule as storage/jobs.js's
 // reporter): recordLlmCall swallows and console.warns any failure, and is a
@@ -13,10 +20,17 @@
 // function safe to leave wired into tests that aren't about logging.
 //
 // CONTEXT rides on `config`, not a global: withLlmLogContext returns a copy of
-// config carrying `llmLog: { source, jobId, runId, ticker }`, which every
+// config carrying `llmLog: { source, jobId, runId, ticker, store }`, which every
 // agent already receives. Same injection point as config.fakeModel, and safe
 // under concurrency (each pipeline run gets its own object -- three analysts
-// running in parallel can't see each other's context).
+// running in parallel can't see each other's context). `store` is the RunStore
+// the entry is written through (its runId becomes the row's env_run_id); with
+// no store on the context, logging is a silent no-op.
+//
+// NOTE the two "run" ids on a row: `runId` here is the PIPELINE run (one news
+// item x ticker, groups every call of one decision) and maps to the column
+// `run_id`; the ENVIRONMENT ('live' or a backtest id) is the store's runId and
+// maps to `env_run_id`. Same split as the state schema header explains.
 
 export const LLM_SOURCES = ["pipeline", "backtest", "exit_check"];
 export const LLM_STATUSES = ["ok", "error"];
@@ -54,45 +68,45 @@ function definedOnly(obj) {
 /**
  * A copy of `config` whose `llmLog` context is extended with `ctx`
  * (undefined/null values are ignored, so a caller can't blank out an outer
- * field like `source`/`jobId` by passing nothing). Nesting composes:
+ * field like `source`/`jobId`/`store` by passing nothing). Nesting composes:
  * llm-worker sets { source: "backtest", jobId }, runPipelineForTicker later
- * adds { runId, ticker } on top and the job id survives.
+ * adds { runId, ticker, store } on top and the job id survives.
  */
 export function withLlmLogContext(config, ctx) {
   return { ...config, llmLog: { ...(config.llmLog ?? {}), ...definedOnly(ctx) } };
 }
 
-/** Inserts one row. Throws on D1 failure -- callers on the LLM path use recordLlmCall instead. */
-export async function insertLlmCall(db, entry, { maxChars = DEFAULT_MAX_CHARS, now = new Date().toISOString() } = {}) {
+/**
+ * The column values for one llm_calls INSERT (everything but env_run_id, which
+ * RunStore supplies from its own runId, and the autoincrement id): clips
+ * prompt/response to `maxChars` (keeping the true length alongside), scrubs
+ * key-shaped strings out of the error and attempt details. Pure -- RunStore
+ * owns the SQL that consumes it.
+ */
+export function buildLlmCallRow(entry, { maxChars = DEFAULT_MAX_CHARS, now = new Date().toISOString() } = {}) {
   const prompt = clip(entry.prompt, maxChars);
   const response = clip(entry.response, maxChars);
-  await db
-    .prepare(
-      `INSERT INTO llm_calls (created_at, source, job_id, run_id, ticker, label, requested_model, model_used, key_index, status, error_stage, error, duration_ms, attempts, prompt, response, prompt_chars, response_chars, truncated)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      now,
-      entry.source ?? "pipeline",
-      entry.jobId ?? null,
-      entry.runId ?? null,
-      entry.ticker ?? null,
-      entry.label ?? "unlabeled",
-      entry.requestedModel ?? null,
-      entry.modelUsed ?? null,
-      Number.isInteger(entry.keyIndex) ? entry.keyIndex : null,
-      entry.status,
-      entry.errorStage ?? null,
-      shortText(entry.error, MAX_ERROR_CHARS),
-      Number.isFinite(entry.durationMs) ? Math.round(entry.durationMs) : null,
-      Array.isArray(entry.attempts) && entry.attempts.length ? JSON.stringify(entry.attempts.map(cleanAttempt)) : null,
-      prompt.text,
-      response.text,
-      prompt.chars,
-      response.chars,
-      prompt.clipped || response.clipped ? 1 : 0
-    )
-    .run();
+  return {
+    created_at: now,
+    source: entry.source ?? "pipeline",
+    job_id: entry.jobId ?? null,
+    run_id: entry.runId ?? null,
+    ticker: entry.ticker ?? null,
+    label: entry.label ?? "unlabeled",
+    requested_model: entry.requestedModel ?? null,
+    model_used: entry.modelUsed ?? null,
+    key_index: Number.isInteger(entry.keyIndex) ? entry.keyIndex : null,
+    status: entry.status,
+    error_stage: entry.errorStage ?? null,
+    error: shortText(entry.error, MAX_ERROR_CHARS),
+    duration_ms: Number.isFinite(entry.durationMs) ? Math.round(entry.durationMs) : null,
+    attempts: Array.isArray(entry.attempts) && entry.attempts.length ? JSON.stringify(entry.attempts.map(cleanAttempt)) : null,
+    prompt: prompt.text,
+    response: response.text,
+    prompt_chars: prompt.chars,
+    response_chars: response.chars,
+    truncated: prompt.clipped || response.clipped ? 1 : 0,
+  };
 }
 
 function cleanAttempt(a) {
@@ -101,16 +115,16 @@ function cleanAttempt(a) {
 
 /**
  * The call-site entry point: merges the config's llmLog context into `entry`
- * and writes it, or does nothing. `config.llmLogEnabled` must be exactly true
- * (config.js's loadConfig sets it, defaulting on), so a hand-built config in a
- * test that never mentions logging stays silent.
+ * and writes it through `config.llmLog.store`, or does nothing.
+ * `config.llmLogEnabled` must be exactly true (config.js's loadConfig sets it,
+ * defaulting on) AND a store must be on the context, so a hand-built config in
+ * a test that never mentions logging stays silent.
  */
-export async function recordLlmCall(env, config, entry) {
-  if (config?.llmLogEnabled !== true || !env?.DB) return;
-  const ctx = config.llmLog ?? {};
+export async function recordLlmCall(config, entry) {
+  const ctx = config?.llmLog ?? {};
+  if (config?.llmLogEnabled !== true || typeof ctx.store?.insertLlmCall !== "function") return;
   try {
-    await insertLlmCall(
-      env.DB,
+    await ctx.store.insertLlmCall(
       { source: ctx.source ?? "pipeline", jobId: ctx.jobId, runId: ctx.runId, ...entry, ticker: entry.ticker ?? ctx.ticker },
       { maxChars: config.llmLogMaxChars || DEFAULT_MAX_CHARS }
     );
@@ -119,17 +133,8 @@ export async function recordLlmCall(env, config, entry) {
   }
 }
 
-/** Deletes rows older than `days`. Returns nothing meaningful; throws on D1 failure. */
-export async function pruneLlmCalls(db, { days, now = Date.now() }) {
-  const cutoff = new Date(now - days * 24 * 3600 * 1000).toISOString();
-  await db.prepare(`DELETE FROM llm_calls WHERE created_at < ?`).bind(cutoff).run();
-}
-
-const LIST_COLUMNS = `id, created_at, source, job_id, run_id, ticker, label, requested_model, model_used, key_index, status, error_stage, error,
-  duration_ms, prompt_chars, response_chars, truncated,
-  substr(prompt, 1, ${PREVIEW_CHARS}) AS prompt_preview, substr(response, 1, ${PREVIEW_CHARS}) AS response_preview`;
-
-function rowToSummary(r) {
+/** An llm_calls row (list shape: prompt_preview/response_preview instead of full text) as the API object. */
+export function llmCallSummaryFromRow(r) {
   return {
     id: r.id,
     createdAt: r.created_at,
@@ -162,39 +167,10 @@ function parseJsonOrNull(text) {
   }
 }
 
-/**
- * Newest-first page of calls, with only a short preview of each prompt/response
- * (the full text can be ~60K chars per row -- the list must not load it; see
- * getLlmCall). Filters are all optional and AND-ed. Keyset pagination on id:
- * pass the previous page's `nextBeforeId` as `beforeId` for the next page.
- * Fetches limit+1 rows to know whether another page exists.
- */
-export async function getRecentLlmCalls(db, { limit = 50, source, status, ticker, jobId, runId, beforeId } = {}) {
-  const where = [];
-  const args = [];
-  if (source) { where.push("source = ?"); args.push(source); }
-  if (status) { where.push("status = ?"); args.push(status); }
-  if (ticker) { where.push("ticker = ?"); args.push(ticker); }
-  if (jobId) { where.push("job_id = ?"); args.push(jobId); }
-  if (runId) { where.push("run_id = ?"); args.push(runId); }
-  if (beforeId) { where.push("id < ?"); args.push(beforeId); }
-
-  const { results } = await db
-    .prepare(`SELECT ${LIST_COLUMNS} FROM llm_calls ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`)
-    .bind(...args, limit + 1)
-    .all();
-
-  const hasMore = results.length > limit;
-  const page = hasMore ? results.slice(0, limit) : results;
-  return { calls: page.map(rowToSummary), nextBeforeId: hasMore ? page[page.length - 1].id : null };
-}
-
-/** One call in full (complete prompt + response + cascade attempts), or null. */
-export async function getLlmCall(db, id) {
-  const row = await db.prepare(`SELECT * FROM llm_calls WHERE id = ?`).bind(id).first();
-  if (!row) return null;
+/** One llm_calls row in full (complete prompt + response + cascade attempts) as the API object. */
+export function llmCallFromRow(row) {
   return {
-    ...rowToSummary({ ...row, prompt_preview: "", response_preview: "" }),
+    ...llmCallSummaryFromRow({ ...row, prompt_preview: "", response_preview: "" }),
     prompt: row.prompt ?? "",
     response: row.response ?? null,
     attempts: parseJsonOrNull(row.attempts) ?? [],

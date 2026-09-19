@@ -23,6 +23,7 @@
 import { getPriceBarsAsOf } from "../storage/inputs_view.js";
 import { evaluateExit } from "../agents/risk_mgmt/exit.js";
 import { settlePositionOutcome } from "./settle.js";
+import { withLlmLogContext } from "../storage/llm_calls.js";
 
 /**
  * `ctx` is `{ inputs, store }`: `inputs` is an inputs-DB handle (read-only is
@@ -36,6 +37,9 @@ import { settlePositionOutcome } from "./settle.js";
  * function doing its own logging, same separation as runScheduledIngestion.
  */
 export async function checkOpenPositionExits(env, config, { inputs, store }, { asOf }) {
+  // The reflection at a position close is an LLM call; route its log row to
+  // this store's environment (llm_calls.env_run_id), same as the pipeline does.
+  config = withLlmLogContext(config, { store });
   const openPositions = await store.getOpenPositionsAsOf({ asOf });
   const closed = [];
 

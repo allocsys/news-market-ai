@@ -52,8 +52,10 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
   // reflection when an old position is replaced below) with its runId/ticker
   // for the dashboard's LLM-call log. `source` is left as whatever the caller
   // set -- the llm Worker marks a backtest run "backtest" (+ its job id) before
-  // it gets here -- and only defaults to "pipeline" for the live path.
-  config = withLlmLogContext(config, { source: config.llmLog?.source ?? "pipeline", runId: pipelineRunId, ticker });
+  // it gets here -- and only defaults to "pipeline" for the live path. `store`
+  // rides along so callStructured's log write lands in this environment's
+  // llm_calls (env_run_id = store.runId).
+  config = withLlmLogContext(config, { source: config.llmLog?.source ?? "pipeline", runId: pipelineRunId, ticker, store });
   const resume = await resumeFrom(store, { pipelineRunId, ticker });
   let stage = resume.stage;
   const state = resume.state ?? {};

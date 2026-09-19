@@ -1,6 +1,7 @@
 // RunStore(db, runId) is the ONLY code allowed to run SQL against the state
 // tables (migrations/state/) -- positions, trade_decisions, decision_memory,
-// pipeline_checkpoints (llm_calls and job_progress follow in M2b). See plan.md "Design:
+// pipeline_checkpoints, llm_calls, job_progress (the last two moved here in M2b;
+// storage/llm_calls.js and storage/jobs.js keep only their pure helpers). See plan.md "Design:
 // environments": every method here filters on its own `runId`, and every
 // read requires an explicit `asOf` the same way storage/d1.js's readers do
 // (LookaheadViolationError on a missing one) -- this class is a run_id-
@@ -14,6 +15,24 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 import { MAX_PORTFOLIO_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
+import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
+import {
+  ACTIVE_JOB_MAX_IDLE_MS,
+  MAX_DETAIL_LENGTH,
+  MAX_ERROR_LENGTH,
+  clampPercent,
+  jobFromRow,
+  nonNegativeInt,
+  nowIso,
+  toJsonOrNull,
+  truncate,
+} from "./jobs.js";
+
+const LLM_LIST_COLUMNS = `id, created_at, source, job_id, run_id, ticker, label, requested_model, model_used, key_index, status, error_stage, error,
+  duration_ms, prompt_chars, response_chars, truncated,
+  substr(prompt, 1, ${PREVIEW_CHARS}) AS prompt_preview, substr(response, 1, ${PREVIEW_CHARS}) AS response_preview`;
+
+const JOB_COLUMNS = "id, type, status, phase, percent, done, total, detail, params, result, error, created_at, started_at, updated_at, finished_at";
 
 function requireAsOf(fnName, asOf) {
   if (!asOf) {
@@ -435,6 +454,157 @@ export class RunStore {
 
     if (!row) return null;
     return { stage: row.stage, state: row.state ? JSON.parse(row.state) : null, updatedAt: row.updated_at };
+  }
+
+  // -------------------------------------------------------------------
+  // LLM call log (M2b) -- the state schema's `llm_calls`. Scoped by
+  // `env_run_id` (this.runId); the table's own `run_id` column is the
+  // PIPELINE run and is only ever a filter/payload here, never the scope.
+  // Best-effort policy lives in storage/llm_calls.js#recordLlmCall (the
+  // call-site wrapper) -- these methods throw on D1 failure.
+  // -------------------------------------------------------------------
+
+  /** Inserts one row for this environment. `entry` is the camelCase shape recordLlmCall builds; see llm_calls.js#buildLlmCallRow for clipping/redaction. */
+  async insertLlmCall(entry, { maxChars = DEFAULT_MAX_CHARS, now = new Date().toISOString() } = {}) {
+    const r = buildLlmCallRow(entry, { maxChars, now });
+    await this.db
+      .prepare(
+        `INSERT INTO llm_calls (env_run_id, created_at, source, job_id, run_id, ticker, label, requested_model, model_used, key_index, status, error_stage, error, duration_ms, attempts, prompt, response, prompt_chars, response_chars, truncated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        this.runId, r.created_at, r.source, r.job_id, r.run_id, r.ticker, r.label, r.requested_model, r.model_used, r.key_index,
+        r.status, r.error_stage, r.error, r.duration_ms, r.attempts, r.prompt, r.response, r.prompt_chars, r.response_chars, r.truncated
+      )
+      .run();
+  }
+
+  /** Deletes THIS environment's rows older than `days`. Throws on D1 failure. */
+  async pruneLlmCalls({ days, now = Date.now() }) {
+    const cutoff = new Date(now - days * 24 * 3600 * 1000).toISOString();
+    await this.db.prepare(`DELETE FROM llm_calls WHERE env_run_id = ? AND created_at < ?`).bind(this.runId, cutoff).run();
+  }
+
+  /**
+   * Newest-first page of this environment's calls, with only a short preview
+   * of each prompt/response (the full text can be ~60K chars per row -- the
+   * list must not load it; see getLlmCall). Filters are all optional and
+   * AND-ed; `runId` here filters the PIPELINE run column. Keyset pagination on
+   * id: pass the previous page's `nextBeforeId` as `beforeId`. Fetches
+   * limit+1 rows to know whether another page exists.
+   */
+  async getRecentLlmCalls({ limit = 50, source, status, ticker, jobId, runId, beforeId } = {}) {
+    const where = ["env_run_id = ?"];
+    const args = [this.runId];
+    if (source) { where.push("source = ?"); args.push(source); }
+    if (status) { where.push("status = ?"); args.push(status); }
+    if (ticker) { where.push("ticker = ?"); args.push(ticker); }
+    if (jobId) { where.push("job_id = ?"); args.push(jobId); }
+    if (runId) { where.push("run_id = ?"); args.push(runId); }
+    if (beforeId) { where.push("id < ?"); args.push(beforeId); }
+
+    const { results } = await this.db
+      .prepare(`SELECT ${LLM_LIST_COLUMNS} FROM llm_calls WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`)
+      .bind(...args, limit + 1)
+      .all();
+
+    const hasMore = results.length > limit;
+    const page = hasMore ? results.slice(0, limit) : results;
+    return { calls: page.map(llmCallSummaryFromRow), nextBeforeId: hasMore ? page[page.length - 1].id : null };
+  }
+
+  /** One call in full (complete prompt + response + cascade attempts), or null. Scoped: another environment's id is "not found". */
+  async getLlmCall(id) {
+    const row = await this.db.prepare(`SELECT * FROM llm_calls WHERE env_run_id = ? AND id = ?`).bind(this.runId, id).first();
+    return row ? llmCallFromRow(row) : null;
+  }
+
+  // -------------------------------------------------------------------
+  // Job progress (M2b) -- the state schema's `job_progress`, PK
+  // (run_id, id), run_id = this.runId. Callers go through
+  // storage/jobs.js#createJobReporter (best-effort, throttled), never these
+  // directly in a per-item loop.
+  // -------------------------------------------------------------------
+
+  /** Inserts the 'queued' row when a job is enqueued. No-op if the id already exists. */
+  async insertQueuedJob({ id, type, params = null, now = nowIso() }) {
+    await this.db
+      .prepare(
+        `INSERT INTO job_progress (run_id, id, type, status, percent, params, created_at, updated_at)
+         VALUES (?, ?, ?, 'queued', 0, ?, ?, ?)
+         ON CONFLICT(run_id, id) DO NOTHING`
+      )
+      .bind(this.runId, id, type, toJsonOrNull(params), now, now)
+      .run();
+  }
+
+  /**
+   * Marks a job 'running' when its consumer picks it up. An upsert, so it also
+   * works when the 'queued' row was never written (best-effort insert failed)
+   * and when a crashed message is redelivered (started_at keeps its first value).
+   */
+  async markJobRunning({ id, type, params = null, now = nowIso() }) {
+    await this.db
+      .prepare(
+        `INSERT INTO job_progress (run_id, id, type, status, percent, params, created_at, started_at, updated_at)
+         VALUES (?, ?, ?, 'running', 0, ?, ?, ?, ?)
+         ON CONFLICT(run_id, id) DO UPDATE SET status = 'running', started_at = COALESCE(job_progress.started_at, excluded.started_at), updated_at = excluded.updated_at`
+      )
+      .bind(this.runId, id, type, toJsonOrNull(params), now, now, now)
+      .run();
+  }
+
+  /** Progress tick. Guarded on status so a late tick can never overwrite a finished job. */
+  async updateJobProgress({ id, phase = null, percent = 0, done = 0, total = 0, detail = null, now = nowIso() }) {
+    await this.db
+      .prepare(
+        `UPDATE job_progress SET status = 'running', phase = ?, percent = ?, done = ?, total = ?, detail = ?, updated_at = ?
+         WHERE run_id = ? AND id = ? AND status IN ('queued', 'running')`
+      )
+      .bind(phase, clampPercent(percent), nonNegativeInt(done), nonNegativeInt(total), truncate(detail, MAX_DETAIL_LENGTH), now, this.runId, id)
+      .run();
+  }
+
+  async completeJob({ id, result = null, detail = null, now = nowIso() }) {
+    await this.db
+      .prepare(`UPDATE job_progress SET status = 'complete', percent = 100, phase = 'done', result = ?, detail = ?, updated_at = ?, finished_at = ? WHERE run_id = ? AND id = ?`)
+      .bind(toJsonOrNull(result), truncate(detail, MAX_DETAIL_LENGTH), now, now, this.runId, id)
+      .run();
+  }
+
+  /** Keeps the last reported percent/phase, so a failed job shows how far it got. */
+  async failJob({ id, error, detail = null, now = nowIso() }) {
+    await this.db
+      .prepare(`UPDATE job_progress SET status = 'failed', error = ?, detail = ?, updated_at = ?, finished_at = ? WHERE run_id = ? AND id = ?`)
+      .bind(truncate(error ?? "unknown error", MAX_ERROR_LENGTH), truncate(detail, MAX_DETAIL_LENGTH), now, now, this.runId, id)
+      .run();
+  }
+
+  /** One job, with JSON columns parsed and keys camelCased for the API. Null if there's no such id in this run. */
+  async getJob(id) {
+    const row = await this.db.prepare(`SELECT ${JOB_COLUMNS} FROM job_progress WHERE run_id = ? AND id = ?`).bind(this.runId, id).first();
+    return row ? jobFromRow(row) : null;
+  }
+
+  /**
+   * The most recently created job of `type` in this run that is still in
+   * flight (status 'queued' or 'running') and has ticked within `maxIdleMs`
+   * (a consumer killed by an uncatchable isolate kill never writes 'failed',
+   * so without the cutoff every such orphan would show a phantom "in
+   * progress" bar forever). Null if none. `now` is injectable so the cutoff
+   * is testable without real waiting.
+   */
+  async getActiveJob(type, { maxIdleMs = ACTIVE_JOB_MAX_IDLE_MS, now = nowIso() } = {}) {
+    const cutoff = new Date(Date.parse(now) - maxIdleMs).toISOString();
+    const row = await this.db
+      .prepare(
+        `SELECT ${JOB_COLUMNS} FROM job_progress
+         WHERE run_id = ? AND type = ? AND status IN ('queued', 'running') AND updated_at >= ?
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .bind(this.runId, type, cutoff)
+      .first();
+    return row ? jobFromRow(row) : null;
   }
 
   // -------------------------------------------------------------------
