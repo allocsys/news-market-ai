@@ -31,21 +31,49 @@ function batchOf(...messages) {
   return { messages };
 }
 
-/** Records every message handed to send/sendBatch without actually queueing anything -- stands in for a Cloudflare Queue binding. */
+/**
+ * Records every message handed to send/sendBatch without actually queueing anything -- stands in for a Cloudflare Queue binding.
+ * Enforces the same 100-message sendBatch cap the real one does (live incident 2026-09-19: `batch message count of 163 exceeds limit of 100`), and records each batch's size in `batchSizes`. `failBatchCalls` (0-based call indexes) makes those calls throw, to simulate a queue outage mid-send.
+ */
 class FakeQueueBinding {
-  constructor() {
+  constructor({ failBatchCalls = [] } = {}) {
     this.sent = [];
+    this.batchSizes = [];
+    this.failBatchCalls = new Set(failBatchCalls);
+    this.batchCalls = 0;
   }
   async send(body) {
     this.sent.push(body);
   }
   async sendBatch(messages) {
+    const call = this.batchCalls++;
+    if (messages.length > 100) throw new Error(`batch message count of ${messages.length} exceeds limit of 100 (10206)`);
+    if (this.failBatchCalls.has(call)) throw new Error("simulated queue outage");
+    this.batchSizes.push(messages.length);
     this.sent.push(...messages.map((m) => m.body));
   }
 }
 
 function mockFinnhubJson() {
   return [{ url: "https://finnhub.example.com/story", datetime: 1757941800, headline: "Story about Acme", summary: "A brief summary." }];
+}
+
+/** `count` distinct Finnhub articles (ids differ by url + datetime), like the trailing window /company-news really returns. */
+function finnhubArticles(count, { offset = 0 } = {}) {
+  return Array.from({ length: count }, (_, i) => ({
+    url: `https://finnhub.example.com/story-${offset + i}`,
+    datetime: 1757941800 + offset + i,
+    headline: `Story ${offset + i} about Acme`,
+    summary: "A brief summary.",
+  }));
+}
+
+/** Finnhub returns `articles()` (re-evaluated per request, so a test can change it between ticks); every other vendor call gets an empty object, which the adapters log and skip. */
+function mockVendors(t, articles) {
+  t.mock.method(global, "fetch", async (url) => {
+    if (String(url).includes("finnhub")) return { ok: true, status: 200, json: async () => articles() };
+    return { ok: true, status: 200, json: async () => ({}) };
+  });
 }
 
 /** Minimal in-memory fake covering news_items/news_item_tickers (insertNewsItem), price_bars (insertPriceBar), and fundamental_facts (insertFundamentalFacts, via db.batch) -- enough for ingestTickerData/ingestFeedNews to run without throwing, not a general D1 emulator (same convention as test/ingestion_wiring.test.js's FakeDb). */
@@ -55,6 +83,7 @@ class FakeIngestDb {
     this.tickers = [];
     this.priceBars = [];
   }
+  // Mirrors D1's `meta.changes` for the two ON CONFLICT DO NOTHING inserts insertNewsItem reads it from: 1 for a new row, 0 for a conflict.
   async batch(statements) {
     const results = [];
     for (const stmt of statements) results.push(await stmt.run());
@@ -66,9 +95,15 @@ class FakeIngestDb {
       bind(...args) {
         return {
           async run() {
-            if (/INSERT INTO news_items/.test(sql)) db.newsItems.push({ id: args[0] });
-            else if (/INSERT INTO news_item_tickers/.test(sql)) db.tickers.push({ newsItemId: args[0], ticker: args[1] });
-            else if (/INSERT INTO news_item_revisions/.test(sql)) return; // exercised, not asserted on
+            if (/INSERT INTO news_items/.test(sql)) {
+              if (db.newsItems.some((n) => n.id === args[0])) return { meta: { changes: 0 } };
+              db.newsItems.push({ id: args[0] });
+              return { meta: { changes: 1 } };
+            } else if (/INSERT INTO news_item_tickers/.test(sql)) {
+              if (db.tickers.some((t) => t.newsItemId === args[0] && t.ticker === args[1])) return { meta: { changes: 0 } };
+              db.tickers.push({ newsItemId: args[0], ticker: args[1] });
+              return { meta: { changes: 1 } };
+            } else if (/INSERT INTO news_item_revisions/.test(sql)) return; // exercised, not asserted on
             else if (/INSERT INTO price_bars/.test(sql)) db.priceBars.push({ ticker: args[0] });
             else if (/INSERT INTO fundamental_facts/.test(sql)) return; // exercised, not asserted on
             else throw new Error(`FakeIngestDb: unsupported run() query: ${sql}`);
@@ -161,11 +196,13 @@ test("queue() ingest_feeds fans ANALYZE messages out per (item, ticker) pair, si
   const message = new FakeMessage({ type: "ingest_feeds", asOf: "2026-09-18T00:00:00.000Z" });
   await worker.queue(batchOf(message), env);
 
-  // Two feed entries (AAPL-hinted, MSFT-hinted) with distinct URLs share
-  // the exact same mocked XML across both fetch calls, so each becomes its
-  // own inserted item -- one ANALYZE message per item, each hinted to its
-  // own feed's ticker.
-  assert.equal(db.newsItems.length, 2);
+  // Two feed entries (AAPL-hinted, MSFT-hinted) share the exact same mocked
+  // XML across both fetch calls, and a news item's id is derived from url +
+  // publishedAt only -- so they are ONE stored article (as real D1 would
+  // have it) carrying two ticker associations. Each association is new, so
+  // each still gets its own ANALYZE message, hinted to its own feed's ticker.
+  assert.equal(db.newsItems.length, 1);
+  assert.equal(db.tickers.length, 2);
   assert.equal(env.ANALYZE.sent.length, 2);
   assert.deepEqual(env.ANALYZE.sent.map((m) => m.ticker).sort(), ["AAPL", "MSFT"]);
   assert.equal(message.acked, true);
@@ -206,4 +243,106 @@ test("queue() retries (does not ack) on a genuine handler crash -- e.g. a malfor
   assert.equal(message.acked, false);
   assert.equal(message.retried, true);
   assert.ok(errorLogs.some(([msg]) => msg.includes("crashed unexpectedly")));
+});
+
+// ---------------------------------------------------------------------------
+// queue(): new-items-only enqueue + sendBatch limits (live incident 2026-09-19:
+// `batch message count of 163 exceeds limit of 100 (10206)` on every tick, so
+// nothing ever reached ANALYZE)
+// ---------------------------------------------------------------------------
+
+test("queue() ingest_ticker sends more than 100 new items to ANALYZE in chunks of at most 100, instead of failing the whole send", async (t) => {
+  const db = new FakeIngestDb();
+  const env = baseEnv({ INPUTS_DB: db });
+  mockVendors(t, () => finnhubArticles(163));
+
+  const message = new FakeMessage({ type: "ingest_ticker", ticker: "AAPL", asOf: "2026-09-18T00:00:00.000Z" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(db.newsItems.length, 163);
+  assert.equal(env.ANALYZE.sent.length, 163);
+  assert.deepEqual(env.ANALYZE.batchSizes, [100, 63]);
+  assert.equal(message.acked, true);
+  assert.equal(message.retried, false);
+});
+
+test("queue() ingest_ticker enqueues nothing for items it already stored on an earlier tick (Finnhub's trailing window repeats them)", async (t) => {
+  const db = new FakeIngestDb();
+  const env = baseEnv({ INPUTS_DB: db });
+  mockVendors(t, () => finnhubArticles(163));
+  const logs = [];
+  t.mock.method(console, "log", (...args) => logs.push(args));
+
+  const tick = () => worker.queue(batchOf(new FakeMessage({ type: "ingest_ticker", ticker: "AAPL", asOf: "2026-09-18T00:00:00.000Z" })), env);
+  await tick();
+  assert.equal(env.ANALYZE.sent.length, 163);
+
+  await tick(); // identical 163-item window
+  assert.equal(env.ANALYZE.sent.length, 163, "second tick must not re-enqueue the same items");
+  assert.equal(env.ANALYZE.batchCalls, 2, "no sendBatch call at all when nothing is new");
+  const [, second] = logs.filter(([msg]) => msg === "ingest_ticker job completed");
+  assert.equal(second[1].fetched, 163);
+  assert.equal(second[1].freshItems, 0);
+  assert.equal(second[1].analyzeMessages, 0);
+
+  // ...and a tick whose window slid forward by 3 articles enqueues exactly those 3.
+  mockVendors(t, () => finnhubArticles(163, { offset: 3 }));
+  await tick();
+  assert.equal(env.ANALYZE.sent.length, 166);
+  assert.deepEqual(env.ANALYZE.sent.slice(163).map((m) => m.newsItem.title).sort(), ["Story 163 about Acme", "Story 164 about Acme", "Story 165 about Acme"]);
+});
+
+test("queue() ingest_ticker still analyzes an already-stored article for a second ticker (the same article surfacing under another ticker's query)", async (t) => {
+  const db = new FakeIngestDb();
+  const env = baseEnv({ INPUTS_DB: db });
+  mockVendors(t, () => finnhubArticles(1));
+
+  const tick = (ticker) => worker.queue(batchOf(new FakeMessage({ type: "ingest_ticker", ticker, asOf: "2026-09-18T00:00:00.000Z" })), env);
+  await tick("AAPL");
+  await tick("MSFT"); // same article id, new (article, MSFT) association
+  await tick("MSFT"); // nothing new any more
+  await tick("AAPL");
+
+  assert.equal(db.newsItems.length, 1);
+  assert.deepEqual(env.ANALYZE.sent.map((m) => m.ticker), ["AAPL", "MSFT"]);
+});
+
+test("queue() ingest_ticker keeps sending the remaining chunks when one sendBatch fails, logs what was lost, and still acks", async (t) => {
+  const db = new FakeIngestDb();
+  const env = baseEnv({ INPUTS_DB: db, ANALYZE: new FakeQueueBinding({ failBatchCalls: [0] }) });
+  mockVendors(t, () => finnhubArticles(163));
+  const errorLogs = [];
+  t.mock.method(console, "error", (...args) => errorLogs.push(args));
+
+  const message = new FakeMessage({ type: "ingest_ticker", ticker: "AAPL", asOf: "2026-09-18T00:00:00.000Z" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(env.ANALYZE.sent.length, 63, "the second chunk still went out");
+  const failure = errorLogs.find(([msg]) => msg.includes("could not enqueue every ANALYZE message"));
+  assert.ok(failure, "a partial enqueue failure must be logged, not swallowed");
+  assert.equal(failure[1].ticker, "AAPL");
+  assert.equal(failure[1].lost, 100);
+  assert.equal(failure[1].failures[0].message, "simulated queue outage");
+  assert.equal(message.acked, true); // re-running would see the items as already stored and enqueue nothing, so a retry is pointless
+  assert.equal(message.retried, false);
+});
+
+test("queue() ingest_feeds enqueues an already-stored article only for the ticker it newly gained", async (t) => {
+  const db = new FakeIngestDb();
+  const feedXml = `<?xml version="1.0"?><rss><channel><item>
+      <title>Story mentioning the ticker</title>
+      <link>https://news.example.com/story</link>
+      <pubDate>Tue, 15 Sep 2026 14:30:00 GMT</pubDate>
+      <description>Body text.</description>
+    </item></channel></rss>`;
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, text: async () => feedXml }));
+  const tick = (feeds) => worker.queue(batchOf(new FakeMessage({ type: "ingest_feeds", asOf: "2026-09-18T00:00:00.000Z" })), baseEnv({ INPUTS_DB: db, ANALYZE: analyze, RSS_FEED_URLS: feeds }));
+  const analyze = new FakeQueueBinding();
+
+  await tick("AAPL|https://fake.test/feed.xml");
+  await tick("AAPL|https://fake.test/feed.xml"); // same feed again: nothing new
+  assert.deepEqual(analyze.sent.map((m) => m.ticker), ["AAPL"]);
+
+  await tick("AAPL|https://fake.test/feed.xml,MSFT|https://fake.test/feed.xml"); // a second feed carries the same article for MSFT
+  assert.deepEqual(analyze.sent.map((m) => m.ticker), ["AAPL", "MSFT"]);
 });
