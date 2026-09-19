@@ -60,6 +60,14 @@ export function parseEnvParam(searchParams) {
   return BACKTEST_ID_RE.test(raw) ? raw : "live";
 }
 
+/** Sections whose data is scoped by `?env=` (the environment selector shows on these, and the nav keeps the chosen env across them). Charts/health/backfill/backtest/more stay env-unaware: price bars and ingestion health are shared market data, and the last three are about launching/listing runs, not viewing one. */
+export const ENV_SECTIONS = ["snapshot", "activity", "decisions", "positions", "pipeline", "llm"];
+
+/** "?env=<id>" for a non-live environment, "" for live -- for links that must carry the selected environment along. `env` is already vetted by parseEnvParam/resolveEnv (BACKTEST_ID_RE), so nothing here needs more than encoding. */
+export function envSuffix(env) {
+  return env && env !== "live" ? `?env=${encodeURIComponent(env)}` : "";
+}
+
 export function parseDashboardParams(searchParams) {
   const sp = searchParams ?? new URLSearchParams();
   return {
@@ -120,7 +128,13 @@ export function llmQuery(params, overrides = {}) {
 export function buildQuery(params, overrides = {}) {
   const merged = { ...params, ...overrides };
   const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(merged)) sp.set(k, String(v));
+  for (const [k, v] of Object.entries(merged)) {
+    // A non-live `env` rides along on every filter link so changing a filter
+    // never silently drops back to live; the live default is left out so
+    // default links stay clean.
+    if (k === "env" && (v === "live" || v === undefined || v === null || v === "")) continue;
+    sp.set(k, String(v));
+  }
   return `?${sp.toString()}`;
 }
 

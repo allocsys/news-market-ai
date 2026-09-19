@@ -6,7 +6,7 @@
 
 import {
   escapeHtml, fmtTime, errorState, statusBadge,
-  LLM_SOURCE_OPTIONS, LLM_STATUS_OPTIONS, LLM_LIMIT_OPTIONS, llmQuery,
+  LLM_SOURCE_OPTIONS, LLM_STATUS_OPTIONS, LLM_LIMIT_OPTIONS, llmQuery, envSuffix,
 } from "../helpers.js";
 
 const SOURCE_LABEL = { pipeline: "live pipeline", backtest: "backtest", exit_check: "exit check" };
@@ -51,8 +51,8 @@ function llmPills(label, options, current, paramName, params) {
 }
 
 function hiddenFilterInputs(params) {
-  const keep = { llmSource: params.llmSource, llmStatus: params.llmStatus, llmLimit: params.llmLimit, llmJob: params.llmJob, llmRun: params.llmRun };
-  const defaults = { llmSource: "all", llmStatus: "all", llmLimit: 50 };
+  const keep = { llmSource: params.llmSource, llmStatus: params.llmStatus, llmLimit: params.llmLimit, llmJob: params.llmJob, llmRun: params.llmRun, env: params.env };
+  const defaults = { llmSource: "all", llmStatus: "all", llmLimit: 50, env: "live" };
   return Object.entries(keep)
     .filter(([key, value]) => value !== "" && value !== defaults[key])
     .map(([key, value]) => `<input type="hidden" name="${key}" value="${escapeHtml(value)}">`)
@@ -67,13 +67,13 @@ function scopeNote(params) {
   return `<p class="note">Showing only calls for ${chips.join(" and ")}. <a href="/dashboard/llm${llmQuery(params, { llmJob: "", llmRun: "" })}">Show all calls</a></p>`;
 }
 
-function callsTable(calls) {
+function callsTable(calls, env) {
   if (calls.length === 0) {
     return `<p class="empty">No LLM calls match these filters. Calls are logged as the pipeline and backtests run; rows older than the retention window (14 days by default) are pruned.</p>`;
   }
   const rows = calls
     .map((c) => {
-      const href = `/dashboard/llm/${c.id}`;
+      const href = `/dashboard/llm/${c.id}${envSuffix(env)}`;
       const responseCell = c.status === "error" && !c.responsePreview
         ? `<span style="color:var(--color-danger-text)">${escapeHtml(c.error ?? "failed")}</span>`
         : preview(c.responsePreview);
@@ -122,7 +122,7 @@ export function renderLlmView({ calls, nextBeforeId, params, error }) {
     <p class="note">Every prompt sent to Gemini and the raw text that came back, newest first &mdash; from the live pipeline, manual backtests and exit-check reflections. Failed calls (Gemini errors, unparseable JSON, schema mismatches) are logged too. A call that reused a checkpoint on retry isn't repeated here.</p>
     ${filterBar}
     ${scopeNote(params)}
-    ${error ? errorState(error) : `${callsTable(calls)}${pager(params, nextBeforeId)}`}
+    ${error ? errorState(error) : `${callsTable(calls, params.env)}${pager(params, nextBeforeId)}`}
   </section>`;
 }
 
@@ -175,14 +175,14 @@ function textPanel(title, text, { note = "" } = {}) {
   </div>`;
 }
 
-export function renderLlmCallView({ call, error }) {
-  const back = `<p class="note"><a href="/dashboard/llm">&larr; All LLM calls</a></p>`;
+export function renderLlmCallView({ call, error, env = "live" }) {
+  const back = `<p class="note"><a href="/dashboard/llm${envSuffix(env)}">&larr; All LLM calls</a></p>`;
   if (error) return `<section id="llm-call"><h2>LLM call</h2>${back}${errorState(error)}</section>`;
   if (!call) return `<section id="llm-call"><h2>LLM call</h2>${back}<p class="empty">Call not found &mdash; it may have been pruned by the retention window.</p></section>`;
 
   const scopeLinks = [
-    call.runId ? `<a href="/dashboard/llm${llmQuery({}, { llmRun: call.runId })}">All calls in this run</a>` : "",
-    call.jobId ? `<a href="/dashboard/llm${llmQuery({}, { llmJob: call.jobId })}">All calls in this backtest</a>` : "",
+    call.runId ? `<a href="/dashboard/llm${llmQuery({ env }, { llmRun: call.runId })}">All calls in this run</a>` : "",
+    call.jobId ? `<a href="/dashboard/llm${llmQuery({ env }, { llmJob: call.jobId })}">All calls in this backtest</a>` : "",
   ].filter(Boolean).join(" &middot; ");
 
   const meta = [

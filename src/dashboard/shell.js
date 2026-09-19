@@ -11,7 +11,7 @@
 //     no heavy shadows (Cloudflare Worker HTML stays print-friendly).
 //   - All animations honor prefers-reduced-motion.
 
-import { escapeHtml, fmtTime } from "./helpers.js";
+import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix } from "./helpers.js";
 
 // ---- Inline SVG icon set (Lucide-style stroke icons, 20x20, currentColor) ----
 // Stored as raw <svg> strings so they can be dropped into nav links, badges,
@@ -867,12 +867,17 @@ export const NAV_SECTIONS = [
   ["more", "More", "MR"],
 ];
 
-function renderNav(activeSection) {
+// `env` (the resolved environment, "live" by default) is appended to the links
+// of env-aware sections only, so a chosen backtest survives flipping between
+// snapshot/decisions/positions/... without the operator re-picking it.
+const navHref = (id, env) => `/dashboard/${id}${ENV_SECTIONS.includes(id) ? envSuffix(env) : ""}`;
+
+function renderNav(activeSection, env) {
   const links = NAV_SECTIONS.map(([id, label, abbr], i) => {
     const n = String(i + 1).padStart(2, "0");
     const active = activeSection === id;
     const icon = ICONS[id] ?? "";
-    return `<a href="/dashboard/${id}"${active ? ' class="active"' : ""} data-label="${escapeHtml(label)}"><span class="nav-index">${n}</span><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span></a>`;
+    return `<a href="${escapeHtml(navHref(id, env))}"${active ? ' class="active"' : ""} data-label="${escapeHtml(label)}"><span class="nav-index">${n}</span><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span></a>`;
   }).join("");
   return `<nav class="section-nav">${links}</nav>`;
 }
@@ -890,7 +895,7 @@ const MOBILE_NAV_SECTIONS = [
   ["more", "More", "10"],
 ];
 
-function renderBottomNav(activeSection) {
+function renderBottomNav(activeSection, env) {
   const moreIds = ["activity", "charts", "llm", "backfill", "backtest", "more"];
   const links = MOBILE_NAV_SECTIONS.map(([id, label, n]) => {
     let active = activeSection === id;
@@ -898,7 +903,7 @@ function renderBottomNav(activeSection) {
       active = true;
     }
     const icon = ICONS[id] ?? "";
-    return `<a href="/dashboard/${id}"${active ? ' class="active"' : ""}><span class="nav-icon">${icon}</span><span>${escapeHtml(label)}</span></a>`;
+    return `<a href="${escapeHtml(navHref(id, env))}"${active ? ' class="active"' : ""}><span class="nav-icon">${icon}</span><span>${escapeHtml(label)}</span></a>`;
   }).join("");
   return `<nav class="bottom-nav">${links}</nav>`;
 }
@@ -924,7 +929,7 @@ function renderPageToolbar(refreshHref) {
       </div>`;
 }
 
-export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref }) {
+export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref, env = "live" }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -956,7 +961,7 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
           <span class="wordmark-sub">operations ledger</span>
         </span>
       </div>
-      ${renderNav(activeSection)}
+      ${renderNav(activeSection, env)}
       <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}</div>
     </aside>
     <div class="content">
@@ -966,7 +971,7 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
       </main>
     </div>
   </div>
-  ${renderBottomNav(activeSection)}
+  ${renderBottomNav(activeSection, env)}
 </body>
 </html>`;
 }

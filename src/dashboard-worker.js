@@ -30,7 +30,8 @@ import { renderLlmView, renderLlmCallView } from "./dashboard/views/llm.js";
 import { renderMoreView } from "./dashboard/views/more.js";
 import { renderBackfillView, renderBackfillConfirmPage } from "./dashboard/views/backfill.js";
 import { renderBacktestView, renderBacktestConfirmPage } from "./dashboard/views/backtest.js";
-import { parseDashboardParams, parseLlmParams, errorState } from "./dashboard/helpers.js";
+import { renderEnvSelector } from "./dashboard/views/env_selector.js";
+import { parseDashboardParams, parseLlmParams, parseEnvParam, envSuffix, errorState, ENV_SECTIONS } from "./dashboard/helpers.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
 
 /** Same "no partial config" gate backend used to run itself (src/index.js,
@@ -104,6 +105,24 @@ async function activeJobPanelFor(env, type) {
 }
 
 /**
+ * HTML for the environment selector (Live + recent backtests) on an env-aware
+ * page. BEST-EFFORT, same as activeJobPanelFor: if the registry lookup fails
+ * the selector still renders with just "Live" (plus the active backtest, if
+ * any) rather than the page erroring over a convenience control.
+ * `resolvedEnv`/`envError` are what the backend actually resolved, not what
+ * the URL asked for.
+ */
+async function envSelectorFor(env, { resolvedEnv, envError, url }) {
+  let runs = [];
+  try {
+    ({ backtestRuns: runs = [] } = await fetchBackendJson(env, "/api/backtest-runs"));
+  } catch (err) {
+    console.warn("dashboard env-selector run lookup failed (non-fatal)", { message: err.message });
+  }
+  return renderEnvSelector({ runs, resolvedEnv, envError, pathname: url.pathname, search: url.search });
+}
+
+/**
  * Session gate shared by every /dashboard/* route. `__disabled__` means the
  * login isn't configured at all -- distinct from `redirect: "/login"`
  * (configured, but this request has no valid session) so callers can 503
@@ -168,8 +187,12 @@ async function renderSection(request, env, config, section) {
     const parseParams = SECTION_PARAM_PARSERS[section];
     const props = parseParams ? { ...data, params: parseParams(url.searchParams) } : data;
     const activePanel = section === "backtest" ? await activeJobPanelFor(env, "backtest") : "";
-    const bodyHtml = activePanel + render(props);
-    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
+    const resolvedEnv = data.resolvedEnv ?? "live";
+    const envBar = ENV_SECTIONS.includes(section)
+      ? await envSelectorFor(env, { resolvedEnv, envError: data.envError ?? null, url })
+      : "";
+    const bodyHtml = envBar + activePanel + render(props);
+    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: resolvedEnv }));
   } catch (err) {
     // backend unreachable, or returned something unexpected -- rendered as
     // a generic panel rather than guessing at the section's own error-prop
@@ -177,7 +200,7 @@ async function renderSection(request, env, config, section) {
     // most others just `error`) and risking a render crash on a malformed prop.
     console.error(`dashboard ${section} backend fetch failed`, { message: err.message });
     const bodyHtml = `<section><h2>${section}</h2>${errorState(err.message)}</section>`;
-    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
+    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: parseEnvParam(url.searchParams) }));
   }
 }
 
@@ -187,17 +210,21 @@ async function renderLlmCall(request, env, config, id) {
   if (auth.redirect === "__disabled__") return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
   if (auth.redirect) return redirect(auth.redirect);
 
-  const shell = (bodyHtml, status = 200) =>
-    htmlResponse(renderShell({ activeSection: "llm", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }), { status });
+  // A backtest's calls are logged under its own run id, so the id alone isn't
+  // enough to find one -- the list page's `?env=` has to travel with it.
+  const callEnv = parseEnvParam(new URL(request.url).searchParams);
 
-  if (!/^\d+$/.test(id)) return shell(renderLlmCallView({ call: null }), 404);
+  const shell = (bodyHtml, status = 200) =>
+    htmlResponse(renderShell({ activeSection: "llm", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: callEnv }), { status });
+
+  if (!/^\d+$/.test(id)) return shell(renderLlmCallView({ call: null, env: callEnv }), 404);
   try {
-    const call = await fetchBackendJson(env, `/api/llm-calls/${id}`);
-    return shell(renderLlmCallView({ call }));
+    const call = await fetchBackendJson(env, `/api/llm-calls/${id}${envSuffix(callEnv)}`);
+    return shell(renderLlmCallView({ call, env: callEnv }));
   } catch (err) {
-    if (err.status === 404) return shell(renderLlmCallView({ call: null }), 404);
+    if (err.status === 404) return shell(renderLlmCallView({ call: null, env: callEnv }), 404);
     console.error("dashboard llm call backend fetch failed", { id, message: err.message });
-    return shell(renderLlmCallView({ error: err.message }), 500);
+    return shell(renderLlmCallView({ error: err.message, env: callEnv }), 500);
   }
 }
 
