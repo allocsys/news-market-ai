@@ -16,8 +16,29 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 
+/** Rows a write statement changed, per D1's `meta.changes` (0 for an `ON CONFLICT DO NOTHING` that hit a conflict). */
+function rowsChanged(result) {
+  return result?.meta?.changes ?? 0;
+}
+
+/**
+ * Idempotent insert of one normalized news item (+ its revision-1 row and its
+ * ticker associations). Returns what was actually NEW, so the ingest Worker can
+ * enqueue analysis for new material only:
+ *   - `inserted`   -- the `news_items` row did not exist before this call.
+ *   - `newTickers` -- the tickers whose `(news_item_id, ticker)` association did
+ *                     not exist before. A brand-new item has all of them; an
+ *                     already-stored item can still gain one (the same article
+ *                     surfacing under a second ticker's feed/query -- its id is
+ *                     derived from url + publishedAt only, so the two collide
+ *                     on the same row).
+ * Why this exists: Finnhub's `/company-news` returns a trailing window, so
+ * every 15-minute tick re-fetches the same ~160 items per ticker. Before this
+ * returned anything, the ingest Worker treated every fetched item as new and
+ * tried to enqueue all of them every tick.
+ */
 export async function insertNewsItem(db, item) {
-  await db
+  const itemResult = await db
     .prepare(
       `INSERT INTO news_items (id, source, url, first_published_at, ingested_at, title, body, raw)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -25,6 +46,7 @@ export async function insertNewsItem(db, item) {
     )
     .bind(item.id, item.source, item.url, item.publishedAt, item.ingestedAt, item.title, item.body, JSON.stringify(item.raw ?? null))
     .run();
+  const inserted = rowsChanged(itemResult) > 0;
 
   // revision 1 on first insert; re-ingesting the same id with different
   // content is a future concern for the adapter layer to detect and insert
@@ -38,12 +60,16 @@ export async function insertNewsItem(db, item) {
     .bind(item.id, item.publishedAt, item.ingestedAt, item.title, item.body, JSON.stringify(item.raw ?? null))
     .run();
 
+  const newTickers = [];
   for (const ticker of item.tickers) {
-    await db
+    const tickerResult = await db
       .prepare(`INSERT INTO news_item_tickers (news_item_id, ticker) VALUES (?, ?) ON CONFLICT DO NOTHING`)
       .bind(item.id, ticker)
       .run();
+    if (rowsChanged(tickerResult) > 0) newTickers.push(ticker);
   }
+
+  return { inserted, newTickers };
 }
 
 /**
