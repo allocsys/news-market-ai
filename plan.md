@@ -193,8 +193,8 @@ scoped storage layer + tests; (3) dashboard filter + delete-by-scope.
 **Until (2) ships, don't run a backtest over a window that overlaps live data.**
 
 **Proposed one-off repair (NOT run; needs owner approval):** delete the 4
-backtest-opened positions, their 3 `decision_memory` rows, 10 `trade_decisions`
-and 13 backtest-style checkpoints (identify via checkpoints whose `run_id`
+backtest-opened positions, their 3 `decision_memory` rows, the 9 distinct
+`trade_decisions` and the 13 backtest-style checkpoints (identify via checkpoints whose `run_id`
 contains `|`, thesis id in `state.riskDecision.tradeThesisId`); then reopen the
 remaining positions with `closed_at > now` (`closed_at`, `close_reason`,
 `exit_price` → NULL) and delete `decision_memory` rows with `resolved_at > now`,
