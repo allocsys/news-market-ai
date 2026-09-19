@@ -25,11 +25,12 @@
 // finish, and a test can hand this a fixed `now` without needing fake
 // timers or mocking the global Date.
 //
-// NOT YET WIRED IN: this module is self-contained and unused by the runner
-// as of this commit (see plan.md M3 -- the runner rewrite is a separate,
-// later piece). It exists standalone here so it can be reviewed and tested
-// on its own before onSignalRunner.js/runBacktest.js are changed to
-// construct one per run and pass it through.
+// WHERE IT IS USED (M3): backend's POST /backtest/run calls assertNotFuture
+// on the request's testEnd (a 400 before anything is enqueued);
+// runBacktest.js#runManualBacktest builds one per run (or takes an injected
+// one), asserts testEnd again (recorded as a 'failed' registry row), and
+// hands it to onSignalRunner.js, whose computeWalkEnd clamps testEnd + grace
+// to now with clampEnd.
 export class SimClock {
   constructor(nowIso = new Date().toISOString()) {
     if (Number.isNaN(Date.parse(nowIso))) {

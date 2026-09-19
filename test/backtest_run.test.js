@@ -13,6 +13,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runManualBacktest } from "../src/backtest/runBacktest.js";
 import { SimClock } from "../src/backtest/simClock.js";
+import { insertBacktestRun } from "../src/storage/sim_registry.js";
 import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { makeCtx, seedNews, seedBar, stateRows, SIM_DIR } from "./helpers/engine_ctx.js";
@@ -192,4 +193,18 @@ test("runManualBacktest logs nothing when config.llmLogEnabled isn't on (the wra
 
   assert.equal(outcome.status, "complete");
   assert.equal((await stateRows(ctx.stateDb, "llm_calls")).length, 0);
+});
+
+test("insertBacktestRun is idempotent on id: a second insert (redelivered queue message) keeps the first row untouched and doesn't throw", async () => {
+  const registryDb = createTestD1([SIM_DIR]);
+  const row = { id: "run-dup", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", trainDays: 0, testDays: 5, graceDays: 2 };
+
+  await insertBacktestRun(registryDb, { ...row, startedAt: "2026-02-01T00:00:00.000Z" });
+  await insertBacktestRun(registryDb, { ...row, graceDays: 9, startedAt: "2026-02-02T00:00:00.000Z" });
+
+  const { n } = await registryDb.prepare("SELECT COUNT(*) as n FROM backtest_runs WHERE id = ?").bind("run-dup").first();
+  assert.equal(n, 1);
+  const persisted = await getRun(registryDb, "run-dup");
+  assert.equal(persisted.started_at, "2026-02-01T00:00:00.000Z");
+  assert.equal(persisted.grace_days, 2);
 });

@@ -21,12 +21,21 @@
  * Worker invocation outright (not caught by runBacktest.js's own try/catch)
  * still leaves a 'running' row behind rather than no record at all, and a
  * dashboard viewer can at least see a run was attempted.
+ *
+ * Idempotent on `id` (ON CONFLICT DO NOTHING): Queues deliver at-least-once,
+ * so a redelivered `backtest` message (the first attempt's Worker died
+ * mid-run) must be able to re-enter runManualBacktest and resume via the
+ * pipeline's checkpoints instead of dying on a primary-key conflict every
+ * retry until it lands in the DLQ with the job stuck 'running'. The first
+ * attempt's row (params, started_at) stands. Ids are generated per request
+ * (index.js#newJobId), so this never masks two genuinely different runs.
  */
 export async function insertBacktestRun(db, { id, tickers, testStart, testEnd, trainDays, testDays, graceDays = null, startedAt }) {
   await db
     .prepare(
       `INSERT INTO backtest_runs (id, tickers, test_start, test_end, train_days, test_days, grace_days, status, started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)
+       ON CONFLICT(id) DO NOTHING`
     )
     .bind(id, JSON.stringify(tickers), testStart, testEnd, trainDays, testDays, graceDays, startedAt)
     .run();
