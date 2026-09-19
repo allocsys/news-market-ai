@@ -22,7 +22,7 @@ import {
 } from "../src/agents/analysts/technicalIndicators.js";
 import { runTechnicalAnalyst } from "../src/agents/analysts/technicalAnalyst.js";
 
-// Bars in most-recent-first order, matching storage/d1.js#getPriceBarsAsOf.
+// Bars in most-recent-first order, matching storage/inputs_view.js#getPriceBarsAsOf.
 const BARS = [
   { ticker: "AAPL", date: "2026-01-10", close: 110, volume: 2000 },
   { ticker: "AAPL", date: "2026-01-09", close: 108, volume: 1200 },

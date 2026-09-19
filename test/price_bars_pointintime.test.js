@@ -1,6 +1,6 @@
 // price_bars_pointintime test (plan.md open item: yfinance price/volume
 // ingestion). Covers two things: market_data_validator.js#validatePriceBar's
-// sanity checks (pure function, no DB needed), and storage/d1.js's
+// sanity checks (pure function, no DB needed), and storage/inputs_view.js's
 // insertPriceBar/getPriceBarsAsOf point-in-time cutoff, against a minimal
 // in-memory fake of the `price_bars` table (same honest, narrow-fake
 // convention as the other *_pointintime tests in this directory).
@@ -14,7 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validatePriceBar } from "../src/ingestion/market_data_validator.js";
-import { insertPriceBar, getPriceBarsAsOf } from "../src/storage/d1.js";
+import { insertPriceBar, getPriceBarsAsOf } from "../src/storage/inputs_view.js";
 import { VendorError, LookaheadViolationError } from "../src/shared/errors.js";
 import { fetchDailyBars } from "../src/ingestion/sources/yfinance.js";
 

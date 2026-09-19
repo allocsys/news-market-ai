@@ -1,7 +1,7 @@
 // fundamentals_pointintime test (plan.md Backtesting Integrity point 3:
 // point-in-time fundamentals). Three layers, same convention as
 // price_bars_pointintime.test.js: validateFundamentalFact (pure function),
-// storage/d1.js#insertFundamentalFact/getFundamentalFactsAsOf against a
+// storage/inputs_view.js#insertFundamentalFact/getFundamentalFactsAsOf against a
 // minimal in-memory fake of the `fundamental_facts` table, and
 // edgar_fundamentals.js#fetchFacts's response-parsing against a mocked
 // fetch. The storage-layer tests are the ones that actually prove point-in-
@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateFundamentalFact } from "../src/ingestion/market_data_validator.js";
-import { insertFundamentalFact, getFundamentalFactsAsOf } from "../src/storage/d1.js";
+import { insertFundamentalFact, getFundamentalFactsAsOf } from "../src/storage/inputs_view.js";
 import { VendorError, LookaheadViolationError } from "../src/shared/errors.js";
 import { fetchFacts } from "../src/ingestion/sources/edgar_fundamentals.js";
 
@@ -47,7 +47,7 @@ test("validateFundamentalFact rejects a missing ticker or tag", () => {
 });
 
 // ---------------------------------------------------------------------------
-// storage/d1.js against a fake `fundamental_facts` table
+// storage/inputs_view.js against a fake `fundamental_facts` table
 // ---------------------------------------------------------------------------
 
 class FakeFundamentalsDb {
