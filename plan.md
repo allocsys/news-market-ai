@@ -262,9 +262,10 @@ run by the `backtest` Worker.
   already `complete` or `failed` is acked and skipped (it would otherwise restart
   the walk from scratch once the checkpoints are gone); a `running` row still
   resumes from checkpoints.
-- The `*/15` cron was disabled by the owner on 2026-09-19 and was to stay off
-  until M4 -- but it is still declared in `wrangler.toml`, so deploys re-enable it
-  (see "Cron state" under Milestones).
+- The `*/15` cron was disabled by the owner on 2026-09-19 and was meant to stay
+  off until M4, but `wrangler.toml` still declared it so deploys kept re-enabling
+  it; the owner decided on 2026-09-20 to leave it on now that M4a has the
+  dashboard reading `live`/`inputs` too (see "Cron state" under Milestones).
 
 **Free-plan budgets** (the account is on Workers Free; limits from Cloudflare's
 docs, checked 2026-09-19). All of these are per account, not per DB, Worker or
@@ -329,19 +330,20 @@ namespace, so three D1s and a second KV isolate state but add no quota.
     LIVE_DB proves run scoping through every route. **Left in M4:** the environment
     selector (a `?env=` reading a backtest's `run_id` off SIM_DB; note
     `getDecisionStats`' "last N days" window is wall-clock relative, so it needs an
-    anchor for a finished backtest), and the owner's cron decision (below).
+    anchor for a finished backtest). The cron question below is now resolved.
 - **M5** Delete the old code and the old `news_market_ai` binding, close PR #44,
   refresh Deployment and Repo Structure.
 Since M2/M2b the engine, ingest and LLM Workers already read and write
 `live`/`inputs`; M4a moved the last readers (the dashboard) over. The old
 `news_market_ai` DB is now bound but unused (M5 removes it).
-**Cron state (observed 2026-09-19, needs an owner decision):** the owner disabled
-the `*/15` trigger out of band, but `wrangler.toml` still declares
-`crons = ["*/15 * * * *"]` and every `backend` deploy re-applies it. Workers
-Observability shows it firing every 15 minutes from at least 18:45Z (deploy #287
-logged `schedule: */15 * * * *`), so live ingest has been running against the
-new DBs. To keep it off across deploys, the trigger has to be removed from
-`wrangler.toml` (or the owner accepts it on now that the cutover is complete).
+**Cron state (observed 2026-09-19, decided 2026-09-20):** the owner had disabled
+the `*/15` trigger out of band, but `wrangler.toml` still declared
+`crons = ["*/15 * * * *"]` and every `backend` deploy re-applied it. Workers
+Observability showed it firing every 15 minutes from at least 18:45Z (deploy #287
+logged `schedule: */15 * * * *`), so live ingest had been running against the
+new DBs regardless of the intended pause. The owner decided (2026-09-20) to
+leave it on: `wrangler.toml` is unchanged and the cron continues to fire on its
+existing schedule with no code change required.
 
 **M1 code — done on `m1/state-store-foundation`, no PR yet (2026-09-19):**
 `migrations/inputs/`, `migrations/state/`, `migrations/sim/` (the split
