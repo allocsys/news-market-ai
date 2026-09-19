@@ -5,9 +5,9 @@
 // is exactly one place each section's D1 reads happen, not two copies that
 // could drift.
 import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.js";
-import { getRecentBacktestRuns } from "../storage/sim_registry.js";
+import { getRecentBacktestRuns, getBacktestRun } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
-import { parseDashboardParams, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
+import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
 
 /**
  * Read-only RunStore over LIVE_DB (run_id 'live'): every state-schema panel
@@ -20,6 +20,39 @@ import { parseDashboardParams, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
  */
 export function liveReadStore(env) {
   return new RunStore(readOnly(env.LIVE_DB), "live");
+}
+
+/**
+ * M4b environment selector. `envParam` is helpers.js#parseEnvParam's output
+ * (already format-checked -- either "live" or something matching
+ * BACKTEST_ID_RE), so this only has to confirm a well-formed backtest id
+ * actually exists in the SIM_DB registry before trusting it as a RunStore
+ * run_id. An unknown id, a malformed one, or a registry lookup failure all
+ * fall back to 'live' rather than erroring the whole page -- `envError`
+ * carries why, so the UI can say so, but every panel still renders.
+ *
+ * `anchor`, non-null only for a resolved backtest, is the timestamp
+ * getDecisionStats should treat as "now": a finished run's decisions happened
+ * at simulated dates that a wall-clock-relative window would otherwise miss
+ * entirely. Prefers finishedAt (the run is done, so anchor at its end);
+ * falls back to startedAt for a still-running or failed-with-no-finishedAt
+ * run so the window isn't simply empty.
+ */
+export async function resolveEnv(env, envParam) {
+  const live = () => ({ store: liveReadStore(env), resolvedEnv: "live", anchor: null, envError: null });
+  if (!envParam || envParam === "live") return live();
+  if (!BACKTEST_ID_RE.test(envParam)) return { ...live(), envError: `unknown environment "${envParam}" -- showing live` };
+
+  const { data: run, error } = await safe(() => getBacktestRun(readOnly(env.SIM_DB), envParam));
+  if (error) return { ...live(), envError: `couldn't verify backtest "${envParam}" (${error}) -- showing live` };
+  if (!run) return { ...live(), envError: `backtest "${envParam}" not found -- showing live` };
+
+  return {
+    store: new RunStore(readOnly(env.SIM_DB), envParam),
+    resolvedEnv: envParam,
+    anchor: run.finishedAt || run.startedAt,
+    envError: null,
+  };
 }
 
 /**
@@ -42,11 +75,12 @@ async function safe(promiseOrFn) {
 }
 
 export async function getSnapshotData(env, params) {
+  const { store, resolvedEnv, anchor, envError } = await resolveEnv(env, params.env);
   const [openPositionsResult, closedPositionsResult, decisionStatsResult, exposureResult] = await Promise.all([
-    safe(() => liveReadStore(env).listOpenPositions({ limit: params.positionsLimit })),
-    safe(() => liveReadStore(env).listRecentlyClosedPositions({ limit: 20 })),
-    safe(() => liveReadStore(env).getDecisionStats({ days: params.activityDays })),
-    safe(() => liveReadStore(env).getOpenExposureTotal()),
+    safe(() => store.listOpenPositions({ limit: params.positionsLimit })),
+    safe(() => store.listRecentlyClosedPositions({ limit: 20 })),
+    safe(() => store.getDecisionStats({ days: params.activityDays, anchor })),
+    safe(() => store.getOpenExposureTotal()),
   ]);
   // The stat grid is one combined panel drawn from all four queries, so a
   // failure in any of them is reported as one error for the section --
@@ -58,16 +92,20 @@ export async function getSnapshotData(env, params) {
     decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} },
     totalExposurePct: (exposureResult.data?.totalPct ?? 0) * 100,
     error,
+    resolvedEnv,
+    envError,
   };
 }
 
 export async function getActivityData(env, params) {
-  const decisionStatsResult = await safe(() => liveReadStore(env).getDecisionStats({ days: params.activityDays }));
-  return { decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} }, error: decisionStatsResult.error };
+  const { store, resolvedEnv, anchor, envError } = await resolveEnv(env, params.env);
+  const decisionStatsResult = await safe(() => store.getDecisionStats({ days: params.activityDays, anchor }));
+  return { decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} }, error: decisionStatsResult.error, resolvedEnv, envError };
 }
 
 export async function getChartsData(env, params) {
-  const openPositionsResult = await safe(() => liveReadStore(env).listOpenPositions({ limit: params.positionsLimit }));
+  const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
+  const openPositionsResult = await safe(() => store.listOpenPositions({ limit: params.positionsLimit }));
   let priceBarsByTicker = {};
   const error = openPositionsResult.error;
   if (!error) {
@@ -75,6 +113,9 @@ export async function getChartsData(env, params) {
     const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
     const entries = await Promise.all(
       chartTickers.map(async (ticker) => {
+        // Price bars are shared market data, not scoped to an environment --
+        // always INPUTS_DB regardless of which run's open positions picked
+        // the ticker.
         const result = await safe(() => getRecentPriceBars(readOnly(env.INPUTS_DB), { ticker, limit: 30 }));
         return [ticker, result];
       })
@@ -85,7 +126,7 @@ export async function getChartsData(env, params) {
       entries.filter(([, result]) => !result.error).map(([ticker, result]) => [ticker, result.data])
     );
   }
-  return { priceBarsByTicker, error };
+  return { priceBarsByTicker, error, resolvedEnv, envError };
 }
 
 export async function getHealthData(env) {
@@ -94,17 +135,19 @@ export async function getHealthData(env) {
 }
 
 export async function getDecisionsData(env, params) {
+  const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
   const decisionsResult = await safe(() =>
-    liveReadStore(env).listRecentTradeDecisions({ limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus })
+    store.listRecentTradeDecisions({ limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus })
   );
-  return { decisions: decisionsResult.data ?? [], error: decisionsResult.error };
+  return { decisions: decisionsResult.data ?? [], error: decisionsResult.error, resolvedEnv, envError };
 }
 
 export async function getPositionsData(env, params) {
+  const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
   const [openPositionsResult, closedPositionsResult, exposureResult] = await Promise.all([
-    safe(() => liveReadStore(env).listOpenPositions({ limit: params.positionsLimit })),
-    safe(() => liveReadStore(env).listRecentlyClosedPositions({ limit: 20 })),
-    safe(() => liveReadStore(env).getOpenExposureTotal()),
+    safe(() => store.listOpenPositions({ limit: params.positionsLimit })),
+    safe(() => store.listRecentlyClosedPositions({ limit: 20 })),
+    safe(() => store.getOpenExposureTotal()),
   ]);
   // Open and closed positions are two sub-panels on one page that must fail
   // independently -- each gets its own error, not one shared one. The
@@ -116,12 +159,15 @@ export async function getPositionsData(env, params) {
     closedPositions: closedPositionsResult.data ?? [],
     closedPositionsError: closedPositionsResult.error,
     totalExposurePct: (exposureResult.data?.totalPct ?? 0) * 100,
+    resolvedEnv,
+    envError,
   };
 }
 
-export async function getPipelineData(env) {
-  const checkpointsResult = await safe(() => liveReadStore(env).listRecentCheckpoints({ limit: 30 }));
-  return { checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error };
+export async function getPipelineData(env, params = {}) {
+  const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
+  const checkpointsResult = await safe(() => store.listRecentCheckpoints({ limit: 30 }));
+  return { checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error, resolvedEnv, envError };
 }
 
 export async function getBacktestRunsData(env) {
@@ -132,8 +178,9 @@ export async function getBacktestRunsData(env) {
 
 /** LLM-call log page: newest-first list (previews only) under the page's filters. `params` is helpers.js#parseLlmParams's output. */
 export async function getLlmCallsData(env, params) {
-  const result = await safe(
-    liveReadStore(env).getRecentLlmCalls({
+  const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
+  const result = await safe(() =>
+    store.getRecentLlmCalls({
       limit: params.llmLimit,
       source: params.llmSource === "all" ? undefined : params.llmSource,
       status: params.llmStatus === "all" ? undefined : params.llmStatus,
@@ -143,13 +190,14 @@ export async function getLlmCallsData(env, params) {
       beforeId: params.llmBefore ?? undefined,
     })
   );
-  return { calls: result.data?.calls ?? [], nextBeforeId: result.data?.nextBeforeId ?? null, error: result.error };
+  return { calls: result.data?.calls ?? [], nextBeforeId: result.data?.nextBeforeId ?? null, error: result.error, resolvedEnv, envError };
 }
 
-/** One call in full: complete prompt, raw response, cascade attempts. `call` is null when the id doesn't exist. */
-export async function getLlmCallData(env, id) {
-  const result = await safe(liveReadStore(env).getLlmCall(id));
-  return { call: result.data, error: result.error };
+/** One call in full: complete prompt, raw response, cascade attempts. `call` is null when the id doesn't exist (including: it exists, but under a different environment than `envParam` resolved to -- env_run_id-scoped, same as the list above). */
+export async function getLlmCallData(env, id, envParam) {
+  const { store, resolvedEnv, envError } = await resolveEnv(env, envParam);
+  const result = await safe(() => store.getLlmCall(id));
+  return { call: result.data, error: result.error, resolvedEnv, envError };
 }
 
 export { parseDashboardParams };

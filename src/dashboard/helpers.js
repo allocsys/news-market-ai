@@ -44,6 +44,22 @@ function pickFromOptions(raw, options, fallback) {
   return options.includes(parsed) ? parsed : fallback;
 }
 
+// M4b environment selector. Shape matches index.js#newJobId("backtest"):
+// `backtest-<ms timestamp>-<base36 suffix>`. This is a FORMAT check only --
+// `raw` still has to be looked up against the SIM_DB registry (data.js#resolveEnv)
+// to confirm the run actually exists; a well-formed but unknown id also falls
+// back to live there. Exported so data.js's resolver uses the identical pattern
+// rather than a second copy that could drift.
+export const BACKTEST_ID_RE = /^backtest-\d+-[a-z0-9]+$/;
+
+/** `?env=` -- "live" (default) or a plausibly-shaped backtest id. Anything else silently falls back to "live" here; existence of a well-formed id is checked downstream in data.js#resolveEnv, not here (this function has no DB access). */
+export function parseEnvParam(searchParams) {
+  const sp = searchParams ?? new URLSearchParams();
+  const raw = (sp.get("env") ?? "").trim();
+  if (raw === "" || raw === "live") return "live";
+  return BACKTEST_ID_RE.test(raw) ? raw : "live";
+}
+
 export function parseDashboardParams(searchParams) {
   const sp = searchParams ?? new URLSearchParams();
   return {
@@ -51,6 +67,7 @@ export function parseDashboardParams(searchParams) {
     decisionStatus: DECISION_STATUS_OPTIONS.includes(sp.get("decisionStatus")) ? sp.get("decisionStatus") : "all",
     decisionLimit: pickFromOptions(sp.get("decisionLimit"), DECISION_LIMIT_OPTIONS, 20),
     positionsLimit: pickFromOptions(sp.get("positionsLimit"), POSITIONS_LIMIT_OPTIONS, 50),
+    env: parseEnvParam(sp),
   };
 }
 
@@ -64,7 +81,7 @@ export function parseDashboardParams(searchParams) {
 export const LLM_SOURCE_OPTIONS = ["all", "pipeline", "backtest", "exit_check"];
 export const LLM_STATUS_OPTIONS = ["all", "ok", "error"];
 export const LLM_LIMIT_OPTIONS = [25, 50, 100];
-const LLM_DEFAULTS = { llmSource: "all", llmStatus: "all", llmLimit: 50 };
+const LLM_DEFAULTS = { llmSource: "all", llmStatus: "all", llmLimit: 50, env: "live" };
 
 function cleanId(raw) {
   const s = (raw ?? "").trim();
@@ -83,6 +100,7 @@ export function parseLlmParams(searchParams) {
     llmJob: cleanId(sp.get("llmJob")),
     llmRun: cleanId(sp.get("llmRun")),
     llmBefore: Number.isInteger(before) && before > 0 ? before : null,
+    env: parseEnvParam(sp),
   };
 }
 

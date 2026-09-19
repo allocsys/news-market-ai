@@ -16,7 +16,7 @@
 // convention this codebase already uses (and tests) for every other JSON
 // response in src/index.js, rather than introducing a second, unproven one.
 import { checkAuth } from "./routes.js";
-import { parseDashboardParams, parseLlmParams } from "./helpers.js";
+import { parseDashboardParams, parseLlmParams, parseEnvParam } from "./helpers.js";
 import {
   getSnapshotData,
   getActivityData,
@@ -28,7 +28,7 @@ import {
   getBacktestRunsData,
   getLlmCallsData,
   getLlmCallData,
-  liveReadStore,
+  resolveEnv,
 } from "./data.js";
 
 function jsonResponse(body, { status = 200 } = {}) {
@@ -83,7 +83,8 @@ export async function handleApiPositionsRoute(request, env, config) {
 export async function handleApiPipelineRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
-  return jsonResponse(await getPipelineData(env));
+  const envParam = parseEnvParam(new URL(request.url).searchParams);
+  return jsonResponse(await getPipelineData(env, { env: envParam }));
 }
 
 export async function handleApiBacktestRunsRoute(request, env, config) {
@@ -100,39 +101,46 @@ export async function handleApiLlmCallsRoute(request, env, config) {
   return jsonResponse(await getLlmCallsData(env, params));
 }
 
-/** GET /api/llm-calls/:id -- one call in full. 404 for an unknown/pruned id, 500 if D1 failed (so the two are distinguishable). */
+/** GET /api/llm-calls/:id?env=... -- one call in full. 404 for an unknown/pruned id (or one that exists in a different environment than `env` resolved to), 500 if D1 failed (so the two are distinguishable). */
 export async function handleApiLlmCallRoute(request, env, config, id) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   if (!/^\d+$/.test(id)) return jsonResponse({ error: "llm call id must be a number" }, { status: 400 });
-  const { call, error } = await getLlmCallData(env, Number(id));
+  const envParam = parseEnvParam(new URL(request.url).searchParams);
+  const { call, error } = await getLlmCallData(env, Number(id), envParam);
   if (error) return jsonResponse({ error }, { status: 500 });
-  if (!call) return jsonResponse({ error: "llm call not found (it may have been pruned by the retention window)" }, { status: 404 });
+  if (!call) return jsonResponse({ error: "llm call not found (it may have been pruned by the retention window, or belong to a different environment)" }, { status: 404 });
   return jsonResponse(call);
 }
 
 const ACTIVE_JOB_TYPES = new Set(["backfill", "backtest"]);
 
 /**
- * GET /api/jobs/active?type=backfill|backtest -- `{ job }`, where `job` is the
- * newest in-flight job of that type (RunStore#getActiveJob, 'live' run) or
- * null. Always 200 for a valid type: "nothing running" is an ordinary answer,
- * not a 404, unlike the by-id route below where a missing id is an error.
- * Lets the backfill/backtest pages show progress for a job submitted earlier.
+ * GET /api/jobs/active?type=backfill|backtest&env=... -- `{ job }`, where `job`
+ * is the newest in-flight job of that type in the resolved environment
+ * (RunStore#getActiveJob) or null. Always 200 for a valid type: "nothing
+ * running" is an ordinary answer, not a 404, unlike the by-id route below
+ * where a missing id is an error. Lets the backfill/backtest pages show
+ * progress for a job submitted earlier. `env` defaults to 'live' -- a
+ * backfill job only ever runs there, but a backtest job lives under its own
+ * run id in SIM_DB (M3), so the backtest page's active-job poll passes it.
  */
 export async function handleApiActiveJobRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
-  const type = new URL(request.url).searchParams.get("type");
+  const searchParams = new URL(request.url).searchParams;
+  const type = searchParams.get("type");
   if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backtest" }, { status: 400 });
-  return jsonResponse({ job: await liveReadStore(env).getActiveJob(type) });
+  const { store } = await resolveEnv(env, parseEnvParam(searchParams));
+  return jsonResponse({ job: await store.getActiveJob(type) });
 }
 
-/** GET /api/jobs/:id -- one job_progress row (RunStore#getJob, 'live' run), for the dashboard's live progress bar. 404 (not 200 + null) when the id doesn't exist, so a typo'd/expired id is visibly distinct from "job exists, no progress yet". */
+/** GET /api/jobs/:id?env=... -- one job_progress row (RunStore#getJob) for the resolved environment, for the dashboard's live progress bar. 404 (not 200 + null) when the id doesn't exist in that environment, so a typo'd/expired id -- or an id that belongs to a different environment -- is visibly distinct from "job exists, no progress yet". */
 export async function handleApiJobRoute(request, env, config, id) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
-  const job = await liveReadStore(env).getJob(id);
+  const { store } = await resolveEnv(env, parseEnvParam(new URL(request.url).searchParams));
+  const job = await store.getJob(id);
   if (!job) return jsonResponse({ error: "job not found" }, { status: 404 });
   return jsonResponse(job);
 }

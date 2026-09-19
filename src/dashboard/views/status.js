@@ -25,8 +25,16 @@
 
 import { escapeHtml } from "../helpers.js";
 
-function jobPollUrl(jobId) {
-  return `/dashboard/jobs/${encodeURIComponent(jobId)}`;
+/**
+ * `type` matters because of where the job_progress row actually lives:
+ * a backfill job is always `RunStore(LIVE_DB, 'live')`, but a backtest job is
+ * `RunStore(SIM_DB, <this backtest's own id>)` (src/index.js) -- the job's id
+ * IS its environment, so polling it needs `?env=<jobId>` or the lookup misses
+ * (backend defaults env to 'live', where a backtest job never lives).
+ */
+function jobPollUrl(jobId, type) {
+  const base = `/dashboard/jobs/${encodeURIComponent(jobId)}`;
+  return type === "backtest" ? `${base}?env=${encodeURIComponent(jobId)}` : base;
 }
 
 const PULSE_STYLE = `<style>
@@ -150,8 +158,8 @@ function renderProgressScript(pollUrl) {
     </script>`;
 }
 
-export function renderRunAcceptedPage({ title, detail, backLink, backLabel, jobId }) {
-  const pollUrl = jobId ? jobPollUrl(jobId) : null;
+export function renderRunAcceptedPage({ title, detail, backLink, backLabel, jobId, type }) {
+  const pollUrl = jobId ? jobPollUrl(jobId, type) : null;
 
   return `<section id="run-accepted">
     <h2>${escapeHtml(title)} accepted</h2>
@@ -186,7 +194,7 @@ export function describeJob(job) {
  */
 export function renderActiveJobPanel(job) {
   if (!job || !job.id) return "";
-  const pollUrl = jobPollUrl(job.id);
+  const pollUrl = jobPollUrl(job.id, job.type);
   const label = job.type === "backtest" ? "Backtest" : "Backfill";
 
   return `<section id="active-job" data-job-id="${escapeHtml(job.id)}">

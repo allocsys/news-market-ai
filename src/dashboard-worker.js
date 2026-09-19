@@ -263,8 +263,10 @@ export default {
       if (auth.redirect === "__disabled__") return jsonResponse({ error: "dashboard is not configured" }, { status: 503 });
       if (auth.redirect) return jsonResponse({ error: "unauthorized" }, { status: 401 });
       const id = pathname.slice("/dashboard/jobs/".length);
+      const envParam = url.searchParams.get("env");
+      const qs = envParam ? `?env=${encodeURIComponent(envParam)}` : "";
       try {
-        const job = await fetchBackendJson(env, `/api/jobs/${encodeURIComponent(id)}`);
+        const job = await fetchBackendJson(env, `/api/jobs/${encodeURIComponent(id)}${qs}`);
         return jsonResponse(job);
       } catch (err) {
         return jsonResponse({ error: err.message }, { status: err.status || 500 });
@@ -376,6 +378,7 @@ export default {
           backLink: "/dashboard/backtest",
           backLabel: "Backtest",
           jobId: body.id,
+          type: "backtest",
         }),
       });
     }
