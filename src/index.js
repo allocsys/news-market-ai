@@ -63,6 +63,7 @@ import {
   handleApiPipelineRoute,
   handleApiBacktestRunsRoute,
   handleApiJobRoute,
+  handleApiActiveJobRoute,
 } from "./dashboard/api.js";
 
 /**
@@ -109,6 +110,11 @@ export default {
     // read by `dashboard` at /dashboard/jobs/:id (which polls this on the
     // operator's behalf -- see src/dashboard-worker.js). :id is whatever
     // POST /backfill or POST /backtest/run returned as `id` below.
+    // Newest in-flight job of a type, for pages that need to show progress
+    // for a job submitted earlier. MUST stay above the /api/jobs/ prefix
+    // match below, or "active" would be looked up as a job id.
+    if (pathname === "/api/jobs/active") return handleApiActiveJobRoute(request, env, config);
+
     if (pathname.startsWith("/api/jobs/")) {
       const id = pathname.slice("/api/jobs/".length);
       if (!id) return jsonResponse({ error: "job id required" }, { status: 400 });
