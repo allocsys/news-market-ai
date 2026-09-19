@@ -80,6 +80,19 @@ function eachDayIso(startIso, endIso) {
   return days;
 }
 
+/**
+ * How many (ticker, day) steps one on-signal walk of a single window takes --
+ * exactly the iteration count runOnSignalReturns will perform, so a caller
+ * reporting progress (runBacktest.js) can size its progress bar up front.
+ * Same grace/walkEnd arithmetic as runOnSignalForTicker below; keep the two in
+ * sync.
+ */
+export function countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays }) {
+  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
+  const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
+  return tickers.length * eachDayIso(testStart, walkEnd).length;
+}
+
 /** Groups getNewsItemsInRange's rows by their UTC calendar date (published_at's first 10 chars), for the day-by-day walk below. */
 function groupItemsByDay(items) {
   const byDay = new Map();
@@ -108,7 +121,7 @@ function groupItemsByDay(items) {
  * is the window's own testStart, which is unique per window by
  * construction (walkForwardWindows never repeats a testStart).
  */
-export async function runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix }) {
+export async function runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep }) {
   const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
   const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
   const prefix = runIdPrefix ?? testStart;
@@ -117,6 +130,9 @@ export async function runOnSignalForTicker(env, config, db, { ticker, testStart,
   const itemsByDay = groupItemsByDay(newsItems);
 
   for (const dayIso of eachDayIso(testStart, walkEnd)) {
+    // Optional progress hook (backtest's live progress bar): told when a day
+    // starts and again when it finishes. Never affects the walk itself.
+    await onStep?.({ ticker, dayIso, done: false });
     const dayItems = itemsByDay.get(dayIso.slice(0, 10)) ?? [];
     for (const item of dayItems) {
       await runPipelineForTicker(env, config, db, {
@@ -130,6 +146,7 @@ export async function runOnSignalForTicker(env, config, db, { ticker, testStart,
     // position from an earlier day can still hit its stop-loss/take-profit/
     // time-based exit on a day with no news at all, same as the live path.
     await checkOpenPositionExits(env, config, db, { asOf: dayIso });
+    await onStep?.({ ticker, dayIso, done: true });
   }
 
   return getRealizedReturnsInRange(db, { ticker, from: testStart, to: walkEnd });
@@ -147,10 +164,10 @@ export async function runOnSignalForTicker(env, config, db, { ticker, testStart,
  * same reason (see runScheduledIngestion's own for-loop, not a
  * Promise.all).
  */
-export async function runOnSignalReturns(env, config, db, { tickers, testStart, testEnd, graceDays }) {
+export async function runOnSignalReturns(env, config, db, { tickers, testStart, testEnd, graceDays, onStep }) {
   const returns = [];
   for (const ticker of tickers) {
-    const tickerReturns = await runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}` });
+    const tickerReturns = await runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}`, onStep });
     returns.push(...tickerReturns);
   }
   return returns;
@@ -170,6 +187,6 @@ export async function runOnSignalReturns(env, config, db, { tickers, testStart, 
  * invoked -- do not wire this into any automated/scheduled path without an
  * explicit decision to spend that budget.
  */
-export function makeOnSignalReturns(env, config, db, { tickers, graceDays }) {
-  return (window) => runOnSignalReturns(env, config, db, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays });
+export function makeOnSignalReturns(env, config, db, { tickers, graceDays, onStep }) {
+  return (window) => runOnSignalReturns(env, config, db, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep });
 }
