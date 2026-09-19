@@ -347,9 +347,10 @@ namespace, so three D1s and a second KV isolate state but add no quota.
   (unmerged, 2026-09-19, superseded by the SimClock isolation design). The root
   `migrations/0001-0012` (the retired pre-split schema) are deleted too; nothing
   read them (tests and CI use only `migrations/{inputs,state,sim}`), and a test
-  keeps `migrations/` free of root-level `.sql` files. Some code comments still
-  cite them by name (`config.js`, `exit.js`, `edgar_fundamentals.js`); git
-  history has the files.
+  keeps `migrations/` free of root-level `.sql` files. Code comments that cited
+  them by name (`config.js`, `exit.js`, `edgar_fundamentals.js`, `status.js`,
+  `inputs_view.js`) now point at `migrations/{state,inputs}/` instead; git
+  history has the old files.
 Since M2/M2b the engine, ingest and LLM Workers already read and write
 `live`/`inputs`; M4a moved the last readers (the dashboard) over, and M5 removed
 the old DB's binding.
