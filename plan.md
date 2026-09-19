@@ -209,8 +209,11 @@ it doesn't own. Required repo secrets regardless of Worker:
 migrate/deploy). Optional secret groups use a bash `-z` guard inside `run:`
 and skip cleanly (the `secrets` context is rejected inside a step's `if:`).
 CI is green end-to-end against real Cloudflare infra as of Step 2's live
-`workflow_dispatch` check; Steps 3-6's own deploy jobs have not yet had the
-same live-deploy check (see each step's own notes, deferred to after Step 7).
+`workflow_dispatch` check. Steps 3-6's own deploy jobs got their live-deploy
+check on 2026-09-19: run #237 (`workflow_dispatch`) deployed all four Workers
+and provisioned every queue/DLQ green -- see "Post-split follow-ups" below.
+Deploys are verified; each step's runtime behavior (see its own "still open"
+notes) is not.
 A secret-leak audit (pre-split) found and fixed a real plaintext-id leak in
 the provisioning actions' `create` step output (ids are now masked before
 printing -- see git history on `ensure-d1-database`/`ensure-kv-namespace` for
@@ -687,6 +690,10 @@ issue `wrangler secret delete` against live infra. **Manual follow-up still
 required:** run `wrangler secret delete GEMINI_API_KEYS --config wrangler.toml`
 against the `news-market-ai` Worker. Key isolation is correct in code/CI but
 not yet real in the deployed environment until that command runs.
+**Resolved 2026-09-19:** the secret was deleted from the `news-market-ai`
+Worker in the Cloudflare dashboard (its latest version is annotated "Deleted
+Secret binding GEMINI_API_KEYS"). See "Post-split follow-ups" below for the
+same class of leftover that did break something.
 
 **Docs rewritten:** the Deployment section's "Planned: split into 4" framing
 replaced with the actual built architecture (each Worker, its bindings, its
@@ -704,6 +711,69 @@ met for every doc section above. **Still open:** the `GEMINI_API_KEYS`
 secret-deletion action on live Cloudflare infra (manual, listed above), and
 the standing deferred CI/live-deploy check across Steps 3-6 (unchanged from
 before this step, not part of Step 7's own scope).
+
+## Post-split follow-ups (2026-09-19)
+Everything here happened after Step 7 merged. None of it changes the
+architecture above.
+
+- **wrangler v3 -> v4 (PR #34, `e56f64b`).** CI had failed on every push to
+  `main` since run #219, at `wrangler queues create`: wrangler 3.x silently
+  sent a 4-day default message-retention (345600s), which exceeds the free
+  tier's 86400s cap, and the API rejected it with a generic "queue settings
+  are invalid" error. Cloudflare removed that default in workers-sdk#12458
+  (merged 2026-02-06), which was not backported to v3 (v3 only gets
+  critical-security patches), so bumping within `^3.x` could not have fixed
+  it. Fix: wrangler `^4.135.0` (v4 requires Node >= 22, so CI moved to Node
+  22) plus an explicit `--message-retention-period-secs 86400` in
+  `ensure-queue`, so queue creation no longer depends on any implicit
+  default.
+- **`ensure-queue` idempotency (PR #35, `1538491`).** v4 reports an existing
+  queue as `Queue name '<n>' is already taken ... [code: 11009]`, not v3's
+  "already exists", so the first re-run after the bump failed at "Ensure JOBS
+  queue exists" (run #236). The check now matches `already (exists|taken)`
+  or `code: 11009`. Verified by run #237: all 7 jobs green, and every queue/DLQ
+  step took the "already exists -- skipping creation" path.
+- **Live-deploy check for Steps 3-6.** Run #237 is the first full green
+  deploy of all four Workers, so provisioning, per-Worker path filters and
+  per-Worker secret pushes are now proven against real Cloudflare infra.
+  Still NOT observed live: a backtest surviving past the old 30s cutoff
+  (Step 3), a real ANALYZE crash-and-retry (Step 4), ops/day against real
+  Workers Observability numbers (Step 4), and the full ingest -> analyze ->
+  llm flow producing decisions end to end.
+- **Stale login secrets on `backend` broke the whole dashboard (fixed
+  2026-09-19).** Step 2's "done when" says the login secrets exist only on
+  `dashboard`, but `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`/`JWT_SECRET`
+  were never deleted from the `news-market-ai` Worker after moving. `routes.js`'s
+  `checkAuth` is a deliberate no-op ONLY when those three are unset, so
+  backend kept demanding a session cookie that dashboard's service-binding
+  call never forwards: every `/api/*` call returned 401 and every dashboard
+  page showed "Couldn't load this section: unauthorized". Fixed by deleting
+  the three secrets from `backend` in the Cloudflare dashboard (no code
+  change). It is the same class of leftover as the stale `GEMINI_API_KEYS`,
+  and Step 7's secrets audit compared `deploy.yml` against code but never
+  against what was actually bound on the live Workers. **Lesson:** a green
+  deploy says nothing about live bindings/secrets; the check that would have
+  caught this is a live comparison of each Worker's bindings to its wrangler
+  file's own "Secrets" comment, or the smoke test below.
+- **Config drift: dashboard logs.** `wrangler.dashboard.toml` enables
+  `[observability.logs]`, but the live `news-market-ai-dashboard` had logs
+  off, which hid the dashboard's own `console.error` during the incident
+  above. The toml is the intended state; re-enable in the Cloudflare
+  dashboard (a later full deploy of that Worker may also restore it).
+
+**Remaining work (nothing here blocks the system running):**
+- **Post-deploy smoke test** in `deploy.yml`: log in through `dashboard`, fetch
+  one `/api/*` route via the service binding, fail the workflow if it isn't
+  200. Not built yet; would have caught the 401 incident.
+- **Live verification** of the four behaviors listed under "Live-deploy check"
+  above.
+- **Stuck backtest row** from Step 0 (`backtest-1789756783629-bxavoi`, still
+  `running`) was never resolved.
+- **Step 5's deliberate gap:** `backend` still holds `FINNHUB_API_KEY` for
+  `backfill` only (needs a second queue to close).
+- **Loose ends:** unreferenced `src/dashboard.js` shim; an unrelated stray
+  Worker `restless-manager-6789` on the account.
+- Everything under "Known Gaps / Backlog" below is unchanged.
 
 ## Repo Structure
 ```
