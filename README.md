@@ -30,7 +30,7 @@ src/
   ingestion/
     normalize.js            # "jsonify anything" boundary
     sources/                # one adapter per source (gdelt.js first, stubbed)
-  storage/d1.js             # ALL point-in-time-safe reads/writes go through here
+  storage/                  # run_store.js (ALL point-in-time-safe reads/writes), inputs_view.js, jobs.js, llm_calls.js, sim_registry.js
   backtest/pointInTime.js    # leak-check + walk-forward window helpers
   agents/
     analysts/                # quick-tier: news/event, sentiment
@@ -47,12 +47,13 @@ test/                       # includes the mandatory backtest leak-check test
 ```bash
 npm install
 cp .dev.vars.example .dev.vars   # fill in GEMINI_API_KEYS
-npm run db:migrate:local
+npm run db:migrate:local:all     # inputs + live + sim D1 databases
 npm test
 npm run dev
 ```
 
-Before deploying: create the real D1 database and KV namespace in the
-Cloudflare dashboard (or via `wrangler d1 create` / `wrangler kv namespace
-create`), then replace the placeholder ids in `wrangler.toml`, and
-`wrangler secret put GEMINI_API_KEYS`.
+Deploys run from CI (`.github/workflows/deploy.yml`). The three D1 databases
+(`news-market-ai-inputs`, `-live`, `-sim`) have their real ids committed in the
+wrangler configs; the KV namespace id is resolved by CI at deploy time. Secrets
+are set with `wrangler secret put` -- see the comments at the bottom of each
+`wrangler.*.toml`.
