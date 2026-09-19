@@ -589,7 +589,16 @@ export class RunStore {
    * a live environment; a finished backtest's decisions are dated in the
    * past, so a window over one is the environment selector's problem.
    */
-  async getDecisionStats({ days = 14 } = {}) {
+  /**
+   * `anchor` (an ISO timestamp) replaces wall-clock 'now' as the end of the
+   * "last N days" window -- required for a finished backtest environment,
+   * whose decisions happened at simulated dates that could be arbitrarily far
+   * in the past and would otherwise fall outside a `now`-relative window
+   * entirely. `live` callers omit it and get the original wall-clock
+   * behavior (SQLite's `datetime(NULL ?? 'now', ...)` below resolves to
+   * `datetime('now', ...)`).
+   */
+  async getDecisionStats({ days = 14, anchor = null } = {}) {
     const totalsResult = await this.db
       .prepare(`SELECT status, COUNT(*) AS count FROM trade_decisions WHERE run_id = ? GROUP BY status`)
       .bind(this.runId)
@@ -599,11 +608,11 @@ export class RunStore {
       .prepare(
         `SELECT substr(created_at, 1, 10) AS day, status, COUNT(*) AS count
          FROM trade_decisions
-         WHERE run_id = ? AND created_at >= datetime('now', ?)
+         WHERE run_id = ? AND created_at >= datetime(?, ?)
          GROUP BY day, status
          ORDER BY day ASC`
       )
-      .bind(this.runId, `-${days} days`)
+      .bind(this.runId, anchor ?? "now", `-${days} days`)
       .all();
 
     const totals = totalsResult.results.reduce((acc, r) => {

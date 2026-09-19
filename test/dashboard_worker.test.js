@@ -21,6 +21,8 @@ import assert from "node:assert/strict";
 import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
 import { renderShell } from "../src/dashboard/shell.js";
+import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
+import { ENV_SECTIONS } from "../src/dashboard/helpers.js";
 
 class FakeNewsDb {
   constructor() {
@@ -436,4 +438,96 @@ test("GET /dashboard/snapshot never shows an active-job panel -- only backfill/b
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
   assert.doesNotMatch(html, /id="active-job"/);
+});
+
+// --------------------------------------------------------------------
+// M4b environment selector -- the bar itself (rendering, healing, and
+// best-effort fallback) on renderSection pages. Backend plumbing is
+// already covered by test/dashboard_env.test.js; the view-only pieces
+// (pill rendering, escaping) by test/dashboard_env_selector.test.js. This
+// block covers the actual wiring: does the bar show up on the right pages,
+// does it reflect what backend resolved (not just the raw query param),
+// do links heal after a bad ?env=, and does the rest of the page survive
+// when the (best-effort) run-list lookup itself fails.
+// --------------------------------------------------------------------
+
+const BT = "backtest-1789000000000-abc123";
+
+async function registerCompleteRun(simDb, id) {
+  await insertBacktestRun(simDb, {
+    id, tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", testEnd: "2024-02-01T00:00:00.000Z",
+    trainDays: 0, testDays: 30, startedAt: "2026-03-12T00:00:00.000Z",
+  });
+  await completeBacktestRun(simDb, { id, result: { overall: {} }, finishedAt: "2026-03-12T01:00:00.000Z" });
+}
+
+// Same shape as baseEnv()/loginConfiguredEnv() above, but keeps a handle on
+// the backend's own env object so a test can register a backtest run
+// against its SIM_DB before issuing requests through the dashboard Worker.
+function envAwareEnv() {
+  const backendEnv = { LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: createTestD1([INPUTS_DIR]), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) };
+  const env = loginConfiguredEnv({ BACKEND: makeBackend(backendEnv) });
+  return { env, backendEnv };
+}
+
+for (const section of ENV_SECTIONS) {
+  test(`GET /dashboard/${section} shows the environment selector bar`, async () => {
+    const html = await getHtml(`/dashboard/${section}`);
+    assert.match(html, /id="env-selector"/);
+  });
+}
+
+for (const section of ["charts", "health"]) {
+  test(`GET /dashboard/${section} does NOT show the environment selector -- env-unaware section`, async () => {
+    const html = await getHtml(`/dashboard/${section}`);
+    assert.doesNotMatch(html, /id="env-selector"/);
+  });
+}
+
+test("the environment selector highlights a registered backtest run when ?env= selects it, and env-aware nav links carry it forward while env-unaware ones don't", async () => {
+  const { env, backendEnv } = envAwareEnv();
+  await registerCompleteRun(backendEnv.SIM_DB, BT);
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/snapshot?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
+
+  assert.match(html, /class="pill pill-active"[^>]*>AAPL/, "the run's own pill is active, not Live");
+  assert.ok(html.includes(`href="/dashboard/decisions?env=${BT}"`), "nav link to another env-aware section carries the chosen env");
+  assert.ok(html.includes('href="/dashboard/charts"') && !html.includes(`href="/dashboard/charts?env=${BT}"`), "nav link to an env-unaware section does NOT carry env");
+});
+
+test("a well-formed but unregistered ?env= heals to live: the Live pill is active and an envError note explains why", async () => {
+  const env = loginConfiguredEnv();
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/decisions?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
+  assert.match(html, /class="pill pill-active"[^>]*>Live<\/a>/);
+  assert.match(html, /not found/);
+});
+
+test("filter links on decisions carry the resolved env (?env=) so switching a filter never silently drops back to live", async () => {
+  const { env, backendEnv } = envAwareEnv();
+  await registerCompleteRun(backendEnv.SIM_DB, BT);
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/decisions?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
+
+  const approvedHrefMatch = html.match(/href="([^"]*decisionStatus=approved[^"]*)"/);
+  assert.ok(approvedHrefMatch, "found the Approved status pill link");
+  assert.match(approvedHrefMatch[1], new RegExp(`env=${BT}`), "the filter link carries env forward");
+});
+
+test("GET /dashboard/snapshot renders fine (Live-only selector, no crash) when the best-effort /api/backtest-runs lookup itself fails", async () => {
+  const realBackend = makeBackend({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: createTestD1([INPUTS_DIR]), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) });
+  const flakyBackend = {
+    fetch: (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.includes("/api/backtest-runs")) return Promise.resolve(new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
+      return realBackend.fetch(input, init);
+    },
+  };
+  const env = loginConfiguredEnv({ BACKEND: flakyBackend });
+  const cookie = await loggedInCookie(env);
+  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env);
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /id="env-selector"/);
+  assert.match(html, /class="pill pill-active"[^>]*>Live<\/a>/);
 });

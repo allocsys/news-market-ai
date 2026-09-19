@@ -44,6 +44,30 @@ function pickFromOptions(raw, options, fallback) {
   return options.includes(parsed) ? parsed : fallback;
 }
 
+// M4b environment selector. Shape matches index.js#newJobId("backtest"):
+// `backtest-<ms timestamp>-<base36 suffix>`. This is a FORMAT check only --
+// `raw` still has to be looked up against the SIM_DB registry (data.js#resolveEnv)
+// to confirm the run actually exists; a well-formed but unknown id also falls
+// back to live there. Exported so data.js's resolver uses the identical pattern
+// rather than a second copy that could drift.
+export const BACKTEST_ID_RE = /^backtest-\d+-[a-z0-9]+$/;
+
+/** `?env=` -- "live" (default) or a plausibly-shaped backtest id. Anything else silently falls back to "live" here; existence of a well-formed id is checked downstream in data.js#resolveEnv, not here (this function has no DB access). */
+export function parseEnvParam(searchParams) {
+  const sp = searchParams ?? new URLSearchParams();
+  const raw = (sp.get("env") ?? "").trim();
+  if (raw === "" || raw === "live") return "live";
+  return BACKTEST_ID_RE.test(raw) ? raw : "live";
+}
+
+/** Sections whose data is scoped by `?env=` (the environment selector shows on these, and the nav keeps the chosen env across them). Charts/health/backfill/backtest/more stay env-unaware: price bars and ingestion health are shared market data, and the last three are about launching/listing runs, not viewing one. */
+export const ENV_SECTIONS = ["snapshot", "activity", "decisions", "positions", "pipeline", "llm"];
+
+/** "?env=<id>" for a non-live environment, "" for live -- for links that must carry the selected environment along. `env` is already vetted by parseEnvParam/resolveEnv (BACKTEST_ID_RE), so nothing here needs more than encoding. */
+export function envSuffix(env) {
+  return env && env !== "live" ? `?env=${encodeURIComponent(env)}` : "";
+}
+
 export function parseDashboardParams(searchParams) {
   const sp = searchParams ?? new URLSearchParams();
   return {
@@ -51,6 +75,7 @@ export function parseDashboardParams(searchParams) {
     decisionStatus: DECISION_STATUS_OPTIONS.includes(sp.get("decisionStatus")) ? sp.get("decisionStatus") : "all",
     decisionLimit: pickFromOptions(sp.get("decisionLimit"), DECISION_LIMIT_OPTIONS, 20),
     positionsLimit: pickFromOptions(sp.get("positionsLimit"), POSITIONS_LIMIT_OPTIONS, 50),
+    env: parseEnvParam(sp),
   };
 }
 
@@ -64,7 +89,7 @@ export function parseDashboardParams(searchParams) {
 export const LLM_SOURCE_OPTIONS = ["all", "pipeline", "backtest", "exit_check"];
 export const LLM_STATUS_OPTIONS = ["all", "ok", "error"];
 export const LLM_LIMIT_OPTIONS = [25, 50, 100];
-const LLM_DEFAULTS = { llmSource: "all", llmStatus: "all", llmLimit: 50 };
+const LLM_DEFAULTS = { llmSource: "all", llmStatus: "all", llmLimit: 50, env: "live" };
 
 function cleanId(raw) {
   const s = (raw ?? "").trim();
@@ -83,6 +108,7 @@ export function parseLlmParams(searchParams) {
     llmJob: cleanId(sp.get("llmJob")),
     llmRun: cleanId(sp.get("llmRun")),
     llmBefore: Number.isInteger(before) && before > 0 ? before : null,
+    env: parseEnvParam(sp),
   };
 }
 
@@ -102,7 +128,13 @@ export function llmQuery(params, overrides = {}) {
 export function buildQuery(params, overrides = {}) {
   const merged = { ...params, ...overrides };
   const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(merged)) sp.set(k, String(v));
+  for (const [k, v] of Object.entries(merged)) {
+    // A non-live `env` rides along on every filter link so changing a filter
+    // never silently drops back to live; the live default is left out so
+    // default links stay clean.
+    if (k === "env" && (v === "live" || v === undefined || v === null || v === "")) continue;
+    sp.set(k, String(v));
+  }
   return `?${sp.toString()}`;
 }
 

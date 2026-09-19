@@ -57,13 +57,13 @@ async function apiFetch(path, env, { cookie } = {}) {
 // without pinning to exact values, which an empty database can't
 // meaningfully provide anyway.
 const API_ROUTES = [
-  { path: "/api/snapshot", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "error"] },
-  { path: "/api/activity", keys: ["decisionStats", "error"] },
-  { path: "/api/charts", keys: ["priceBarsByTicker", "error"] },
+  { path: "/api/snapshot", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "error", "resolvedEnv", "envError"] },
+  { path: "/api/activity", keys: ["decisionStats", "error", "resolvedEnv", "envError"] },
+  { path: "/api/charts", keys: ["priceBarsByTicker", "error", "resolvedEnv", "envError"] },
   { path: "/api/health", keys: ["health", "error"] },
-  { path: "/api/decisions", keys: ["decisions", "error"] },
-  { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct"] },
-  { path: "/api/pipeline", keys: ["checkpoints", "error"] },
+  { path: "/api/decisions", keys: ["decisions", "error", "resolvedEnv", "envError"] },
+  { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct", "resolvedEnv", "envError"] },
+  { path: "/api/pipeline", keys: ["checkpoints", "error", "resolvedEnv", "envError"] },
   { path: "/api/backtest-runs", keys: ["backtestRuns", "error"] },
 ];
 

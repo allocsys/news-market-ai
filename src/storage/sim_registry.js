@@ -57,17 +57,8 @@ export async function failBacktestRun(db, { id, error, finishedAt }) {
     .run();
 }
 
-/** Most recent backtest_runs rows, newest first. */
-export async function getRecentBacktestRuns(db, { limit = 10 } = {}) {
-  const { results } = await db
-    .prepare(
-      `SELECT id, tickers, test_start, test_end, train_days, test_days, grace_days, status, result, error, started_at, finished_at
-       FROM backtest_runs ORDER BY started_at DESC LIMIT ?`
-    )
-    .bind(limit)
-    .all();
-
-  return results.map((r) => ({
+function rowToRun(r) {
+  return {
     id: r.id,
     tickers: JSON.parse(r.tickers),
     testStart: r.test_start,
@@ -80,5 +71,29 @@ export async function getRecentBacktestRuns(db, { limit = 10 } = {}) {
     error: r.error,
     startedAt: r.started_at,
     finishedAt: r.finished_at,
-  }));
+  };
+}
+
+/**
+ * One backtest_runs row by id, or null. Used by the dashboard's environment
+ * selector (dashboard/data.js#resolveEnv) to confirm a `?env=` id is a real
+ * run before trusting it as a RunStore run_id -- a malformed or unknown id
+ * must fall back to 'live', not surface a raw SQL/D1 error to the page.
+ */
+export async function getBacktestRun(db, id) {
+  const row = await db.prepare(`SELECT id, tickers, test_start, test_end, train_days, test_days, grace_days, status, result, error, started_at, finished_at FROM backtest_runs WHERE id = ?`).bind(id).first();
+  return row ? rowToRun(row) : null;
+}
+
+/** Most recent backtest_runs rows, newest first. */
+export async function getRecentBacktestRuns(db, { limit = 10 } = {}) {
+  const { results } = await db
+    .prepare(
+      `SELECT id, tickers, test_start, test_end, train_days, test_days, grace_days, status, result, error, started_at, finished_at
+       FROM backtest_runs ORDER BY started_at DESC LIMIT ?`
+    )
+    .bind(limit)
+    .all();
+
+  return results.map(rowToRun);
 }
