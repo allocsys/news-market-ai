@@ -17,6 +17,24 @@ binding = "DB"
 database_name = "news_market_ai"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
+# --- D1 (environment-split, plan.md "Backtest / Live Isolation" redesign,
+# provisioned 2026-09-19, M1) --- this Worker is live-only, so it gets
+# LIVE_DB (read/write) and INPUTS_DB (read-only by convention -- see
+# readOnly(db) in src/storage/run_store.js). No SIM_DB: that's the future
+# `backtest` Worker's (M3), and plan.md is explicit this Worker holds no
+# binding to any other environment's state. Real ids committed directly --
+# see wrangler.toml's own comment on why (ensure-d1-database's patch step
+# is multi-block-unsafe).
+[[d1_databases]]
+binding = "LIVE_DB"
+database_name = "news-market-ai-live"
+database_id = "215b7856-a888-41e1-b929-e9612e99ebd8"
+
+[[d1_databases]]
+binding = "INPUTS_DB"
+database_name = "news-market-ai-inputs"
+database_id = "c14d62d9-62bb-403f-8792-1c627e076d1a"
+
 # --- KV --- same CACHE_KV namespace the other Workers bind. This Worker is
 # the only one that reads/writes the Gemini cascade's cooldown state
 # (`gemini:cooldown:<model>:<keyIndex>`, src/shared/cooldown.js) -- the

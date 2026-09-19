@@ -543,6 +543,37 @@ four behaviors below have not been observed live end to end.
    `restless-manager-6789` on the account; dashboard UI/UX not screenshot-reviewed.
 6. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
 
+**M1 bindings wired 2026-09-19:** `wrangler.toml` (backend) now binds
+INPUTS_DB/LIVE_DB/SIM_DB alongside the old DB; `wrangler.llm.toml` binds
+LIVE_DB (rw) + INPUTS_DB (ro by convention); `wrangler.ingest.toml` binds
+INPUTS_DB (rw). Real database_ids committed directly rather than through
+the usual `REPLACE_WITH_D1_DATABASE_ID` + `ensure-d1-database` placeholder
+pattern -- see next paragraph for why. No `wrangler.backtest.toml` yet
+(M3) so the KV namespace (`news-market-ai-backtest-CACHE_KV`,
+`f14e4607af5843599eac863b6adb508b`) isn't bound anywhere yet either. Not
+yet done: `package.json`/`deploy.yml` migrate steps for the three new DBs
+(they were migrated by hand for M1 -- see that section); engine code
+(pipeline.js etc.) still reads/writes the old single `DB` binding until
+M2's port lands.
+
+**CI bug found 2026-09-19, not yet fixed:**
+`.github/actions/ensure-d1-database`'s patch step
+(`sed -i "s/database_id = \".*\"/.../" "$CONFIG_FILE"`) matches and
+overwrites **every** `database_id = "..."` line in the target file, not
+only the one belonging to its own `database-name` input. Invisible with
+one `[[d1_databases]]` block per file (every prior use of this action);
+now that `wrangler.toml`/`wrangler.llm.toml`/`wrangler.ingest.toml` each
+have multiple blocks, calling this action against any of them (e.g. to
+re-resolve the old `DB` binding's id on a fresh checkout) would stomp
+INPUTS_DB/LIVE_DB/SIM_DB's real ids with whatever single id it resolved.
+Not triggered today -- CI's `migrate`/`deploy`/`deploy-ingest`/`deploy-llm`
+jobs still only call this action for the single old `DB` binding, and
+INPUTS_DB/LIVE_DB/SIM_DB's ids are committed directly (not placeholders),
+so there's nothing for it to patch there yet. Needs a fix (scope the sed
+to the block matching `database-name`, e.g. via a small awk/sed range
+match) before any new wiring relies on this action for a file with more
+than one block.
+
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists
   (`entity_resolution.js#buildCompanyNameIndex`/`matchTickersByName`, gated by

@@ -17,6 +17,35 @@ binding = "DB"
 database_name = "news_market_ai"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
+# --- D1 (environment-split, plan.md "Backtest / Live Isolation" redesign,
+# provisioned 2026-09-19, M1) --- `backend` holds handles to all three for
+# the dashboard API and runs migrations for all three (this Worker's own
+# migrate step, npm run db:migrate:remote:*, is not wired up yet -- these
+# three DBs were migrated by hand for M1, see plan.md). Real ids committed
+# directly, not the REPLACE_WITH_D1_DATABASE_ID + ensure-d1-database
+# placeholder pattern above -- see this commit's message for why (a real
+# bug in that action's patch step, multi-block-unsafe).
+# INPUTS_DB: news_items/news_item_revisions/news_item_tickers/price_bars/
+# fundamental_facts (migrations/inputs/). Shared, append-only.
+[[d1_databases]]
+binding = "INPUTS_DB"
+database_name = "news-market-ai-inputs"
+database_id = "c14d62d9-62bb-403f-8792-1c627e076d1a"
+
+# LIVE_DB: run_id='live' state -- positions/trade_decisions/decision_memory/
+# pipeline_checkpoints/llm_calls/job_progress (migrations/state/).
+[[d1_databases]]
+binding = "LIVE_DB"
+database_name = "news-market-ai-live"
+database_id = "215b7856-a888-41e1-b929-e9612e99ebd8"
+
+# SIM_DB: same state schema as LIVE_DB, run_id=<backtest id>, plus
+# backtest_runs (migrations/state/ + migrations/sim/).
+[[d1_databases]]
+binding = "SIM_DB"
+database_name = "news-market-ai-sim"
+database_id = "55a8fab8-9f30-4c1f-9393-d5393af669fb"
+
 # --- KV (lightweight config/flags + Finnhub's cross-invocation 429 cooldown
 # for the `backfill` job -- see src/shared/cooldown.js. The Gemini cascade's
 # cooldown keys are NOT written from this Worker anymore (plan.md Step 6:
