@@ -279,7 +279,7 @@ export function loadConfig(env) {
     // unreliable network conditions before a live check could complete.
     // Explicit opt-out remains available ("false") if live behavior turns
     // out to need more false-positive tuning than expected.
-    entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX !== "false",
+    entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX === "true",
     // Dashboard login (src/index.js's GET/POST /login, src/auth/session.js)
     // -- a one-time login that then authorizes POST /backfill and POST
     // /backtest/run via a session cookie; it is now the ONLY way to call
