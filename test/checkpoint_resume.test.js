@@ -194,6 +194,19 @@ class FakePipelineDb {
               return { results };
             }
             if (/FROM price_bars/.test(sql)) {
+              // Distinguish the two real call sites by their bound `limit`
+              // (ticker, asOf, limit) -- same distinction pipeline.js itself
+              // makes: the unlimited (default 200) technical-analyst fetch
+              // stays empty so computeTechnicalSnapshot keeps reporting
+              // hasData: false (technicalAnalyst self-skips, no LLM call,
+              // matching this file's own "technical self-skips" 6-call
+              // comment below); the limit:1 entryPrice fetch returns one
+              // bar so runPipelineForTicker's no-price-data guard (PR #38,
+              // c83423c) doesn't block the position this test asserts on.
+              const [, , limit] = args;
+              if (limit === 1) {
+                return { results: [{ ticker: "AAPL", date: "2026-01-14", open: 180, high: 182, low: 179, close: 181, volume: 1000000, source: "test-fixture" }] };
+              }
               return { results: [] }; // no price history seeded -- technicalAnalyst self-skips on empty bars
             }
             if (/FROM decision_memory/.test(sql)) {
