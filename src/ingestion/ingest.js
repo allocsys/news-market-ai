@@ -290,9 +290,8 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
  * `scheduled` sends these instead of one whole-watchlist sweep).
  * Fetches finnhub news, price bars, and fundamentals SCOPED TO
  * THIS ONE TICKER ONLY (unlike collectNewsItems' whole-watchlist sweep
- * above), writes them to D1, and returns the inserted news items so
- * the INGEST consumer can enqueue one ANALYZE message per item for this
- * ticker. This is what turns one 15-minute cron tick into N small
+ * above), writes them to D1, and returns what the INGEST consumer should
+ * enqueue ANALYZE messages for. This is what turns one 15-minute cron tick into N small
  * invocations instead of one big one (plan.md Step 4's whole point) --
  * each ticker's finnhub/yfinance/edgar calls, and their D1 writes, happen
  * in their own Worker invocation with its own fresh CPU budget.
@@ -302,6 +301,16 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
  * convention as collectNewsItems: a VendorError from any of the three
  * sub-fetches is logged and that source is skipped, never aborts the
  * others for this ticker.
+ *
+ * Returns `{ fetched, fresh }`. `fetched` is how many items Finnhub returned;
+ * `fresh` is `[{ item, tickers: [ticker] }]` for only the items that are NEW
+ * for this ticker -- the news_items row was just inserted, or the
+ * (item, ticker) association was. Finnhub's /company-news returns a trailing
+ * window (finnhubLookbackDays), so on any given tick most of `fetched` is
+ * already stored; returning all of it (what this used to do) made the
+ * consumer re-enqueue the whole window every 15 minutes -- past Cloudflare's
+ * 100-message sendBatch cap, and past the Queues daily-ops budget had that cap
+ * been worked around by chunking alone.
  */
 export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
   const { items, errors } = await fetchFinnhubLatest(config, { queries: [{ ticker }] }, { kv });
@@ -309,10 +318,10 @@ export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
     logSkippedSource("ticker ingest", "finnhub", error);
   }
 
-  const insertedNews = [];
+  const fresh = [];
   for (const item of items) {
-    await insertNewsItem(db, item);
-    insertedNews.push(item);
+    const { inserted, newTickers } = await insertNewsItem(db, item);
+    if (inserted || newTickers.includes(ticker)) fresh.push({ item, tickers: [ticker] });
   }
 
   // Price bars / fundamentals are a strict enhancement, not a hard
@@ -323,7 +332,7 @@ export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
   await ingestPriceBars(config, db, kv, { tickers: [ticker] });
   await ingestFundamentals(config, db, kv, { tickers: [ticker] });
 
-  return insertedNews;
+  return { fetched: items.length, fresh };
 }
 
 /**
@@ -336,6 +345,12 @@ export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
  * ingestTickerData's job now, not this one's, to avoid double-fetching/
  * double-inserting the same finnhub articles from two different fan-out
  * paths landing in the same cron tick.
+ *
+ * Returns `{ fetched, fresh }` like ingestTickerData, except each `fresh` entry
+ * carries the tickers that are NEW for that item (`newTickers` from
+ * insertNewsItem): every resolved ticker for a brand-new item, only the added
+ * one when an already-stored article shows up under another feed's ticker
+ * hint. Items with no new ticker are left out.
  */
 export async function ingestFeedNews(config, db, kv) {
   const items = [];
@@ -366,11 +381,11 @@ export async function ingestFeedNews(config, db, kv) {
     }
   }
 
-  const insertedNews = [];
+  const fresh = [];
   for (const item of items) {
-    await insertNewsItem(db, item);
-    insertedNews.push(item);
+    const { newTickers } = await insertNewsItem(db, item);
+    if (newTickers.length > 0) fresh.push({ item, tickers: newTickers });
   }
-  return insertedNews;
+  return { fetched: items.length, fresh };
 }
 
