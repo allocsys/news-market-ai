@@ -1,23 +1,20 @@
 // checkpoint_resume test (plan.md open item, mirrors TradingAgents' test
 // naming). Scope: exercises graph/checkpointer.js's stage-ordering logic and
-// its round-trip through storage/d1.js#saveCheckpoint/getCheckpoint against
-// a minimal in-memory fake of D1's prepare/bind/run/first interface.
+// its round-trip through RunStore#saveCheckpoint/getCheckpoint, then
+// runPipelineForTicker end-to-end.
 //
-// HONEST SCOPE: FakeCheckpointDb below only understands the two queries
-// d1.js actually issues against pipeline_checkpoints (an upsert and a
-// point lookup by run_id+ticker) -- it is NOT a general D1/SQLite emulator,
-// deliberately, matching this repo's convention of not building more than
-// what's needed (see e.g. entity_resolution.js's domain map). It does not
-// exercise runPipelineForTicker itself -- that's FakePipelineDb, a
-// separate, wider fake covering positions/trade_decisions/decision_memory/
-// price_bars too, further down this file. Splitting them keeps this file's
-// top half a pure unit test of checkpointer.js's stage-ordering logic
-// against the smallest fake that can exercise it.
+// M2: everything here runs on REAL sqlite-backed DBs (test/helpers/
+// engine_ctx.js -- the real migrations/state + migrations/inputs SQL), not
+// hand-written fakes. The old FakeCheckpointDb/FakePipelineDb only
+// understood the exact query shapes d1.js issued and had to be edited in
+// lockstep with every SQL change; the real schema also proves things they
+// couldn't (the (run_id, pipeline_run_id, ticker) checkpoint key, commitThesis's
+// atomic batch actually opening the position).
 //
-// UPDATE (2026-09-17): agents/utils/structured.js now exposes
-// config.fakeModel (see that file's header), which is what makes the
-// full-pipeline integration test below possible -- previously this would
-// have required live Gemini calls across six agent modules.
+// config.fakeModel (agents/utils/structured.js) is what makes the
+// full-pipeline test possible without live Gemini calls across six agent
+// modules. Only llm_calls still uses a fake (FakeLlmDb as env.DB) -- that
+// table stays on the old DB binding until M2b.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -27,37 +24,8 @@ import { runNewsEventAnalyst } from "../src/agents/analysts/newsEventAnalyst.js"
 import { runSentimentAnalyst } from "../src/agents/analysts/sentimentAnalyst.js";
 import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { FakeLlmDb } from "./helpers/fake_llm_db.js";
+import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
 import { withLlmLogContext } from "../src/storage/llm_calls.js";
-
-class FakeCheckpointDb {
-  constructor() {
-    this.rows = new Map(); // key: `${runId}|${ticker}` -> { stage, state, updated_at }
-  }
-
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async run() {
-            if (!/INSERT INTO pipeline_checkpoints/.test(sql)) {
-              throw new Error(`FakeCheckpointDb: unsupported run() query: ${sql}`);
-            }
-            const [runId, ticker, stage, state, updatedAt] = args;
-            db.rows.set(`${runId}|${ticker}`, { stage, state, updated_at: updatedAt });
-          },
-          async first() {
-            if (!/SELECT stage, state, updated_at FROM pipeline_checkpoints/.test(sql)) {
-              throw new Error(`FakeCheckpointDb: unsupported first() query: ${sql}`);
-            }
-            const [runId, ticker] = args;
-            return db.rows.get(`${runId}|${ticker}`) ?? null;
-          },
-        };
-      },
-    };
-  }
-}
 
 test("nextStage(null) starts a brand-new run at the first stage", () => {
   assert.equal(nextStage(null), STAGES[0]);
@@ -79,147 +47,66 @@ test("nextStage throws on an unrecognized stage name", () => {
 });
 
 test("resumeFrom returns {stage: null, state: null} when no checkpoint exists yet", async () => {
-  const db = new FakeCheckpointDb();
-  const result = await resumeFrom(db, { runId: "run-1", ticker: "AAPL" });
+  const { store } = makeCtx();
+  const result = await resumeFrom(store, { pipelineRunId: "run-1", ticker: "AAPL" });
   assert.deepEqual(result, { stage: null, state: null });
 });
 
 test("checkpoint + resumeFrom resumes at the stage AFTER the last completed one, with state preserved", async () => {
-  const db = new FakeCheckpointDb();
+  const { store } = makeCtx();
   const state = { opinions: [{ ticker: "AAPL", note: "fake analyst output" }] };
 
-  await checkpoint(db, { runId: "run-1", ticker: "AAPL", stage: "analyzed", state });
-  const result = await resumeFrom(db, { runId: "run-1", ticker: "AAPL" });
+  await checkpoint(store, { pipelineRunId: "run-1", ticker: "AAPL", stage: "analyzed", state });
+  const result = await resumeFrom(store, { pipelineRunId: "run-1", ticker: "AAPL" });
 
   assert.equal(result.stage, "debated"); // the stage after "analyzed"
   assert.deepEqual(result.state, state);
 });
 
 test("resumeFrom distinguishes a fully-completed run (nextStage null + state present) from a brand-new one (nextStage null + state null)", async () => {
-  const db = new FakeCheckpointDb();
+  const { store } = makeCtx();
   const state = { portfolioDecision: { action: "hold" } };
 
-  await checkpoint(db, { runId: "run-1", ticker: "AAPL", stage: "portfolio_checked", state });
-  const result = await resumeFrom(db, { runId: "run-1", ticker: "AAPL" });
+  await checkpoint(store, { pipelineRunId: "run-1", ticker: "AAPL", stage: "portfolio_checked", state });
+  const result = await resumeFrom(store, { pipelineRunId: "run-1", ticker: "AAPL" });
 
   assert.equal(result.stage, null); // no stage after the last one
   assert.deepEqual(result.state, state); // but state is populated -- this is what pipeline.js checks to short-circuit and return the cached decision
 });
 
-test("resumeFrom keeps separate (runId, ticker) pairs independent", async () => {
-  const db = new FakeCheckpointDb();
-  await checkpoint(db, { runId: "run-1", ticker: "AAPL", stage: "traded", state: { thesis: "aapl thesis" } });
-  await checkpoint(db, { runId: "run-1", ticker: "MSFT", stage: "analyzed", state: { opinions: ["msft opinion"] } });
+test("resumeFrom keeps separate (pipelineRunId, ticker) pairs independent", async () => {
+  const { store } = makeCtx();
+  await checkpoint(store, { pipelineRunId: "run-1", ticker: "AAPL", stage: "traded", state: { thesis: "aapl thesis" } });
+  await checkpoint(store, { pipelineRunId: "run-1", ticker: "MSFT", stage: "analyzed", state: { opinions: ["msft opinion"] } });
 
-  const aapl = await resumeFrom(db, { runId: "run-1", ticker: "AAPL" });
-  const msft = await resumeFrom(db, { runId: "run-1", ticker: "MSFT" });
+  const aapl = await resumeFrom(store, { pipelineRunId: "run-1", ticker: "AAPL" });
+  const msft = await resumeFrom(store, { pipelineRunId: "run-1", ticker: "MSFT" });
 
   assert.equal(aapl.stage, "risk_checked");
   assert.equal(msft.stage, "debated");
 });
 
+test("checkpoints are scoped by environment run_id: the same (pipelineRunId, ticker) in two RunStores never collides", async () => {
+  const live = makeCtx({ runId: "live" });
+  // Same underlying state DB, different environment id -- the backtest case.
+  const { RunStore } = await import("../src/storage/run_store.js");
+  const sim = new RunStore(live.stateDb, "bt-1");
+  await checkpoint(live.store, { pipelineRunId: "run-1", ticker: "AAPL", stage: "analyzed", state: { env: "live" } });
+
+  assert.deepEqual(await resumeFrom(sim, { pipelineRunId: "run-1", ticker: "AAPL" }), { stage: null, state: null });
+  assert.deepEqual((await resumeFrom(live.store, { pipelineRunId: "run-1", ticker: "AAPL" })).state, { env: "live" });
+});
+
 // =======================================================================
 // runPipelineForTicker -- true end-to-end integration, via config.fakeModel
-// (agents/utils/structured.js). FakePipelineDb below is wider than
-// FakeCheckpointDb above: it also covers positions, trade_decisions, and
-// the decision_memory/price_bars reads the pipeline touches along the way
-// (both returning empty results here -- no price history or prior
-// decisions is a normal, honest state for a ticker's first-ever run, and
-// keeps this fake from needing to be a general SQLite emulator).
+// (agents/utils/structured.js), over real sqlite state + inputs DBs.
 // =======================================================================
 
-class FakePipelineDb {
-  constructor() {
-    this.checkpoints = new Map(); // `${runId}|${ticker}` -> { stage, state, updated_at }
-    this.positions = [];
-    this.tradeDecisions = [];
-  }
-
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async run() {
-            if (/INSERT INTO pipeline_checkpoints/.test(sql)) {
-              const [runId, ticker, stage, state, updatedAt] = args;
-              db.checkpoints.set(`${runId}|${ticker}`, { stage, state, updated_at: updatedAt });
-              return;
-            }
-            if (/INSERT INTO positions/.test(sql)) {
-              const [id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, openedAt] = args;
-              if (db.positions.some((p) => p.id === id)) return; // ON CONFLICT(id) DO NOTHING
-              db.positions.push({
-                id, ticker, trade_thesis_id: tradeThesisId, position_size_pct: positionSizePct,
-                direction, entry_price: entryPrice, stop_loss_pct: stopLossPct, take_profit_pct: takeProfitPct,
-                opened_at: openedAt, closed_at: null, close_reason: null,
-              });
-              return;
-            }
-            if (/UPDATE positions SET closed_at/.test(sql)) {
-              const [closedAt, closeReason, exitPrice, id] = args;
-              const p = db.positions.find((p) => p.id === id && p.closed_at === null);
-              if (p) { p.closed_at = closedAt; p.close_reason = closeReason; p.exit_price = exitPrice; }
-              return;
-            }
-            if (/INSERT INTO trade_decisions/.test(sql)) {
-              const [id, ticker, asOf, debateId, thesis, riskDecision, portfolioDecision, status, createdAt] = args;
-              if (db.tradeDecisions.some((d) => d.id === id)) return; // ON CONFLICT(id) DO NOTHING
-              db.tradeDecisions.push({ id, ticker, as_of: asOf, debate_id: debateId, thesis, risk_decision: riskDecision, portfolio_decision: portfolioDecision, status, created_at: createdAt });
-              return;
-            }
-            throw new Error(`FakePipelineDb: unsupported run() query: ${sql}`);
-          },
-          async first() {
-            if (/SELECT stage, state, updated_at FROM pipeline_checkpoints/.test(sql)) {
-              const [runId, ticker] = args;
-              return db.checkpoints.get(`${runId}|${ticker}`) ?? null;
-            }
-            if (/FROM positions/.test(sql) && /LIMIT 1/.test(sql)) {
-              // getOpenPositionForTickerAsOf: bind(ticker, asOf, asOf)
-              const [ticker, asOf, asOfClose] = args;
-              const open = db.positions
-                .filter((p) => p.ticker === ticker && p.opened_at <= asOf && (p.closed_at === null || p.closed_at > asOfClose))
-                .sort((a, b) => (a.opened_at < b.opened_at ? 1 : -1));
-              return open[0] ?? null;
-            }
-            throw new Error(`FakePipelineDb: unsupported first() query: ${sql}`);
-          },
-          async all() {
-            if (/SELECT position_size_pct FROM positions/.test(sql)) {
-              // getOpenPositionsRiskPctAsOf: bind(asOf, asOf) or bind(asOf, asOf, excludeTicker)
-              const [asOf, asOfClose, excludeTicker] = args;
-              const results = db.positions
-                .filter((p) => p.opened_at <= asOf && (p.closed_at === null || p.closed_at > asOfClose))
-                .filter((p) => !excludeTicker || p.ticker !== excludeTicker)
-                .map((p) => ({ position_size_pct: p.position_size_pct }));
-              return { results };
-            }
-            if (/FROM price_bars/.test(sql)) {
-              // Distinguish the two real call sites by their bound `limit`
-              // (ticker, asOf, limit) -- same distinction pipeline.js itself
-              // makes: the unlimited (default 200) technical-analyst fetch
-              // stays empty so computeTechnicalSnapshot keeps reporting
-              // hasData: false (technicalAnalyst self-skips, no LLM call,
-              // matching this file's own "technical self-skips" 6-call
-              // comment below); the limit:1 entryPrice fetch returns one
-              // bar so runPipelineForTicker's no-price-data guard (PR #38,
-              // c83423c) doesn't block the position this test asserts on.
-              const [, , limit] = args;
-              if (limit === 1) {
-                return { results: [{ ticker: "AAPL", date: "2026-01-14", open: 180, high: 182, low: 179, close: 181, volume: 1000000, source: "test-fixture" }] };
-              }
-              return { results: [] }; // no price history seeded -- technicalAnalyst self-skips on empty bars
-            }
-            if (/FROM decision_memory/.test(sql)) {
-              return { results: [] }; // no prior decisions for this fresh test ticker
-            }
-            throw new Error(`FakePipelineDb: unsupported all() query: ${sql}`);
-          },
-        };
-      },
-    };
-  }
+/** ctx with the one price bar runPipelineForTicker's entry-price lookup needs (PR #38's no-price-data guard). */
+async function ctxWithEntryBar() {
+  const ctx = makeCtx();
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 181 });
+  return ctx;
 }
 
 /**
@@ -260,30 +147,36 @@ function makeFakeModel({ onCall } = {}) {
 const NEWS_ITEM = { id: "news-1", title: "AAPL beats earnings", body: "Apple reported EPS above estimates and raised guidance." };
 
 test("runPipelineForTicker runs the FULL pipeline end-to-end via config.fakeModel -- every stage checkpointed, a position opened, and a portfolioDecision returned", async () => {
-  const db = new FakePipelineDb();
+  const ctx = await ctxWithEntryBar();
   const calls = [];
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel({ onCall: (opts) => calls.push(opts) }) };
 
-  const result = await runPipelineForTicker({}, config, db, {
-    runId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z",
+  const result = await runPipelineForTicker({}, config, ctx, {
+    pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z",
   });
 
   assert.equal(result.approvedForExecution, true);
   assert.ok(result.finalPositionSizePct > 0);
 
   // Every stage checkpointed, in order, ending at portfolio_checked.
-  const finalCheckpoint = db.checkpoints.get("news-1|AAPL");
-  assert.equal(finalCheckpoint.stage, "portfolio_checked");
+  const checkpoints = await stateRows(ctx.stateDb, "pipeline_checkpoints");
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0].pipeline_run_id, "news-1");
+  assert.equal(checkpoints[0].run_id, "live");
+  assert.equal(checkpoints[0].stage, "portfolio_checked");
 
   // A position actually opened (confidence 0.8 clears risk.js's 0.6 threshold).
-  assert.equal(db.positions.length, 1);
-  assert.equal(db.positions[0].ticker, "AAPL");
-  assert.equal(db.positions[0].direction, "long");
-  assert.equal(db.positions[0].closed_at, null);
+  const positions = await stateRows(ctx.stateDb, "positions");
+  assert.equal(positions.length, 1);
+  assert.equal(positions[0].ticker, "AAPL");
+  assert.equal(positions[0].direction, "long");
+  assert.equal(positions[0].closed_at, null);
+  assert.equal(positions[0].run_id, "live");
 
-  // A trade_decision row was persisted.
-  assert.equal(db.tradeDecisions.length, 1);
-  assert.equal(db.tradeDecisions[0].status, "approved");
+  // A trade_decision row was persisted (status renamed approved -> opened in M2).
+  const decisions = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].status, "opened");
 
   // Exactly one call per LLM-backed agent: 2 analysts (technical self-skips,
   // no price bars) + bull + bear + judge + trader = 6, single debate round
@@ -292,7 +185,7 @@ test("runPipelineForTicker runs the FULL pipeline end-to-end via config.fakeMode
 });
 
 test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT re-invoking already-completed stages' LLM calls", async () => {
-  const db = new FakePipelineDb();
+  const ctx = await ctxWithEntryBar();
 
   // First "process": complete only through the analyzed stage, exactly what
   // runPipelineForTicker's own first block does, then simulate a crash by
@@ -315,9 +208,9 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
     runNewsEventAnalyst({}, configForFirstHalf, NEWS_ITEM),
     runSentimentAnalyst({}, configForFirstHalf, NEWS_ITEM),
   ]);
-  await checkpoint(db, { runId: "news-1", ticker: "AAPL", stage: "analyzed", state: { opinions: [newsOpinion, sentimentOpinion] } });
+  await checkpoint(ctx.store, { pipelineRunId: "news-1", ticker: "AAPL", stage: "analyzed", state: { opinions: [newsOpinion, sentimentOpinion] } });
 
-  // "Resume": a fresh call to runPipelineForTicker for the same (runId,
+  // "Resume": a fresh call to runPipelineForTicker for the same (pipelineRunId,
   // ticker) -- a fake model that THROWS if an analyst (AnalystOpinion) is
   // ever called again is the actual resume assertion: if resumeFrom's
   // stage-skipping logic were broken, this test would fail on that throw,
@@ -343,13 +236,14 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
   };
   const configForResume = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: resumeModel };
 
-  const result = await runPipelineForTicker({}, configForResume, db, {
-    runId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z",
+  const result = await runPipelineForTicker({}, configForResume, ctx, {
+    pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z",
   });
 
   assert.equal(result.approvedForExecution, true);
   assert.equal(calls.length, 4); // bull + bear + judge + trader -- NOT the 2 analysts again
-  assert.equal(db.checkpoints.get("news-1|AAPL").stage, "portfolio_checked");
+  assert.equal((await resumeFrom(ctx.store, { pipelineRunId: "news-1", ticker: "AAPL" })).stage, null);
+  assert.equal((await stateRows(ctx.stateDb, "pipeline_checkpoints"))[0].stage, "portfolio_checked");
 
   // The checkpointed opinions from BEFORE the simulated crash made it all
   // the way through to the debate stage unchanged -- proof state, not just
@@ -359,7 +253,7 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
 });
 
 test("runPipelineForTicker returns null-confidence rejection without opening a position when the debate verdict has low confidence", async () => {
-  const db = new FakePipelineDb();
+  const ctx = await ctxWithEntryBar();
   const lowConfidenceModel = async (prompt, opts) => {
     if (opts.schema === AnalystOpinion) {
       return opts.extraFields.agent === "news_event"
@@ -381,30 +275,31 @@ test("runPipelineForTicker returns null-confidence rejection without opening a p
   };
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: lowConfidenceModel };
 
-  const result = await runPipelineForTicker({}, config, db, {
-    runId: "news-2", ticker: "AAPL", newsItem: { ...NEWS_ITEM, id: "news-2" }, asOf: "2026-01-15T00:00:00Z",
+  const result = await runPipelineForTicker({}, config, ctx, {
+    pipelineRunId: "news-2", ticker: "AAPL", newsItem: { ...NEWS_ITEM, id: "news-2" }, asOf: "2026-01-15T00:00:00Z",
   });
 
   assert.equal(result.approvedForExecution, false); // risk.js's MIN_CONFIDENCE_TO_ACT (0.6) not met
-  assert.equal(db.positions.length, 0);
-  assert.equal(db.tradeDecisions.length, 1);
-  assert.equal(db.tradeDecisions[0].status, "rejected");
+  assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0);
+  const decisions = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].status, "rejected");
 });
 
 // ---------------------------------------------------------------------------
-// LLM call log context (storage/llm_calls.js). env.DB is separate from the
-// pipeline's own `db` argument, so a FakeLlmDb as env.DB records exactly what
-// the log writes without FakePipelineDb needing to know about llm_calls.
+// LLM call log context (storage/llm_calls.js). env.DB (the old DB binding,
+// where llm_calls lives until M2b) is separate from the engine ctx, so a
+// FakeLlmDb as env.DB records exactly what the log writes.
 // ---------------------------------------------------------------------------
 
 const EXPECTED_LABELS = ["analyst:news_event", "analyst:sentiment", "debate:bear", "debate:bull", "debate:judge", "trader"];
 
 test("runPipelineForTicker logs every LLM call it makes, tagged with its runId and ticker, as source 'pipeline' by default", async () => {
-  const db = new FakePipelineDb();
+  const ctx = await ctxWithEntryBar();
   const llmDb = new FakeLlmDb();
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, llmLogEnabled: true, fakeModel: makeFakeModel() };
 
-  await runPipelineForTicker({ DB: llmDb }, config, db, { runId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
+  await runPipelineForTicker({ DB: llmDb }, config, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
   assert.deepEqual(llmDb.rows.map((r) => r.label).sort(), EXPECTED_LABELS);
   for (const row of llmDb.rows) {
@@ -423,12 +318,12 @@ test("runPipelineForTicker logs every LLM call it makes, tagged with its runId a
 });
 
 test("runPipelineForTicker keeps a source/jobId the caller set (a backtest), and only adds runId/ticker on top", async () => {
-  const db = new FakePipelineDb();
+  const ctx = await ctxWithEntryBar();
   const llmDb = new FakeLlmDb();
   const base = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, llmLogEnabled: true, fakeModel: makeFakeModel() };
   const config = withLlmLogContext(base, { source: "backtest", jobId: "backtest-42" });
 
-  await runPipelineForTicker({ DB: llmDb }, config, db, { runId: "2026-01-01|AAPL|news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
+  await runPipelineForTicker({ DB: llmDb }, config, ctx, { pipelineRunId: "2026-01-01|AAPL|news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
   assert.equal(llmDb.rows.length, 6);
   for (const row of llmDb.rows) {
@@ -440,7 +335,7 @@ test("runPipelineForTicker keeps a source/jobId the caller set (a backtest), and
 });
 
 test("a resumed pipeline run doesn't log the stages it skips (no LLM call was made for them)", async () => {
-  const db = new FakePipelineDb();
+  const ctx = await ctxWithEntryBar();
   const firstLog = new FakeLlmDb();
   const base = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, llmLogEnabled: true };
 
@@ -449,12 +344,12 @@ test("a resumed pipeline run doesn't log the stages it skips (no LLM call was ma
     if (opts.schema === DebateSide) throw new Error("simulated crash mid-pipeline");
     return makeFakeModel()(prompt, opts);
   };
-  await assert.rejects(runPipelineForTicker({ DB: firstLog }, { ...base, fakeModel: crashModel }, db, { runId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" }));
+  await assert.rejects(runPipelineForTicker({ DB: firstLog }, { ...base, fakeModel: crashModel }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" }));
   const analystRows = firstLog.rows.filter((r) => r.label.startsWith("analyst:"));
   assert.equal(analystRows.length, 2);
 
   // Retry: resumes at the debate stage, so the analysts must not be called (or logged) again.
   const retryLog = new FakeLlmDb();
-  await runPipelineForTicker({ DB: retryLog }, { ...base, fakeModel: makeFakeModel() }, db, { runId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
+  await runPipelineForTicker({ DB: retryLog }, { ...base, fakeModel: makeFakeModel() }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
   assert.deepEqual(retryLog.rows.map((r) => r.label).sort(), ["debate:bear", "debate:bull", "debate:judge", "trader"]);
 });
