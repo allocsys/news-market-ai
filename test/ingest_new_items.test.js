@@ -10,6 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { INPUTS_DIR } from "./helpers/engine_ctx.js";
+import { loadConfig } from "../src/config.js";
 import { insertNewsItem } from "../src/storage/inputs_view.js";
 import { ingestTickerData, ingestFeedNews } from "../src/ingestion/ingest.js";
 
@@ -77,15 +78,13 @@ function finnhubArticles(count, { offset = 0 } = {}) {
   }));
 }
 
-const tickerConfig = {
-  watchlist: [{ ticker: "AAPL", query: "AAPL" }, { ticker: "MSFT", query: "MSFT" }],
-  finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key", finnhubLookbackDays: 3,
-  retryMaxAttempts: 1,
-  // yfinance/edgar calls get an empty object from the mocked fetch below; with
-  // no edgarCikMap/User-Agent the fundamentals step is a no-op and yfinance
-  // logs-and-skips, so neither touches the assertions here.
-  edgarCikMap: {}, edgarUserAgent: "",
+// The same env ingest_worker.test.js gives the Worker, through the real loadConfig, so every adapter sees a fully-populated config. yfinance/edgar calls get an empty object from the mocked fetch below; the adapters log-and-skip that, which doesn't touch the assertions here.
+const baseEnv = {
+  WATCHLIST_TICKERS: "AAPL,MSFT",
+  FINNHUB_API_KEY: "test-key",
+  ENTITY_RESOLUTION_USE_NAME_INDEX: "false",
 };
+const tickerConfig = loadConfig(baseEnv);
 
 function mockFinnhub(t, articles) {
   t.mock.method(global, "fetch", async (url) => {
@@ -149,19 +148,19 @@ test("ingestFeedNews returns only the tickers that are new for each item", async
     </item></channel></rss>`;
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, text: async () => feedXml }));
 
-  const feedsConfig = (feeds) => ({ watchlist: [], rssFeeds: feeds, scrapePages: [] });
-  const aaplFeed = { ticker: "AAPL", url: "https://fake.test/feed.xml" };
-  const msftFeed = { ticker: "MSFT", url: "https://fake.test/feed.xml" };
+  const feedsConfig = (feeds) => loadConfig({ ...baseEnv, RSS_FEED_URLS: feeds });
+  const aaplFeed = "AAPL|https://fake.test/feed.xml";
+  const msftFeed = "MSFT|https://fake.test/feed.xml";
 
-  const first = await ingestFeedNews(feedsConfig([aaplFeed]), db);
+  const first = await ingestFeedNews(feedsConfig(aaplFeed), db);
   assert.equal(first.fetched, 1);
   assert.deepEqual(first.fresh.map((f) => f.tickers), [["AAPL"]]);
 
-  const repeat = await ingestFeedNews(feedsConfig([aaplFeed]), db);
+  const repeat = await ingestFeedNews(feedsConfig(aaplFeed), db);
   assert.equal(repeat.fetched, 1);
   assert.deepEqual(repeat.fresh, []);
 
-  const gained = await ingestFeedNews(feedsConfig([aaplFeed, msftFeed]), db);
+  const gained = await ingestFeedNews(feedsConfig(`${aaplFeed},${msftFeed}`), db);
   assert.equal(gained.fetched, 2);
   assert.deepEqual(gained.fresh.map((f) => f.tickers), [["MSFT"]]);
 });
