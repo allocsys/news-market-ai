@@ -556,23 +556,23 @@ yet done: `package.json`/`deploy.yml` migrate steps for the three new DBs
 (pipeline.js etc.) still reads/writes the old single `DB` binding until
 M2's port lands.
 
-**CI bug found 2026-09-19, not yet fixed:**
-`.github/actions/ensure-d1-database`'s patch step
-(`sed -i "s/database_id = \".*\"/.../" "$CONFIG_FILE"`) matches and
-overwrites **every** `database_id = "..."` line in the target file, not
+**CI bug found 2026-09-19, fixed same day:**
+`.github/actions/ensure-d1-database`'s patch step used to do
+(`sed -i "s/database_id = \".*\"/.../" "$CONFIG_FILE"`), which matched and
+overwrote **every** `database_id = "..."` line in the target file, not
 only the one belonging to its own `database-name` input. Invisible with
 one `[[d1_databases]]` block per file (every prior use of this action);
 now that `wrangler.toml`/`wrangler.llm.toml`/`wrangler.ingest.toml` each
 have multiple blocks, calling this action against any of them (e.g. to
-re-resolve the old `DB` binding's id on a fresh checkout) would stomp
-INPUTS_DB/LIVE_DB/SIM_DB's real ids with whatever single id it resolved.
-Not triggered today -- CI's `migrate`/`deploy`/`deploy-ingest`/`deploy-llm`
-jobs still only call this action for the single old `DB` binding, and
-INPUTS_DB/LIVE_DB/SIM_DB's ids are committed directly (not placeholders),
-so there's nothing for it to patch there yet. Needs a fix (scope the sed
-to the block matching `database-name`, e.g. via a small awk/sed range
-match) before any new wiring relies on this action for a file with more
-than one block.
+re-resolve the old `DB` binding's id on a fresh checkout) would have
+stomped INPUTS_DB/LIVE_DB/SIM_DB's real ids with whatever single id it
+resolved. Was not triggered before the fix -- CI's
+`migrate`/`deploy`/`deploy-ingest`/`deploy-llm` jobs only ever called this
+action for the single old `DB` binding, and INPUTS_DB/LIVE_DB/SIM_DB's ids
+are committed directly (not placeholders), so there was nothing for it to
+patch there yet. **Fixed** by replacing the global sed with an awk pass
+scoped to the specific `[[d1_databases]]` block whose `database_name`
+matches `inputs.database-name`, leaving every other block's id untouched.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists

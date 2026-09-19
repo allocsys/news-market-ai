@@ -104,5 +104,23 @@ runs:
           echo "Created D1 database '$DB_NAME' (id: [masked])."
         fi
 
-        sed -i "s/database_id = \".*\"/database_id = \"$DB_ID\"/" "$CONFIG_FILE"
-        echo "This job's local $CONFIG_FILE now points at the real database_id (not committed back to the repo -- see this action's description)."
+        # Scope the patch to the specific [[d1_databases]] block whose
+        # database_name matches $DB_NAME -- a plain global sed here would
+        # match every database_id line in the file, which is unsafe now
+        # that wrangler.toml/wrangler.llm.toml/wrangler.ingest.toml each
+        # have multiple [[d1_databases]] blocks (INPUTS_DB/LIVE_DB/SIM_DB
+        # alongside the legacy DB binding). Track entry into the matching
+        # block via its own database_name line, then patch only the first
+        # database_id line seen after that (each block emits name before
+        # id, per wrangler's own generated format) and stop matching again
+        # once that block's id has been patched.
+        awk -v target="$DB_NAME" -v newid="$DB_ID" '
+          /^\[\[d1_databases\]\]/ { in_target = 0 }
+          in_target == 0 && $0 ~ ("^database_name[ \t]*=[ \t]*\"" target "\"") { in_target = 1 }
+          in_target == 1 && /^database_id[ \t]*=/ {
+            sub(/database_id[ \t]*=.*/, "database_id = \"" newid "\"")
+            in_target = 2
+          }
+          { print }
+        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        echo "This job's local $CONFIG_FILE now points at the real database_id for '$DB_NAME' only (not committed back to the repo -- see this action's description)."
