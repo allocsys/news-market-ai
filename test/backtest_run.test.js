@@ -208,3 +208,77 @@ test("insertBacktestRun is idempotent on id: a second insert (redelivered queue 
   assert.equal(persisted.started_at, "2026-02-01T00:00:00.000Z");
   assert.equal(persisted.grace_days, 2);
 });
+
+// ---------------------------------------------------------------------------
+// M3 (8/N): a failed run's error says WHERE it died (its data is cleaned up
+// afterwards, so this is what remains to tell how far it got)
+// ---------------------------------------------------------------------------
+
+/** A model that throws once the pipeline reaches it -- i.e. mid-walk, on the first day that has news. */
+const explodingModel = async () => {
+  throw new Error("model exploded");
+};
+
+test("a run that dies mid-walk records WHICH ticker-day it died on, in both the outcome and the registry row -- and names the right day, not an earlier finished one", async () => {
+  for (const withProgress of [false, true]) {
+    const ctx = makeBacktestCtx();
+    // News only on day 3: days 1-2 complete (clearing the in-flight marker) before day 3 blows up.
+    await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-03T12:00:00.000Z", title: "AAPL beats earnings", body: "b" });
+    await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+    const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: explodingModel };
+    const id = `run-mid-${withProgress}`;
+
+    const outcome = await runManualBacktest({}, config, ctx, {
+      id, tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+      ...(withProgress ? { onProgress: async () => {} } : {}),
+    });
+
+    assert.equal(outcome.status, "failed", `withProgress=${withProgress}`);
+    assert.match(outcome.error, /model exploded/);
+    assert.match(outcome.error, /\[while processing AAPL 2026-01-03\]$/, `withProgress=${withProgress}: the suffix must work even with no progress reporter`);
+    assert.equal((await getRun(ctx.registryDb, id)).error, outcome.error, "the registry stores the same suffixed message");
+  }
+});
+
+test("a run that fails BEFORE the walk starts gets no 'while processing' suffix", async () => {
+  // (a) future testEnd -- rejected before any ticker-day.
+  const ctx = makeBacktestCtx();
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  const future = await runManualBacktest({}, config, ctx, {
+    id: "run-pre-1", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", clock: new SimClock("2026-01-03T00:00:00.000Z"),
+  });
+  assert.equal(future.status, "failed");
+  assert.doesNotMatch(future.error, /while processing/);
+
+  // (b) the news read (first thing per ticker) failing -- before that ticker's first day starts.
+  const ctx2 = makeBacktestCtx();
+  const realInputs = ctx2.inputs;
+  ctx2.inputs = { prepare(sql) { if (/FROM news_item_revisions r/.test(sql)) throw new Error("simulated D1 read failure"); return realInputs.prepare(sql); } };
+  const read = await runManualBacktest({}, config, ctx2, {
+    id: "run-pre-2", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+  });
+  assert.equal(read.status, "failed");
+  assert.match(read.error, /simulated D1 read failure/);
+  assert.doesNotMatch(read.error, /while processing/);
+});
+
+test("a failure BETWEEN ticker-days is not blamed on the last day that finished: AAPL's walk completes, MSFT's news read fails -> no 'while processing' suffix", async () => {
+  const ctx = makeBacktestCtx();
+  const realInputs = ctx.inputs;
+  ctx.inputs = {
+    prepare(sql) {
+      const stmt = realInputs.prepare(sql);
+      if (!/FROM news_item_revisions r/.test(sql)) return stmt;
+      return { bind: (...args) => { if (args[0] === "MSFT") throw new Error("MSFT news read failed"); return stmt.bind(...args); } };
+    },
+  };
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-between", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-04T00:00:00.000Z",
+  });
+
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.error, /MSFT news read failed/);
+  assert.doesNotMatch(outcome.error, /while processing/, "AAPL's last day finished cleanly; blaming it would send the debugger to the wrong place");
+});

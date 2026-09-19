@@ -241,8 +241,27 @@ run by the `backtest` Worker.
   exceeded) on top of concurrency 1.
   *Implemented (M3 7/N):* `src/llm/budget.js`; one counter per run on
   `config.llmBudget`, charged at `callStructured`. It counts logical calls, not
-  cascade HTTP attempts, and **no default is set (unset = uncapped) until the
-  owner picks one**. A redelivered queue message starts a fresh counter.
+  cascade HTTP attempts. **Owner decided (2026-09-19): no cap** -- leave
+  `BACKTEST_MAX_LLM_CALLS` unset (backtests uncapped); the mechanism stays in
+  code. Known risk: an uncapped runaway backtest can burn the shared Gemini
+  quota that live also uses. A redelivered queue message starts a fresh counter.
+- **Failed runs are cleaned up: delete the data, keep the error log.**
+  *Implemented (M3 8/N):* when a run ends `failed`, the `backtest` Worker
+  (`src/backtest/cleanup.js`, called after the failure is recorded) deletes its
+  positions, decisions, memory, checkpoints and non-error `llm_calls`, in chunks
+  (`RunStore.deleteRun`, 500 rows/table/chunk, at most 20 chunks per run). It
+  **keeps** the `backtest_runs` row (status `failed` + the error, which now ends
+  in `[while processing <ticker> <day>]` when the failure was mid-walk), the
+  run's `llm_calls` rows with `status='error'`, and its single `job_progress`
+  row. **Complete runs are never auto-deleted**; cleanup refuses anything whose
+  registry row is not `failed`, and always refuses `live`. It is best-effort:
+  an error is logged, never retried, and never changes the ack. If cut short at
+  the chunk cap, the leftover rows simply remain (logged). Cost: D1 deletes count
+  as rows written, so a run that fails late pays roughly double its writes
+  against the 100K/day cap. A redelivered message for a run whose registry row is
+  already `complete` or `failed` is acked and skipped (it would otherwise restart
+  the walk from scratch once the checkpoints are gone); a `running` row still
+  resumes from checkpoints.
 - The `*/15` cron was disabled by the owner on 2026-09-19 and stays off until M4.
 
 **Free-plan budgets** (the account is on Workers Free; limits from Cloudflare's

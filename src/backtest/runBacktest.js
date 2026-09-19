@@ -90,19 +90,29 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
   // onStep fires twice per ticker-day (done:false when it starts, done:true
   // when it finishes, see onSignalRunner.js) -- only count the finish, so
   // completedSteps never exceeds totalSteps.
-  const onStep = onProgress
-    ? async ({ ticker, dayIso, done }) => {
-        if (!done) return;
-        completedSteps++;
-        await onProgress({
-          phase: "simulating",
-          percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
-          done: completedSteps,
-          total: totalSteps,
-          detail: `${ticker} ${dayIso.slice(0, 10)}`,
-        });
-      }
-    : undefined;
+  //
+  // The wrapper is ALWAYS defined (even with no onProgress) because it also
+  // remembers the ticker-day currently in flight: set when a day starts,
+  // cleared when it finishes. If the run then throws, that is WHERE it died,
+  // and it is appended to the stored error so a failed run whose data has
+  // been cleaned up (backtest/cleanup.js) still says how far it got.
+  let current = null;
+  const onStep = async ({ ticker, dayIso, done }) => {
+    if (!done) {
+      current = { ticker, dayIso };
+      return;
+    }
+    current = null;
+    completedSteps++;
+    if (!onProgress) return;
+    await onProgress({
+      phase: "simulating",
+      percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
+      done: completedSteps,
+      total: totalSteps,
+      detail: `${ticker} ${dayIso.slice(0, 10)}`,
+    });
+  };
 
   try {
     // Fresh per-run LLM-call counter (llm/budget.js), created here -- not in
@@ -128,7 +138,9 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     await completeBacktestRun(registryDb, { id, result, finishedAt: new Date().toISOString() });
     return { id, status: "complete", result };
   } catch (err) {
-    await failBacktestRun(registryDb, { id, error: err.message, finishedAt: new Date().toISOString() });
-    return { id, status: "failed", error: err.message };
+    // No suffix when it failed before the walk started (e.g. assertNotFuture).
+    const error = current ? `${err.message} [while processing ${current.ticker} ${current.dayIso.slice(0, 10)}]` : err.message;
+    await failBacktestRun(registryDb, { id, error, finishedAt: new Date().toISOString() });
+    return { id, status: "failed", error };
   }
 }

@@ -17,7 +17,13 @@
 // identically. A throw that DOES escape (e.g. the registry insert hitting a
 // SIM_DB outage) is unexpected, so the message is retried; the registry
 // insert is idempotent on id and the pipeline resumes from its checkpoints,
-// so a redelivered message continues rather than restarts or conflicts.
+// so a redelivered message continues rather than restarts or conflicts. A
+// redelivery for a run whose registry row is already terminal ('complete' or
+// 'failed') is acked and skipped: a failed run's data has been deleted (see
+// below), so re-running it would restart the whole walk from scratch.
+//
+// FAILED RUNS: the run's data is deleted, its error log kept -- see
+// backtest/cleanup.js (best-effort; runs after the failure is recorded).
 //
 // max_concurrency = 1 / max_batch_size = 1 (wrangler.backtest.toml) keeps
 // runs strictly sequential: the walk is CPU/subrequest heavy and the
@@ -27,6 +33,7 @@ import { loadConfig } from "./config.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
+import { cleanupFailedRun } from "./backtest/cleanup.js";
 
 /** Per-message backtest context: SIM_DB read/write under this run's own id, INPUTS_DB read-only. Mirrors llm-worker.js's buildLiveContext shape. */
 function buildBacktestContext(env, runId) {
@@ -47,7 +54,19 @@ export default {
       try {
         if (job.type === "backtest") {
           const { id, tickers, testStart, testEnd, graceDays } = job;
+          // (ctx first: RunStore's constructor is what rejects a message with no id.)
           const ctx = buildBacktestContext(env, id);
+          // Redelivery of an already-finished run: skip it. A failed run's data
+          // is deleted (backtest/cleanup.js), so re-running it would restart the
+          // whole walk from scratch and could overwrite the 'failed' row; a
+          // complete run has nothing left to do. A 'running' row (a run whose
+          // Worker died mid-walk) still proceeds and resumes from checkpoints.
+          const existing = await env.SIM_DB.prepare(`SELECT status FROM backtest_runs WHERE id = ?`).bind(id).first();
+          if (existing?.status === "complete" || existing?.status === "failed") {
+            console.log("backtest job already finished, acking without re-running", { id, status: existing.status });
+            message.ack();
+            continue;
+          }
           // job_progress (storage/jobs.js) is the dashboard's live percent/
           // phase display -- a SEPARATE, finer-grained record from the
           // backtest_runs registry, which runManualBacktest itself writes
@@ -63,12 +82,17 @@ export default {
             { inputs: ctx.inputs, store: ctx.store, registryDb: env.SIM_DB },
             { id, tickers, testStart, testEnd, graceDays, onProgress: (progress) => reporter.update(progress) }
           );
+          let cleanup;
           if (outcome.status === "complete") {
             await reporter.complete(outcome.result, "Backtest complete");
           } else {
             await reporter.fail(outcome.error);
+            // AFTER reporter.fail: failJob is an UPDATE, so the job_progress row
+            // must exist first (and the cleanup keeps that one row). Delete the
+            // failed run's data, keep its error log. Best-effort, never throws.
+            cleanup = await cleanupFailedRun(env.SIM_DB, ctx.store, id);
           }
-          console.log("backtest job finished", { id, status: outcome.status, tickers });
+          console.log("backtest job finished", { id, status: outcome.status, tickers, ...(cleanup ? { cleanup } : {}) });
         } else {
           console.error("backtest queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
         }
