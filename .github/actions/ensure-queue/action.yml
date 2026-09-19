@@ -52,7 +52,11 @@ runs:
 
         if [ "$CREATE_STATUS" -eq 0 ]; then
           echo "Created queue '$QUEUE_NAME'."
-        elif echo "$CREATE_OUTPUT" | grep -qi "already exists"; then
+        # wrangler v3 said "already exists"; v4 says "Queue name '<n>' is
+        # already taken ... [code: 11009]". Match both wordings plus the
+        # stable API error code, so a future wording change doesn't break
+        # re-runs again.
+        elif echo "$CREATE_OUTPUT" | grep -qiE "already (exists|taken)|code: 11009"; then
           echo "Queue '$QUEUE_NAME' already exists -- skipping creation."
         else
           echo "::error::'wrangler queues create $QUEUE_NAME' failed (exit $CREATE_STATUS) for a reason other than 'already exists' -- see output above."
