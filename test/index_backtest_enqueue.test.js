@@ -37,6 +37,7 @@ class RecordingDb {
 function baseEnv() {
   return {
     DB: new RecordingDb(),
+    LIVE_DB: new RecordingDb(), // M2b: job_progress lives here now
     JOBS: new FakeQueue(),
     LLM_JOBS: new FakeQueue(),
     WATCHLIST_TICKERS: "AAPL,MSFT",
@@ -60,6 +61,7 @@ test("POST /backtest/run returns 503 naming M3, and enqueues nothing / writes no
   assert.equal(env.JOBS.sent.length, 0);
   assert.equal(env.LLM_JOBS.sent.length, 0);
   assert.equal(env.DB.prepared.length, 0, "no job_progress row may be created for a disabled route");
+  assert.equal(env.LIVE_DB.prepared.length, 0, "...in LIVE_DB (where job_progress lives since M2b) either");
 });
 
 test("POST /backtest/run returns the same 503 for a malformed request (disabled before validation), still touching nothing", async () => {
@@ -71,4 +73,5 @@ test("POST /backtest/run returns the same 503 for a malformed request (disabled 
   assert.equal(env.JOBS.sent.length, 0);
   assert.equal(env.LLM_JOBS.sent.length, 0);
   assert.equal(env.DB.prepared.length, 0);
+  assert.equal(env.LIVE_DB.prepared.length, 0);
 });

@@ -30,9 +30,10 @@
 // falls through to message.retry(), so each consumer's max_retries/
 // dead_letter_queue in wrangler.llm.toml is the safety net for that.
 //
-// M2 STATE: analyze and exit_check run against a per-message context --
+// STATE (M2/M2b): analyze and exit_check run against a per-message context --
 // INPUTS_DB read-only + a RunStore("live") on LIVE_DB. llm_calls and
-// job_progress still live on the old DB binding (env.DB) until M2b. The
+// job_progress live in that same state DB (M2b), through that same RunStore.
+// The old DB binding (env.DB) is no longer read or written here. The
 // `backtest` message type is now REJECTED loudly (job marked failed, nothing
 // run): backtests move to the backtest Worker in M3, and this Worker never
 // binds SIM_DB. Only `backend` runs migrations. Same CACHE_KV namespace the other
@@ -45,7 +46,7 @@ import { runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
-import { pruneLlmCalls, withLlmLogContext } from "./storage/llm_calls.js";
+import { withLlmLogContext } from "./storage/llm_calls.js";
 
 // Per-message engine context (M2). `inputs` is a read-only handle onto the
 // shared inputs DB (this Worker never writes news/price/fundamentals --
@@ -103,7 +104,9 @@ export default {
           const { id, tickers, testStart, testEnd, graceDays } = job;
           const reason = "backtests move to the backtest Worker in M3";
           console.error("backtest job rejected: " + reason, { id, tickers });
-          const reporter = createJobReporter(env.DB, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } });
+          // The row lands under the 'live' run: this Worker has no SIM_DB, and
+          // a real backtest's jobs get their own run id in the backtest Worker (M3).
+          const reporter = createJobReporter(buildLiveContext(env).store, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } });
           // start() first: it upserts the row to 'running' whether or not a
           // 'queued' row exists (a message already on the queue predates the
           // disabled route), and fail() only updates a queued/running row.
@@ -119,8 +122,9 @@ export default {
           // unexpected failure -- but retrying wouldn't recover anything
           // either, the next scheduled tick re-evaluates every still-open
           // position regardless.
+          const liveCtx = buildLiveContext(env);
           try {
-            const closed = await checkOpenPositionExits(env, withLlmLogContext(config, { source: "exit_check" }), buildLiveContext(env), { asOf: job.asOf });
+            const closed = await checkOpenPositionExits(env, withLlmLogContext(config, { source: "exit_check" }), liveCtx, { asOf: job.asOf });
             console.log("exit_check job completed", { closed: closed.length, closed });
           } catch (err) {
             console.error("exit_check job failed", { message: err.message });
@@ -131,7 +135,7 @@ export default {
           // failed prune must not affect the exit check above or the ack below.
           if (config.llmLogEnabled) {
             try {
-              await pruneLlmCalls(env.DB, { days: config.llmLogRetentionDays });
+              await liveCtx.store.pruneLlmCalls({ days: config.llmLogRetentionDays });
             } catch (err) {
               console.warn("llm call log prune failed (non-fatal)", { message: err.message });
             }

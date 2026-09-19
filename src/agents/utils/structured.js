@@ -70,7 +70,7 @@ export async function callStructured(env, config, schema, prompt, { model, extra
   const trace = {};
   const startedAt = Date.now();
   const log = (fields) =>
-    recordLlmCall(env, config, {
+    recordLlmCall(config, {
       label,
       ticker,
       requestedModel,

@@ -14,6 +14,7 @@
 // used to.
 
 import test from "node:test";
+import { jobStateDb } from "./helpers/job_db.js";
 import assert from "node:assert/strict";
 import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
@@ -384,55 +385,26 @@ test("POST /backtest/run with a valid session cookie is forwarded to backend, wh
 // /api/jobs/active contract, not a guessed shape of it.
 // --------------------------------------------------------------------
 
-/** Answers job_progress reads for a single canned row (or none), same shape as FakeDashboardDb. */
-class FakeJobDb {
-  constructor(row = undefined) {
-    this.row = row;
-  }
-  prepare(sql) {
-    const db = this;
-    return {
-      bind() {
-        return this;
-      },
-      async first() {
-        return /FROM job_progress/.test(sql) ? db.row : undefined;
-      },
-      async all() {
-        return { results: [] };
-      },
-      async run() {},
-    };
-  }
-}
-
-const RUNNING_BACKFILL_ROW = {
+const RUNNING_BACKFILL = {
   id: "backfill-1789783849291-cx0mfj",
   type: "backfill",
-  status: "running",
   phase: "saving",
   percent: 60,
   done: 200,
   total: 733,
   detail: "Saved 200/733 articles",
-  params: '{"from":"2024-01-01","to":"2024-01-31"}',
-  result: null,
-  error: null,
-  created_at: "2026-09-19T11:58:00.000Z",
-  started_at: "2026-09-19T11:58:05.000Z",
-  updated_at: "2026-09-19T11:59:30.000Z",
-  finished_at: null,
+  params: { from: "2024-01-01", to: "2024-01-31" },
 };
 
 test("GET /dashboard/backfill shows no active-job panel when nothing is in flight", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeJobDb(undefined) }) });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
   assert.doesNotMatch(html, /id="active-job"/);
 });
 
 test("GET /dashboard/backfill prepends the active-job panel ahead of the form when backend reports a running backfill", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeJobDb(RUNNING_BACKFILL_ROW) }) });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb([RUNNING_BACKFILL])).db }) });
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
 
@@ -454,15 +426,15 @@ test("GET /dashboard/backfill renders normally (no active-job panel, no crash) w
 });
 
 test("GET /dashboard/backtest shows no active-job panel when nothing is in flight", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeJobDb(undefined) }) });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backtest", { headers: { Cookie: cookie } }), env)).text();
   assert.doesNotMatch(html, /id="active-job"/);
 });
 
 test("GET /dashboard/backtest prepends the active-job panel when backend reports a running backtest", async () => {
-  const runningBacktestRow = { ...RUNNING_BACKFILL_ROW, id: "backtest-1-abc", type: "backtest", params: '{"tickers":["AAPL"]}' };
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeJobDb(runningBacktestRow) }) });
+  const runningBacktest = { ...RUNNING_BACKFILL, id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] } };
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb([runningBacktest])).db }) });
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backtest", { headers: { Cookie: cookie } }), env)).text();
 
@@ -471,7 +443,7 @@ test("GET /dashboard/backtest prepends the active-job panel when backend reports
 });
 
 test("GET /dashboard/snapshot never shows an active-job panel -- only backfill/backtest pages look one up", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeJobDb(RUNNING_BACKFILL_ROW) }) });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb([RUNNING_BACKFILL])).db }) });
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
   assert.doesNotMatch(html, /id="active-job"/);

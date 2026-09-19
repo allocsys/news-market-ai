@@ -21,6 +21,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
+import { createTestD1 } from "./helpers/sqlite_d1.js";
+import { STATE_DIR } from "./helpers/engine_ctx.js";
+import { BrokenDb } from "./helpers/broken_db.js";
+import { RunStore } from "../src/storage/run_store.js";
 
 class FakeMessage {
   constructor(body) {
@@ -64,8 +68,8 @@ function mockFinnhubJson() {
 
 test("queue() processes a backfill job: runs the real backfill, then acks the message", async (t) => {
   const db = new FakeNewsDb();
-  // M2: news writes go to INPUTS_DB; env.DB is only the (best-effort) job_progress reporter until M2b.
-  const env = { DB: {}, INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
+  // M2: news writes go to INPUTS_DB; M2b: the job_progress row goes to LIVE_DB (run_id 'live').
+  const env = { LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const message = new FakeMessage({ type: "backfill", id: "backfill-1", from: "2024-01-01", to: "2024-01-31" });
@@ -74,6 +78,15 @@ test("queue() processes a backfill job: runs the real backfill, then acks the me
   assert.equal(db.newsItems.length, 1);
   assert.equal(message.acked, true);
   assert.equal(message.retried, false);
+
+  // The progress row: written even though no 'queued' row existed (upsert), finished 'complete' with the real counts.
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-1");
+  assert.equal(job.status, "complete");
+  assert.equal(job.type, "backfill");
+  assert.equal(job.percent, 100);
+  assert.deepEqual(job.params, { from: "2024-01-01", to: "2024-01-31" });
+  assert.equal(job.result.inserted, 1);
+  assert.match(job.detail, /Inserted 1 article/);
 });
 
 test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and still acks -- no lasting state to retry into", async (t) => {
@@ -82,7 +95,7 @@ test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and s
       throw new Error("simulated D1 write failure");
     }
   }
-  const env = { DB: {}, INPUTS_DB: new ThrowingDb(), WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
+  const env = { LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: new ThrowingDb(), WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const errorLogs = [];
@@ -94,6 +107,26 @@ test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and s
   assert.equal(message.acked, true);
   assert.equal(message.retried, false);
   assert.ok(errorLogs.some(([msg]) => msg.includes("backfill job failed")));
+
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-2");
+  assert.equal(job.status, "failed");
+  assert.match(job.error, /simulated D1 write failure/);
+});
+
+test("queue() still runs and acks a backfill when LIVE_DB (the progress store) is down -- progress is best-effort", async (t) => {
+  const db = new FakeNewsDb();
+  const env = { LIVE_DB: new BrokenDb(), INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL", FINNHUB_API_KEY: "test-key" };
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
+  const warnings = [];
+  t.mock.method(console, "warn", (...args) => warnings.push(args));
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-3", from: "2024-01-01", to: "2024-01-31" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(db.newsItems.length, 1, "the backfill itself is unaffected");
+  assert.equal(message.acked, true);
+  assert.equal(message.retried, false);
+  assert.ok(warnings.some(([msg]) => msg.includes("job progress write failed")));
 });
 
 test("queue() no longer handles the Gemini-calling message types (backtest, exit_check, analyze) -- acks them as unrecognized, does no work", async (t) => {
@@ -105,7 +138,7 @@ test("queue() no longer handles the Gemini-calling message types (backtest, exit
   // methods: any attempt to actually run one of these would throw on first
   // D1 access and land in the retry path instead of ack, failing the
   // assertions below.
-  const env = { DB: {} };
+  const env = {};
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -122,7 +155,7 @@ test("queue() no longer handles the Gemini-calling message types (backtest, exit
 });
 
 test("queue() acks (does not retry) an unrecognized job type, logging the anomaly", async (t) => {
-  const env = { DB: {} };
+  const env = {};
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -139,7 +172,7 @@ test("queue() retries (does not ack) a message when the handler itself crashes u
   // the "unrecognized type" case above) -- to actually exercise the retry
   // path we need queue()'s own try/catch to see a real thrown error, e.g.
   // a completely malformed message body that isn't even an object.
-  const env = { DB: {} };
+  const env = {};
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 

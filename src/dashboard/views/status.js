@@ -166,7 +166,7 @@ export function renderRunAcceptedPage({ title, detail, backLink, backLabel, jobI
 /** Above this many tickers, name the count instead of listing them (a default backtest covers the whole watchlist). */
 const MAX_TICKERS_LISTED = 5;
 
-/** One-line human description of a job_progress row (src/storage/jobs.js's getJob/getActiveJob shape), built from the params it was enqueued with. Tolerates missing params. */
+/** One-line human description of a job_progress row (RunStore#getJob/getActiveJob shape, storage/jobs.js#jobFromRow), built from the params it was enqueued with. Tolerates missing params. */
 export function describeJob(job) {
   const p = job?.params || {};
   if (job?.type === "backtest") {

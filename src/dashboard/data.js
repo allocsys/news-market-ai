@@ -15,8 +15,19 @@ import {
   getRecentBacktestRuns,
   getOpenPositionsExposureTotal,
 } from "../storage/d1.js";
-import { getRecentLlmCalls, getLlmCall } from "../storage/llm_calls.js";
+import { RunStore, readOnly } from "../storage/run_store.js";
 import { parseDashboardParams, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
+
+/**
+ * Read-only RunStore over LIVE_DB (run_id 'live') for the state-schema panels
+ * that have moved off the old DB: the LLM-call log and job progress (M2b).
+ * The dashboard API never writes, so the handle is wrapped in readOnly() --
+ * a write method reaching D1 through it throws instead of running. The other
+ * panels still read env.DB until M4 (which also adds an env selector).
+ */
+export function liveReadStore(env) {
+  return new RunStore(readOnly(env.LIVE_DB), "live");
+}
 
 /**
  * Wraps a single D1 query promise so a rejection becomes { data: null, error }
@@ -125,7 +136,7 @@ export async function getBacktestRunsData(env) {
 /** LLM-call log page: newest-first list (previews only) under the page's filters. `params` is helpers.js#parseLlmParams's output. */
 export async function getLlmCallsData(env, params) {
   const result = await safe(
-    getRecentLlmCalls(env.DB, {
+    liveReadStore(env).getRecentLlmCalls({
       limit: params.llmLimit,
       source: params.llmSource === "all" ? undefined : params.llmSource,
       status: params.llmStatus === "all" ? undefined : params.llmStatus,
@@ -140,7 +151,7 @@ export async function getLlmCallsData(env, params) {
 
 /** One call in full: complete prompt, raw response, cascade attempts. `call` is null when the id doesn't exist. */
 export async function getLlmCallData(env, id) {
-  const result = await safe(getLlmCall(env.DB, id));
+  const result = await safe(liveReadStore(env).getLlmCall(id));
   return { call: result.data, error: result.error };
 }
 

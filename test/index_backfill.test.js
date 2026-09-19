@@ -18,6 +18,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
+import { createTestD1 } from "./helpers/sqlite_d1.js";
+import { STATE_DIR } from "./helpers/engine_ctx.js";
+import { RunStore } from "../src/storage/run_store.js";
 
 /** Minimal fake of the JOBS queue binding (Cloudflare Queues' `send`
  * producer API) -- captures every enqueued message so a test can assert on
@@ -40,7 +43,8 @@ class ThrowingJobsQueue {
 
 function baseEnv(overrides = {}) {
   return {
-    DB: {},
+    LIVE_DB: createTestD1([STATE_DIR]), // M2b: the 'queued' job_progress row lands here, run_id 'live'
+
     JOBS: new FakeJobsQueue(),
     WATCHLIST_TICKERS: "AAPL",
     FINNHUB_API_KEY: "test-key",
@@ -77,6 +81,23 @@ test("POST /backfill with a valid range enqueues a backfill job onto JOBS and re
 
   assert.equal(env.JOBS.sent.length, 1);
   assert.deepEqual(env.JOBS.sent[0], { type: "backfill", id: body.id, from: "2024-01-01", to: "2024-01-31" });
+
+  // A 'queued' progress row was written BEFORE the enqueue, under the live run.
+  const job = await new RunStore(env.LIVE_DB, "live").getJob(body.id);
+  assert.equal(job.status, "queued");
+  assert.equal(job.type, "backfill");
+  assert.deepEqual(job.params, { from: "2024-01-01", to: "2024-01-31" });
+});
+
+test("POST /backfill still enqueues when the progress store is down -- the 'queued' row is best-effort and must never block the real enqueue", async (t) => {
+  const { BrokenDb } = await import("./helpers/broken_db.js");
+  t.mock.method(console, "warn", () => {});
+  const env = baseEnv({ LIVE_DB: new BrokenDb() });
+
+  const response = await worker.fetch(new Request("https://worker.example/backfill?from=2024-01-01&to=2024-01-31", { method: "POST" }), env);
+
+  assert.equal(response.status, 200);
+  assert.equal(env.JOBS.sent.length, 1);
 });
 
 test("POST /backfill still enqueues (and ignores) a legacy ?async=1 query param -- harmless leftover from before plan.md Step 3", async () => {

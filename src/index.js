@@ -53,6 +53,7 @@
 import { loadConfig } from "./config.js";
 import { backfillHistoricalNews } from "./ingestion/ingest.js";
 import { createJobReporter } from "./storage/jobs.js";
+import { RunStore } from "./storage/run_store.js";
 import {
   handleApiSnapshotRoute,
   handleApiActivityRoute,
@@ -127,7 +128,7 @@ export default {
     }
 
     // Operational entry point for ingestion/ingest.js#backfillHistoricalNews (writes INPUTS_DB
-    // since M2; the job row itself stays on env.DB until M2b).
+    // since M2; the job row lives in LIVE_DB's job_progress under run_id 'live', since M2b).
     // Query-string only (from/to) -- `dashboard` is the only caller and
     // always forwards as query params, whether it originally received a
     // browser form submission or a scripted JSON request. Since plan.md
@@ -149,7 +150,7 @@ export default {
       // 'queued' row written before the message is even sent -- best-effort
       // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
       // progress-write hiccup here can never block the real enqueue below.
-      await createJobReporter(env.DB, { id, type: "backfill", params: { from, to } }).queued();
+      await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } }).queued();
       try {
         await env.JOBS.send({ type: "backfill", id, from, to });
         return jsonResponse({ accepted: true, id, from, to });
@@ -232,7 +233,7 @@ export default {
       try {
         if (job.type === "backfill") {
           const { id, from, to } = job;
-          const reporter = createJobReporter(env.DB, { id, type: "backfill", params: { from, to } });
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } });
           await reporter.start();
           try {
             const result = await backfillHistoricalNews(config, env.INPUTS_DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
