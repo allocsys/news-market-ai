@@ -180,3 +180,87 @@ test("inputs schema is disjoint from the state schema (no table defined in both)
   const state = await names([STATE_DIR]);
   assert.deepEqual([...inputs].filter((n) => state.has(n)), []);
 });
+
+// ---------------------------------------------------------------------------
+// deploy wiring: every Worker config is actually deployed by CI, and every
+// queue any config references exists before `wrangler deploy` needs it
+// ---------------------------------------------------------------------------
+// These read deploy.yml / path-filters.yml as TEXT (no YAML dependency), so they
+// are structural checks -- they prove the wiring is present and ordered, not
+// that GitHub Actions accepts it. No real Actions run has exercised the
+// deploy-backtest job.
+
+const DEPLOY_YML = readFileSync(path.join(ROOT, ".github/workflows/deploy.yml"), "utf8");
+const PATH_FILTERS = readFileSync(path.join(ROOT, ".github/path-filters.yml"), "utf8");
+const PACKAGE_JSON = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
+
+/** The text of one top-level job in deploy.yml (up to the next job, or the end of the file). */
+function jobBlock(name) {
+  const m = DEPLOY_YML.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z][\\w-]*:\\n|$)`));
+  assert.ok(m, `deploy.yml has no top-level job ${name}`);
+  return m[1];
+}
+
+/** Every queue name any wrangler config references, as producer, consumer or dead-letter queue. */
+function referencedQueues() {
+  const names = new Set();
+  for (const f of WRANGLER_FILES) {
+    const cfg = read(f);
+    for (const q of [...(cfg.arrays["queues.producers"] ?? []), ...(cfg.arrays["queues.consumers"] ?? [])]) {
+      names.add(q.queue);
+      if (q.dead_letter_queue) names.add(q.dead_letter_queue);
+    }
+  }
+  return [...names].sort();
+}
+
+test("every queue any wrangler config references is ensured by CI, in backend's deploy job, before `wrangler deploy` runs", () => {
+  const queues = referencedQueues();
+  assert.ok(queues.includes("news-market-ai-backtest") && queues.includes("news-market-ai-backtest-dlq"), "the backtest queue + DLQ are among the referenced queues");
+  const backend = jobBlock("deploy");
+  const deployStep = backend.indexOf("        run: npm run deploy\n");
+  assert.ok(deployStep > 0, "backend's `npm run deploy` step exists");
+  for (const q of queues) {
+    const at = backend.indexOf(`queue-name: ${q}\n`);
+    assert.ok(at >= 0, `deploy.yml's backend deploy job never ensures queue ${q} -- \`wrangler deploy\` would fail on a missing queue`);
+    assert.ok(at < deployStep, `queue ${q} is ensured only AFTER backend's deploy step`);
+  }
+});
+
+test("each satellite Worker (dashboard, ingest, llm, backtest) has a script, a path filter, a changes output + baseline, a paths-filter step, a deploy job and a package script", () => {
+  for (const name of ["dashboard", "ingest", "llm", "backtest"]) {
+    const cfg = read(`wrangler.${name}.toml`);
+    const main = cfg.top.main;
+    assert.ok(main && readFileSync(path.join(ROOT, main), "utf8"), `wrangler.${name}.toml's main (${main}) exists`);
+
+    const filter = PATH_FILTERS.match(new RegExp(`^${name}:\\n((?:[ \\t]+.*\\n|\\n)*)`, "m"));
+    assert.ok(filter, `path-filters.yml has no \`${name}:\` filter`);
+    assert.ok(filter[1].includes(`'${main}'`), `the ${name} filter doesn't list its own entry point ${main}`);
+    assert.ok(filter[1].includes(`'wrangler.${name}.toml'`), `the ${name} filter doesn't list wrangler.${name}.toml`);
+
+    assert.ok(DEPLOY_YML.includes(`      ${name}: \${{ github.event_name == 'workflow_dispatch' ||`), `the changes job has no \`${name}\` output`);
+    assert.ok(DEPLOY_YML.includes(`[${name}]=deploy-${name}`), `the baseline want-map has no [${name}]=deploy-${name}`);
+    assert.ok(new RegExp(`id: f_${name}\\n\\s+if: github.event_name == 'push' && steps.base.outputs.${name} != ''`).test(DEPLOY_YML), `no paths-filter step f_${name}`);
+    assert.ok(new RegExp(`\\n  deploy-${name}:\\n`).test(DEPLOY_YML), `no deploy-${name} job`);
+    assert.ok(jobBlock(`deploy-${name}`).includes(`needs.changes.outputs.${name} == 'true'`), `deploy-${name} isn't gated on its own changes output`);
+    assert.ok(jobBlock(`deploy-${name}`).includes(`run: npm run deploy:${name}\n`), `deploy-${name} doesn't run npm run deploy:${name}`);
+    assert.equal(PACKAGE_JSON.scripts[`deploy:${name}`], `wrangler deploy --config wrangler.${name}.toml`);
+    assert.equal(PACKAGE_JSON.scripts[`dev:${name}`], `wrangler dev --config wrangler.${name}.toml`);
+  }
+});
+
+test("the llm filter no longer watches src/backtest/** (llm-worker.js stopped importing it); the backtest filter does", () => {
+  const llm = PATH_FILTERS.match(/^llm:\n((?:[ \t]+.*\n)*)/m)[1];
+  const backtest = PATH_FILTERS.match(/^backtest:\n((?:[ \t]+.*\n)*)/m)[1];
+  assert.ok(!llm.includes("src/backtest/**"));
+  assert.ok(backtest.includes("'src/backtest/**'"));
+  assert.ok(!/from "\.\/backtest\//.test(readFileSync(path.join(ROOT, "src/llm-worker.js"), "utf8")), "llm-worker.js really doesn't import src/backtest");
+});
+
+test("deploy-backtest sets GEMINI_API_KEYS on its own config, never a Finnhub key, and never resolves D1/KV placeholders (its config has real ids)", () => {
+  const job = jobBlock("deploy-backtest");
+  assert.ok(job.includes("wrangler secret put GEMINI_API_KEYS --config wrangler.backtest.toml"));
+  assert.ok(!/FINNHUB/.test(job), "the backtest Worker must not receive a Finnhub key");
+  assert.ok(!/ensure-d1-database|ensure-kv-namespace/.test(job), "an ensure-* step could patch live's ids into wrangler.backtest.toml");
+  assert.ok(job.includes("group: deploy-news-market-ai-backtest-"), "own concurrency group");
+});
