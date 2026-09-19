@@ -12,6 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runManualBacktest } from "../src/backtest/runBacktest.js";
+import { SimClock } from "../src/backtest/simClock.js";
 import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { makeCtx, seedNews, seedBar, stateRows, SIM_DIR } from "./helpers/engine_ctx.js";
@@ -114,4 +115,81 @@ test("runManualBacktest with no backfilled news for the window still completes, 
   assert.equal(outcome.status, "complete");
   assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0); // no news -> no pipeline run -> no position
   assert.equal(outcome.result.overall.on.cumulativeReturn, 0); // empty return series, not a fabricated number
+});
+
+// ---------------------------------------------------------------------------
+// M3: SimClock + LLM call log wiring
+// ---------------------------------------------------------------------------
+
+test("runManualBacktest fails a run whose testEnd is in the future, recording it as a 'failed' registry row (not a silent reinterpretation)", async () => {
+  const ctx = makeBacktestCtx();
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-future", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    clock: new SimClock("2026-01-03T00:00:00.000Z"),
+  });
+
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.error, /testEnd/);
+  assert.match(outcome.error, /future/);
+  const persisted = await getRun(ctx.registryDb, "run-future");
+  assert.equal(persisted.status, "failed");
+  assert.match(persisted.error, /future/);
+  assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0);
+});
+
+test("runManualBacktest clamps the grace-period overshoot to the clock's now: progress totals are sized to the clamped walk", async () => {
+  const ctx = makeBacktestCtx();
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-03", close: 100 });
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  const updates = [];
+
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-clamped", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-03T00:00:00.000Z", graceDays: 30,
+    clock: new SimClock("2026-01-04T00:00:00.000Z"),
+    onProgress: async (u) => { updates.push(u); },
+  });
+
+  assert.equal(outcome.status, "complete");
+  const simulating = updates.filter((u) => u.phase === "simulating");
+  // Jan 1..Jan 4 inclusive = 4 days, NOT the 33 an unclamped 30-day grace would walk.
+  assert.equal(simulating.at(-1).total, 4);
+  assert.equal(simulating.at(-1).done, 4);
+});
+
+test("runManualBacktest tags every LLM call it makes source 'backtest' with its own id as job_id, in the run's own store", async () => {
+  const ctx = makeBacktestCtx();
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "AAPL beats earnings", body: "Apple reported EPS above estimates." });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-05", close: 110 });
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 2, llmLogEnabled: true, fakeModel: makeFakeModel() };
+
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-logged", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 3,
+  });
+
+  assert.equal(outcome.status, "complete");
+  const calls = await stateRows(ctx.stateDb, "llm_calls");
+  assert.ok(calls.length > 0, "the pipeline's LLM calls were logged");
+  for (const row of calls) {
+    assert.equal(row.source, "backtest");
+    assert.equal(row.job_id, "run-logged");
+    assert.equal(row.env_run_id, "bt-test", "written under the ctx store's own run id, never 'live'");
+  }
+});
+
+test("runManualBacktest logs nothing when config.llmLogEnabled isn't on (the wrangler.backtest.toml default)", async () => {
+  const ctx = makeBacktestCtx();
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z" });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 2, llmLogEnabled: false, fakeModel: makeFakeModel() };
+
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-unlogged", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-03T00:00:00.000Z", graceDays: 1,
+  });
+
+  assert.equal(outcome.status, "complete");
+  assert.equal((await stateRows(ctx.stateDb, "llm_calls")).length, 0);
 });

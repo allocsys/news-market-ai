@@ -21,6 +21,9 @@ import assert from "node:assert/strict";
 import worker from "../src/index.js";
 import { createSessionCookie } from "../src/auth/session.js";
 import { loadConfig } from "../src/config.js";
+import { createTestD1 } from "./helpers/sqlite_d1.js";
+import { SIM_DIR } from "./helpers/engine_ctx.js";
+import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
 
 function sessionCookieHeader(setCookieString) {
   return setCookieString.split(";")[0];
@@ -302,4 +305,39 @@ test("GET /api/jobs/:id returns the job by id from LIVE_DB, and 404 for an unkno
 
   const missing = await apiFetch("/api/jobs/nope", env, { cookie });
   assert.equal(missing.status, 404);
+});
+
+// --------------------------------------------------------------------
+// GET /api/backtest-runs reads the sim registry on SIM_DB (M3), not the old DB.
+// --------------------------------------------------------------------
+
+test("GET /api/backtest-runs lists registry rows from SIM_DB, newest first, JSON-parsed", async () => {
+  const simDb = createTestD1([SIM_DIR]);
+  await insertBacktestRun(simDb, { id: "bt-old", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", trainDays: 0, testDays: 5, startedAt: "2026-02-01T00:00:00.000Z" });
+  await insertBacktestRun(simDb, { id: "bt-new", tickers: ["AAPL", "MSFT"], testStart: "2026-03-01T00:00:00.000Z", testEnd: "2026-03-06T00:00:00.000Z", trainDays: 0, testDays: 5, graceDays: 3, startedAt: "2026-04-01T00:00:00.000Z" });
+  await completeBacktestRun(simDb, { id: "bt-new", result: { overall: { on: 1 } }, finishedAt: "2026-04-01T01:00:00.000Z" });
+  const env = loginConfiguredEnv({ SIM_DB: simDb });
+  const cookie = await loggedInCookie(env);
+
+  const response = await apiFetch("/api/backtest-runs", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.error, null);
+  assert.deepEqual(body.backtestRuns.map((r) => r.id), ["bt-new", "bt-old"]);
+  assert.deepEqual(body.backtestRuns[0].tickers, ["AAPL", "MSFT"]);
+  assert.deepEqual(body.backtestRuns[0].result, { overall: { on: 1 } });
+  assert.equal(body.backtestRuns[1].status, "running");
+});
+
+test("GET /api/backtest-runs goes through a read-only SIM_DB handle: a write attempt can't happen from the dashboard path", async () => {
+  // readOnly() refuses non-SELECT; this pins that the route only ever SELECTs by
+  // handing it a SIM_DB whose prepare() records every SQL string it sees.
+  const seen = [];
+  const simDb = { prepare(sql) { seen.push(sql); return { bind: () => ({ all: async () => ({ results: [] }) }) }; } };
+  const env = loginConfiguredEnv({ SIM_DB: simDb });
+  const cookie = await loggedInCookie(env);
+
+  const response = await apiFetch("/api/backtest-runs", env, { cookie });
+  assert.equal(response.status, 200);
+  assert.ok(seen.length > 0 && seen.every((sql) => /^\s*select\b/i.test(sql)));
 });

@@ -1,5 +1,5 @@
-// Covers storage/d1.js's backtest_runs read/write functions
-// (migrations/0010_backtest_runs.sql) -- insertBacktestRun/
+// Covers storage/sim_registry.js's backtest_runs read/write functions
+// (migrations/sim/0001_backtest_runs.sql) -- insertBacktestRun/
 // completeBacktestRun/failBacktestRun/getRecentBacktestRuns. Minimal
 // in-memory fake of just this table's INSERT/UPDATE/SELECT shapes, same
 // narrow-fake convention as test/backtest_no_signal_baseline.test.js's
@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { insertBacktestRun, completeBacktestRun, failBacktestRun, getRecentBacktestRuns } from "../src/storage/d1.js";
+import { insertBacktestRun, completeBacktestRun, failBacktestRun, getRecentBacktestRuns } from "../src/storage/sim_registry.js";
 
 class FakeBacktestRunsDb {
   constructor() {

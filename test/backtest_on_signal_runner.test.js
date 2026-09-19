@@ -12,7 +12,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runOnSignalForTicker, runOnSignalReturns, makeOnSignalReturns } from "../src/backtest/onSignalRunner.js";
+import { runOnSignalForTicker, runOnSignalReturns, makeOnSignalReturns, countSignalWalkSteps } from "../src/backtest/onSignalRunner.js";
+import { SimClock } from "../src/backtest/simClock.js";
 import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
 
@@ -150,4 +151,33 @@ test("makeOnSignalReturns returns a function matching compareSignalOnOffByWindow
   const returns = await getOnReturns({ trainStart: "2025-12-01T00:00:00.000Z", trainEnd: "2026-01-01T00:00:00.000Z", testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z" });
 
   assert.deepEqual(returns, [0]);
+});
+
+// ---------------------------------------------------------------------------
+// SimClock (M3): the engine-computed walk end (testEnd + grace) is clamped to
+// the clock's now instead of walking into days that can't have data yet.
+// ---------------------------------------------------------------------------
+
+test("countSignalWalkSteps without a clock is testStart..testEnd+grace, unclamped (fixed-date unit tests keep working)", () => {
+  // Jan 1 .. Jan 3 + 30 grace days = Jan 1 .. Feb 2 = 33 days, 1 ticker.
+  assert.equal(countSignalWalkSteps({}, { tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-03T00:00:00.000Z", graceDays: 30 }), 33);
+});
+
+test("countSignalWalkSteps with a SimClock clamps the grace overshoot to now, per ticker", () => {
+  const clock = new SimClock("2026-01-04T00:00:00.000Z");
+  // Walk is Jan 1 .. Jan 4 (clamped), 4 days x 2 tickers.
+  assert.equal(countSignalWalkSteps({}, { tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-03T00:00:00.000Z", graceDays: 30, clock }), 8);
+});
+
+test("runOnSignalForTicker with a SimClock stops the walk at now, and its step count matches countSignalWalkSteps", async () => {
+  const ctx = makeCtx();
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 30, fakeModel: makeFakeModel() };
+  const clock = new SimClock("2026-01-04T00:00:00.000Z");
+  const args = { ticker: "AAPL", testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-03T00:00:00.000Z", graceDays: 30 };
+
+  const days = [];
+  await runOnSignalForTicker({}, config, ctx, { ...args, clock, onStep: ({ dayIso, done }) => { if (done) days.push(dayIso.slice(0, 10)); } });
+
+  assert.deepEqual(days, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]);
+  assert.equal(days.length, countSignalWalkSteps(config, { tickers: ["AAPL"], ...args, clock }));
 });

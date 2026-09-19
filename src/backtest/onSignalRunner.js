@@ -81,15 +81,29 @@ function eachDayIso(startIso, endIso) {
 }
 
 /**
+ * Where the day-by-day walk stops: testEnd + the grace period. This is an
+ * ENGINE-computed end (not something the caller asked for), so when a
+ * SimClock is supplied it is clamped to the clock's now rather than thrown
+ * on -- a grace period that rolls past "now" just means the walk ends today
+ * (plan.md "Engine ports": "end clamped to real now"). No clock, no clamp
+ * (unit tests with fixed historical dates). The single place this arithmetic
+ * lives, so countSignalWalkSteps and runOnSignalForTicker can't drift.
+ */
+function computeWalkEnd(config, { testEnd, graceDays, clock }) {
+  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
+  const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
+  return clock ? clock.clampEnd(walkEnd) : walkEnd;
+}
+
+/**
  * How many (ticker, day) steps one on-signal walk of a single window takes --
  * exactly the iteration count runOnSignalReturns will perform, so a caller
  * reporting progress (runBacktest.js) can size its progress bar up front.
- * Same grace/walkEnd arithmetic as runOnSignalForTicker below; keep the two in
- * sync.
+ * Pass the same `clock` the walk itself gets, so a clamped walk is sized
+ * as the clamped walk.
  */
-export function countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays }) {
-  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
-  const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
+export function countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays, clock }) {
+  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
   return tickers.length * eachDayIso(testStart, walkEnd).length;
 }
 
@@ -121,9 +135,8 @@ function groupItemsByDay(items) {
  * is the window's own testStart, which is unique per window by
  * construction (walkForwardWindows never repeats a testStart).
  */
-export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep }) {
-  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
-  const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
+export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock }) {
+  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
   const prefix = runIdPrefix ?? testStart;
 
   const newsItems = await getNewsItemsInRange(ctx.inputs, { ticker, from: testStart, to: testEnd });
@@ -164,10 +177,10 @@ export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart
  * same reason (analyze messages are consumed one at a time per
  * max_concurrency, not raced in a Promise.all).
  */
-export async function runOnSignalReturns(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep }) {
+export async function runOnSignalReturns(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock }) {
   const returns = [];
   for (const ticker of tickers) {
-    const tickerReturns = await runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}`, onStep });
+    const tickerReturns = await runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}`, onStep, clock });
     returns.push(...tickerReturns);
   }
   return returns;
@@ -187,6 +200,6 @@ export async function runOnSignalReturns(env, config, ctx, { tickers, testStart,
  * invoked -- do not wire this into any automated/scheduled path without an
  * explicit decision to spend that budget.
  */
-export function makeOnSignalReturns(env, config, ctx, { tickers, graceDays, onStep }) {
-  return (window) => runOnSignalReturns(env, config, ctx, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep });
+export function makeOnSignalReturns(env, config, ctx, { tickers, graceDays, onStep, clock }) {
+  return (window) => runOnSignalReturns(env, config, ctx, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep, clock });
 }
