@@ -331,11 +331,29 @@ namespace, so three D1s and a second KV isolate state but add no quota.
     selector (a `?env=` reading a backtest's `run_id` off SIM_DB; note
     `getDecisionStats`' "last N days" window is wall-clock relative, so it needs an
     anchor for a finished backtest). The cron question below is now resolved.
-- **M5** Delete the old code and the old `news_market_ai` binding, close PR #44,
-  refresh Deployment and Repo Structure.
+- **M5 — remove the old DB from code and config (done, PR pending):** the `DB`
+  binding (`news_market_ai`) is gone from `wrangler.toml`, `wrangler.ingest.toml`
+  and `wrangler.llm.toml`; `db:migrate:{local,remote}` are deleted and the `:all`
+  chains now run inputs, live and sim only; `deploy.yml` lost its four "Ensure D1
+  database exists" steps; `test/cron_fanout.test.js` lost `FakeIngestDb`; and
+  `.github/actions/ensure-d1-database` is deleted. That action defaulted to the
+  name `news_market_ai` and would have re-created an empty database on the first
+  deploy after the resource was deleted. `test/ci_env_isolation.test.js` used to
+  read the legacy id from `wrangler.toml`'s `DB` block, so it now pins the
+  placeholder constant instead, and gained two guards: no wrangler config binds
+  the legacy DB or carries a placeholder D1 id, and CI/npm scripts never
+  reference it. **The owner deletes the actual Cloudflare `news_market_ai` D1
+  resource out of band** -- nothing in the repo does. PR #44 was already closed
+  (unmerged, 2026-09-19, superseded by the SimClock isolation design). The root
+  `migrations/0001-0012` (the retired pre-split schema) are deleted too; nothing
+  read them (tests and CI use only `migrations/{inputs,state,sim}`), and a test
+  keeps `migrations/` free of root-level `.sql` files. Code comments that cited
+  them by name (`config.js`, `exit.js`, `edgar_fundamentals.js`, `status.js`,
+  `inputs_view.js`) now point at `migrations/{state,inputs}/` instead; git
+  history has the old files.
 Since M2/M2b the engine, ingest and LLM Workers already read and write
-`live`/`inputs`; M4a moved the last readers (the dashboard) over. The old
-`news_market_ai` DB is now bound but unused (M5 removes it).
+`live`/`inputs`; M4a moved the last readers (the dashboard) over, and M5 removed
+the old DB's binding.
 **Cron state (observed 2026-09-19, decided 2026-09-20):** the owner had disabled
 the `*/15` trigger out of band, but `wrangler.toml` still declared
 `crons = ["*/15 * * * *"]` and every `backend` deploy re-applied it. Workers
@@ -394,8 +412,11 @@ processing and (c) a per-ticker ceiling cap were dropped.
 | KV | 1GB storage, 100K reads/day, 1K writes/day | Only for low-frequency state (LLM key/model cooldowns) |
 | Queues | 10K ops/day | ~5 guaranteed messages per 15-min tick at 3 tickers, plus one ANALYZE per new item; re-check before growing the watchlist |
 
-**Architecture (built 2026-09-19):** four Workers connected by queues, all binding
-the same D1 (only `backend` runs migrations) and the same `CACHE_KV`.
+**Architecture (built 2026-09-19):** four Workers connected by queues (a fifth,
+`backtest`, was added in M3), each binding only the D1s it needs -- `inputs`,
+`live` or `sim`; the old single `news_market_ai` DB was removed in M5 -- with
+only `backend` running migrations, and all sharing one `CACHE_KV` except
+`backtest`, which has its own.
 - **`dashboard`** (`wrangler.dashboard.toml`, `src/dashboard-worker.js`) — the only
   public Worker: login, session cookie, server-rendered UI. Reaches `backend`
   through a service binding. Holds the dashboard login secrets.
@@ -420,10 +441,11 @@ cooldown state and light config.
 gated on `migrations/**`) → one deploy job per Worker (`deploy`=backend,
 `deploy-dashboard`, `deploy-ingest`, `deploy-llm`), each with its own
 `dorny/paths-filter` output and `concurrency` group; `workflow_dispatch` runs
-all. Provisioning is idempotent via `.github/actions/ensure-{d1-database,
-kv-namespace,queue}` (look up by name, create if missing, never commit ids; the
-first two take a `wrangler-config` input so each Worker's job patches its own
-file). Worker jobs use `needs: [changes, migrate]` with `if: always() &&
+all. Provisioning is idempotent via `.github/actions/ensure-{kv-namespace,queue}`
+(look up by name, create if missing, never commit ids; `ensure-kv-namespace` takes
+a `wrangler-config` input so each Worker's job patches its own file). D1 ids are
+committed directly (since M1), so there is no D1 provisioning step and
+`ensure-d1-database` was deleted in M5. Worker jobs use `needs: [changes, migrate]` with `if: always() &&
 (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')`.
 Deploy path filters live in `.github/path-filters.yml`, and each target is
 diffed against its own last successful deploy.
@@ -544,15 +566,18 @@ src/llm-worker.js     # `llm` Worker (wrangler.llm.toml) -- ANALYZE + exit_check
                       # {inputs, live store}; a backtest message on LLM_JOBS is
                       # rejected (logged, job marked failed, acked, no work done)
                       # until M3; only holder of GEMINI_API_KEYS
+src/backtest-worker.js  # `backtest` Worker (wrangler.backtest.toml) -- BACKTEST
+                      # consumer; binds only SIM_DB + INPUTS_DB + its own CACHE_KV
 ingestion/           # Finnhub, GDELT (unwired), EDGAR, RSS, HTML-scrape, yfinance adapters
   ingest.js           # scheduled-ingestion entry point (split out of index.js in M2)
   errors.js           # typed vendor error taxonomy (Pattern 11)
   date_window.js       # point-in-time cutoff/boundary helpers
   market_data_validator.js  # sanity-check vendor data before agents see it (Pattern 9)
 storage/             # run_store.js (RunStore, state-DB access), inputs_view.js
-                      # (input-side D1 access); d1.js is LEGACY -- dashboard's
-                      # old-DB reads + backtest_runs registry only; llm_calls.js and
-                      # jobs.js hold pure helpers only (M2b) -- their SQL is RunStore's
+                      # (input-side D1 access), sim_registry.js (the backtest_runs
+                      # registry, SIM_DB only); llm_calls.js and jobs.js hold pure
+                      # helpers only (M2b) -- their SQL is RunStore's. The old d1.js
+                      # is gone (M4a).
 llm/                 # multi-key Gemini cascade, KV-backed cooldown
 agents/
   analysts/          # news/event, sentiment, technical
@@ -571,7 +596,8 @@ graph/               # orchestration
   exit_check.js         # stop-loss / take-profit / time-based exits
 backtest/            # point-in-time harness, walk-forward, signal on/off comparison
 dashboard/           # operational dashboard
-migrations/          # D1 schema (0001-0012)
+migrations/          # inputs/, state/, sim/ -- the three environment schemas
+                      # (the pre-split root 0001-0012 were deleted in M5)
 config/
 tests/
 ```

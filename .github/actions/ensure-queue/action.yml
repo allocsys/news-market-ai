@@ -6,7 +6,7 @@ description: >
   `[[queues.consumers]]` block that references a queue that doesn't exist
   yet on the account.
 
-  Unlike D1 (ensure-d1-database) and KV (ensure-kv-namespace), a queue is
+  Unlike KV (ensure-kv-namespace), a queue is
   referenced in wrangler.toml by NAME, not by a generated id -- there is no
   placeholder id to look up and patch into this job's checkout. That makes
   this action simpler: just make sure the name exists, nothing to write

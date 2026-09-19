@@ -137,7 +137,7 @@ export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
       if (filedAt.getTime() < cutoffMs) continue; // outside the lookback window -- this is what actually caps the fan-out
 
       // fundamental_facts.fiscal_year/fiscal_period are NOT NULL (see
-      // migrations/0005_fundamental_facts.sql) and validateFundamentalFact
+      // migrations/inputs/) and validateFundamentalFact
       // below does not check these fields -- an entry missing fy/fp (some
       // older companyfacts frames omit them entirely) previously reached
       // storage/inputs_view.js#insertFundamentalFact uncaught, threw a

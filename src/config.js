@@ -29,7 +29,7 @@ export function loadConfig(env) {
     geminiQuickModel: env.GEMINI_QUICK_MODEL || "gemini-2.5-flash-lite",
     geminiDeepModel: env.GEMINI_DEEP_MODEL || "gemini-2.5-flash",
     geminiFallbackModels: parseList(env.GEMINI_FALLBACK_MODELS),
-    // LLM call log (storage/llm_calls.js, migrations/0012_llm_calls.sql): every
+    // LLM call log (storage/llm_calls.js, migrations/state/): every
     // Gemini prompt/response is stored for the dashboard's "LLM calls" page.
     // On by default; LLM_LOG_ENABLED="false" turns it off (D1 free tier: each
     // logged call costs ~4 rows written -- table + 3 indexes -- against

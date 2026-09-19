@@ -11,12 +11,6 @@ compatibility_flags = ["nodejs_compat"]
 # there's no public door here regardless of app-level auth state.
 workers_dev = false
 
-# --- D1 (structured layer: news, analyst opinions, debates, decisions) ---
-[[d1_databases]]
-binding = "DB"
-database_name = "news_market_ai"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
-
 # --- D1 (environment-split, plan.md "Backtest / Live Isolation" redesign,
 # provisioned 2026-09-19, M1) --- `backend` holds handles to all three for
 # the dashboard API and runs migrations for all three. These three DBs were
@@ -25,10 +19,11 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 # below -- confirmed idempotent against the hand-applied state (d1_migrations
 # bookkeeping already had 0001_init.sql etc. recorded from the original
 # `wrangler d1 migrations apply` runs, so the first automated run is a true
-# no-op, not a re-apply). Real ids committed directly, not the
-# REPLACE_WITH_D1_DATABASE_ID + ensure-d1-database placeholder pattern
-# above -- see this commit's message for why (a real bug in that action's
-# patch step, multi-block-unsafe).
+# no-op, not a re-apply). Real ids are committed directly -- there is no
+# placeholder id to resolve at deploy time. (M5 removed the legacy pre-split
+# `DB` binding that used to sit above these, along with the CI action that
+# patched its placeholder id: that action's patch step was multi-block-unsafe
+# and it defaulted to creating the old database by name.)
 # INPUTS_DB: news_items/news_item_revisions/news_item_tickers/price_bars/
 # fundamental_facts (migrations/inputs/). Shared, append-only.
 [[d1_databases]]

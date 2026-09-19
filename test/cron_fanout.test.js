@@ -14,6 +14,11 @@
 // in behavior -- backend's queue() doesn't handle either type anymore, see
 // test/queue_consumer.test.js for the test proving that. What's left here:
 // scheduled()'s own fan-out tests, which stay backend's job.
+//
+// UPDATE (plan.md M5): scheduled() never touches D1 at all (it only
+// enqueues), so these tests pass no database binding -- the FakeIngestDb
+// stand-in that used to be handed in as `DB` (the legacy pre-split binding,
+// now removed from every wrangler config) is gone with it.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -29,40 +34,6 @@ class FakeQueueBinding {
   }
   async sendBatch(messages) {
     this.sent.push(...messages.map((m) => m.body));
-  }
-}
-
-/** Minimal in-memory fake covering news_items/news_item_tickers (insertNewsItem) -- enough for scheduled()'s own tests below, which never reach D1 at all (scheduled() only enqueues, see its own header) but still need a DB value in baseEnv() for shape parity with the rest of this file's env objects. */
-class FakeIngestDb {
-  constructor() {
-    this.newsItems = [];
-    this.tickers = [];
-    this.priceBars = [];
-  }
-  async batch(statements) {
-    const results = [];
-    for (const stmt of statements) results.push(await stmt.run());
-    return results;
-  }
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async run() {
-            if (/INSERT INTO news_items/.test(sql)) db.newsItems.push({ id: args[0] });
-            else if (/INSERT INTO news_item_tickers/.test(sql)) db.tickers.push({ newsItemId: args[0], ticker: args[1] });
-            else if (/INSERT INTO news_item_revisions/.test(sql)) return; // exercised, not asserted on
-            else if (/INSERT INTO price_bars/.test(sql)) db.priceBars.push({ ticker: args[0] });
-            else if (/INSERT INTO fundamental_facts/.test(sql)) return; // exercised, not asserted on
-            else throw new Error(`FakeIngestDb: unsupported run() query: ${sql}`);
-          },
-          async all() {
-            throw new Error(`FakeIngestDb: unsupported all() query: ${sql}`);
-          },
-        };
-      },
-    };
   }
 }
 
@@ -84,7 +55,7 @@ function baseEnv(overrides = {}) {
 // ---------------------------------------------------------------------------
 
 test("scheduled() fans out one INGEST message per watchlist ticker, one ingest_feeds message, and one LLM_JOBS exit_check message -- no inline pipeline work", async () => {
-  const env = baseEnv({ DB: new FakeIngestDb() });
+  const env = baseEnv();
 
   await worker.scheduled({ cron: "*/15 * * * *" }, env);
 
@@ -108,7 +79,7 @@ test("scheduled() logs (not throws) if INGEST fan-out fails, and still attempts 
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
   const brokenIngest = { async sendBatch() { throw new Error("simulated INGEST enqueue failure"); }, async send() { throw new Error("simulated INGEST enqueue failure"); } };
-  const env = baseEnv({ DB: new FakeIngestDb(), INGEST: brokenIngest });
+  const env = baseEnv({ INGEST: brokenIngest });
 
   await worker.scheduled({ cron: "*/15 * * * *" }, env);
 
@@ -122,7 +93,7 @@ test("scheduled() logs (not throws) if the exit_check enqueue fails, without dis
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
   const brokenLlmJobs = { async send() { throw new Error("simulated LLM_JOBS enqueue failure"); } };
-  const env = baseEnv({ DB: new FakeIngestDb(), LLM_JOBS: brokenLlmJobs });
+  const env = baseEnv({ LLM_JOBS: brokenLlmJobs });
 
   await worker.scheduled({ cron: "*/15 * * * *" }, env);
 

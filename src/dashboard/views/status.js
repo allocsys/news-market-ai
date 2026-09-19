@@ -95,8 +95,8 @@ function renderProgressScript(pollUrl) {
           dot.style.background = color;
         }
 
-        // updated_at doubles as a liveness signal (see migrations/
-        // 0011_job_progress.sql's header): if a 'running' job hasn't ticked
+        // updated_at doubles as a liveness signal (job_progress table,
+        // migrations/state/): if a 'running' job hasn't ticked
         // in a while, its consumer probably died mid-run. Flag it rather
         // than polling forever in silence.
         function armStaleCheck(updatedAt) {

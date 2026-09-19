@@ -8,23 +8,15 @@ compatibility_flags = ["nodejs_compat"]
 # only ever runs via its two queue consumers below.
 workers_dev = false
 
-# --- D1 (same database as every other Worker; only `backend` runs
-# migrations -- see plan.md's Roadmap rule) --- runPipelineForTicker,
-# checkOpenPositionExits and runManualBacktest all read and write D1
-# directly (decisions, checkpoints, positions, backtest_runs).
-[[d1_databases]]
-binding = "DB"
-database_name = "news_market_ai"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
-
 # --- D1 (environment-split, plan.md "Backtest / Live Isolation" redesign,
 # provisioned 2026-09-19, M1) --- this Worker is live-only, so it gets
 # LIVE_DB (read/write) and INPUTS_DB (read-only by convention -- see
 # readOnly(db) in src/storage/run_store.js). No SIM_DB: that's the future
 # `backtest` Worker's (M3), and plan.md is explicit this Worker holds no
 # binding to any other environment's state. Real ids committed directly --
-# see wrangler.toml's own comment on why (ensure-d1-database's patch step
-# is multi-block-unsafe).
+# see wrangler.toml's own comment. runPipelineForTicker and
+# checkOpenPositionExits read and write LIVE_DB (decisions, checkpoints,
+# positions).
 [[d1_databases]]
 binding = "LIVE_DB"
 database_name = "news-market-ai-live"

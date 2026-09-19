@@ -16,16 +16,14 @@
     "dev:backtest": "wrangler dev --config wrangler.backtest.toml",
     "deploy:backtest": "wrangler deploy --config wrangler.backtest.toml",
     "test": "node --test $(find test -name '*.test.js')",
-    "db:migrate:local": "wrangler d1 migrations apply news_market_ai --local",
-    "db:migrate:remote": "wrangler d1 migrations apply news_market_ai --remote",
     "db:migrate:local:inputs": "wrangler d1 migrations apply news-market-ai-inputs --local",
     "db:migrate:remote:inputs": "wrangler d1 migrations apply news-market-ai-inputs --remote",
     "db:migrate:local:live": "wrangler d1 migrations apply news-market-ai-live --local",
     "db:migrate:remote:live": "wrangler d1 migrations apply news-market-ai-live --remote",
     "db:migrate:local:sim": "wrangler d1 migrations apply news-market-ai-sim --local && wrangler d1 migrations apply news-market-ai-sim --local -c wrangler.sim-migrate.toml",
     "db:migrate:remote:sim": "wrangler d1 migrations apply news-market-ai-sim --remote && wrangler d1 migrations apply news-market-ai-sim --remote -c wrangler.sim-migrate.toml",
-    "db:migrate:local:all": "npm run db:migrate:local && npm run db:migrate:local:inputs && npm run db:migrate:local:live && npm run db:migrate:local:sim",
-    "db:migrate:remote:all": "npm run db:migrate:remote && npm run db:migrate:remote:inputs && npm run db:migrate:remote:live && npm run db:migrate:remote:sim"
+    "db:migrate:local:all": "npm run db:migrate:local:inputs && npm run db:migrate:local:live && npm run db:migrate:local:sim",
+    "db:migrate:remote:all": "npm run db:migrate:remote:inputs && npm run db:migrate:remote:live && npm run db:migrate:remote:sim"
   },
   "dependencies": {
     "zod": "^3.23.8"
