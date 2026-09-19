@@ -60,66 +60,120 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides which jobs run. Filter definitions live in .github/path-filters.yml.
+  #
+  # WHY PER-TARGET BASELINES (2026-09-19): dorny/paths-filter on a push diffs
+  # only against the PREVIOUS PUSH's head. If the run that first saw a change
+  # was cancelled (concurrency cancel-in-progress) or failed (test job), the
+  # next push's diff no longer contains that change, so no later run ever
+  # deploys it. That silently left the dashboard Worker stale for weeks: run
+  # #247 saw dashboard=true but its test job failed; run #249 diffed only
+  # against #247's head and saw dashboard=false.
+  #
+  # Fix: for each target, find the newest earlier push/workflow_dispatch run
+  # on main whose CORRESPONDING JOB concluded success (code->deploy,
+  # migrations->migrate, dashboard->deploy-dashboard, ...) and diff against
+  # that run's commit. A change stays "pending" for a target until a run
+  # actually deploys it. Skipped/cancelled/failed jobs never advance a
+  # baseline. FAILS OPEN: if no baseline can be resolved (API error, no
+  # prior success, commit no longer in history) the target is treated as
+  # changed, i.e. it deploys -- a redundant idempotent deploy is harmless, a
+  # missed one is not.
+  #
+  # workflow_dispatch has no meaningful base ref to diff against -- skip the
+  # filters entirely and force every output true, so a manual run always does
+  # the full job. pull_request keeps the action's default base (merge-base
+  # with the target branch); only code/migrations matter there.
   changes:
     runs-on: ubuntu-latest
-    # workflow_dispatch has no meaningful base ref to diff against -- skip
-    # the filter step entirely and force both outputs true, so a manual run
-    # always does the full job rather than the filter step failing/guessing.
+    permissions:
+      contents: read
+      actions: read
     outputs:
-      code: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.code == 'true' }}
-      migrations: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.migrations == 'true' }}
-      dashboard: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
-      ingest: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ingest == 'true' }}
-      llm: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.llm == 'true' }}
+      code: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && steps.pr.outputs.code == 'true') || (github.event_name == 'push' && (steps.base.outputs.code == '' || steps.f_code.outputs.code == 'true')) }}
+      migrations: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && steps.pr.outputs.migrations == 'true') || (github.event_name == 'push' && (steps.base.outputs.migrations == '' || steps.f_migrations.outputs.migrations == 'true')) }}
+      dashboard: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.dashboard == '' || steps.f_dashboard.outputs.dashboard == 'true')) }}
+      ingest: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.ingest == '' || steps.f_ingest.outputs.ingest == 'true')) }}
+      llm: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.llm == '' || steps.f_llm.outputs.llm == 'true')) }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_dispatch'
-      - uses: dorny/paths-filter@v3
-        id: filter
-        if: github.event_name != 'workflow_dispatch'
         with:
-          filters: |
-            code:
-              - '**'
-              - '!*.md'
-              - '!**/*.md'
-            migrations:
-              - 'migrations/**'
-            dashboard:
-              - 'src/dashboard-worker.js'
-              - 'wrangler.dashboard.toml'
-              - 'src/dashboard/**'
-              - 'src/login.js'
-              - 'src/auth/**'
-              - 'src/config.js'
-              - '.github/workflows/deploy.yml'
-            ingest:
-              - 'src/ingest-worker.js'
-              - 'wrangler.ingest.toml'
-              - 'src/graph/pipeline.js'
-              - 'src/ingestion/**'
-              - 'src/storage/**'
-              - 'src/shared/**'
-              - 'src/config.js'
-              - '.github/workflows/deploy.yml'
-            llm:
-              # Broader than the other Workers' filters on purpose: llm-worker.js
-              # imports graph/pipeline.js, exit_check.js and backtest/runBacktest.js,
-              # which between them pull in agents/, llm/, backtest/, storage/,
-              # shared/ and (via pipeline.js's ingestion imports) ingestion/ --
-              # a change to any of those changes what gets bundled into this Worker.
-              - 'src/llm-worker.js'
-              - 'wrangler.llm.toml'
-              - 'src/graph/**'
-              - 'src/agents/**'
-              - 'src/llm/**'
-              - 'src/backtest/**'
-              - 'src/schemas/**'
-              - 'src/ingestion/**'
-              - 'src/storage/**'
-              - 'src/shared/**'
-              - 'src/config.js'
-              - '.github/workflows/deploy.yml'
+          # Full history: baselines can be many commits back.
+          fetch-depth: 0
+      - name: Resolve last-successful-deploy baseline per target
+        id: base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Deliberately no `set -e`: any failure here must fall through to
+          # empty outputs (= deploy), never fail the workflow.
+          set -u
+          declare -A want=( [code]=deploy [migrations]=migrate [dashboard]=deploy-dashboard [ingest]=deploy-ingest [llm]=deploy-llm )
+          declare -A found=()
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/deploy.yml/runs?branch=main&status=completed&per_page=50" \
+            --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | "\(.id) \(.head_sha)"') || runs=""
+          while read -r run_id sha; do
+            [ -z "${run_id:-}" ] && continue
+            [ "$run_id" = "$GITHUB_RUN_ID" ] && continue
+            [ "${#found[@]}" -ge "${#want[@]}" ] && break
+            jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=50" \
+              --jq '.jobs[] | "\(.name) \(.conclusion)"') || continue
+            for key in "${!want[@]}"; do
+              [ -n "${found[$key]:-}" ] && continue
+              if grep -qx "${want[$key]} success" <<<"$jobs"; then
+                if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+                  found[$key]=$sha
+                fi
+              fi
+            done
+          done <<<"$runs"
+          for key in "${!want[@]}"; do
+            echo "${key}=${found[$key]:-}" >> "$GITHUB_OUTPUT"
+            echo "baseline[${key}] (${want[$key]}) = ${found[$key]:-<none: will deploy>}"
+          done
+
+      # pull_request: default base, unchanged behavior.
+      - uses: dorny/paths-filter@v3
+        id: pr
+        if: github.event_name == 'pull_request'
+        with:
+          filters: .github/path-filters.yml
+
+      # push: one evaluation per target, each against its own baseline. Only
+      # run when a baseline resolved; otherwise the output expression above
+      # fails open to true.
+      - uses: dorny/paths-filter@v3
+        id: f_code
+        if: github.event_name == 'push' && steps.base.outputs.code != ''
+        with:
+          base: ${{ steps.base.outputs.code }}
+          filters: .github/path-filters.yml
+      - uses: dorny/paths-filter@v3
+        id: f_migrations
+        if: github.event_name == 'push' && steps.base.outputs.migrations != ''
+        with:
+          base: ${{ steps.base.outputs.migrations }}
+          filters: .github/path-filters.yml
+      - uses: dorny/paths-filter@v3
+        id: f_dashboard
+        if: github.event_name == 'push' && steps.base.outputs.dashboard != ''
+        with:
+          base: ${{ steps.base.outputs.dashboard }}
+          filters: .github/path-filters.yml
+      - uses: dorny/paths-filter@v3
+        id: f_ingest
+        if: github.event_name == 'push' && steps.base.outputs.ingest != ''
+        with:
+          base: ${{ steps.base.outputs.ingest }}
+          filters: .github/path-filters.yml
+      - uses: dorny/paths-filter@v3
+        id: f_llm
+        if: github.event_name == 'push' && steps.base.outputs.llm != ''
+        with:
+          base: ${{ steps.base.outputs.llm }}
+          filters: .github/path-filters.yml
 
   test:
     needs: changes
