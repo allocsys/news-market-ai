@@ -112,17 +112,27 @@ queue = "news-market-ai-ingest"
 binding = "INGEST"
 
 # --- LLM_JOBS (produce only, plan.md Step 6) --- `backend` enqueues
-# `backtest` (POST /backtest/run) and `exit_check` (scheduled()) here; the
-# `llm` Worker (wrangler.llm.toml) is the only consumer. Both message types
-# used to ride JOBS with this Worker as their consumer, but both call
-# Gemini (backtest via the real pipeline over backfilled news, exit_check
-# via a reflection per closed position), so they moved with the rest of the
-# LLM work. No producer binding for ANALYZE is needed here anymore: the
+# `exit_check` (scheduled()) here; the `llm` Worker (wrangler.llm.toml) is
+# the only consumer. `backtest` used to ride this queue too (Step 6), but
+# moved to its own BACKTEST queue/Worker in M3 (see below) once a backtest
+# needed a SIM_DB-backed RunStore + SimClock the `llm` Worker deliberately
+# never gets. No producer binding for ANALYZE is needed here anymore: the
 # `ingest` Worker is its only producer (wrangler.ingest.toml), `llm` its
 # only consumer -- `backend` neither produces nor consumes it after Step 6.
 [[queues.producers]]
 queue = "news-market-ai-llm-jobs"
 binding = "LLM_JOBS"
+
+# --- BACKTEST (produce only, plan.md M3) --- `backend` enqueues `backtest`
+# (POST /backtest/run) here; the new `backtest` Worker
+# (wrangler.backtest.toml) is the only consumer. Split out from LLM_JOBS
+# specifically so the consuming Worker can hold a SIM_DB binding and a
+# SimClock without also holding (or needing) LIVE_DB -- see
+# wrangler.backtest.toml's own header for why that separation is the
+# config-level half of the live/backtest isolation guarantee.
+[[queues.producers]]
+queue = "news-market-ai-backtest"
+binding = "BACKTEST"
 
 # Ingestion cadence -- GDELT updates every 15 min, so no point polling faster.
 [triggers]

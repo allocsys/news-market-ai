@@ -302,7 +302,7 @@ test("POST /backtest/run returns 401 with a stale/forged cookie (bad signature) 
   assert.equal(response.status, 401);
 });
 
-/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. Since plan.md Step 3, backend's POST /backfill never runs the backfill itself: it validates, enqueues onto JOBS and returns an immediate ack. (Since Step 6, POST /backtest/run did the same onto LLM_JOBS; M2 disabled it with a 503 until the M3 backtest Worker.) These two tests were written for the pre-Step-3 synchronous/waitUntil behavior and had been failing on main ever since -- backend's env had no JOBS binding, so the enqueue threw and the route returned 500. */
+/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. Since plan.md Step 3, backend's POST /backfill never runs the backfill itself: it validates, enqueues onto JOBS and returns an immediate ack. POST /backtest/run followed the same shape onto LLM_JOBS (Step 6), was disabled with a 503 during M2 pending the backtest Worker, and (M3) is re-enabled onto its own new BACKTEST queue -- see the test below. These tests were originally written for the pre-Step-3 synchronous/waitUntil behavior and had been failing on main ever since -- backend's env had no JOBS binding, so the enqueue threw and the route returned 500. */
 class FakeQueue {
   constructor() {
     this.sent = [];
@@ -359,21 +359,25 @@ test("POST /backfill accepts a form-encoded body -- checks the session, forwards
   assert.equal(jobs.sent[0].to, "2024-01-31");
 });
 
-test("POST /backtest/run with a valid session cookie is forwarded to backend, which now answers 503 (disabled until the M3 backtest Worker) -- nothing enqueued", async () => {
-  const jobs = new FakeQueue();
-  const llmJobs = new FakeQueue();
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), JOBS: jobs, LLM_JOBS: llmJobs, WATCHLIST_TICKERS: "AAPL" }) });
+test("POST /backtest/run with a valid session cookie is forwarded to backend, which (M3) enqueues onto BACKTEST and returns an accepted ack", async () => {
+  const { createTestD1 } = await import("./helpers/sqlite_d1.js");
+  const { STATE_DIR, SIM_DIR } = await import("./helpers/engine_ctx.js");
+  const backtestQueue = new FakeQueue();
+  const env = loginConfiguredEnv({
+    BACKEND: makeBackend({ DB: new FakeNewsDb(), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]), BACKTEST: backtestQueue, WATCHLIST_TICKERS: "AAPL" }),
+  });
   const cookie = await loggedInCookie(env);
 
   const response = await worker.fetch(
     new Request("https://dashboard.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL", { method: "POST", headers: { Cookie: cookie } }),
     env,
   );
-  assert.equal(response.status, 503);
+  assert.equal(response.status, 200);
   const body = await response.json();
-  assert.match(body.error, /backtest Worker in M3/);
-  assert.equal(jobs.sent.length, 0);
-  assert.equal(llmJobs.sent.length, 0);
+  assert.equal(body.accepted, true);
+  assert.equal(backtestQueue.sent.length, 1);
+  assert.equal(backtestQueue.sent[0].type, "backtest");
+  assert.deepEqual(backtestQueue.sent[0].tickers, ["AAPL"]);
 });
 
 // --------------------------------------------------------------------
