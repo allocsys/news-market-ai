@@ -301,7 +301,7 @@ test("POST /backtest/run returns 401 with a stale/forged cookie (bad signature) 
   assert.equal(response.status, 401);
 });
 
-/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. Since plan.md Step 3, backend's POST /backfill never runs the backfill itself: it validates, enqueues onto JOBS and returns an immediate ack. (Since Step 6, POST /backtest/run does the same onto LLM_JOBS.) These two tests were written for the pre-Step-3 synchronous/waitUntil behavior and had been failing on main ever since -- backend's env had no JOBS binding, so the enqueue threw and the route returned 500. */
+/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. Since plan.md Step 3, backend's POST /backfill never runs the backfill itself: it validates, enqueues onto JOBS and returns an immediate ack. (Since Step 6, POST /backtest/run did the same onto LLM_JOBS; M2 disabled it with a 503 until the M3 backtest Worker.) These two tests were written for the pre-Step-3 synchronous/waitUntil behavior and had been failing on main ever since -- backend's env had no JOBS binding, so the enqueue threw and the route returned 500. */
 class FakeQueue {
   constructor() {
     this.sent = [];
@@ -358,7 +358,7 @@ test("POST /backfill accepts a form-encoded body -- checks the session, forwards
   assert.equal(jobs.sent[0].to, "2024-01-31");
 });
 
-test("POST /backtest/run succeeds on a valid session cookie -- forwarded to backend, which enqueues onto LLM_JOBS (not JOBS, plan.md Step 6)", async () => {
+test("POST /backtest/run with a valid session cookie is forwarded to backend, which now answers 503 (disabled until the M3 backtest Worker) -- nothing enqueued", async () => {
   const jobs = new FakeQueue();
   const llmJobs = new FakeQueue();
   const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), JOBS: jobs, LLM_JOBS: llmJobs, WATCHLIST_TICKERS: "AAPL" }) });
@@ -368,14 +368,11 @@ test("POST /backtest/run succeeds on a valid session cookie -- forwarded to back
     new Request("https://dashboard.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL", { method: "POST", headers: { Cookie: cookie } }),
     env,
   );
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 503);
   const body = await response.json();
-  assert.equal(body.accepted, true);
-  assert.match(body.id, /^backtest-/);
+  assert.match(body.error, /backtest Worker in M3/);
   assert.equal(jobs.sent.length, 0);
-  assert.equal(llmJobs.sent.length, 1);
-  assert.equal(llmJobs.sent[0].type, "backtest");
-  assert.deepEqual(llmJobs.sent[0].tickers, ["AAPL"]);
+  assert.equal(llmJobs.sent.length, 0);
 });
 
 // --------------------------------------------------------------------

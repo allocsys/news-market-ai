@@ -1,13 +1,14 @@
-// Covers backend's (src/index.js) POST /backtest/run route -- the operational
-// entry point wired onto backtest/runBacktest.js. Same shape as
-// test/index_backfill.test.js's coverage of POST /backfill: validate, enqueue,
-// return an immediate ack.
-//
-// The point of this file (plan.md Step 6): the message goes onto LLM_JOBS,
-// NOT JOBS. A backtest's "signal on" side runs the real Gemini-backed
-// pipeline, so its consumer is the `llm` Worker (src/llm-worker.js) -- see
-// test/llm_worker.test.js for that half of the contract. JOBS stays
-// backfill-only so backend never has a reason to hold a Gemini key.
+// Covers backend's (src/index.js) POST /backtest/run route after M2: the
+// route is DISABLED (503) until the backtest Worker exists (M3). The engine
+// now needs a SIM_DB-backed RunStore + SimClock that only that Worker will
+// have, and the `llm` Worker rejects `backtest` messages outright (see
+// test/llm_worker.test.js), so accepting a request here would only create a
+// job that can never run. The contract this file pins down:
+//   - a clear 503 JSON error naming M3, for valid AND invalid requests
+//   - NOTHING enqueued (neither JOBS nor LLM_JOBS)
+//   - NO job_progress row written (no phantom 'queued' job on the dashboard)
+// The old enqueue behavior (LLM_JOBS message shape, 400 validation, 500 on
+// enqueue failure) is in git history for the M3 hand-off.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -22,82 +23,52 @@ class FakeQueue {
   }
 }
 
-class ThrowingQueue {
-  async send() {
-    throw new Error("simulated queue send failure");
+/** A DB that records every statement prepared against it (a job row would be an INSERT INTO job_progress). */
+class RecordingDb {
+  constructor() {
+    this.prepared = [];
+  }
+  prepare(sql) {
+    this.prepared.push(sql);
+    return { bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) };
   }
 }
 
-function baseEnv(overrides = {}) {
+function baseEnv() {
   return {
-    DB: {},
+    DB: new RecordingDb(),
     JOBS: new FakeQueue(),
     LLM_JOBS: new FakeQueue(),
     WATCHLIST_TICKERS: "AAPL,MSFT",
-    ...overrides,
   };
 }
 
-test("POST /backtest/run returns 400 for a missing or malformed testStart/testEnd, without touching either queue", async () => {
+test("POST /backtest/run returns 503 naming M3, and enqueues nothing / writes no job row, for a valid request", async () => {
   const env = baseEnv();
 
-  const missing = await worker.fetch(new Request("https://worker.example/backtest/run?testStart=2024-01-01", { method: "POST" }), env);
-  assert.equal(missing.status, 400);
+  const response = await worker.fetch(
+    new Request("https://worker.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL,%20MSFT&graceDays=5", { method: "POST" }),
+    env
+  );
 
-  const malformed = await worker.fetch(new Request("https://worker.example/backtest/run?testStart=nope&testEnd=2024-01-31", { method: "POST" }), env);
-  assert.equal(malformed.status, 400);
-
-  assert.equal(env.LLM_JOBS.sent.length, 0);
-  assert.equal(env.JOBS.sent.length, 0);
-});
-
-test("POST /backtest/run with a valid range enqueues a backtest job onto LLM_JOBS (not JOBS) and returns an immediate accepted ack", async () => {
-  const env = baseEnv();
-
-  const request = new Request("https://worker.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL,%20MSFT&graceDays=5", { method: "POST" });
-  const response = await worker.fetch(request, env);
-
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 503);
   assert.match(response.headers.get("content-type"), /application\/json/);
   const body = await response.json();
-  assert.equal(body.accepted, true);
-  assert.match(body.id, /^backtest-/);
-  assert.deepEqual(body.tickers, ["AAPL", "MSFT"]);
+  assert.match(body.error, /backtest Worker in M3/);
+  assert.equal(body.accepted, undefined);
 
   assert.equal(env.JOBS.sent.length, 0);
-  assert.equal(env.LLM_JOBS.sent.length, 1);
-  assert.deepEqual(env.LLM_JOBS.sent[0], {
-    type: "backtest",
-    id: body.id,
-    tickers: ["AAPL", "MSFT"],
-    testStart: "2024-01-01T00:00:00.000Z",
-    testEnd: "2024-01-31T00:00:00.000Z",
-    graceDays: 5,
-  });
+  assert.equal(env.LLM_JOBS.sent.length, 0);
+  assert.equal(env.DB.prepared.length, 0, "no job_progress row may be created for a disabled route");
 });
 
-test("POST /backtest/run defaults to the configured watchlist when no tickers param is given", async () => {
+test("POST /backtest/run returns the same 503 for a malformed request (disabled before validation), still touching nothing", async () => {
   const env = baseEnv();
 
-  const request = new Request("https://worker.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31", { method: "POST" });
-  const response = await worker.fetch(request, env);
+  const response = await worker.fetch(new Request("https://worker.example/backtest/run?testStart=nope", { method: "POST" }), env);
 
-  assert.equal(response.status, 200);
-  assert.equal(env.LLM_JOBS.sent.length, 1);
-  assert.deepEqual(env.LLM_JOBS.sent[0].tickers, ["AAPL", "MSFT"]);
-});
-
-test("POST /backtest/run returns 500 with the failure message if enqueueing itself fails (e.g. LLM_JOBS unavailable)", async (t) => {
-  const env = baseEnv({ LLM_JOBS: new ThrowingQueue() });
-
-  const errorLogs = [];
-  t.mock.method(console, "error", (...args) => errorLogs.push(args));
-
-  const request = new Request("https://worker.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31", { method: "POST" });
-  const response = await worker.fetch(request, env);
-
-  assert.equal(response.status, 500);
-  const body = await response.json();
-  assert.match(body.message, /simulated queue send failure/);
-  assert.ok(errorLogs.some(([msg]) => msg.includes("backtest enqueue failed")));
+  assert.equal(response.status, 503);
+  assert.equal(env.JOBS.sent.length, 0);
+  assert.equal(env.LLM_JOBS.sent.length, 0);
+  assert.equal(env.DB.prepared.length, 0);
 });
