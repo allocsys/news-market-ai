@@ -239,6 +239,10 @@ run by the `backtest` Worker.
   trip live's. The upstream Gemini quota per key is still shared, so backtests
   also get a per-run LLM-call budget (`BACKTEST_MAX_LLM_CALLS`; the run fails when
   exceeded) on top of concurrency 1.
+  *Implemented (M3 7/N):* `src/llm/budget.js`; one counter per run on
+  `config.llmBudget`, charged at `callStructured`. It counts logical calls, not
+  cascade HTTP attempts, and **no default is set (unset = uncapped) until the
+  owner picks one**. A redelivered queue message starts a fresh counter.
 - The `*/15` cron was disabled by the owner on 2026-09-19 and stays off until M4.
 
 **Free-plan budgets** (the account is on Workers Free; limits from Cloudflare's

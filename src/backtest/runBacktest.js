@@ -45,6 +45,7 @@ import { compareSignalOnOffByWindow } from "./signalCompare.js";
 import { insertBacktestRun, completeBacktestRun, failBacktestRun } from "../storage/sim_registry.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 import { SimClock } from "./simClock.js";
+import { createLlmBudget } from "../llm/budget.js";
 
 /**
  * Runs one full signal on/off backtest, persisting its params up front
@@ -104,6 +105,11 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     : undefined;
 
   try {
+    // Fresh per-run LLM-call counter (llm/budget.js), created here -- not in
+    // loadConfig -- so each run gets its own; it rides on config to every agent.
+    // Inside the try: a malformed BACKTEST_MAX_LLM_CALLS is recorded as a
+    // 'failed' run rather than escaping and looping the queue message.
+    config = { ...config, llmBudget: createLlmBudget(config.backtestMaxLlmCalls) };
     clock.assertNotFuture(testEnd, "testEnd");
     if (onProgress) totalSteps = countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays, clock });
     const getOnReturns = makeOnSignalReturns(env, config, { inputs, store }, { tickers, graceDays, onStep, clock });

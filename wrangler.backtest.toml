@@ -68,7 +68,8 @@ id = "f14e4607af5843599eac863b6adb508b"
 # ANALYZE/LLM_JOBS consumers (GEMINI_API_KEYS is a repo-wide secret, not
 # per-Worker) -- keeping this at 1 avoids stacking a second full-speed
 # Gemini consumer on top of `llm`'s own concurrency of 2, on top of the
-# per-run BACKTEST_MAX_LLM_CALLS budget plan.md calls for.
+# per-run BACKTEST_MAX_LLM_CALLS budget plan.md calls for (implemented in
+# src/llm/budget.js; see the commented-out var under [vars] below).
 [[queues.consumers]]
 queue = "news-market-ai-backtest"
 max_batch_size = 1
@@ -92,6 +93,13 @@ invocation_logs = true
 GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
 GEMINI_DEEP_MODEL = "gemini-3.5-flash"
 GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash"
+
+# Per-run cap on LLM calls (src/llm/budget.js): a run that tries call number
+# max+1 fails with "LLM call budget exceeded". Counts logical calls (one per
+# agent call), not the HTTP attempts inside the model/key cascade. UNSET = NO
+# CAP -- the owner has not picked a value, so none is set here (a typo'd value
+# fails the run rather than meaning "no cap").
+# BACKTEST_MAX_LLM_CALLS = "..."
 
 # LLM call log (src/storage/llm_calls.js) -- off by default for backtest
 # runs specifically (plan.md's Free-plan budgets section: "It runs with
