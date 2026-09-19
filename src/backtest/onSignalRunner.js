@@ -49,7 +49,9 @@
 // exactly at testEnd. This does NOT let entry decisions see anything past
 // testEnd -- getNewsItemsInRange below is still bounded to [testStart,
 // testEnd) for what triggers a NEW pipeline run; the grace period only
-// keeps checking positions that already opened for exits.
+// keeps checking positions that already opened for exits. The grace walk is
+// also clamped to "now" (walkEndIso below): a simulated day in the future is
+// meaningless, and stamping exits there corrupts real rows.
 //
 // WINDOW ATTRIBUTION: getRealizedReturnsInRange reads every realized return
 // whose resolved_at (== closedAt) falls in [testStart, testEnd + graceDays),
@@ -81,6 +83,22 @@ function eachDayIso(startIso, endIso) {
 }
 
 /**
+ * Last simulated day a walk may visit: `testEnd + graceDays`, but NEVER later
+ * than "now". Without the clamp the default grace period (config.maxPositionHoldDays,
+ * 10) walks past today whenever testEnd is recent, and checkOpenPositionExits
+ * then closes still-open positions -- LIVE ones included, it has no run
+ * scope yet -- with time_based exits stamped at simulated dates in the
+ * future, writing future-dated rows into positions and decision_memory
+ * (plan.md "Backtest / Live Isolation", failure mode 1). `config.nowMs` is a
+ * test-only clock override; production always uses the real clock.
+ */
+function walkEndIso(config, { testEnd, graceDays }) {
+  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
+  const nowMs = typeof config.nowMs === "number" ? config.nowMs : Date.now();
+  return new Date(Math.min(new Date(testEnd).getTime() + grace * DAY_MS, nowMs)).toISOString();
+}
+
+/**
  * How many (ticker, day) steps one on-signal walk of a single window takes --
  * exactly the iteration count runOnSignalReturns will perform, so a caller
  * reporting progress (runBacktest.js) can size its progress bar up front.
@@ -88,8 +106,7 @@ function eachDayIso(startIso, endIso) {
  * sync.
  */
 export function countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays }) {
-  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
-  const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
+  const walkEnd = walkEndIso(config, { testEnd, graceDays });
   return tickers.length * eachDayIso(testStart, walkEnd).length;
 }
 
@@ -122,8 +139,7 @@ function groupItemsByDay(items) {
  * construction (walkForwardWindows never repeats a testStart).
  */
 export async function runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep }) {
-  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
-  const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
+  const walkEnd = walkEndIso(config, { testEnd, graceDays });
   const prefix = runIdPrefix ?? testStart;
 
   const newsItems = await getNewsItemsInRange(db, { ticker, from: testStart, to: testEnd });

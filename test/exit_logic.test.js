@@ -324,3 +324,32 @@ test("checkOpenPositionExits is safe to re-run: an already-closed position is no
   // settlePositionOutcome only ran once, on the first (real) close.
   assert.equal(db.decisionMemory.length, 1);
 });
+
+// ---------------------------------------------------------------------
+// Future-asOf guard (plan.md "Backtest / Live Isolation", failure mode 1):
+// closing a position at a date that has not happened writes future-dated
+// closed_at/resolved_at rows. The guard fires before any DB access.
+// ---------------------------------------------------------------------
+
+test("checkOpenPositionExits rejects an asOf in the future with LookaheadViolationError, before touching the db", async () => {
+  const nowMs = Date.parse("2026-01-10T12:00:00Z");
+  await assert.rejects(
+    () => checkOpenPositionExits({}, { nowMs, maxPositionHoldDays: 10 }, {}, { asOf: "2026-01-20T00:00:00Z" }),
+    (err) => err instanceof LookaheadViolationError && /in the future/.test(err.message)
+  );
+});
+
+test("checkOpenPositionExits tolerates a small clock skew but not more", async () => {
+  const nowMs = Date.parse("2026-01-10T12:00:00Z");
+  const emptyDb = { prepare: () => ({ bind: () => ({ all: async () => ({ results: [] }) }) }) };
+
+  // 30s ahead of "now": inside the 60s tolerance -> runs normally (no open positions -> []).
+  const closed = await checkOpenPositionExits({}, { nowMs }, emptyDb, { asOf: "2026-01-10T12:00:30Z" });
+  assert.deepEqual(closed, []);
+
+  // 5 minutes ahead: rejected.
+  await assert.rejects(
+    () => checkOpenPositionExits({}, { nowMs }, emptyDb, { asOf: "2026-01-10T12:05:00Z" }),
+    LookaheadViolationError
+  );
+});

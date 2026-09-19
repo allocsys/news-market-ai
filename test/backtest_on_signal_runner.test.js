@@ -20,7 +20,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runOnSignalForTicker, runOnSignalReturns, makeOnSignalReturns } from "../src/backtest/onSignalRunner.js";
+import { runOnSignalForTicker, runOnSignalReturns, makeOnSignalReturns, countSignalWalkSteps } from "../src/backtest/onSignalRunner.js";
 import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 
 class FakeOnSignalDb {
@@ -288,4 +288,78 @@ test("makeOnSignalReturns returns a function matching compareSignalOnOffByWindow
   const returns = await getOnReturns({ trainStart: "2025-12-01T00:00:00.000Z", trainEnd: "2026-01-01T00:00:00.000Z", testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z" });
 
   assert.deepEqual(returns, [0]);
+});
+
+// ---------------------------------------------------------------------
+// Walk-end clamp (plan.md "Backtest / Live Isolation", failure mode 1):
+// the grace walk must never visit a simulated day later than "now".
+// `config.nowMs` is the test-only clock override.
+// ---------------------------------------------------------------------
+
+test("runOnSignalForTicker never walks past 'now', even when testEnd + graceDays lands in the future", async () => {
+  const db = new FakeOnSignalDb({
+    newsItems: [{ id: "news-1", tickers: ["AAPL"], published_at: "2026-01-01T00:00:00.000Z", title: "t", body: "b" }],
+    priceBars: [{ ticker: "AAPL", date: "2025-12-31", close: 100 }],
+  });
+  const nowMs = Date.parse("2026-01-04T12:00:00.000Z");
+  const config = {
+    geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1,
+    maxPositionHoldDays: 10, // would fire a time_based exit on 2026-01-11 -- a day that has not happened yet
+    nowMs,
+    fakeModel: makeFakeModel(),
+  };
+
+  const returns = await runOnSignalForTicker({}, config, db, {
+    ticker: "AAPL", testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z", graceDays: 10,
+  });
+
+  // Position opened, but the walk stopped at "now" (2026-01-04) so the
+  // 10-day time-based exit never fired at a simulated future date.
+  assert.equal(db.positions.length, 1);
+  assert.equal(db.positions[0].closed_at, null);
+  assert.deepEqual(returns, []);
+  assert.equal(db.decisionMemory.length, 0);
+});
+
+test("runOnSignalForTicker still closes exits that fall on or before 'now'", async () => {
+  const db = new FakeOnSignalDb({
+    newsItems: [{ id: "news-1", tickers: ["AAPL"], published_at: "2026-01-01T00:00:00.000Z", title: "t", body: "b" }],
+    priceBars: [{ ticker: "AAPL", date: "2025-12-31", close: 100 }],
+  });
+  const nowMs = Date.parse("2026-01-04T12:00:00.000Z");
+  const config = {
+    geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1,
+    maxPositionHoldDays: 2, // fires 2026-01-03, before "now"
+    nowMs,
+    fakeModel: makeFakeModel(),
+  };
+
+  const returns = await runOnSignalForTicker({}, config, db, {
+    ticker: "AAPL", testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z", graceDays: 10,
+  });
+
+  assert.equal(db.positions[0].closed_at, "2026-01-03T00:00:00.000Z");
+  assert.ok(db.positions.every((p) => p.closed_at === null || Date.parse(p.closed_at) <= nowMs));
+  assert.deepEqual(returns, [0]);
+});
+
+test("countSignalWalkSteps applies the same 'now' clamp as the walk itself", () => {
+  const nowMs = Date.parse("2026-01-04T12:00:00.000Z");
+  const args = { tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z", graceDays: 10 };
+
+  // Days 01-01..01-04 inclusive = 4 per ticker, not the 12 an unclamped walk to 01-12 would give.
+  assert.equal(countSignalWalkSteps({ nowMs }, args), 8);
+  // A "now" comfortably after testEnd + grace leaves the walk unclamped: 01-01..01-12 = 12 days.
+  assert.equal(countSignalWalkSteps({ nowMs: Date.parse("2026-03-01T00:00:00.000Z") }, args), 24);
+});
+
+test("runOnSignalForTicker on a window that starts after 'now' walks nothing and never fabricates", async () => {
+  const db = new FakeOnSignalDb({ newsItems: [], priceBars: [] });
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, nowMs: Date.parse("2026-01-01T00:00:00.000Z"), fakeModel: makeFakeModel() };
+
+  const returns = await runOnSignalForTicker({}, config, db, {
+    ticker: "AAPL", testStart: "2026-02-01T00:00:00.000Z", testEnd: "2026-02-08T00:00:00.000Z", graceDays: 10,
+  });
+
+  assert.deepEqual(returns, []);
 });
