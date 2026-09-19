@@ -30,7 +30,7 @@ src/
   ingestion/
     normalize.js            # "jsonify anything" boundary
     sources/                # one adapter per source (gdelt.js first, stubbed)
-  storage/                  # run_store.js (ALL point-in-time-safe reads/writes), inputs_view.js, jobs.js, llm_calls.js, sim_registry.js
+  storage/                  # D1 access: run_store.js, inputs_view.js, jobs.js, llm_calls.js, sim_registry.js (see plan.md Repo Structure)
   backtest/pointInTime.js    # leak-check + walk-forward window helpers
   agents/
     analysts/                # quick-tier: news/event, sentiment
