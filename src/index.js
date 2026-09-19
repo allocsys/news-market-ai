@@ -52,6 +52,7 @@
 
 import { loadConfig } from "./config.js";
 import { backfillHistoricalNews } from "./graph/pipeline.js";
+import { createJobReporter } from "./storage/jobs.js";
 import {
   handleApiSnapshotRoute,
   handleApiActivityRoute,
@@ -61,6 +62,7 @@ import {
   handleApiPositionsRoute,
   handleApiPipelineRoute,
   handleApiBacktestRunsRoute,
+  handleApiJobRoute,
 } from "./dashboard/api.js";
 
 /**
@@ -103,6 +105,16 @@ export default {
     if (pathname === "/api/pipeline") return handleApiPipelineRoute(request, env, config);
     if (pathname === "/api/backtest-runs") return handleApiBacktestRunsRoute(request, env, config);
 
+    // Live progress for one job (src/storage/jobs.js's job_progress table),
+    // read by `dashboard` at /dashboard/jobs/:id (which polls this on the
+    // operator's behalf -- see src/dashboard-worker.js). :id is whatever
+    // POST /backfill or POST /backtest/run returned as `id` below.
+    if (pathname.startsWith("/api/jobs/")) {
+      const id = pathname.slice("/api/jobs/".length);
+      if (!id) return jsonResponse({ error: "job id required" }, { status: 400 });
+      return handleApiJobRoute(request, env, config, id);
+    }
+
     // Operational entry point for graph/pipeline.js#backfillHistoricalNews.
     // Query-string only (from/to) -- `dashboard` is the only caller and
     // always forwards as query params, whether it originally received a
@@ -122,6 +134,10 @@ export default {
       }
 
       const id = newJobId("backfill");
+      // 'queued' row written before the message is even sent -- best-effort
+      // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
+      // progress-write hiccup here can never block the real enqueue below.
+      await createJobReporter(env.DB, { id, type: "backfill", params: { from, to } }).queued();
       try {
         await env.JOBS.send({ type: "backfill", id, from, to });
         return jsonResponse({ accepted: true, id, from, to });
@@ -161,6 +177,10 @@ export default {
       // full ISO strings.
       const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
       const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
+
+      // Same best-effort 'queued' row as /backfill above -- the `llm` Worker
+      // (which consumes LLM_JOBS) is the one that later marks it 'running'.
+      await createJobReporter(env.DB, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } }).queued();
 
       try {
         await env.LLM_JOBS.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays });
@@ -233,11 +253,18 @@ export default {
       try {
         if (job.type === "backfill") {
           const { id, from, to } = job;
+          const reporter = createJobReporter(env.DB, { id, type: "backfill", params: { from, to } });
+          await reporter.start();
           try {
-            const result = await backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV });
+            const result = await backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
             console.log("backfill job completed", { id, from, to, inserted: result.inserted, errorCount: result.errors.length });
+            await reporter.complete(
+              { inserted: result.inserted, errorCount: result.errors.length },
+              `Inserted ${result.inserted} article${result.inserted === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
+            );
           } catch (err) {
             console.error("backfill job failed", { id, from, to, message: err.message });
+            await reporter.fail(err.message);
           }
         } else {
           console.error("queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
