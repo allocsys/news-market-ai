@@ -79,7 +79,9 @@ test("renderActiveJobPanel renders a 'Backtest in progress' panel for a backtest
 
   assert.match(html, /<h2>Backtest in progress<\/h2>/);
   assert.match(html, /Running a backtest for AAPL\./);
-  assert.match(html, /var pollUrl = "\/dashboard\/jobs\/backtest-456-def";/);
+  // A backtest's job_progress row lives under its OWN id as run_id (SIM_DB),
+  // never under 'live', so the poll URL must carry ?env=<jobId> or it 404s forever.
+  assert.match(html, /var pollUrl = "\/dashboard\/jobs\/backtest-456-def\?env=backtest-456-def";/);
 });
 
 test("renderActiveJobPanel HTML-escapes and URI-encodes the job id everywhere it appears", () => {

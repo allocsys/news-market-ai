@@ -29,10 +29,10 @@ const DEFAULT_PARAMS = parseLlmParams(qs({}));
 // ---------------------------------------------------------------------------
 
 test("parseLlmParams defaults, and validates every param", () => {
-  assert.deepEqual(parseLlmParams(qs({})), { llmSource: "all", llmStatus: "all", llmLimit: 50, llmTicker: "", llmJob: "", llmRun: "", llmBefore: null });
+  assert.deepEqual(parseLlmParams(qs({})), { llmSource: "all", llmStatus: "all", llmLimit: 50, llmTicker: "", llmJob: "", llmRun: "", llmBefore: null, env: "live" });
   assert.deepEqual(
     parseLlmParams(qs({ llmSource: "backtest", llmStatus: "error", llmLimit: "100", llmTicker: " aapl ", llmJob: "backtest-1", llmRun: "n|1", llmBefore: "42" })),
-    { llmSource: "backtest", llmStatus: "error", llmLimit: 100, llmTicker: "AAPL", llmJob: "backtest-1", llmRun: "n|1", llmBefore: 42 }
+    { llmSource: "backtest", llmStatus: "error", llmLimit: 100, llmTicker: "AAPL", llmJob: "backtest-1", llmRun: "n|1", llmBefore: 42, env: "live" }
   );
   // junk falls back to defaults instead of reaching the query
   const junk = parseLlmParams(qs({ llmSource: "drop table", llmStatus: "x", llmLimit: "9999", llmTicker: "AA PL;--", llmBefore: "-3", llmJob: "j".repeat(500) }));
