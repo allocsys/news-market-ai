@@ -18,8 +18,9 @@ import { renderShell } from "../src/dashboard/shell.js";
 import { renderMoreView } from "../src/dashboard/views/more.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
-import { STATE_DIR } from "./helpers/engine_ctx.js";
+import { STATE_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
 import { BrokenDb } from "./helpers/broken_db.js";
+import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
 
 const qs = (obj) => new URLSearchParams(obj);
 const DEFAULT_PARAMS = parseLlmParams(qs({}));
@@ -331,4 +332,81 @@ test("GET /dashboard/llm/:id renders the full prompt and response; unknown or no
   assert.equal(missing.status, 404);
   assert.match(await missing.text(), /Call not found/);
   assert.equal((await dashGet("/dashboard/llm/abc", env, cookie)).status, 404);
+});
+
+// ---------------------------------------------------------------------------
+// M4b: the LLM call detail page's environment selector (owner's 3fd767d,
+// which added resolvedEnv/envError to /api/llm-calls/:id, and 68bb093,
+// which wired envSelectorFor into renderLlmCall -- neither had test
+// coverage before this commit).
+// ---------------------------------------------------------------------------
+
+const BT = "backtest-1789000000000-abc123";
+
+/** A SIM_DB with BT registered+complete, holding one LLM call under that run. */
+async function seededSimDb() {
+  const simDb = createTestD1([STATE_DIR, SIM_DIR]);
+  await insertBacktestRun(simDb, { id: BT, tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", testEnd: "2024-02-01T00:00:00.000Z", trainDays: 0, testDays: 30, startedAt: "2026-03-12T00:00:00.000Z" });
+  await completeBacktestRun(simDb, { id: BT, result: { overall: {} }, finishedAt: "2026-03-12T01:00:00.000Z" });
+  await new RunStore(simDb, BT).insertLlmCall({ source: "backtest", ticker: "AAPL", jobId: BT, runId: "w|AAPL|n1", label: "trader", status: "ok", prompt: "SIM-PROMPT", response: '{"instrument":"equity"}' });
+  return simDb;
+}
+
+test("GET /api/llm-calls/:id?env=<registered backtest> returns the call scoped to that run, plus resolvedEnv and no envError", async () => {
+  const env = { LIVE_DB: createTestD1([STATE_DIR]), SIM_DB: await seededSimDb() };
+  const res = await backendGet(`/api/llm-calls/1?env=${BT}`, env);
+  assert.equal(res.status, 200);
+  const call = await res.json();
+  assert.equal(call.prompt, "SIM-PROMPT");
+  assert.equal(call.resolvedEnv, BT);
+  assert.equal(call.envError, null);
+});
+
+test("GET /api/llm-calls/:id?env=<well-formed but unregistered> heals to live: returns live's call, resolvedEnv 'live', and an envError explaining why", async () => {
+  const env = { LIVE_DB: await seededDb(), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) };
+  const res = await backendGet(`/api/llm-calls/1?env=${BT}`, env);
+  assert.equal(res.status, 200);
+  const call = await res.json();
+  assert.equal(call.prompt, "PROMPT-ONE");
+  assert.equal(call.resolvedEnv, "live");
+  assert.match(call.envError, /not found/);
+});
+
+test("GET /dashboard/llm/:id?env=<registered backtest> shows the selector with that run's pill active, and the scope + back links carry the env", async () => {
+  const backendEnv = { LIVE_DB: createTestD1([STATE_DIR]), SIM_DB: await seededSimDb() };
+  const env = { BACKEND: makeBackend(backendEnv), DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key" };
+  const cookie = await sessionCookie(env);
+  const html = await (await dashGet(`/dashboard/llm/1?env=${BT}`, env, cookie)).text();
+
+  assert.match(html, /id="env-selector"/);
+  assert.match(html, /class="pill pill-active"[^>]*>AAPL/, "the backtest's own pill is active, not Live");
+  assert.match(html, /SIM-PROMPT/);
+
+  assert.ok(html.includes(`href="/dashboard/llm?env=${BT}"`), "back link carries the env");
+  const scopeMatch = html.match(/href="([^"]*)">All calls in this run<\/a>/);
+  assert.ok(scopeMatch, "scope link found");
+  assert.ok(scopeMatch[1].includes(`env=${BT}`) && scopeMatch[1].includes("llmRun=w%7CAAPL%7Cn1"), "scope link carries both the env and the run filter");
+});
+
+test("GET /dashboard/llm/:id?env=<unregistered> heals to live: Live pill active, envError note shown, and live's own call is displayed rather than a broken page", async () => {
+  const backendEnv = { LIVE_DB: await seededDb(), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) };
+  const env = { BACKEND: makeBackend(backendEnv), DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key" };
+  const cookie = await sessionCookie(env);
+  const html = await (await dashGet(`/dashboard/llm/1?env=${BT}`, env, cookie)).text();
+
+  assert.match(html, /class="pill pill-active"[^>]*>Live<\/a>/);
+  assert.match(html, /not found/);
+  assert.match(html, /PROMPT-ONE/, "healed to live -- shows live's call 1, not a blank/error page");
+});
+
+test("renderLlmCallView: back/scope links carry a non-live env, and default to plain live links when env is omitted", () => {
+  const call = fullCall({ runId: "w|AAPL|n1", jobId: "backtest-3" });
+
+  const live = renderLlmCallView({ call });
+  assert.ok(live.includes('href="/dashboard/llm"'), "no ?env= for the default live view");
+
+  const scoped = renderLlmCallView({ call, env: "backtest-1-abc" });
+  assert.ok(scoped.includes('href="/dashboard/llm?env=backtest-1-abc"'), "back link carries the env");
+  const scopeMatch = scoped.match(/href="([^"]*)">All calls in this run<\/a>/);
+  assert.ok(scopeMatch[1].includes("env=backtest-1-abc") && scopeMatch[1].includes("llmJob=backtest-3"));
 });
