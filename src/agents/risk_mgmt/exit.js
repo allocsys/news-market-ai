@@ -36,8 +36,8 @@ function daysBetween(fromIso, toIso) {
  * matters when neither price target fired.
  *
  * `position.entryPrice` (or `currentPrice`) may be null -- price_bars has
- * no data yet for this ticker/date, a known gap, see plan.md and
- * migrations/0006's header. In that case price-based exits are skipped
+ * no data yet for this ticker/date, a known gap, see plan.md. In that
+ * case price-based exits are skipped
  * entirely and only the time-based exit can fire; this function never
  * fabricates a price to force a stop-loss/take-profit decision.
  */
