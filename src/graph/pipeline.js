@@ -73,6 +73,7 @@ import { shouldContinueDebate } from "./conditional_logic.js";
 import { loadLessonsForDebate } from "./reflection.js";
 import { settlePositionOutcome } from "./settle.js";
 import { VendorError } from "../shared/errors.js";
+import { withLlmLogContext } from "../storage/llm_calls.js";
 
 /**
  * Runs the full analyst -> debate -> trade -> risk -> portfolio pipeline for
@@ -84,6 +85,12 @@ import { VendorError } from "../shared/errors.js";
  * id) so resume can find the right checkpoint row.
  */
 export async function runPipelineForTicker(env, config, db, { runId, ticker, newsItem, asOf }) {
+  // Tag every LLM call this run makes (analysts, debate, trader, and the
+  // reflection when an old position is replaced below) with its runId/ticker
+  // for the dashboard's LLM-call log. `source` is left as whatever the caller
+  // set -- the llm Worker marks a backtest run "backtest" (+ its job id) before
+  // it gets here -- and only defaults to "pipeline" for the live path.
+  config = withLlmLogContext(config, { source: config.llmLog?.source ?? "pipeline", runId, ticker });
   const resume = await resumeFrom(db, { runId, ticker });
   let stage = resume.stage;
   const state = resume.state ?? {};

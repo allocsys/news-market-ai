@@ -20,6 +20,7 @@ Body: ${newsItem.body}`;
 
   return callStructured(env, config, AnalystOpinion, prompt, {
     model: config.geminiQuickModel,
+    label: "analyst:news_event",
     extraFields: { agent: "news_event", newsItemId: newsItem.id, modelUsed: config.geminiQuickModel },
   });
 }

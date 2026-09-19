@@ -181,6 +181,77 @@ test("queue() exit_check acks (does not retry) on failure -- next scheduled tick
 });
 
 // ---------------------------------------------------------------------------
+// LLM call log retention (storage/llm_calls.js#pruneLlmCalls) rides the
+// exit_check tick
+// ---------------------------------------------------------------------------
+
+/** FakeNoPositionsDb plus the one DELETE the retention prune issues. `failDelete` makes that DELETE reject. */
+class PrunableDb extends FakeNoPositionsDb {
+  constructor({ failDelete = false } = {}) {
+    super();
+    this.cutoffs = [];
+    this.failDelete = failDelete;
+  }
+  prepare(sql) {
+    if (!/DELETE FROM llm_calls/.test(sql)) return super.prepare(sql);
+    const db = this;
+    return {
+      bind(cutoff) {
+        return {
+          async run() {
+            if (db.failDelete) throw new Error("simulated D1 failure on prune");
+            db.cutoffs.push(cutoff);
+          },
+        };
+      },
+    };
+  }
+}
+
+const DAY_MS = 24 * 3600 * 1000;
+
+test("queue() exit_check prunes LLM call log rows older than the retention window (14 days by default)", async () => {
+  const env = { DB: new PrunableDb() };
+  const before = Date.now();
+  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  assert.equal(env.DB.cutoffs.length, 1);
+  const cutoffMs = Date.parse(env.DB.cutoffs[0]);
+  assert.ok(Math.abs(cutoffMs - (before - 14 * DAY_MS)) < 5000, `cutoff ${env.DB.cutoffs[0]} should be ~14 days ago`);
+});
+
+test("queue() exit_check honors LLM_LOG_RETENTION_DAYS", async () => {
+  const env = { DB: new PrunableDb(), LLM_LOG_RETENTION_DAYS: "3" };
+  const before = Date.now();
+  await worker.queue(batchOf(new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" })), env);
+
+  assert.ok(Math.abs(Date.parse(env.DB.cutoffs[0]) - (before - 3 * DAY_MS)) < 5000);
+});
+
+test("queue() exit_check skips the prune entirely when LLM_LOG_ENABLED is \"false\"", async () => {
+  const env = { DB: new PrunableDb(), LLM_LOG_ENABLED: "false" };
+  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  assert.equal(env.DB.cutoffs.length, 0);
+});
+
+test("queue() exit_check still acks when the prune itself fails -- a log-retention hiccup must not look like a failed exit check", async (t) => {
+  const warnings = [];
+  t.mock.method(console, "warn", (...args) => warnings.push(args));
+  const env = { DB: new PrunableDb({ failDelete: true }) };
+  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  assert.equal(message.retried, false);
+  assert.ok(warnings.some(([msg]) => msg.includes("llm call log prune failed")));
+});
+
+// ---------------------------------------------------------------------------
 // analyze (ANALYZE)
 // ---------------------------------------------------------------------------
 

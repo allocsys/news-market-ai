@@ -53,7 +53,7 @@ Decision: ${JSON.stringify(decisionSummary)}
 Realized return: ${realizedReturn}
 Alpha (vs. benchmark): ${alphaReturn}`;
 
-  const { reflection } = await callStructured(env, config, Reflection, prompt, { model: config.geminiQuickModel });
+  const { reflection } = await callStructured(env, config, Reflection, prompt, { model: config.geminiQuickModel, label: "reflection", ticker });
 
   await recordDecisionOutcome(db, { id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt });
   return reflection;

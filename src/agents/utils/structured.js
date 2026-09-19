@@ -6,6 +6,7 @@
 // better JSON-repair on malformed model output) only has to happen once.
 
 import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { recordLlmCall } from "../../storage/llm_calls.js";
 
 /**
  * Fake-model injection point (plan.md open item, closed 2026-09-17). Every
@@ -35,11 +36,13 @@ import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
  * every production call falls through to the real geminiGenerateText call
  * below, unchanged.
  */
-async function generateText(env, config, prompt, { model, schema, extraFields } = {}) {
+async function generateText(env, config, prompt, { model, schema, extraFields, trace } = {}) {
   if (config.fakeModel) {
-    return config.fakeModel(prompt, { model: model || config.geminiQuickModel, schema, extraFields, env, config });
+    const text = await config.fakeModel(prompt, { model: model || config.geminiQuickModel, schema, extraFields, env, config });
+    if (trace) trace.modelUsed = "fake";
+    return text;
   }
-  return geminiGenerateText(env, config, prompt, { model });
+  return geminiGenerateText(env, config, prompt, { model, trace });
 }
 
 /**
@@ -51,9 +54,51 @@ async function generateText(env, config, prompt, { model, schema, extraFields } 
  * Deliberately does NOT swallow parse/validation errors -- a schema
  * mismatch usually means the prompt or model output shape changed in a way
  * worth surfacing, not silently recovering from.
+ *
+ * LLM CALL LOG (storage/llm_calls.js): every call -- success, vendor
+ * failure, unparseable JSON, schema mismatch -- is recorded with the exact
+ * prompt sent and raw text received, for the dashboard's "LLM calls" page.
+ * That happens here, at the one choke point all eight agents share, so no
+ * agent needs its own logging. `label` says which agent this call is (shown
+ * on the page); `ticker` overrides the ticker from config.llmLog (which
+ * runPipelineForTicker sets) for callers outside a pipeline run, e.g. the
+ * reflection at position close. Logging is best-effort and never changes what
+ * this function returns or throws.
  */
-export async function callStructured(env, config, schema, prompt, { model, extraFields = {} } = {}) {
-  const text = await generateText(env, config, prompt, { model, schema, extraFields });
-  const parsed = JSON.parse(stripJsonFence(text));
-  return schema.parse({ ...extraFields, ...parsed });
+export async function callStructured(env, config, schema, prompt, { model, extraFields = {}, label, ticker } = {}) {
+  const requestedModel = model || config.geminiQuickModel;
+  const trace = {};
+  const startedAt = Date.now();
+  const log = (fields) =>
+    recordLlmCall(env, config, {
+      label,
+      ticker,
+      requestedModel,
+      modelUsed: trace.modelUsed,
+      keyIndex: trace.keyIndex,
+      attempts: trace.attempts,
+      durationMs: Date.now() - startedAt,
+      prompt,
+      ...fields,
+    });
+
+  let text;
+  try {
+    text = await generateText(env, config, prompt, { model, schema, extraFields, trace });
+  } catch (err) {
+    await log({ status: "error", errorStage: "vendor", error: err?.message ?? String(err), response: null });
+    throw err;
+  }
+
+  let result;
+  try {
+    const parsed = JSON.parse(stripJsonFence(text));
+    result = schema.parse({ ...extraFields, ...parsed });
+  } catch (err) {
+    await log({ status: "error", errorStage: err?.name === "ZodError" ? "validation" : "parse", error: err?.message ?? String(err), response: text });
+    throw err;
+  }
+
+  await log({ status: "ok", response: text });
+  return result;
 }

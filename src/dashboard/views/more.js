@@ -6,6 +6,7 @@ import { escapeHtml } from "../helpers.js";
 const MORE_ICONS = {
   activity: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><rect x="7" y="11" width="3" height="6" rx="0.5"/><rect x="12" y="7" width="3" height="10" rx="0.5"/><rect x="17" y="13" width="3" height="4" rx="0.5"/></svg>`,
   charts: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 14 3-4 3 3 4-6"/></svg>`,
+  llm: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>`,
   backfill: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 13V3"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14a2 2 0 0 0 2-2v-4"/><path d="M3 15h4"/><path d="M3 19h4"/></svg>`,
   backtest: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6"/><path d="M10 3v6.5L5 19a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 19l-5-9.5V3"/><path d="M7 15h10"/></svg>`,
 };
@@ -13,6 +14,7 @@ const MORE_ICONS = {
 const MORE_SECTIONS = [
   { id: "activity", title: "Activity", desc: "Trade decisions per UTC calendar day, stacked by status.", icon: MORE_ICONS.activity },
   { id: "charts", title: "Charts", desc: "Recent daily closes (unadjusted) for watchlist tickers.", icon: MORE_ICONS.charts },
+  { id: "llm", title: "LLM calls", desc: "Every prompt sent to Gemini and what came back -- live pipeline and backtests.", icon: MORE_ICONS.llm },
   { id: "backfill", title: "Backfill", desc: "Triggers historical news backfill (Finnhub company-news).", icon: MORE_ICONS.backfill },
   { id: "backtest", title: "Backtest", desc: "Manual backtest harness (Signal ON vs buy & hold).", icon: MORE_ICONS.backtest },
 ];

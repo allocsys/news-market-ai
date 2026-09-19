@@ -26,10 +26,11 @@ import { renderHealthView } from "./dashboard/views/health.js";
 import { renderDecisionsView } from "./dashboard/views/decisions.js";
 import { renderPositionsView } from "./dashboard/views/positions.js";
 import { renderPipelineView } from "./dashboard/views/pipeline.js";
+import { renderLlmView, renderLlmCallView } from "./dashboard/views/llm.js";
 import { renderMoreView } from "./dashboard/views/more.js";
 import { renderBackfillView, renderBackfillConfirmPage } from "./dashboard/views/backfill.js";
 import { renderBacktestView, renderBacktestConfirmPage } from "./dashboard/views/backtest.js";
-import { parseDashboardParams, errorState } from "./dashboard/helpers.js";
+import { parseDashboardParams, parseLlmParams, errorState } from "./dashboard/helpers.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
 
 /** Same "no partial config" gate backend used to run itself (src/index.js,
@@ -124,6 +125,7 @@ const SECTION_RENDERERS = {
   decisions: renderDecisionsView,
   positions: renderPositionsView,
   pipeline: renderPipelineView,
+  llm: renderLlmView,
   backtest: renderBacktestView,
 };
 
@@ -135,13 +137,21 @@ const SECTION_API_PATH = {
   decisions: "/api/decisions",
   positions: "/api/positions",
   pipeline: "/api/pipeline",
+  llm: "/api/llm-calls",
   backtest: "/api/backtest-runs",
 };
 
 // Sections whose render*View needs `params` alongside the /api/* JSON body
 // (activity/decisions/positions filter UI reads its own current filter
-// state back out of `params`, same as routes.js's former SSR handlers did).
-const SECTIONS_NEEDING_PARAMS = new Set(["activity", "decisions", "positions"]);
+// state back out of `params`, same as routes.js's former SSR handlers did),
+// mapped to the parser that turns the query string into that section's
+// params. The LLM-calls page has its own param set (see helpers.js#parseLlmParams).
+const SECTION_PARAM_PARSERS = {
+  activity: parseDashboardParams,
+  decisions: parseDashboardParams,
+  positions: parseDashboardParams,
+  llm: parseLlmParams,
+};
 
 /** GET /dashboard/<section> -- fetch that section's JSON from backend, render it through the same view function routes.js's SSR handler used, wrap in the shell. */
 async function renderSection(request, env, config, section) {
@@ -155,7 +165,8 @@ async function renderSection(request, env, config, section) {
 
   try {
     const data = await fetchBackendJson(env, apiPath);
-    const props = SECTIONS_NEEDING_PARAMS.has(section) ? { ...data, params: parseDashboardParams(url.searchParams) } : data;
+    const parseParams = SECTION_PARAM_PARSERS[section];
+    const props = parseParams ? { ...data, params: parseParams(url.searchParams) } : data;
     const activePanel = section === "backtest" ? await activeJobPanelFor(env, "backtest") : "";
     const bodyHtml = activePanel + render(props);
     return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
@@ -167,6 +178,26 @@ async function renderSection(request, env, config, section) {
     console.error(`dashboard ${section} backend fetch failed`, { message: err.message });
     const bodyHtml = `<section><h2>${section}</h2>${errorState(err.message)}</section>`;
     return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
+  }
+}
+
+/** GET /dashboard/llm/:id -- one LLM call in full (backend's /api/llm-calls/:id). A missing id renders the view's own "not found" state (with a 404 status) rather than the generic backend-error panel. */
+async function renderLlmCall(request, env, config, id) {
+  const auth = await requireSession(request, config);
+  if (auth.redirect === "__disabled__") return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
+  if (auth.redirect) return redirect(auth.redirect);
+
+  const shell = (bodyHtml, status = 200) =>
+    htmlResponse(renderShell({ activeSection: "llm", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }), { status });
+
+  if (!/^\d+$/.test(id)) return shell(renderLlmCallView({ call: null }), 404);
+  try {
+    const call = await fetchBackendJson(env, `/api/llm-calls/${id}`);
+    return shell(renderLlmCallView({ call }));
+  } catch (err) {
+    if (err.status === 404) return shell(renderLlmCallView({ call: null }), 404);
+    console.error("dashboard llm call backend fetch failed", { id, message: err.message });
+    return shell(renderLlmCallView({ error: err.message }), 500);
   }
 }
 
@@ -248,6 +279,8 @@ export default {
     if (pathname === "/dashboard/decisions") return renderSection(request, env, config, "decisions");
     if (pathname === "/dashboard/positions") return renderSection(request, env, config, "positions");
     if (pathname === "/dashboard/pipeline") return renderSection(request, env, config, "pipeline");
+    if (pathname === "/dashboard/llm") return renderSection(request, env, config, "llm");
+    if (pathname.startsWith("/dashboard/llm/")) return renderLlmCall(request, env, config, pathname.slice("/dashboard/llm/".length));
     if (pathname === "/dashboard/backtest") return renderSection(request, env, config, "backtest");
 
     // Pure UI, no backend data needed -- forms and their confirm pages.

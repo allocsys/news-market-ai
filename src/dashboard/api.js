@@ -16,7 +16,7 @@
 // convention this codebase already uses (and tests) for every other JSON
 // response in src/index.js, rather than introducing a second, unproven one.
 import { checkAuth } from "./routes.js";
-import { parseDashboardParams } from "./helpers.js";
+import { parseDashboardParams, parseLlmParams } from "./helpers.js";
 import {
   getSnapshotData,
   getActivityData,
@@ -26,6 +26,8 @@ import {
   getPositionsData,
   getPipelineData,
   getBacktestRunsData,
+  getLlmCallsData,
+  getLlmCallData,
 } from "./data.js";
 import { getJob, getActiveJob } from "../storage/jobs.js";
 
@@ -88,6 +90,25 @@ export async function handleApiBacktestRunsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   return jsonResponse(await getBacktestRunsData(env));
+}
+
+/** GET /api/llm-calls -- `{ calls, nextBeforeId, error }`, newest first, previews only. Filters: llmSource, llmStatus, llmTicker, llmJob, llmRun, llmLimit, llmBefore (helpers.js#parseLlmParams). */
+export async function handleApiLlmCallsRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const params = parseLlmParams(new URL(request.url).searchParams);
+  return jsonResponse(await getLlmCallsData(env, params));
+}
+
+/** GET /api/llm-calls/:id -- one call in full. 404 for an unknown/pruned id, 500 if D1 failed (so the two are distinguishable). */
+export async function handleApiLlmCallRoute(request, env, config, id) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  if (!/^\d+$/.test(id)) return jsonResponse({ error: "llm call id must be a number" }, { status: 400 });
+  const { call, error } = await getLlmCallData(env, Number(id));
+  if (error) return jsonResponse({ error }, { status: 500 });
+  if (!call) return jsonResponse({ error: "llm call not found (it may have been pruned by the retention window)" }, { status: 404 });
+  return jsonResponse(call);
 }
 
 const ACTIVE_JOB_TYPES = new Set(["backfill", "backtest"]);

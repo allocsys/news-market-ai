@@ -42,6 +42,7 @@ ${JSON.stringify(snapshot, null, 2)}`;
 
   return callStructured(env, config, AnalystOpinion, prompt, {
     model: config.geminiQuickModel,
+    label: "analyst:technical",
     extraFields: { agent: "technical", newsItemId: newsItem.id, modelUsed: config.geminiQuickModel },
   });
 }

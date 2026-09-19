@@ -62,6 +62,8 @@ import {
   handleApiPositionsRoute,
   handleApiPipelineRoute,
   handleApiBacktestRunsRoute,
+  handleApiLlmCallsRoute,
+  handleApiLlmCallRoute,
   handleApiJobRoute,
   handleApiActiveJobRoute,
 } from "./dashboard/api.js";
@@ -105,6 +107,9 @@ export default {
     if (pathname === "/api/positions") return handleApiPositionsRoute(request, env, config);
     if (pathname === "/api/pipeline") return handleApiPipelineRoute(request, env, config);
     if (pathname === "/api/backtest-runs") return handleApiBacktestRunsRoute(request, env, config);
+    // LLM call log (storage/llm_calls.js): list, then one call in full.
+    if (pathname === "/api/llm-calls") return handleApiLlmCallsRoute(request, env, config);
+    if (pathname.startsWith("/api/llm-calls/")) return handleApiLlmCallRoute(request, env, config, pathname.slice("/api/llm-calls/".length));
 
     // Newest in-flight job of a type, for pages that need to show progress
     // for a job submitted earlier. MUST stay above the /api/jobs/ prefix
