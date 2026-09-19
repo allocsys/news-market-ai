@@ -92,13 +92,17 @@ Must be true by construction, not by discipline.
    static split.
 6. **A leak-check test, not just a design doc** — CI asserts zero rows returned to
    the agent have a timestamp after `T`.
-7. **Backtest state must not touch live state, and vice versa.** _Currently
-   violated_ — see "Backtest / Live Isolation" below.
+7. **Backtest state must not touch live state, and vice versa.** Enforced
+   structurally (separate D1 for state, no live binding in the backtest Worker),
+   not by row tags: design in "Backtest / Live Isolation" below. _Not built yet;
+   currently violated._
 
-## Backtest / Live Isolation — OPEN (verified 2026-09-19)
+## Backtest / Live Isolation — REDESIGN (verified 2026-09-19; prod D1 wiped the same day)
 **Problem:** backtest and live runs share the same D1 tables and nothing marks
 which run wrote a row. Verified by reading the code and running read-only
 queries against production D1 (`news_market_ai`, 2026-09-19 ~04:35Z).
+**Prod D1 was wiped later that day at the owner's request (no backup), so the
+numbers below are historical evidence of why the design changed.**
 
 ### What is and isn't shared
 | Store | Tagged by run type? | Notes |
@@ -161,36 +165,101 @@ queries against production D1 (`news_market_ai`, 2026-09-19 ~04:35Z).
    `getRecentlyClosedPositions`, `getOpenPositionsExposureTotal`,
    `getDecisionStats` and `getRecentCheckpoints` are unfiltered.
 
-### Proposed fix (tagging + scoped access; no second database)
-- **Migration `0013_run_scope.sql`:** `run_scope TEXT` (NULL = live, else the
-  backtest job id) on `positions`, `trade_decisions`, `decision_memory` and
-  `pipeline_checkpoints`, plus indexes. `ALTER TABLE ... ADD COLUMN`, no table rebuild.
-- **Scope-unique ids:** backtest `tradeThesisId` = `<scope>|<ticker>|<asOf>`
-  (`evaluateRisk` takes an optional scope). Live ids stay `ticker|asOf`, so no PK
-  change and no live data rewrite.
-- **Thread scope like `withLlmLogContext`:** a `withRunScope(config, id)` helper;
-  every function in `storage/d1.js` touching those tables filters
-  `run_scope IS ?` (NULL-safe). Covers `getOpenPositionsAsOf`,
-  `getOpenPositionsRiskPctAsOf`, `getOpenPositionForTickerAsOf`,
-  `getDecisionMemoryAsOf`, `getRealizedReturnsInRange`, the write functions,
-  `checkOpenPositionExits`, `settlePositionOutcome` and the checkpointer.
-- **A backtest sees only its own scope** (empty memory and positions at start).
-  Walk-forward windows inside one run share a scope, so lessons still accumulate
-  within it. Runs become reproducible and independent.
-- **Never simulate the future:** clamp the backtest walk end to today, and have
-  the live exit check reject `asOf` > now.
-- **Dashboard:** default to live only (`run_scope IS NULL`); the backtest detail
-  page reads by scope; add delete-by-scope for failed runs.
-- **Tests (extends Backtesting Integrity point 6):** after a backtest, zero
-  live-scope rows changed; live memory reads return zero backtest rows; the same
-  `ticker|asOf` in two scopes doesn't collide; an identical window run twice
-  re-executes.
-- **Rejected alternative:** a separate D1 for backtests. Hard isolation, but a
-  second binding, duplicated schema/migrations and copied market data.
+### Design: environments (rewrite, D1 only — agreed 2026-09-19, not built)
+Backtest was bolted onto live (shared tables, then proposed row tags) and each
+fix still left a path to leak. The rewrite makes isolation structural: **one
+engine, run inside an environment; an environment owns its state, and its Worker
+holds no binding to any other environment's state.** No Durable Objects; D1 only.
+This supersedes the earlier `run_scope` tagging proposal and its "reject a
+second D1" note.
 
-**Order:** (1) clamp the walk + live `asOf` guard (no migration); (2) migration +
-scoped storage layer + tests; (3) dashboard filter + delete-by-scope.
-**Until (2) ships, don't run a backtest over a window that overlaps live data.**
+**Three D1 databases**
+| DB | Holds | Written by |
+|---|---|---|
+| `inputs` | `news_items`, `news_item_revisions`, `news_item_tickers`, `price_bars`, `fundamental_facts`: shared, append-only, point-in-time through the existing `asOf` filters | `ingest` only (`backend` too until `backfill` moves, the Step 5 gap) |
+| `live` | run state with `run_id = 'live'`: `positions`, `trade_decisions`, `decision_memory`, `pipeline_checkpoints`, `llm_calls`, `job_progress` | `llm` (live) |
+| `sim` | the same tables with `run_id` = backtest id, plus `backtest_runs` (registry) | `backtest` |
+
+**Schema and access**
+- One state schema, `migrations/state/`, applied to both `live` and `sim`
+  (`migrations/inputs/` for `inputs`). `run_id NOT NULL` is part of every
+  primary/unique key, so `ticker|asOf` thesis ids can no longer collide across
+  runs, and an identical window re-run gets a new `run_id` and really executes.
+  CI fails if the `live` and `sim` schemas differ.
+- `RunStore(db, runId)` is the only code that runs SQL on state tables; every
+  method filters `run_id`, and delete-by-run refuses `'live'`. The scope-less
+  functions in `storage/d1.js` are deleted, not adapted. Input reads go through
+  a separate `InputsView(db)` (`asOf` required, as today).
+
+**Workers and bindings**
+- `ingest`: `inputs` read/write. Enqueues ANALYZE.
+- `llm` (live only): `live` read/write, `inputs` read-only. Consumes `ANALYZE`
+  and `exit_check`.
+- `backtest` (new: `wrangler.backtest.toml`, own `BACKTEST` queue + DLQ): `sim`
+  read/write, `inputs` read-only, KV for cooldowns. **No `live` binding.**
+- `backend`: read-only handles to all three for the dashboard API; runs the
+  migrations for all three; enqueues backtest jobs.
+- `dashboard`: unchanged, except views take an environment (`live` by default);
+  backtest pages read the `sim` registry.
+- Enforcement is config first, code second: CI fails if `wrangler.backtest.toml`
+  binds the `live` DB; `readOnly(db)` rejects anything but SELECT (tested).
+  D1 bindings can't be made read-only, so the `inputs` guard is the one that is
+  code, not config.
+
+**Engine ports.** The pipeline receives `{ clock, inputs, store, enqueue }` and
+never calls `Date.now()`. Live: real clock and queues. Backtest: `SimClock`
+(end clamped to real now, throws on a future time) and a recording enqueue, so a
+backtest cannot trigger live work. This replaces PR #44 (walk clamp + guard).
+
+**Atomic portfolio commit (also fixes "Overlapping open positions").** D1 runs a
+`batch` as one transaction and serializes writers per database, so
+check-and-write goes in one batch with the checks inside the SQL:
+1. Predicate P = no open position for this ticker with a later `opened_at` AND
+   (open risk of *other* tickers) + new risk <= `MAX_PORTFOLIO_RISK_PCT`.
+2. `UPDATE positions` closing this ticker's older open positions as `replaced`
+   `WHERE P`; `INSERT` the new position `WHERE P`; insert the decision row either
+   way, with the outcome (opened / rejected / superseded) recorded.
+3. Backstop: partial unique index on `(run_id, ticker) WHERE closed_at IS NULL`,
+   so a bug fails loudly instead of double-opening.
+Latest `asOf` wins, so a late-finishing older article can't open or close
+anything out of order. Behavior change to confirm: the ceiling is checked
+against other tickers' exposure, because a ticker's new position replaces its
+old one.
+
+**Memory** is per run. A backtest starts with empty memory; seeding from a frozen
+live snapshot is deferred (it needs a cross-environment copy, which the isolation
+rules forbid inside a backtest). **Cleanup** = delete-by-run in `sim`, chunked,
+run by the `backtest` Worker.
+
+**Caveats / open decisions**
+- Gemini quota and `gemini:cooldown:*` KV are shared, so a backtest can starve
+  live analysis. Decide: a separate key, or a hard per-run call budget.
+- D1 free-tier row read/write budgets are likely account-wide (verify), so
+  backtests spend live's daily write budget. Cap concurrent backtests
+  (`LLM_JOBS` is batch 1 / concurrency 1 today) and keep `llm_calls` retention.
+- Concurrent backtests share `sim`: `run_id` prevents collisions but writes
+  contend and the DB grows; delete-by-run must chunk.
+- No cross-DB joins or transactions. None needed today: the only JOIN in the code
+  is `news_item_revisions` with `news_item_tickers`, both in `inputs`.
+- Backfill is still a write to `inputs`. It stays an explicit ingest job; a
+  backtest over an un-backfilled window fails fast instead of fetching.
+- Verify current D1 `batch` atomicity/serialization docs and the free-plan
+  per-database size cap before M1.
+
+**Milestones** (one PR each, squash-merge)
+- **M1** Provision `inputs`/`live`/`sim` (`ensure-d1-database`), split
+  migrations, `RunStore`, `readOnly`, `commitThesis`; tests: out-of-order `asOf`,
+  concurrent same-ticker commits, ceiling race, run isolation.
+- **M2** Engine ports: `pipeline.js`, `settle.js`, `exit_check.js`, memory reads
+  via `RunStore`/`InputsView`; split `storage/d1.js`.
+- **M3** `backtest` Worker + queue, `SimClock`, runner rewrite (walk-forward,
+  signal on/off), delete-by-run, CI checks (no live binding, equal schemas).
+- **M4** Cut live over to `live`/`inputs` (empty; fresh ingest), dashboard and
+  backend read paths, environment selector.
+- **M5** Delete the old code and the old `news_market_ai` binding, close PR #44,
+  refresh Deployment and Repo Structure.
+Until M4 live still runs on the old schema and can re-accumulate overlapping
+positions (consider pausing the `*/15` cron); don't run backtests on the old DB.
 
 ### Overlapping open positions (separate live bug, found during this check)
 Not caused by backtests. 23 of the 24 open AAPL positions were opened by the
@@ -202,24 +271,18 @@ at most one (`LIMIT 1`). An older article processed after a newer one opens its
 own position and nothing ever closes it. Evidence: `trade_decisions.created_at`
 is not in `as_of` order (AAPL `09-18T12:47:00` was decided at 16:01, before
 `09-18T08:37:53` at 19:02).
-**Impact:** every non-AAPL live thesis sees 0.58–0.89 open exposure against the
-0.20 ceiling and is rejected (6 rejections on 09-18: EVR, GOOGL, INTC, MSFT, NVDA,
+**Impact:** every non-AAPL live thesis saw 0.58–0.89 open exposure against the
+0.20 ceiling and was rejected (6 rejections on 09-18: EVR, GOOGL, INTC, MSFT, NVDA,
 SKHY; per-decision causation not replayed).
-**Options (needs an owner decision, changes live trading behavior):**
-(a) enforce at most one open position per ticker at write time by closing every
-other open position for it as `replaced`, regardless of `asOf` order;
-(b) process ANALYZE per ticker in `published_at` order; (c) cap the ceiling
-check per ticker. Not started.
+**Decision:** fixed by the atomic portfolio commit in the environment design
+above (latest `asOf` wins, one open position per ticker enforced in SQL plus a
+unique-index backstop), built in M1, live from M4. Options (b) per-ticker ordered
+processing and (c) a per-ticker ceiling cap were dropped.
 
-**Proposed one-off repair (NOT run; needs owner approval, copy the affected rows
-into `_bak_*` tables first):** (1) delete the backtest-derived rows: 4 positions,
-3 `decision_memory` rows, 9 distinct `trade_decisions` and 13 checkpoints
-(identify via checkpoints whose `run_id` contains `|`; thesis id in
-`state.riskDecision.tradeThesisId`); (2) delete `decision_memory` rows with
-`resolved_at > now`; (3) reopen positions with `closed_at > now` (`closed_at`,
-`close_reason`, `exit_price` → NULL). This makes the ledger honest and the
-dashboard agree with the pipeline (27 open / 88%). It does **not** unblock live
-trading; that needs the overlapping-position fix above.
+**Data repair: not needed.** At the owner's request all 14 data tables in prod D1
+(`news_market_ai`) were emptied on 2026-09-19, with no backup; schema and
+`d1_migrations` were kept. Re-ingesting enqueues ANALYZE for every fetched item
+(LLM spend), and the overlap bug will re-accumulate until M4.
 
 ## Deployment: Cloudflare Workers + D1 + KV (free tier)
 | Resource | Free limit | Implication |
@@ -413,9 +476,11 @@ CI and deploys are green across all four Workers.
 four behaviors below have not been observed live end to end.
 
 **Remaining work (item 1b blocks non-AAPL live trades; nothing else blocks the system running):**
-1. **Backtest / live isolation** — see the section above.
-1b. **Overlapping open positions per ticker** (live) — blocks every non-AAPL
-   live trade today; see "Overlapping open positions" above. Needs a decision.
+1. **Backtest / live isolation** — environment redesign (three D1s, `backtest`
+   Worker, `RunStore`), milestones M1–M5 in the section above.
+1b. **Overlapping open positions per ticker** (live) — fixed by the atomic
+   portfolio commit in M1 (live from M4); until then live can re-accumulate
+   overlapping positions and reject non-AAPL trades.
 2. **Post-deploy smoke test** in `deploy.yml`: log in via `dashboard`, fetch one
    `/api/*` route through the service binding, fail unless 200. Would have caught
    the 401 incident.
