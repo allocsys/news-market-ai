@@ -189,6 +189,11 @@ export class RunStore {
    *      against OTHER tickers only -- **decided 2026-09-19** (plan.md):
    *      a ticker's new position replacing its own old one is not double-
    *      counted against the ceiling.
+   * (1) never closes the row it is about to (re)insert (`id != ?`): a
+   * checkpoint-resumed or queue-retried re-run of the portfolio stage (crash
+   * between this batch and the checkpoint write) must be a no-op, not close
+   * its own just-opened position as 'replaced'. `exitPrice` is recorded on
+   * whatever (1) closes, so the caller can settle the replaced position.
    * (1) excludes this ticker's own soon-to-be-closed row from P2's SUM by
    * construction (`ticker != ?`), so evaluating the identical expression
    * again in (2) and (3) is safe -- (1) never changes what (2)/(3) see.
@@ -218,6 +223,7 @@ export class RunStore {
     stopLossPct = null,
     takeProfitPct = null,
     asOf,
+    exitPrice = null,
     debateId = null,
     thesis,
     riskDecision,
@@ -233,8 +239,8 @@ export class RunStore {
     const closeOld = this.db
       .prepare(
         `UPDATE positions
-         SET closed_at = ?, close_reason = 'replaced'
-         WHERE run_id = ? AND ticker = ? AND closed_at IS NULL
+         SET closed_at = ?, close_reason = 'replaced', exit_price = ?
+         WHERE run_id = ? AND ticker = ? AND id != ? AND closed_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM positions p2
              WHERE p2.run_id = ? AND p2.ticker = ? AND p2.closed_at IS NULL AND p2.opened_at > ?
@@ -244,7 +250,7 @@ export class RunStore {
              WHERE p3.run_id = ? AND p3.ticker != ? AND p3.closed_at IS NULL
            ) + ? <= ?`
       )
-      .bind(asOf, this.runId, ticker, this.runId, ticker, asOf, this.runId, ticker, positionSizePct, MAX_PORTFOLIO_RISK_PCT);
+      .bind(asOf, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, positionSizePct, MAX_PORTFOLIO_RISK_PCT);
 
     const openNew = this.db
       .prepare(
