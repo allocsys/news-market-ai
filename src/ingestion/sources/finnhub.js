@@ -58,7 +58,7 @@ import { withRetry } from "../../shared/retry.js";
  * failing ticker never blocks the rest of the watchlist in the same run.
  * Same convention as gdelt.js#fetchLatest/yfinance.js#fetchDailyBars.
  */
-export async function fetchLatest(config, { queries = config.watchlist, from, to } = {}, { kv } = {}) {
+export async function fetchLatest(config, { queries = config.watchlist, from, to } = {}, { kv, onTickerDone } = {}) {
   const items = [];
   const errors = [];
 
@@ -90,7 +90,7 @@ export async function fetchLatest(config, { queries = config.watchlist, from, to
   const toStr = toDate.toISOString().slice(0, 10);
   const fromStr = fromDate.toISOString().slice(0, 10);
 
-  for (const { ticker } of queries) {
+  for (const [tickerIndex, { ticker }] of queries.entries()) {
     await throttle.wait();
     try {
       const url = `${config.finnhubApiBase}?symbol=${encodeURIComponent(ticker)}&from=${fromStr}&to=${toStr}`;
@@ -167,6 +167,11 @@ export async function fetchLatest(config, { queries = config.watchlist, from, to
         throw err;
       }
     }
+
+    // Optional progress hook (backfill's live progress bar) -- fires once per
+    // ticker whether it succeeded or was isolated into `errors` above. Absent
+    // for the live cron path, which never passes it.
+    await onTickerDone?.({ ticker, index: tickerIndex, total: queries.length });
   }
 
   return { items, errors };
