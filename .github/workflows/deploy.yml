@@ -24,11 +24,12 @@
 #
 # What WAS carried over, because it solves a real problem this repo has too:
 #   - The idempotent "look up by name, create only if missing, patch this
-#     job's own uncommitted wrangler.toml checkout" pattern for D1 (see
-#     .github/actions/ensure-d1-database) and KV (ensure-kv-namespace) --
-#     avoids requiring a manual one-time `wrangler d1 create` /
-#     `wrangler kv namespace create` before first deploy, and avoids ever
-#     committing a real database/namespace id to the repo.
+#     job's own uncommitted wrangler.toml checkout" pattern for KV
+#     (.github/actions/ensure-kv-namespace) -- avoids requiring a manual
+#     one-time `wrangler kv namespace create` before first deploy, and avoids
+#     ever committing a real namespace id to the repo. (D1 used to ride the
+#     same pattern; since M1/M5 every D1 binding carries a real id committed
+#     directly and the D1 action was deleted -- see wrangler.toml.)
 #   - Fail-fast secret-presence checks before touching Cloudflare, so a
 #     misconfigured repo fails with a clear message instead of a confusing
 #     wrangler error deep in a deploy step.
@@ -220,17 +221,15 @@ jobs:
             echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- cannot run D1 migrations. Aborting before touching the database."
             exit 1
           fi
-      - name: Ensure D1 database exists
-        uses: ./.github/actions/ensure-d1-database
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Apply D1 migrations (remote)
-        # db:migrate:remote:all covers all four D1 databases: the legacy
-        # `news_market_ai` DB (migrations/, unchanged) plus the three
-        # environment-split DBs added in M1 -- INPUTS_DB (migrations/inputs/),
-        # LIVE_DB (migrations/state/), and SIM_DB (migrations/state/ +
-        # migrations/sim/, two passes -- see wrangler.sim-migrate.toml).
+        # db:migrate:remote:all covers the three environment-split D1
+        # databases -- INPUTS_DB (migrations/inputs/), LIVE_DB
+        # (migrations/state/), and SIM_DB (migrations/state/ +
+        # migrations/sim/, two passes -- see wrangler.sim-migrate.toml). Their
+        # real ids are committed in wrangler.toml, so no lookup/patch step is
+        # needed before this one. (The pre-split legacy database was retired
+        # in M5: nothing here migrates the root-level migrations/*.sql files
+        # anymore.)
         # These three were previously migrated by hand only (see
         # wrangler.toml's own comment history); each `wrangler d1 migrations
         # apply` call is idempotent against already-applied migrations
@@ -264,11 +263,6 @@ jobs:
             echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
             exit 1
           fi
-      - name: Ensure D1 database exists
-        uses: ./.github/actions/ensure-d1-database
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Ensure CACHE_KV namespace exists
         uses: ./.github/actions/ensure-kv-namespace
         env:
@@ -462,20 +456,13 @@ jobs:
             echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
             exit 1
           fi
-      - name: Ensure D1 database exists (patches wrangler.ingest.toml)
-        # Added in plan.md Step 6: this job binds D1 + CACHE_KV but, as first
-        # written in Step 5, never resolved their placeholder ids -- the
-        # ensure-* actions only patched wrangler.toml, and each job has its own
-        # checkout, so `wrangler deploy --config wrangler.ingest.toml` here would
-        # have shipped REPLACE_WITH_* ids. The actions now take a
-        # `wrangler-config` input.
-        uses: ./.github/actions/ensure-d1-database
-        with:
-          wrangler-config: wrangler.ingest.toml
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Ensure CACHE_KV namespace exists (patches wrangler.ingest.toml)
+        # CACHE_KV is the only binding in this config still carrying a
+        # placeholder id, and each job has its own checkout, so it has to be
+        # resolved here (patching wrangler.toml in the backend job does nothing
+        # for this file). Every D1 binding has a real id committed directly --
+        # the legacy `DB` binding whose placeholder used to be resolved by a
+        # sibling step here was removed in M5.
         uses: ./.github/actions/ensure-kv-namespace
         with:
           wrangler-config: wrangler.ingest.toml
@@ -516,8 +503,8 @@ jobs:
   # backend's own `deploy` job, not just `test`, since backend's deploy job
   # is what provisions the news-market-ai-analyze / news-market-ai-llm-jobs
   # queues (+ DLQs) this Worker's wrangler.llm.toml consumes from (via the
-  # same ensure-queue composite action, reused unmodified), and the D1/KV
-  # resources it then resolves for itself below.
+  # same ensure-queue composite action, reused unmodified), and the KV
+  # namespace it then resolves for itself below.
   deploy-llm:
     needs: [changes, deploy]
     if: always() && needs.deploy.result == 'success' && needs.changes.outputs.llm == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -538,13 +525,6 @@ jobs:
             echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
             exit 1
           fi
-      - name: Ensure D1 database exists (patches wrangler.llm.toml)
-        uses: ./.github/actions/ensure-d1-database
-        with:
-          wrangler-config: wrangler.llm.toml
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Ensure CACHE_KV namespace exists (patches wrangler.llm.toml)
         uses: ./.github/actions/ensure-kv-namespace
         with:
