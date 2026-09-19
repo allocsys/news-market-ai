@@ -46,7 +46,7 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
   );
 
   // --- Exposure gauge (open positions only) -----------------------------------
-  // totalExposurePct comes in as a prop (storage/d1.js#getOpenPositionsExposureTotal,
+  // totalExposurePct comes in as a prop (storage/run_store.js#RunStore.getOpenExposureTotal,
   // an unbounded aggregate) rather than being summed here from the (Rows-limited)
   // openPositions array -- see helpers.js#renderSummaryCards's own comment.
   const exposureFraction = Math.max(0, Math.min(1, totalExposurePct / 100));

@@ -270,3 +270,45 @@ export async function getFundamentalFactsAsOf(db, { ticker, tag, asOf, limit = 2
 
   return results;
 }
+
+// ---------------------------------------------------------------------
+// Dashboard-only reads (M4, moved from the deleted storage/d1.js). These are
+// unrestricted "current state" queries for the human-facing dashboard, NOT
+// agent inputs: the required-asOf convention on every read above exists to
+// stop an AGENT seeing future data in a simulated run, and has no bearing on
+// a dashboard showing what is actually in the inputs DB right now. Never feed
+// these to an agent prompt. Pass readOnly(env.INPUTS_DB).
+// ---------------------------------------------------------------------
+
+/**
+ * Last-ingested timestamp + row count per ingestion table (news_items,
+ * price_bars, fundamental_facts) -- the closest thing to "ingestion health"
+ * available: there is no persisted per-source vendor-error log, so a stale
+ * lastIngestedAt is the only real signal.
+ */
+export async function getIngestionHealth(db) {
+  const [news, bars, facts] = await Promise.all([
+    db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM news_items`).first(),
+    db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM price_bars`).first(),
+    db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM fundamental_facts`).first(),
+  ]);
+
+  return {
+    news: { count: news?.count ?? 0, lastIngestedAt: news?.last ?? null },
+    priceBars: { count: bars?.count ?? 0, lastIngestedAt: bars?.last ?? null },
+    fundamentals: { count: facts?.count ?? 0, lastIngestedAt: facts?.last ?? null },
+  };
+}
+
+/**
+ * Most recent price bars for `ticker`, oldest-first (chronological, ready to
+ * feed straight into a chart x-axis). Current-state read, not point-in-time.
+ */
+export async function getRecentPriceBars(db, { ticker, limit = 30 }) {
+  const { results } = await db
+    .prepare(`SELECT date, close FROM price_bars WHERE ticker = ? ORDER BY date DESC LIMIT ?`)
+    .bind(ticker, limit)
+    .all();
+
+  return results.reverse();
+}

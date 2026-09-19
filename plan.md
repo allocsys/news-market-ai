@@ -262,7 +262,9 @@ run by the `backtest` Worker.
   already `complete` or `failed` is acked and skipped (it would otherwise restart
   the walk from scratch once the checkpoints are gone); a `running` row still
   resumes from checkpoints.
-- The `*/15` cron was disabled by the owner on 2026-09-19 and stays off until M4.
+- The `*/15` cron was disabled by the owner on 2026-09-19 and was to stay off
+  until M4 -- but it is still declared in `wrangler.toml`, so deploys re-enable it
+  (see "Cron state" under Milestones).
 
 **Free-plan budgets** (the account is on Workers Free; limits from Cloudflare's
 docs, checked 2026-09-19). All of these are per account, not per DB, Worker or
@@ -311,11 +313,35 @@ namespace, so three D1s and a second KV isolate state but add no quota.
   signal on/off), delete-by-run, CI checks (no live binding, equal schemas).
 - **M4** Cut live over to `live`/`inputs` (empty; fresh ingest), dashboard and
   backend read paths, environment selector.
+  - **M4a — dashboard read paths (done, PR pending):** every dashboard panel now
+    reads `readOnly(LIVE_DB)` through `RunStore` (`run_id = 'live'`: positions,
+    exposure, decisions, decision stats, pipeline checkpoints, plus the LLM log and
+    jobs from M2b) or `readOnly(INPUTS_DB)` (ingestion health, price charts). Nothing
+    in `src/` reads the old `DB` binding any more, and `storage/d1.js` is deleted.
+    The reads are `RunStore.listOpenPositions / getOpenExposureTotal /
+    listRecentlyClosedPositions / listRecentTradeDecisions / listRecentCheckpoints /
+    getDecisionStats` and `inputs_view.js#getIngestionHealth / getRecentPriceBars`;
+    all are `run_id`-scoped, deliberately not asOf-gated (dashboard-only), and must
+    not feed an agent prompt. `safe()` in `dashboard/data.js` now also catches a
+    failure while *building* a query. Tests: the two hand-written DB fakes in
+    `dashboard_api`/`dashboard_worker` are gone (real sqlite LIVE_DB/INPUTS_DB/SIM_DB
+    instead), a poisoned old `DB` proves nothing reads it, a decoy run in the same
+    LIVE_DB proves run scoping through every route. **Left in M4:** the environment
+    selector (a `?env=` reading a backtest's `run_id` off SIM_DB; note
+    `getDecisionStats`' "last N days" window is wall-clock relative, so it needs an
+    anchor for a finished backtest), and the owner's cron decision (below).
 - **M5** Delete the old code and the old `news_market_ai` binding, close PR #44,
   refresh Deployment and Repo Structure.
-Until M4 live still runs on the old schema and can re-accumulate overlapping
-positions. The `*/15` cron is disabled (owner, 2026-09-19), so live ingest is
-paused; don't run backtests on the old DB.
+Since M2/M2b the engine, ingest and LLM Workers already read and write
+`live`/`inputs`; M4a moved the last readers (the dashboard) over. The old
+`news_market_ai` DB is now bound but unused (M5 removes it).
+**Cron state (observed 2026-09-19, needs an owner decision):** the owner disabled
+the `*/15` trigger out of band, but `wrangler.toml` still declares
+`crons = ["*/15 * * * *"]` and every `backend` deploy re-applies it. Workers
+Observability shows it firing every 15 minutes from at least 18:45Z (deploy #287
+logged `schedule: */15 * * * *`), so live ingest has been running against the
+new DBs. To keep it off across deploys, the trigger has to be removed from
+`wrangler.toml` (or the owner accepts it on now that the cutover is complete).
 
 **M1 code — done on `m1/state-store-foundation`, no PR yet (2026-09-19):**
 `migrations/inputs/`, `migrations/state/`, `migrations/sim/` (the split
@@ -699,7 +725,7 @@ jobs and LLM calls through `dashboard/data.js#liveReadStore`, a
 rejected-backtest row live under `run_id = 'live'` (the `llm` Worker has no
 `SIM_DB`; a real backtest's jobs get their own run id in the backtest Worker, M3),
 so `/api/jobs/*` and `/api/llm-calls*` are live-only until the M4 env selector.
-Every other dashboard panel still reads the old `env.DB` until M4. Tests: the two
+(M4a moved every other dashboard panel off the old `env.DB` too.) Tests: the two
 hand-written fakes (`FakeLlmDb`, `FakeJobDb`) are gone; `storage_jobs`,
 `llm_call_log`, `dashboard_llm`, `dashboard_api`, `dashboard_worker`,
 `llm_worker`, `queue_consumer`, `index_backfill`, `index_backtest_enqueue` and
