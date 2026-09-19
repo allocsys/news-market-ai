@@ -27,6 +27,7 @@ import {
   getPipelineData,
   getBacktestRunsData,
 } from "./data.js";
+import { getJob } from "../storage/jobs.js";
 
 function jsonResponse(body, { status = 200 } = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -87,4 +88,13 @@ export async function handleApiBacktestRunsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   return jsonResponse(await getBacktestRunsData(env));
+}
+
+/** GET /api/jobs/:id -- one job_progress row (src/storage/jobs.js), for the dashboard's live progress bar. 404 (not 200 + null) when the id doesn't exist, so a typo'd/expired id is visibly distinct from "job exists, no progress yet". */
+export async function handleApiJobRoute(request, env, config, id) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const job = await getJob(env.DB, id);
+  if (!job) return jsonResponse({ error: "job not found" }, { status: 404 });
+  return jsonResponse(job);
 }
