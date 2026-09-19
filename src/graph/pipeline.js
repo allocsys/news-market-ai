@@ -158,47 +158,68 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
       isReplacingPosition: existingPosition !== null,
     });
 
+    // `executed` distinguishes "approved and actually traded" from
+    // "approved but blocked by a data gap" for the trade_decisions.status
+    // write below -- see the no-price branch's own comment.
+    let executed = false;
+
     if (state.portfolioDecision.approvedForExecution) {
-      // If this ticker already has an open position AND it isn't literally
-      // the same row (same id = same tradeThesisId -- a checkpoint-resumed
-      // re-run of this exact stage), close it as 'replaced' before opening
-      // the new one. Without this, a re-evaluated ticker would accumulate
-      // two live open rows for the same ticker -- the netting fix above
-      // only corrects the RISK-PCT MATH, this is what keeps the positions
-      // table itself honest (at most one open position per ticker).
       // Fetched ONCE -- it's both the exitPrice for a replaced existing
       // position and the entryPrice for the new one below, since both
-      // happen at the same ticker/asOf. May be null (yfinance ingestion
-      // isn't wired into this pipeline yet, a separate known gap), in
-      // which case the new position still opens but
-      // agents/risk_mgmt/exit.js#evaluateExit can only apply a time-based
-      // exit to it later, never stop-loss/take-profit, until real price
-      // data exists for this ticker (see migrations/0006's header for the
-      // same honest-null convention).
+      // happen at the same ticker/asOf.
       const priceBars = await getPriceBarsAsOf(db, { ticker, asOf, limit: 1 });
       const currentPrice = priceBars[0]?.close ?? null;
 
-      if (existingPosition && existingPosition.id !== state.riskDecision.tradeThesisId) {
-        await closePosition(db, { id: existingPosition.id, closedAt: asOf, closeReason: "replaced", exitPrice: currentPrice });
-        await settlePositionOutcome(env, config, db, { position: existingPosition, exitPrice: currentPrice, closedAt: asOf, closeReason: "replaced" });
+      if (currentPrice == null) {
+        // HONEST SCOPE: no price_bars data for this ticker as of `asOf`
+        // (yfinance ingestion gap -- see plan.md). Opening a position with
+        // entryPrice: null would permanently block stop-loss/take-profit
+        // (agents/risk_mgmt/exit.js#evaluateExit requires both entryPrice
+        // AND currentPrice) and, if it later closed via the time_based
+        // exit, would produce an unrecoverable null realized return
+        // (graph/settle.js#computeRealizedReturn never fabricates a
+        // number) -- a PnL-blind position that can never be measured,
+        // closed or open. Same problem applies to replacing an existing
+        // position: closing it with exitPrice: null loses ITS realized
+        // PnL immediately rather than eventually. So: skip both the
+        // replace-close and the open entirely rather than accept either
+        // outcome. risk_mgmt/portfolio_manager's approval is still
+        // recorded below (status 'skipped_no_price_data', distinct from
+        // 'approved'/'rejected') so this is visible on the dashboard as a
+        // real thesis blocked by a data gap, not a risk rejection. A
+        // later news item for this ticker (fresh asOf/tradeThesisId) gets
+        // a fresh chance once price_bars has data.
+        console.error("pipeline: skipping position open/replace -- no price_bars data for ticker", { ticker, asOf });
+      } else {
+        // If this ticker already has an open position AND it isn't
+        // literally the same row (same id = same tradeThesisId -- a
+        // checkpoint-resumed re-run of this exact stage), close it as
+        // 'replaced' before opening the new one. Without this, a
+        // re-evaluated ticker would accumulate two live open rows for the
+        // same ticker -- the netting fix above only corrects the
+        // RISK-PCT MATH, this is what keeps the positions table itself
+        // honest (at most one open position per ticker).
+        if (existingPosition && existingPosition.id !== state.riskDecision.tradeThesisId) {
+          await closePosition(db, { id: existingPosition.id, closedAt: asOf, closeReason: "replaced", exitPrice: currentPrice });
+          await settlePositionOutcome(env, config, db, { position: existingPosition, exitPrice: currentPrice, closedAt: asOf, closeReason: "replaced" });
+        }
+
+        // id = tradeThesisId (ticker|asOf) so a checkpoint-resumed re-run
+        // of this stage can't double-open the same position (ON CONFLICT
+        // DO NOTHING in openPosition).
+        await openPosition(db, {
+          id: state.riskDecision.tradeThesisId,
+          ticker,
+          tradeThesisId: state.riskDecision.tradeThesisId,
+          positionSizePct: state.portfolioDecision.finalPositionSizePct,
+          direction: state.thesis.direction,
+          entryPrice: currentPrice,
+          stopLossPct: state.riskDecision.stopLossPct ?? null,
+          takeProfitPct: state.riskDecision.takeProfitPct ?? null,
+          openedAt: asOf,
+        });
+        executed = true;
       }
-
-      const entryPrice = currentPrice;
-
-      // id = tradeThesisId (ticker|asOf) so a checkpoint-resumed re-run of
-      // this stage can't double-open the same position (ON CONFLICT DO
-      // NOTHING in openPosition).
-      await openPosition(db, {
-        id: state.riskDecision.tradeThesisId,
-        ticker,
-        tradeThesisId: state.riskDecision.tradeThesisId,
-        positionSizePct: state.portfolioDecision.finalPositionSizePct,
-        direction: state.thesis.direction,
-        entryPrice,
-        stopLossPct: state.riskDecision.stopLossPct ?? null,
-        takeProfitPct: state.riskDecision.takeProfitPct ?? null,
-        openedAt: asOf,
-      });
     }
 
     // Persist the full decision chain as a real, queryable row -- see
