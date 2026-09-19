@@ -33,7 +33,7 @@
 // no walk-forward opinion can pass trainDays=0 for one single test window
 // spanning the whole [testStart, testEnd) range.
 
-import { makeOnSignalReturns } from "./onSignalRunner.js";
+import { makeOnSignalReturns, countSignalWalkSteps } from "./onSignalRunner.js";
 import { makeBuyAndHoldOffReturns } from "./noSignalBaseline.js";
 import { compareSignalOnOffByWindow } from "./signalCompare.js";
 import { insertBacktestRun, completeBacktestRun, failBacktestRun } from "../storage/d1.js";
@@ -49,7 +49,7 @@ import { insertBacktestRun, completeBacktestRun, failBacktestRun } from "../stor
  * their own; a failure here is reported as data (status: 'failed'), not
  * re-thrown, so a bad backtest run doesn't look like a route/server bug.
  */
-export async function runManualBacktest(env, config, db, { id, tickers, testStart, testEnd, trainDays = 0, testDays, graceDays }) {
+export async function runManualBacktest(env, config, db, { id, tickers, testStart, testEnd, trainDays = 0, testDays, graceDays, onProgress }) {
   const startedAt = new Date().toISOString();
   // A single [testStart, testEnd) window (no walk-forward roll) unless the
   // caller explicitly asks for one via testDays -- testDays defaults to the
@@ -59,8 +59,35 @@ export async function runManualBacktest(env, config, db, { id, tickers, testStar
 
   await insertBacktestRun(db, { id, tickers, testStart, testEnd, trainDays, testDays: resolvedTestDays, graceDays: graceDays ?? null, startedAt });
 
+  // Live-progress wiring (src/storage/jobs.js's percent convention: 0-95 for
+  // the day-by-day walk, 98 for saving, 100 only via reporter.complete()).
+  // `onProgress` is the caller's job reporter's `update` -- optional, so this
+  // function stays a plain no-op-progress call for tests/callers that don't
+  // care (same as backfillHistoricalNews's own onProgress convention).
+  // totalSteps is computed up front via onSignalRunner.js#countSignalWalkSteps
+  // so the FIRST progress tick already knows the real denominator, not a
+  // guess that jumps around as ticker-days complete.
+  const totalSteps = onProgress ? countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays }) : 0;
+  let completedSteps = 0;
+  // onStep fires twice per ticker-day (done:false when it starts, done:true
+  // when it finishes, see onSignalRunner.js) -- only count the finish, so
+  // completedSteps never exceeds totalSteps.
+  const onStep = onProgress
+    ? async ({ ticker, dayIso, done }) => {
+        if (!done) return;
+        completedSteps++;
+        await onProgress({
+          phase: "simulating",
+          percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
+          done: completedSteps,
+          total: totalSteps,
+          detail: `${ticker} ${dayIso.slice(0, 10)}`,
+        });
+      }
+    : undefined;
+
   try {
-    const getOnReturns = makeOnSignalReturns(env, config, db, { tickers, graceDays });
+    const getOnReturns = makeOnSignalReturns(env, config, db, { tickers, graceDays, onStep });
     const getOffReturns = makeBuyAndHoldOffReturns(db, { tickers });
 
     const result = await compareSignalOnOffByWindow({
@@ -72,6 +99,7 @@ export async function runManualBacktest(env, config, db, { id, tickers, testStar
       getOffReturns,
     });
 
+    await onProgress?.({ phase: "saving", percent: 98, done: totalSteps, total: totalSteps, detail: "Saving backtest results", force: true });
     await completeBacktestRun(db, { id, result, finishedAt: new Date().toISOString() });
     return { id, status: "complete", result };
   } catch (err) {
