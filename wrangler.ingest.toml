@@ -8,22 +8,14 @@ compatibility_flags = ["nodejs_compat"]
 # ever runs via its INGEST queue consumer below.
 workers_dev = false
 
-# --- D1 (same database as every other Worker; only `backend` runs
-# migrations -- see plan.md's Roadmap rule) --- ingestTickerData/
-# ingestFeedNews (src/graph/pipeline.js) write straight to D1
-# (insertNewsItem/insertPriceBar/insertFundamentalFacts).
-[[d1_databases]]
-binding = "DB"
-database_name = "news_market_ai"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
-
 # --- D1 (environment-split, plan.md "Backtest / Live Isolation" redesign,
 # provisioned 2026-09-19, M1) --- ingest writes INPUTS_DB
 # (news_items/news_item_revisions/news_item_tickers/price_bars/
 # fundamental_facts, migrations/inputs/). No LIVE_DB/SIM_DB binding --
 # ingest never touches run state. Real id committed directly -- see
-# wrangler.toml's own comment on why (ensure-d1-database's patch step is
-# multi-block-unsafe).
+# wrangler.toml's own comment. ingestTickerData/ingestFeedNews
+# (src/graph/pipeline.js) write here via insertNewsItem/insertPriceBar/
+# insertFundamentalFacts.
 [[d1_databases]]
 binding = "INPUTS_DB"
 database_name = "news-market-ai-inputs"
