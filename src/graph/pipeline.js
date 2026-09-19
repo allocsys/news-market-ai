@@ -427,7 +427,7 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
   // so the dashboard just draws it: fetching = 5-50 (one step per ticker),
   // saving = 50-100 (one step per article). It must never affect the
   // backfill's own outcome, so it is only ever awaited, never inspected.
-  const tickerCount = config.watchlist.length;
+  const tickerCount = config.watchlist?.length ?? 0;
   await onProgress?.({ phase: "fetching", percent: 5, done: 0, total: tickerCount, detail: `Fetching Finnhub news for ${tickerCount} ticker${tickerCount === 1 ? "" : "s"}`, force: true });
 
   const { items, errors } = await fetchFinnhubLatest(config, { from, to }, {
