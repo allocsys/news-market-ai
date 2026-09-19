@@ -187,7 +187,7 @@ async function handleTriggerRoute(request, env, config, { backendPath, buildQuer
         : jsonResponse(body, { status: res.status });
     }
     if (isFormSubmit) {
-      const bodyHtml = renderRunAcceptedPage(formSubmitAccepted(built.params));
+      const bodyHtml = renderRunAcceptedPage(formSubmitAccepted(built.params, body));
       return htmlResponse(renderShell({ activeSection: built.activeSection, sessionUsername, bodyHtml }));
     }
     return jsonResponse(body);
@@ -202,6 +202,24 @@ export default {
     const url = new URL(request.url);
     const { pathname } = url;
     const config = loadConfig(env);
+
+    // Live progress polling target for the run-accepted page's client-side
+    // JS (dashboard/views/status.js) -- proxies backend's GET /api/jobs/:id
+    // the same way every other /dashboard/* read does, just returning raw
+    // JSON instead of rendering a section, since this is fetched by script,
+    // not navigated to.
+    if (pathname.startsWith("/dashboard/jobs/")) {
+      const auth = await requireSession(request, config);
+      if (auth.redirect === "__disabled__") return jsonResponse({ error: "dashboard is not configured" }, { status: 503 });
+      if (auth.redirect) return jsonResponse({ error: "unauthorized" }, { status: 401 });
+      const id = pathname.slice("/dashboard/jobs/".length);
+      try {
+        const job = await fetchBackendJson(env, `/api/jobs/${encodeURIComponent(id)}`);
+        return jsonResponse(job);
+      } catch (err) {
+        return jsonResponse({ error: err.message }, { status: err.status || 500 });
+      }
+    }
 
     if (pathname === "/dashboard") return redirect("/dashboard/snapshot");
     if (pathname === "/dashboard/snapshot") return renderSection(request, env, config, "snapshot");
@@ -273,11 +291,12 @@ export default {
           }
           return { params: { from, to }, activeSection: "backfill" };
         },
-        formSubmitAccepted: ({ from, to }) => ({
+        formSubmitAccepted: ({ from, to }, body) => ({
           title: "Backfill",
           detail: `Backfilling historical news from ${from} to ${to}.`,
           backLink: "/dashboard/backfill",
           backLabel: "Backfill",
+          jobId: body.id,
         }),
       });
     }
@@ -298,11 +317,12 @@ export default {
           if (graceDays) params.graceDays = graceDays;
           return { params, activeSection: "backtest" };
         },
-        formSubmitAccepted: ({ testStart, testEnd, tickers }) => ({
+        formSubmitAccepted: ({ testStart, testEnd, tickers }, body) => ({
           title: "Backtest",
           detail: `Running a backtest for ${tickers || "the full watchlist"} from ${testStart} to ${testEnd}.`,
           backLink: "/dashboard/backtest",
           backLabel: "Backtest",
+          jobId: body.id,
         }),
       });
     }
