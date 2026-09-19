@@ -1,6 +1,6 @@
 // Closes the last link in the realized-outcome chain: once a position has
-// both an entryPrice and an exitPrice (storage/d1.js#closePosition,
-// migrations/0009_positions_exit_price.sql), this computes the realized
+// both an entryPrice and an exitPrice (RunStore#closePosition / commitThesis's
+// exitPrice), this computes the realized
 // return and feeds it into reflection.js#closeTheLoop -- which already
 // existed (agents/utils/memory.js#recordAndReflect) but had NO caller
 // anywhere in the pipeline until now, because nothing produced a realized
@@ -39,9 +39,8 @@ function computeRealizedReturn({ direction, entryPrice, exitPrice }) {
 }
 
 /**
- * Called right after storage/d1.js#closePosition succeeds. `position` is
- * the shape storage/d1.js#getOpenPositionsAsOf / getOpenPositionForTickerAsOf
- * return (must include tradeThesisId, ticker, direction, entryPrice,
+ * Called right after a position closes. `position` is the shape RunStore's
+ * getOpenPositionsAsOf / getUnsettledReplacedPositions return (must include tradeThesisId, ticker, direction, entryPrice,
  * positionSizePct, openedAt). Computes the realized return from
  * `position`'s entryPrice/direction and the exitPrice just recorded, then
  * records it via closeTheLoop -- the loop fetchPriorLessons/
@@ -52,7 +51,7 @@ function computeRealizedReturn({ direction, entryPrice, exitPrice }) {
  * couldn't be computed (see computeRealizedReturn) or closeTheLoop itself
  * failed (logged, not thrown -- see header).
  */
-export async function settlePositionOutcome(env, config, db, { position, exitPrice, closedAt, closeReason }) {
+export async function settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason }) {
   const realizedReturn = computeRealizedReturn({
     direction: position.direction,
     entryPrice: position.entryPrice,
@@ -83,7 +82,7 @@ export async function settlePositionOutcome(env, config, db, { position, exitPri
   };
 
   try {
-    return await closeTheLoop(env, config, db, {
+    return await closeTheLoop(env, config, store, {
       decisionId: position.tradeThesisId,
       ticker: position.ticker,
       decisionSummary,

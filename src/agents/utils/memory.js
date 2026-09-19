@@ -1,6 +1,6 @@
 // Reflection/memory loop (plan.md Adopted Pattern #8), restructured into
 // agents/utils/ as shared agent tooling rather than being embedded inside
-// any single agent. Wraps storage/d1.js's decision_memory read/write so
+// any single agent. Wraps RunStore's decision_memory read/write so
 // agents never touch that table directly, and adds the one piece storage
 // doesn't own: turning a realized outcome into a short natural-language
 // reflection via the quick model (this is a summarization task, not a
@@ -10,22 +10,24 @@
 // straight through to getDecisionMemoryAsOf's own enforced cutoff -- see
 // plan.md Backtesting Integrity point 4. This file must never grow a
 // "give me all reflections" path with no asOf, for the same reason
-// storage/d1.js never grew one either.
+// RunStore never grew one either.
 
-import { getDecisionMemoryAsOf, recordDecisionOutcome } from "../../storage/d1.js";
 import { callStructured } from "./structured.js";
 import { z } from "zod";
 
 const Reflection = z.object({ reflection: z.string() });
 
 /**
+ * `store` is a RunStore -- memory is per environment/run, so a backtest never
+ * sees live's lessons and vice versa.
+ *
  * Fetches prior same-ticker decision outcomes strictly before `asOf`,
  * formatted as plain text ready to inject into an analyst/researcher/trader
  * prompt. Returns "" (not null) when there's no history yet, so callers can
  * always safely append the result to a prompt.
  */
-export async function fetchPriorLessons(db, { ticker, asOf, limit = 5 }) {
-  const rows = await getDecisionMemoryAsOf(db, { ticker, asOf, limit });
+export async function fetchPriorLessons(store, { ticker, asOf, limit = 5 }) {
+  const rows = await store.getDecisionMemoryAsOf({ ticker, asOf, limit });
   if (rows.length === 0) return "";
 
   const lines = rows.map(
@@ -41,7 +43,7 @@ export async function fetchPriorLessons(db, { ticker, asOf, limit = 5 }) {
  * outcome became knowable -- this is what fetchPriorLessons's asOf cutoff
  * checks against, so getting it right is what keeps the loop leak-free.
  */
-export async function recordAndReflect(env, config, db, { id, decisionId, ticker, decisionSummary, realizedReturn, alphaReturn, resolvedAt }) {
+export async function recordAndReflect(env, config, store, { id, decisionId, ticker, decisionSummary, realizedReturn, alphaReturn, resolvedAt }) {
   const prompt = `A trade decision for ${ticker} has resolved. Write ONE short sentence \
 reflecting on what worked or didn't -- this will be shown to a future version of yourself \
 before a similar decision. Be specific and actionable, not generic.
@@ -55,6 +57,6 @@ Alpha (vs. benchmark): ${alphaReturn}`;
 
   const { reflection } = await callStructured(env, config, Reflection, prompt, { model: config.geminiQuickModel, label: "reflection", ticker });
 
-  await recordDecisionOutcome(db, { id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt });
+  await store.recordDecisionOutcome({ id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt });
   return reflection;
 }

@@ -23,7 +23,7 @@ export function backfillTriggerForm() {
 export function renderBackfillView() {
   return `<section id="backfill">
     <h2>Historical news backfill</h2>
-    <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. rss/scrape sources can't be backfilled this way (see graph/pipeline.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
+    <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. rss/scrape sources can't be backfilled this way (see ingestion/ingest.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
 
     <div class="panel">
       <div class="panel-header"><span class="panel-title">Backfill parameters</span></div>

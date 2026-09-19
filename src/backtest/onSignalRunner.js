@@ -6,7 +6,7 @@
 // "off" side (naive buy-and-hold, zero LLM calls). This file supplies the
 // "on" side: actually running the real LLM-backed pipeline
 // (graph/pipeline.js#runPipelineForTicker) over backfilled historical news
-// (graph/pipeline.js#backfillHistoricalNews) and turning the positions it
+// (ingestion/ingest.js#backfillHistoricalNews) and turning the positions it
 // opens into the realized returns getOnReturns(window) must produce.
 //
 // COST / LIVE-TRAFFIC WARNING: unlike noSignalBaseline.js, calling the
@@ -61,7 +61,7 @@
 // compareSignalOnOff stays an apples-to-apples comparison, not skewed by a
 // boundary-effect difference between the two sides).
 
-import { getNewsItemsInRange, getRealizedReturnsInRange } from "../storage/d1.js";
+import { getNewsItemsInRange } from "../storage/inputs_view.js";
 import { runPipelineForTicker } from "../graph/pipeline.js";
 import { checkOpenPositionExits } from "../graph/exit_check.js";
 
@@ -121,12 +121,12 @@ function groupItemsByDay(items) {
  * is the window's own testStart, which is unique per window by
  * construction (walkForwardWindows never repeats a testStart).
  */
-export async function runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep }) {
+export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep }) {
   const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
   const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
   const prefix = runIdPrefix ?? testStart;
 
-  const newsItems = await getNewsItemsInRange(db, { ticker, from: testStart, to: testEnd });
+  const newsItems = await getNewsItemsInRange(ctx.inputs, { ticker, from: testStart, to: testEnd });
   const itemsByDay = groupItemsByDay(newsItems);
 
   for (const dayIso of eachDayIso(testStart, walkEnd)) {
@@ -135,8 +135,8 @@ export async function runOnSignalForTicker(env, config, db, { ticker, testStart,
     await onStep?.({ ticker, dayIso, done: false });
     const dayItems = itemsByDay.get(dayIso.slice(0, 10)) ?? [];
     for (const item of dayItems) {
-      await runPipelineForTicker(env, config, db, {
-        runId: `${prefix}|${item.id}`,
+      await runPipelineForTicker(env, config, ctx, {
+        pipelineRunId: `${prefix}|${item.id}`,
         ticker,
         newsItem: { id: item.id, tickers: [ticker], title: item.title, body: item.body, publishedAt: item.published_at },
         asOf: item.published_at,
@@ -145,11 +145,11 @@ export async function runOnSignalForTicker(env, config, db, { ticker, testStart,
     // Runs regardless of whether any news landed today -- an already-open
     // position from an earlier day can still hit its stop-loss/take-profit/
     // time-based exit on a day with no news at all, same as the live path.
-    await checkOpenPositionExits(env, config, db, { asOf: dayIso });
+    await checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
     await onStep?.({ ticker, dayIso, done: true });
   }
 
-  return getRealizedReturnsInRange(db, { ticker, from: testStart, to: walkEnd });
+  return ctx.store.getRealizedReturnsInRange({ ticker, from: testStart, to: walkEnd });
 }
 
 /**
@@ -158,35 +158,35 @@ export async function runOnSignalForTicker(env, config, db, { ticker, testStart,
  * as noSignalBaseline.js#computeBuyAndHoldReturns. Sequential per ticker
  * (not Promise.all) deliberately: runPipelineForTicker's own portfolio
  * stage reads cross-ticker open-position exposure
- * (getOpenPositionsRiskPctAsOf), so concurrent tickers racing through the
+ * (store.getOpenPositionsRiskPctAsOf), so concurrent tickers racing through the
  * same day would see each other's NOT-YET-COMMITTED state inconsistently
  * -- the live cron path itself is also sequential per news item for the
- * same reason (see runScheduledIngestion's own for-loop, not a
- * Promise.all).
+ * same reason (analyze messages are consumed one at a time per
+ * max_concurrency, not raced in a Promise.all).
  */
-export async function runOnSignalReturns(env, config, db, { tickers, testStart, testEnd, graceDays, onStep }) {
+export async function runOnSignalReturns(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep }) {
   const returns = [];
   for (const ticker of tickers) {
-    const tickerReturns = await runOnSignalForTicker(env, config, db, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}`, onStep });
+    const tickerReturns = await runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}`, onStep });
     returns.push(...tickerReturns);
   }
   return returns;
 }
 
 /**
- * Binds env/config/db/tickers, returning a function with exactly
+ * Binds env/config/ctx({inputs, store})/tickers, returning a function with exactly
  * signalCompare.js#compareSignalOnOffByWindow's getOnReturns(window)
  * signature -- mirrors noSignalBaseline.js#makeBuyAndHoldOffReturns exactly,
  * so a real end-to-end run is just:
  *
- *   const getOnReturns = makeOnSignalReturns(env, config, db, { tickers });
- *   const getOffReturns = makeBuyAndHoldOffReturns(db, { tickers });
+ *   const getOnReturns = makeOnSignalReturns(env, config, ctx, { tickers });
+ *   const getOffReturns = makeBuyAndHoldOffReturns(ctx.inputs, { tickers });
  *   await compareSignalOnOffByWindow({ ..., getOnReturns, getOffReturns });
  *
  * See this file's header for the real cost this incurs once actually
  * invoked -- do not wire this into any automated/scheduled path without an
  * explicit decision to spend that budget.
  */
-export function makeOnSignalReturns(env, config, db, { tickers, graceDays, onStep }) {
-  return (window) => runOnSignalReturns(env, config, db, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep });
+export function makeOnSignalReturns(env, config, ctx, { tickers, graceDays, onStep }) {
+  return (window) => runOnSignalReturns(env, config, ctx, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep });
 }

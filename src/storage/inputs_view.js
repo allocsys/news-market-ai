@@ -1,20 +1,272 @@
-// InputsView(db) -- plan.md "Design: environments": "Input reads go through
-// a separate InputsView(db) (asOf required, as today)." The inputs DB's
-// schema (migrations/inputs/) is byte-for-byte what these functions already
-// query in storage/d1.js -- the split moves WHICH DATABASE they run
-// against, not the SQL itself -- so this module re-exports them rather than
-// duplicating ~300 lines of identical query code. Callers that only touch
-// inputs data (news/price/fundamentals) should import from here going
-// forward; storage/d1.js's own copies are for the OLD scope-less schema and
-// get deleted (not just left as dead code) once M2 finishes moving the live
-// pipeline over -- see plan.md's milestone list.
-export {
-  insertNewsItem,
-  getNewsAsOf,
-  getNewsItemsInRange,
-  insertPriceBar,
-  getPriceBarsAsOf,
-  insertFundamentalFact,
-  insertFundamentalFacts,
-  getFundamentalFactsAsOf,
-} from "./d1.js";
+// InputsView -- plan.md "Design: environments": input reads (news, price
+// bars, fundamentals) live in the shared `inputs` DB (migrations/inputs/),
+// every read requires an explicit `asOf` (LookaheadViolationError on a
+// missing one -- there is deliberately no "give me everything" read here),
+// and the point-in-time cutoff is therefore true by construction for every
+// agent input, live or backtest. These functions take the db handle as their
+// first argument: pass env.INPUTS_DB directly where writing is allowed
+// (`ingest`, `backfill`), and `readOnly(env.INPUTS_DB)` from run_store.js
+// everywhere else (`llm`, and the future `backtest` Worker) -- D1 bindings
+// can't be made read-only in config, so that wrapper is the code half of the
+// isolation rule.
+//
+// Moved verbatim from storage/d1.js in M2 (the SQL was already
+// byte-for-byte what the inputs schema wants); the state-table functions
+// that used to sit beside them are replaced by RunStore (run_store.js).
+
+import { LookaheadViolationError } from "../shared/errors.js";
+
+export async function insertNewsItem(db, item) {
+  await db
+    .prepare(
+      `INSERT INTO news_items (id, source, url, first_published_at, ingested_at, title, body, raw)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING`
+    )
+    .bind(item.id, item.source, item.url, item.publishedAt, item.ingestedAt, item.title, item.body, JSON.stringify(item.raw ?? null))
+    .run();
+
+  // revision 1 on first insert; re-ingesting the same id with different
+  // content is a future concern for the adapter layer to detect and insert
+  // as revision 2, not this function's job.
+  await db
+    .prepare(
+      `INSERT INTO news_item_revisions (news_item_id, revision, published_at, ingested_at, title, body, raw)
+       VALUES (?, 1, ?, ?, ?, ?, ?)
+       ON CONFLICT(news_item_id, revision) DO NOTHING`
+    )
+    .bind(item.id, item.publishedAt, item.ingestedAt, item.title, item.body, JSON.stringify(item.raw ?? null))
+    .run();
+
+  for (const ticker of item.tickers) {
+    await db
+      .prepare(`INSERT INTO news_item_tickers (news_item_id, ticker) VALUES (?, ?) ON CONFLICT DO NOTHING`)
+      .bind(item.id, ticker)
+      .run();
+  }
+}
+
+/**
+ * Point-in-time read: news for `ticker` whose LATEST-AS-OF-asOf revision
+ * published at or before `asOf`. This is what makes it revision-aware
+ * (plan.md Backtesting Integrity, point 2) -- it serves whichever version of
+ * the article actually existed at `asOf`, not necessarily the newest one in
+ * the table.
+ */
+export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getNewsAsOf requires an explicit asOf timestamp");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT r.news_item_id AS id, r.revision, r.published_at AS published_at, r.title, r.body
+       FROM news_item_revisions r
+       JOIN news_item_tickers t ON t.news_item_id = r.news_item_id
+       WHERE t.ticker = ?
+         AND r.published_at <= ?
+         AND r.revision = (
+           SELECT MAX(r2.revision) FROM news_item_revisions r2
+           WHERE r2.news_item_id = r.news_item_id AND r2.published_at <= ?
+         )
+       ORDER BY r.published_at DESC
+       LIMIT ?`
+    )
+    .bind(ticker, asOf, asOf, limit)
+    .all();
+
+  return results;
+}
+
+/**
+ * Enumeration read, NOT a point-in-time snapshot like getNewsAsOf above --
+ * this is what backtest/onSignalRunner.js needs instead: every backfilled
+ * news item for `ticker` published in [from, to), so the runner can drive
+ * runPipelineForTicker once per item, each call using THAT item's own
+ * published_at as its asOf (exactly the live cron path's own convention,
+ * see ingestion/ingest.js (runScheduledIngestion was deleted in M2)). getNewsAsOf can't serve
+ * this: it answers "what would an agent reading at one single asOf see",
+ * capped at `limit` and newest-first, not "list every decision point in a
+ * date range" in chronological order.
+ *
+ * Still bounded on BOTH ends (`from` AND `to` both required) -- same
+ * no-"give me everything" convention as every asOf-gated reader above,
+ * just with an explicit window instead of a single cutoff. Reuses
+ * getNewsAsOf's own revision-selection subquery (latest revision as of
+ * the ROW's own published_at, not `to`) so a backfilled item is read the
+ * same revision-correct way live ingestion would have seen it at the time
+ * it first appeared -- trivial today since insertNewsItem only ever writes
+ * revision 1 (see that function's own comment), but this stays correct
+ * the day a real revision-2 writer exists.
+ */
+export async function getNewsItemsInRange(db, { ticker, from, to, limit = 500 }) {
+  if (!from || !to) {
+    throw new LookaheadViolationError("getNewsItemsInRange requires an explicit {from, to} range");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT r.news_item_id AS id, r.revision, r.published_at AS published_at, r.title, r.body
+       FROM news_item_revisions r
+       JOIN news_item_tickers t ON t.news_item_id = r.news_item_id
+       WHERE t.ticker = ?
+         AND r.published_at >= ? AND r.published_at < ?
+         AND r.revision = (
+           SELECT MAX(r2.revision) FROM news_item_revisions r2
+           WHERE r2.news_item_id = r.news_item_id AND r2.published_at <= r.published_at
+         )
+       ORDER BY r.published_at ASC
+       LIMIT ?`
+    )
+    .bind(ticker, from, to, limit)
+    .all();
+
+  return results;
+}
+
+/**
+ * Write path for daily OHLCV bars (ingestion/sources/yfinance.js). Upsert on
+ * (ticker, date) since re-ingesting the same trading day should overwrite
+ * rather than duplicate -- unlike news, a price bar has no meaningful
+ * "revision" concept to preserve.
+ */
+export async function insertPriceBar(db, bar) {
+  await db
+    .prepare(
+      `INSERT INTO price_bars (ticker, date, open, high, low, close, volume, source, ingested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ticker, date) DO UPDATE SET
+         open = excluded.open, high = excluded.high, low = excluded.low,
+         close = excluded.close, volume = excluded.volume,
+         source = excluded.source, ingested_at = excluded.ingested_at`
+    )
+    .bind(bar.ticker, bar.date, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source, new Date().toISOString())
+    .run();
+}
+
+/**
+ * Point-in-time read: bars for `ticker` dated at or before `asOf`. Same
+ * required-asOf, no-"give me everything" convention as getNewsAsOf and
+ * getDecisionMemoryAsOf (Backtesting Integrity, point 1) -- a technical
+ * analyst reading price history must not be able to see a bar from after
+ * the simulated "now" any more than a news analyst can.
+ */
+export async function getPriceBarsAsOf(db, { ticker, asOf, limit = 200 }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getPriceBarsAsOf requires an explicit asOf timestamp");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT ticker, date, open, high, low, close, volume, source
+       FROM price_bars
+       WHERE ticker = ? AND date <= ?
+       ORDER BY date DESC
+       LIMIT ?`
+    )
+    .bind(ticker, asOf, limit)
+    .all();
+
+  return results;
+}
+
+/**
+ * One row per (ticker, tag, fiscalYear, fiscalPeriod, form) -- a restated
+ * figure (10-K/A) for a period already covered by an earlier filing is a
+ * NEW row, not an overwrite. See migrations/0005_fundamental_facts.sql's
+ * header for why: this is what lets getFundamentalFactsAsOf reconstruct the
+ * value that was actually known at a given point in time, restatements
+ * included, instead of only ever storing today's (possibly since-corrected)
+ * figure.
+ */
+export async function insertFundamentalFact(db, fact) {
+  await db
+    .prepare(
+      `INSERT INTO fundamental_facts (ticker, cik, tag, val, unit, fiscal_year, fiscal_period, form, filed_at, source, ingested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ticker, tag, fiscal_year, fiscal_period, form) DO UPDATE SET
+         val = excluded.val, unit = excluded.unit, filed_at = excluded.filed_at,
+         source = excluded.source, ingested_at = excluded.ingested_at`
+    )
+    .bind(
+      fact.ticker, fact.cik, fact.tag, fact.val, fact.unit,
+      fact.fiscalYear, fact.fiscalPeriod, fact.form, fact.filedAt, fact.source, new Date().toISOString()
+    )
+    .run();
+}
+
+/**
+ * Batched sibling of insertFundamentalFact -- same upsert, but for many
+ * rows in one db.batch() call instead of one db-prepared .run() per row.
+ * Each individual .run() is its own Worker subrequest, so a per-fact loop
+ * over EDGAR's full companyfacts history for even one ticker/tag can blow
+ * Cloudflare's per-invocation subrequest cap well before the loop
+ * finishes (see ingestion/ingest.js#ingestFundamentals's header for the live
+ * incident this fixes: TSLA alone threw "Too many API requests by single
+ * Worker invocation" 1047 times in one 15-minute cron run). db.batch()
+ * sends the whole array as ONE request to D1, so a chunk of N facts costs
+ * one subrequest regardless of N. No-op on an empty array (db.batch([])
+ * is otherwise a wasted round trip).
+ */
+export async function insertFundamentalFacts(db, facts) {
+  if (facts.length === 0) return;
+
+  const stmt = db.prepare(
+    `INSERT INTO fundamental_facts (ticker, cik, tag, val, unit, fiscal_year, fiscal_period, form, filed_at, source, ingested_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(ticker, tag, fiscal_year, fiscal_period, form) DO UPDATE SET
+       val = excluded.val, unit = excluded.unit, filed_at = excluded.filed_at,
+       source = excluded.source, ingested_at = excluded.ingested_at`
+  );
+
+  const ingestedAt = new Date().toISOString();
+  const batch = facts.map((fact) =>
+    stmt.bind(
+      fact.ticker, fact.cik, fact.tag, fact.val, fact.unit,
+      fact.fiscalYear, fact.fiscalPeriod, fact.form, fact.filedAt, fact.source, ingestedAt
+    )
+  );
+
+  await db.batch(batch);
+}
+
+/**
+ * Point-in-time read (plan.md Backtesting Integrity, point 3): for
+ * `ticker`/`tag`, the latest-filed-as-of-`asOf` fact PER FISCAL PERIOD --
+ * i.e. whatever value an analyst reading at `asOf` would actually have
+ * seen, restatements included up to that point but never a later one. Same
+ * required-asOf, no-"give me everything" convention as
+ * getPriceBarsAsOf/getNewsAsOf. Ordered most-recent-fiscal-period first.
+ *
+ * HONEST LIMITATION (see plan.md + edgar_fundamentals.js): this reflects
+ * whatever this table has actually been populated with. EDGAR only covers
+ * US-listed XBRL filers, and this project's ticker->CIK map is currently a
+ * small hand-maintained list (same convention as
+ * ingestion/entity_resolution.js's domain map) -- a ticker with no rows
+ * here is NOT evidence the company has no fundamentals, only that we
+ * haven't ingested them.
+ */
+export async function getFundamentalFactsAsOf(db, { ticker, tag, asOf, limit = 20 }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getFundamentalFactsAsOf requires an explicit asOf timestamp");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT ticker, cik, tag, val, unit, fiscal_year, fiscal_period, form, filed_at, source
+       FROM (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY fiscal_year, fiscal_period ORDER BY filed_at DESC
+         ) AS rn
+         FROM fundamental_facts
+         WHERE ticker = ? AND tag = ? AND filed_at <= ?
+       )
+       WHERE rn = 1
+       ORDER BY fiscal_year DESC, fiscal_period DESC
+       LIMIT ?`
+    )
+    .bind(ticker, tag, asOf, limit)
+    .all();
+
+  return results;
+}

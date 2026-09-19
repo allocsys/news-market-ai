@@ -120,7 +120,7 @@ export function loadConfig(env) {
     // UPDATE (2026-09-17): gdelt.js#enrichWithFullText -- an explicit opt-in
     // second step that fetches each article's own page to fill in `body`
     // (fetchLatest alone only ever returns metadata, see that file's HONEST
-    // SCOPE note). Defaults to true/enabled -- graph/pipeline.js#collectNewsItems
+    // SCOPE note). Defaults to true/enabled -- ingestion/ingest.js#collectNewsItems
     // calls it by default -- since a headline-only newsItem.body is a real,
     // previously-documented gap for the analysts reading it; explicit
     // opt-out ("false") exists for anyone who wants cheaper/faster runs or

@@ -1,7 +1,7 @@
 // portfolio_manager.js previously had no dedicated test file at all --
 // only exercised indirectly, if ever, through graph/pipeline.js. Covers
 // evaluatePortfolio's core ceiling math (unchanged by the netting fix --
-// see storage/d1.js#getOpenPositionsRiskPctAsOf and
+// see storage/run_store.js#RunStore.getOpenPositionsRiskPctAsOf and
 // graph/pipeline.js's risk_checked stage for where the actual exclusion
 // happens) plus the isReplacingPosition reason-text behavior added
 // alongside it.

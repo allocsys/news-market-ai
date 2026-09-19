@@ -479,18 +479,25 @@ work on `main` directly.
 
 ## Repo Structure
 ```
-src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill +
-                      # /backtest/run, cron scheduler, JOBS (backfill-only) consumer
+src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill,
+                      # /backtest/run (disabled, returns 503 until M3), cron
+                      # scheduler, JOBS (backfill-only) consumer
 src/dashboard-worker.js  # `dashboard` Worker (wrangler.dashboard.toml) -- login,
                       # session, SSR UI; calls `backend` via service binding
 src/ingest-worker.js  # `ingest` Worker (wrangler.ingest.toml) -- INGEST consumer
-src/llm-worker.js     # `llm` Worker (wrangler.llm.toml) -- ANALYZE + LLM_JOBS
-                      # (backtest/exit_check) consumer; only holder of GEMINI_API_KEYS
+src/llm-worker.js     # `llm` Worker (wrangler.llm.toml) -- ANALYZE + exit_check on
+                      # {inputs, live store}; a backtest message on LLM_JOBS is
+                      # rejected (logged, job marked failed, acked, no work done)
+                      # until M3; only holder of GEMINI_API_KEYS
 ingestion/           # Finnhub, GDELT (unwired), EDGAR, RSS, HTML-scrape, yfinance adapters
+  ingest.js           # scheduled-ingestion entry point (split out of index.js in M2)
   errors.js           # typed vendor error taxonomy (Pattern 11)
   date_window.js       # point-in-time cutoff/boundary helpers
   market_data_validator.js  # sanity-check vendor data before agents see it (Pattern 9)
-storage/             # D1 access layer (d1.js, llm_calls.js, jobs.js)
+storage/             # run_store.js (RunStore, state-DB access), inputs_view.js
+                      # (input-side D1 access); d1.js is LEGACY -- dashboard's
+                      # old-DB reads + backtest_runs registry only; llm_calls.js,
+                      # jobs.js (job_progress) still on the old DB until M2b
 llm/                 # multi-key Gemini cascade, KV-backed cooldown
 agents/
   analysts/          # news/event, sentiment, technical
@@ -581,6 +588,77 @@ are committed directly (not placeholders), so there was nothing for it to
 patch there yet. **Fixed** by replacing the global sed with an awk pass
 scoped to the specific `[[d1_databases]]` block whose `database_name`
 matches `inputs.database-name`, leaving every other block's id untouched.
+
+**M2 code — done on `m2/engine-port-run-store`, pushed, no PR yet (2026-09-19):**
+Engine now runs on `{inputs, store}` instead of the old scope-less `d1.js`.
+`shared/constants.js` gained `MAX_PORTFOLIO_RISK_PCT` and `TRADE_DECISION_STATUS`
+(`opened`/`rejected`/`superseded`/`skipped_no_price_data` — the M1 design's
+`approved` is renamed `opened` to match); `portfolio_manager` imports the shared
+constant instead of a local copy. `RunStore` gained
+`getUnsettledReplacedPositions` (see design note below). `storage/inputs_view.js`
+now holds the input-side functions directly (no longer just a re-export);
+`storage/d1.js` is LEGACY — kept only for the dashboard's old-DB reads and the
+`backtest_runs` registry functions, everything else deleted rather than adapted,
+per the M1 rule. `checkpointer.js`, `memory.js`, `reflection.js`, `settle.js`,
+`exit_check.js` and `pipeline.js` all take `{inputs, store}` now.
+`ingestion/ingest.js` was split out of the old scheduler; `runScheduledIngestion`
+is deleted (was dead code per the Known Gaps note, confirmed unused). `ingest-worker`
+and `index.js`'s backfill path both use `env.INPUTS_DB`; the job reporter stays on
+`env.DB` until M2b moves `job_progress` to the state schema. `llm-worker` builds
+its `{inputs, store}` context per message (`inputs = readOnly(env.INPUTS_DB)`,
+`store = new RunStore(env.LIVE_DB, "live")`); a `backtest` message on `LLM_JOBS`
+now fails loudly — starts the job row, logs, `reporter.fail("backtests move to the
+backtest Worker in M3")`, acks, does no work — instead of running against live
+state. `POST /backtest/run` returns a 503 JSON body before any job row is written
+or anything enqueued (the old enqueue block is deleted, not gated). `src/backtest/*`
+is ported onto the new signature: `runManualBacktest(env, config, {inputs, store,
+registryDb}, params)`. A few stale comments referencing the old `d1.js` functions
+were fixed in passing.
+
+**Design note (for the PR body):** `settlePositionOutcome` logs and swallows a
+failed reflection by design — the position stays closed, there's just no
+reflection recorded. So `getUnsettledReplacedPositions` only recovers a hard
+crash or queue retry landing between the `commitThesis` batch and the settle
+step; it is not a retry path for a thrown reflection error, and shouldn't be
+treated as one later.
+
+**M2 tests:** new `test/helpers/engine_ctx.js` builds `{inputs, store}` (plus
+`inputsDb`/`stateDb`) on real `node:sqlite`, with `seedNews`/`seedBar`/`stateRows`
+helpers and `STATE_DIR`/`INPUTS_DIR`/`SIM_DIR` exports, so tests run against real
+SQL instead of hand-written fakes. Rewritten on top of it, assertions unchanged:
+`backtest_on_signal_runner`, `backtest_run` (`registryDb = createTestD1([SIM_DIR])`),
+`checkpoint_resume` (technical analyst now actually runs — 7 LLM calls,
+`EXPECTED_LABELS` includes `analyst:technical` — plus a new env-scoped checkpoint
+case), `exit_logic` (+ run-id isolation), `positions_pointintime` (+ run-id
+isolation), `memory_pointintime`. Updated for the new bindings/contract:
+`index_backtest_enqueue` (503 contract — nothing enqueued, no `job_progress`
+row), `dashboard_worker` (503 pass-through), `ingest_worker`/`queue_consumer`
+(`INPUTS_DB`), `ingestion_wiring`/`entity_resolution_wiring` (import path moved
+to `ingestion/ingest.js`), `fundamentals`/`price_bars`/`technical`/
+`portfolio_manager`/`inputs_view` (updated paths/headers only), `llm_worker`
+(real `LIVE_DB`/`INPUTS_DB` via an `engineBindings()` helper; the backtest-rejection
+test still uses the OLD-DB schema — the root `migrations/` dir — for
+`job_progress`, since the state schema's `job_progress` gets a `run_id` column
+only in M2b). New `test/replaced_settle.test.js` (7 cases):
+`getUnsettledReplacedPositions` returns replaced-and-unsettled positions with
+`exitPrice`, excludes already-settled ones, matches on `closedAt`/`ticker`/
+`'replaced'` exactly, and requires `closedAt`; a pipeline retry after a
+commit-before-settle crash (injected by making `store.getUnsettledReplacedPositions`
+throw once) settles the replaced position exactly once; `TRADE_DECISION_STATUS`
+values; `skipped_no_price_data` when no bar exists. The SQL outcomes for
+superseded/opened/rejected stay pinned in `test/run_store.test.js`, unchanged.
+Full suite: 470/470 pass.
+
+**M2b (not started, tracked for after the M2 PR):** move `llm_calls` and
+`job_progress` onto the state DB via `RunStore` — the state schema already has
+both tables with `run_id`/`env_run_id` columns from M1, this is wiring, not a
+schema change. Needed before M5 can delete the old `DB` binding.
+
+**Still open, carried from M1:** whether the `package.json`/`deploy.yml` migrate
+steps for the three new D1s land in M2 or M3; `BACKTEST_DAILY_WRITE_BUDGET`
+(proposed 40K) is not yet approved by the owner; whether each statement inside a
+D1 `batch()` counts individually toward the 50-queries-per-invocation Free cap is
+still unmeasured — needs a real deploy, not `node:sqlite`.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists

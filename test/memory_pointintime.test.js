@@ -2,55 +2,33 @@
 // naming and backtest.leakcheck.test.js's leak-check style). Covers
 // Backtesting Integrity point 4: the reflection/memory loop is the easiest
 // place to leak the future into a backtest, since it depends on a REALIZED
-// outcome. Exercises storage/d1.js#getDecisionMemoryAsOf's enforced cutoff
-// AND agents/utils/memory.js#fetchPriorLessons's use of it, against a
-// minimal in-memory fake of D1's prepare/bind/all interface.
-//
-// HONEST SCOPE: FakeMemoryDb only understands the two queries d1.js issues
-// against decision_memory (the SELECT, plus -- since the fake-model
-// injection point below closed the old gap -- the INSERT recordDecisionOutcome
-// issues) -- not a general D1/SQLite emulator, same convention as
-// checkpoint_resume.test.js's FakeCheckpointDb.
+// outcome. Exercises RunStore#getDecisionMemoryAsOf's enforced cutoff
+// AND agents/utils/memory.js#fetchPriorLessons's use of it. M2: runs against
+// a REAL sqlite state DB through RunStore (storage/run_store.js#
+// getDecisionMemoryAsOf / recordDecisionOutcome), replacing the hand-rolled
+// FakeMemoryDb -- every assertion is kept, now proven against the real SQL
+// (the strictly-before "<" cutoff, the ORDER BY, ON CONFLICT DO NOTHING).
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getDecisionMemoryAsOf } from "../src/storage/d1.js";
 import { fetchPriorLessons, recordAndReflect } from "../src/agents/utils/memory.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
+import { makeCtx, stateRows } from "./helpers/engine_ctx.js";
 
-class FakeMemoryDb {
-  constructor(rows) {
-    this.rows = rows; // [{ id, decision_id, ticker, realized_return, alpha_return, reflection, resolved_at }]
+/**
+ * A live RunStore over a real sqlite state DB, with `rows` inserted straight
+ * into decision_memory (raw SQL, run_id 'live') so each test controls the
+ * exact resolved_at values the point-in-time cutoff is checked against.
+ */
+async function memoryStore(rows) {
+  const ctx = makeCtx();
+  for (const r of rows) {
+    await ctx.stateDb
+      .prepare(`INSERT INTO decision_memory (run_id, id, decision_id, ticker, realized_return, alpha_return, reflection, resolved_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind("live", r.id, r.decision_id, r.ticker, r.realized_return, r.alpha_return, r.reflection, r.resolved_at, r.resolved_at)
+      .run();
   }
-
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async all() {
-            if (!/FROM decision_memory/.test(sql)) {
-              throw new Error(`FakeMemoryDb: unsupported query: ${sql}`);
-            }
-            const [ticker, asOf, limit] = args;
-            const results = db.rows
-              .filter((r) => r.ticker === ticker && r.resolved_at < asOf) // strictly before -- matches the real SQL's "<", not "<="
-              .sort((a, b) => (a.resolved_at < b.resolved_at ? 1 : -1)) // resolved_at DESC, matching the real ORDER BY
-              .slice(0, limit);
-            return { results };
-          },
-          async run() {
-            if (!/INSERT INTO decision_memory/.test(sql)) {
-              throw new Error(`FakeMemoryDb: unsupported run() query: ${sql}`);
-            }
-            const [id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt] = args;
-            if (db.rows.some((r) => r.id === id)) return; // ON CONFLICT(id) DO NOTHING, matching the real SQL
-            db.rows.push({ id, decision_id: decisionId, ticker, realized_return: realizedReturn, alpha_return: alphaReturn, reflection, resolved_at: resolvedAt });
-          },
-        };
-      },
-    };
-  }
+  return ctx;
 }
 
 const SAMPLE_ROWS = [
@@ -61,13 +39,13 @@ const SAMPLE_ROWS = [
 ];
 
 test("getDecisionMemoryAsOf throws LookaheadViolationError when asOf is omitted", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
-  await assert.rejects(() => getDecisionMemoryAsOf(db, { ticker: "AAPL" }), LookaheadViolationError);
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
+  await assert.rejects(() => store.getDecisionMemoryAsOf({ ticker: "AAPL" }), LookaheadViolationError);
 });
 
 test("getDecisionMemoryAsOf returns only rows strictly before asOf", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
-  const results = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
+  const results = await store.getDecisionMemoryAsOf({ ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
 
   assert.equal(results.length, 2);
   assert.ok(results.every((r) => r.resolved_at < "2026-01-15T00:00:00Z"));
@@ -75,36 +53,36 @@ test("getDecisionMemoryAsOf returns only rows strictly before asOf", async () =>
 });
 
 test("getDecisionMemoryAsOf excludes a row resolved EXACTLY at asOf (strictly before, not at-or-before)", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
-  const results = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-02-01T00:00:00Z" });
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
+  const results = await store.getDecisionMemoryAsOf({ ticker: "AAPL", asOf: "2026-02-01T00:00:00Z" });
 
   assert.ok(!results.some((r) => r.id === "d3")); // resolved_at === asOf must not count as "already known"
 });
 
 test("getDecisionMemoryAsOf orders most-recent-first and respects limit", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
-  const results = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z", limit: 1 });
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
+  const results = await store.getDecisionMemoryAsOf({ ticker: "AAPL", asOf: "2026-01-15T00:00:00Z", limit: 1 });
 
   assert.equal(results.length, 1);
   assert.equal(results[0].id, "d2"); // most recent of the two eligible AAPL rows (d3 is not yet resolved as of Jan 15)
 });
 
 test("getDecisionMemoryAsOf never mixes another ticker's history in", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
-  const results = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-03-01T00:00:00Z" });
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
+  const results = await store.getDecisionMemoryAsOf({ ticker: "AAPL", asOf: "2026-03-01T00:00:00Z" });
 
   assert.ok(!results.some((r) => r.ticker === "MSFT"));
 });
 
 test("fetchPriorLessons returns '' with no history, never null/undefined", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
-  const lessons = await fetchPriorLessons(db, { ticker: "TSLA", asOf: "2026-01-15T00:00:00Z" }); // no TSLA rows at all
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
+  const lessons = await fetchPriorLessons(store, { ticker: "TSLA", asOf: "2026-01-15T00:00:00Z" }); // no TSLA rows at all
   assert.equal(lessons, "");
 });
 
 test("fetchPriorLessons's formatted prompt text never contains a future reflection", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
-  const lessons = await fetchPriorLessons(db, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
+  const lessons = await fetchPriorLessons(store, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
 
   assert.ok(lessons.includes("sized in too early"));
   assert.ok(lessons.includes("ignored bear case"));
@@ -112,13 +90,13 @@ test("fetchPriorLessons's formatted prompt text never contains a future reflecti
 });
 
 test("fetchPriorLessons's asOf boundary shifts forward correctly as simulated time advances (walk-forward-style check)", async () => {
-  const db = new FakeMemoryDb(SAMPLE_ROWS);
+  const { store, stateDb } = await memoryStore(SAMPLE_ROWS);
 
-  const early = await fetchPriorLessons(db, { ticker: "AAPL", asOf: "2026-01-05T00:00:00Z" });
+  const early = await fetchPriorLessons(store, { ticker: "AAPL", asOf: "2026-01-05T00:00:00Z" });
   assert.ok(early.includes("sized in too early"));
   assert.ok(!early.includes("ignored bear case")); // d2 (Jan 10) not yet resolved as of Jan 5
 
-  const later = await fetchPriorLessons(db, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
+  const later = await fetchPriorLessons(store, { ticker: "AAPL", asOf: "2026-01-15T00:00:00Z" });
   assert.ok(later.includes("ignored bear case")); // now resolved and visible
 });
 
@@ -129,7 +107,7 @@ test("fetchPriorLessons's asOf boundary shifts forward correctly as simulated ti
 // ---------------------------------------------------------------------
 
 test("recordAndReflect calls the real callStructured path (via config.fakeModel), persists the outcome, and returns the reflection text", async () => {
-  const db = new FakeMemoryDb([]);
+  const { store, stateDb } = await memoryStore([]);
   let capturedPrompt = null;
 
   const config = {
@@ -141,7 +119,7 @@ test("recordAndReflect calls the real callStructured path (via config.fakeModel)
     },
   };
 
-  const reflection = await recordAndReflect({}, config, db, {
+  const reflection = await recordAndReflect({}, config, store, {
     id: "dec-1|reflection",
     decisionId: "dec-1",
     ticker: "AAPL",
@@ -156,14 +134,14 @@ test("recordAndReflect calls the real callStructured path (via config.fakeModel)
   assert.ok(capturedPrompt.includes("-0.02")); // grounded in the real realized return
 
   // Persisted row is now readable back through the normal asOf-gated read path.
-  const rows = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-03-02T00:00:00Z" });
+  const rows = await store.getDecisionMemoryAsOf({ ticker: "AAPL", asOf: "2026-03-02T00:00:00Z" });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].reflection, "sized too aggressively given low confidence");
   assert.equal(rows[0].realized_return, -0.02);
 });
 
 test("recordAndReflect is idempotent -- a second call with the same id does not duplicate the row (ON CONFLICT DO NOTHING)", async () => {
-  const db = new FakeMemoryDb([]);
+  const { store, stateDb } = await memoryStore([]);
   const config = {
     geminiQuickModel: "quick-model",
     fakeModel: async () => JSON.stringify({ reflection: "first reflection" }),
@@ -179,24 +157,24 @@ test("recordAndReflect is idempotent -- a second call with the same id does not 
     resolvedAt: "2026-03-01T00:00:00Z",
   };
 
-  await recordAndReflect({}, config, db, args);
+  await recordAndReflect({}, config, store, args);
   config.fakeModel = async () => JSON.stringify({ reflection: "a different second reflection" });
-  await recordAndReflect({}, config, db, args); // same id -- a checkpoint-resumed re-run scenario
+  await recordAndReflect({}, config, store, args); // same id -- a checkpoint-resumed re-run scenario
 
-  const rows = await getDecisionMemoryAsOf(db, { ticker: "AAPL", asOf: "2026-03-02T00:00:00Z" });
+  const rows = await store.getDecisionMemoryAsOf({ ticker: "AAPL", asOf: "2026-03-02T00:00:00Z" });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].reflection, "first reflection"); // the second call's write never landed
 });
 
 test("recordAndReflect surfaces a schema-validation error rather than silently persisting a malformed reflection", async () => {
-  const db = new FakeMemoryDb([]);
+  const { store, stateDb } = await memoryStore([]);
   const config = {
     geminiQuickModel: "quick-model",
     fakeModel: async () => JSON.stringify({ notReflection: "wrong shape" }), // missing required `reflection: string`
   };
 
   await assert.rejects(() =>
-    recordAndReflect({}, config, db, {
+    recordAndReflect({}, config, store, {
       id: "dec-2|reflection",
       decisionId: "dec-2",
       ticker: "AAPL",
@@ -207,5 +185,5 @@ test("recordAndReflect surfaces a schema-validation error rather than silently p
     })
   );
 
-  assert.equal(db.rows.length, 0); // failed validation, nothing should have been written
+  assert.equal((await stateRows(stateDb, "decision_memory")).length, 0); // failed validation, nothing should have been written
 });

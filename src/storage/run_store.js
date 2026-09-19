@@ -1,26 +1,19 @@
 // RunStore(db, runId) is the ONLY code allowed to run SQL against the state
 // tables (migrations/state/) -- positions, trade_decisions, decision_memory,
-// pipeline_checkpoints, llm_calls, job_progress. See plan.md "Design:
+// pipeline_checkpoints (llm_calls and job_progress follow in M2b). See plan.md "Design:
 // environments": every method here filters on its own `runId`, and every
 // read requires an explicit `asOf` the same way storage/d1.js's readers do
 // (LookaheadViolationError on a missing one) -- this class is a run_id-
 // scoped rewrite of those functions, not a new access policy.
 //
-// M1 scope: this module is additive. The old scope-less functions in
-// storage/d1.js keep working unchanged for `live` (old schema) until M4 --
-// see plan.md's milestone list. They get deleted, not adapted, in M2.
+// M2: the old scope-less state functions in storage/d1.js are gone -- this
+// class is the only path to the state tables. Input reads (news/prices/
+// fundamentals) live in storage/inputs_view.js. The remaining d1.js functions
+// are the dashboard's old-DB reads and the backtest_runs registry, which move
+// in M4/M3.
 
 import { LookaheadViolationError } from "../shared/errors.js";
-
-// Mirrors portfolio_manager.js's own MAX_PORTFOLIO_RISK_PCT placeholder
-// (src/agents/managers/portfolio_manager.js). Duplicated rather than
-// imported: portfolio_manager.js's copy is a placeholder on the OLD
-// scope-less schema and gets rewired in M2 to actually call commitThesis
-// below; until then the two constants must be kept equal by hand (flagged
-// in plan.md, not solved by a shared import yet since that would create a
-// dependency from the new state-store code back into the old pipeline
-// code this milestone deliberately doesn't touch).
-const MAX_PORTFOLIO_RISK_PCT = 0.2;
+import { MAX_PORTFOLIO_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
 
 function requireAsOf(fnName, asOf) {
   if (!asOf) {
@@ -160,6 +153,50 @@ export class RunStore {
     };
   }
 
+  /**
+   * Positions that ticker's commitThesis batch closed as 'replaced' at exactly
+   * `closedAt` and that have no decision_memory row yet -- i.e. replaced
+   * positions still waiting for graph/settle.js to record their realized
+   * outcome. This is how the pipeline finds what to settle AFTER the commit:
+   * it can't rely on "the position I read before committing" because a
+   * queue-retried re-run (crash after the batch, before settle/checkpoint)
+   * would then see its own new position as the existing one and never settle
+   * the old one. Returns each position with `exitPrice`/`closedAt`/
+   * `closeReason`, the shape settlePositionOutcome needs. A position whose
+   * realized return can't be computed (no entry price) stays "unsettled"
+   * here and is simply skipped again on a re-run -- harmless.
+   */
+  async getUnsettledReplacedPositions({ ticker, closedAt }) {
+    if (!closedAt) {
+      throw new LookaheadViolationError("getUnsettledReplacedPositions requires an explicit closedAt timestamp");
+    }
+
+    const { results } = await this.db
+      .prepare(
+        `SELECT p.id, p.ticker, p.trade_thesis_id, p.position_size_pct, p.direction, p.entry_price, p.exit_price, p.opened_at, p.closed_at, p.close_reason
+         FROM positions p
+         WHERE p.run_id = ? AND p.ticker = ? AND p.closed_at = ? AND p.close_reason = 'replaced'
+           AND NOT EXISTS (
+             SELECT 1 FROM decision_memory m WHERE m.run_id = p.run_id AND m.decision_id = p.trade_thesis_id
+           )`
+      )
+      .bind(this.runId, ticker, closedAt)
+      .all();
+
+    return results.map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      tradeThesisId: r.trade_thesis_id,
+      positionSizePct: r.position_size_pct,
+      direction: r.direction,
+      entryPrice: r.entry_price,
+      exitPrice: r.exit_price,
+      openedAt: r.opened_at,
+      closedAt: r.closed_at,
+      closeReason: r.close_reason,
+    }));
+  }
+
   // -------------------------------------------------------------------
   // Atomic portfolio commit -- plan.md "Atomic portfolio commit"
   // -------------------------------------------------------------------
@@ -279,12 +316,12 @@ export class RunStore {
              WHEN EXISTS (
                SELECT 1 FROM positions p2
                WHERE p2.run_id = ? AND p2.ticker = ? AND p2.closed_at IS NULL AND p2.opened_at > ?
-             ) THEN 'superseded'
+             ) THEN '${TRADE_DECISION_STATUS.SUPERSEDED}'
              WHEN (
                SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
                WHERE p3.run_id = ? AND p3.ticker != ? AND p3.closed_at IS NULL
-             ) + ? > ? THEN 'rejected'
-             ELSE 'opened'
+             ) + ? > ? THEN '${TRADE_DECISION_STATUS.REJECTED}'
+             ELSE '${TRADE_DECISION_STATUS.OPENED}'
            END),
            ?, ?, ?)
          ON CONFLICT(run_id, id) DO NOTHING`
