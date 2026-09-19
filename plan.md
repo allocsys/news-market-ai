@@ -412,7 +412,7 @@ CI and deploys are green across all four Workers.
 **Not yet true:** backtests are not isolated from live state (see above). The
 four behaviors below have not been observed live end to end.
 
-**Remaining work (nothing here blocks the system running):**
+**Remaining work (item 1b blocks non-AAPL live trades; nothing else blocks the system running):**
 1. **Backtest / live isolation** — see the section above.
 1b. **Overlapping open positions per ticker** (live) — blocks every non-AAPL
    live trade today; see "Overlapping open positions" above. Needs a decision.
