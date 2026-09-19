@@ -723,7 +723,7 @@ architecture above.
   are invalid" error. Cloudflare removed that default in workers-sdk#12458
   (merged 2026-02-06), which was not backported to v3 (v3 only gets
   critical-security patches), so bumping within `^3.x` could not have fixed
-  it. Fix: wrangler `^4.135.0` (v4 requires Node >= 22, so CI moved to Node
+  it. Fix: wrangler v4.135.0 (v4 requires Node >= 22, so CI moved to Node
   22) plus an explicit `--message-retention-period-secs 86400` in
   `ensure-queue`, so queue creation no longer depends on any implicit
   default.
