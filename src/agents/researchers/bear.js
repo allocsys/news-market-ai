@@ -16,6 +16,7 @@ ${JSON.stringify(opinions, null, 2)}`;
 
   return callStructured(env, config, DebateSide, prompt, {
     model: config.geminiDeepModel,
+    label: "debate:bear",
     extraFields: { stance: "bear" },
   });
 }

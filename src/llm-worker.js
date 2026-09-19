@@ -41,6 +41,7 @@ import { runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
 import { createJobReporter } from "./storage/jobs.js";
+import { pruneLlmCalls, withLlmLogContext } from "./storage/llm_calls.js";
 
 export default {
   async fetch() {
@@ -74,7 +75,7 @@ export default {
           // dead_letter_queue on the ANALYZE consumer is the real safety
           // net for a persistently failing ticker/item.
           const { runId, ticker, newsItem, asOf: itemAsOf } = job;
-          await runPipelineForTicker(env, config, env.DB, { runId, ticker, newsItem, asOf: itemAsOf });
+          await runPipelineForTicker(env, withLlmLogContext(config, { source: "pipeline" }), env.DB, { runId, ticker, newsItem, asOf: itemAsOf });
         } else if (job.type === "backtest") {
           const { id, tickers, testStart, testEnd, graceDays } = job;
           // job_progress (src/storage/jobs.js) is a SEPARATE, finer-grained
@@ -87,7 +88,12 @@ export default {
           // 'complete'/'failed' once it resolves -- it never throws (see its
           // own header comment), so there's no separate catch needed here
           // for the expected-failure case.
-          const outcome = await runManualBacktest(env, config, env.DB, { id, tickers, testStart, testEnd, graceDays, onProgress: reporter.update });
+          // Every LLM call made anywhere inside this run -- the pipeline over
+          // each news item AND the reflections when simulated positions close
+          // -- is logged as source "backtest" with this job's id, so the
+          // dashboard's LLM-calls page can show "everything this backtest sent".
+          const backtestConfig = withLlmLogContext(config, { source: "backtest", jobId: id });
+          const outcome = await runManualBacktest(env, backtestConfig, env.DB, { id, tickers, testStart, testEnd, graceDays, onProgress: reporter.update });
           if (outcome.status === "complete") {
             await reporter.complete(outcome.result, "Backtest complete");
           } else {
@@ -105,10 +111,21 @@ export default {
           // either, the next scheduled tick re-evaluates every still-open
           // position regardless.
           try {
-            const closed = await checkOpenPositionExits(env, config, env.DB, { asOf: job.asOf });
+            const closed = await checkOpenPositionExits(env, withLlmLogContext(config, { source: "exit_check" }), env.DB, { asOf: job.asOf });
             console.log("exit_check job completed", { closed: closed.length, closed });
           } catch (err) {
             console.error("exit_check job failed", { message: err.message });
+          }
+          // Retention for the LLM call log (storage/llm_calls.js). Rides this
+          // scheduled tick (every 15 min) rather than a cron of its own; the
+          // DELETE is index-backed and a no-op most ticks. Own try/catch: a
+          // failed prune must not affect the exit check above or the ack below.
+          if (config.llmLogEnabled) {
+            try {
+              await pruneLlmCalls(env.DB, { days: config.llmLogRetentionDays });
+            } catch (err) {
+              console.warn("llm call log prune failed (non-fatal)", { message: err.message });
+            }
           }
         } else {
           console.error("llm queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });

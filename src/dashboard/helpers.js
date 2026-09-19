@@ -54,6 +54,51 @@ export function parseDashboardParams(searchParams) {
   };
 }
 
+// ---- LLM calls page (/dashboard/llm) ----
+// Its own param set, parsed separately from parseDashboardParams: those are
+// shared by three other pages and pillLinks/buildQuery serialize every key
+// they hold into every link, which would leak these into unrelated pages'
+// URLs. Every param is validated here -- llmTicker/llmJob/llmRun end up in
+// SQL bind values (never interpolated), but bounding them keeps junk out of
+// the query and the rendered links.
+export const LLM_SOURCE_OPTIONS = ["all", "pipeline", "backtest", "exit_check"];
+export const LLM_STATUS_OPTIONS = ["all", "ok", "error"];
+export const LLM_LIMIT_OPTIONS = [25, 50, 100];
+const LLM_DEFAULTS = { llmSource: "all", llmStatus: "all", llmLimit: 50 };
+
+function cleanId(raw) {
+  const s = (raw ?? "").trim();
+  return s.length > 0 && s.length <= 200 ? s : "";
+}
+
+export function parseLlmParams(searchParams) {
+  const sp = searchParams ?? new URLSearchParams();
+  const ticker = (sp.get("llmTicker") ?? "").trim().toUpperCase();
+  const before = Number(sp.get("llmBefore"));
+  return {
+    llmSource: LLM_SOURCE_OPTIONS.includes(sp.get("llmSource")) ? sp.get("llmSource") : LLM_DEFAULTS.llmSource,
+    llmStatus: LLM_STATUS_OPTIONS.includes(sp.get("llmStatus")) ? sp.get("llmStatus") : LLM_DEFAULTS.llmStatus,
+    llmLimit: pickFromOptions(sp.get("llmLimit"), LLM_LIMIT_OPTIONS, LLM_DEFAULTS.llmLimit),
+    llmTicker: /^[A-Z0-9.\-]{1,12}$/.test(ticker) ? ticker : "",
+    llmJob: cleanId(sp.get("llmJob")),
+    llmRun: cleanId(sp.get("llmRun")),
+    llmBefore: Number.isInteger(before) && before > 0 ? before : null,
+  };
+}
+
+/** "?..." for the LLM page with `overrides` applied, omitting anything at its default so links stay short. `llmBefore` is dropped on any filter change (an older-page cursor means nothing under a different filter) unless the override sets it. */
+export function llmQuery(params, overrides = {}) {
+  const merged = { ...params, ...("llmBefore" in overrides ? {} : { llmBefore: null }), ...overrides };
+  const sp = new URLSearchParams();
+  for (const [key, value] of Object.entries(merged)) {
+    if (value === null || value === undefined || value === "") continue;
+    if (key in LLM_DEFAULTS && value === LLM_DEFAULTS[key]) continue;
+    sp.set(key, String(value));
+  }
+  const qs = sp.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export function buildQuery(params, overrides = {}) {
   const merged = { ...params, ...overrides };
   const sp = new URLSearchParams();
@@ -189,7 +234,8 @@ export function backtestRunsList(runs) {
         : r.status === "failed"
           ? `<p class="empty">${escapeHtml(r.error ?? "failed with no recorded error message")}</p>`
           : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
-      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${body}</div></details>`;
+      const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery(parseLlmParams(null), { llmJob: r.id })}">View every LLM call this run made &rarr;</a></p>`;
+      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${llmLink}${body}</div></details>`;
     })
     .join("\n");
 }

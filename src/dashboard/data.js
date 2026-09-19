@@ -15,6 +15,7 @@ import {
   getRecentBacktestRuns,
   getOpenPositionsExposureTotal,
 } from "../storage/d1.js";
+import { getRecentLlmCalls, getLlmCall } from "../storage/llm_calls.js";
 import { parseDashboardParams, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
 
 /**
@@ -119,6 +120,28 @@ export async function getPipelineData(env) {
 export async function getBacktestRunsData(env) {
   const backtestRunsResult = await safe(getRecentBacktestRuns(env.DB, { limit: 10 }));
   return { backtestRuns: backtestRunsResult.data ?? [], error: backtestRunsResult.error };
+}
+
+/** LLM-call log page: newest-first list (previews only) under the page's filters. `params` is helpers.js#parseLlmParams's output. */
+export async function getLlmCallsData(env, params) {
+  const result = await safe(
+    getRecentLlmCalls(env.DB, {
+      limit: params.llmLimit,
+      source: params.llmSource === "all" ? undefined : params.llmSource,
+      status: params.llmStatus === "all" ? undefined : params.llmStatus,
+      ticker: params.llmTicker || undefined,
+      jobId: params.llmJob || undefined,
+      runId: params.llmRun || undefined,
+      beforeId: params.llmBefore ?? undefined,
+    })
+  );
+  return { calls: result.data?.calls ?? [], nextBeforeId: result.data?.nextBeforeId ?? null, error: result.error };
+}
+
+/** One call in full: complete prompt, raw response, cascade attempts. `call` is null when the id doesn't exist. */
+export async function getLlmCallData(env, id) {
+  const result = await safe(getLlmCall(env.DB, id));
+  return { call: result.data, error: result.error };
 }
 
 export { parseDashboardParams };

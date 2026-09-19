@@ -18,6 +18,7 @@ Verdict: ${JSON.stringify(verdict)}`;
 
   return callStructured(env, config, TradeThesis, prompt, {
     model: config.geminiDeepModel,
+    label: "trader",
     extraFields: { ticker: verdict.ticker, asOf: verdict.asOf, direction: verdict.direction },
   });
 }

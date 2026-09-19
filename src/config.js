@@ -29,6 +29,16 @@ export function loadConfig(env) {
     geminiQuickModel: env.GEMINI_QUICK_MODEL || "gemini-2.5-flash-lite",
     geminiDeepModel: env.GEMINI_DEEP_MODEL || "gemini-2.5-flash",
     geminiFallbackModels: parseList(env.GEMINI_FALLBACK_MODELS),
+    // LLM call log (storage/llm_calls.js, migrations/0012_llm_calls.sql): every
+    // Gemini prompt/response is stored for the dashboard's "LLM calls" page.
+    // On by default; LLM_LOG_ENABLED="false" turns it off (D1 free tier: each
+    // logged call costs ~4 rows written -- table + 3 indexes -- against
+    // 100K/day). Rows older than the retention window are pruned by the
+    // scheduled exit-check tick. Prompt/response are each clipped to
+    // llmLogMaxChars on write (the true length is kept alongside).
+    llmLogEnabled: env.LLM_LOG_ENABLED !== "false",
+    llmLogRetentionDays: Number(env.LLM_LOG_RETENTION_DAYS) || 14,
+    llmLogMaxChars: Number(env.LLM_LOG_MAX_CHARS) || 60000,
     geminiApiBase: "https://generativelanguage.googleapis.com/v1beta",
     geminiRequestTimeoutMs: Number(env.GEMINI_REQUEST_TIMEOUT_MS) || 30000,
     // Timeout for every plain-`fetch` ingestion call (shared/fetch_with_timeout.js)

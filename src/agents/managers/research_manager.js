@@ -24,6 +24,7 @@ ${priorLessons ? `\n${priorLessons}\n\nWeigh these past outcomes, but do not let
 
   return callStructured(env, config, DebateVerdict, prompt, {
     model: config.geminiDeepModel,
+    label: "debate:judge",
     extraFields: { ticker, asOf, bull, bear },
   });
 }

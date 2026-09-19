@@ -248,6 +248,35 @@ a call is tagged for logging.
 This cascade underlies every LLM-touching stage (Analyst Team, Researcher Team,
 Trader) — nothing calls the Gemini API directly.
 
+**Fallback list must differ from the requested model.** The cascade for a call is
+`[requestedModel, ...GEMINI_FALLBACK_MODELS minus requestedModel]`, so a fallback
+list that only contains the quick model leaves every quick-tier call with a
+one-model cascade and no fallback (a single 503 killed a whole backtest before
+PR #41). `wrangler.llm.toml` now lists three distinct models; quick tier cascades
+`3.1-flash-lite -> 2.5-flash-lite -> 2.5-flash`, deep tier prepends `3.5-flash`.
+
+### LLM call log (dashboard "LLM calls" page)
+Every prompt sent to Gemini and the raw text that came back is stored in D1
+(`llm_calls`, migration 0012) and shown at `/dashboard/llm` (list + filters by
+source/status/ticker/backtest/run) and `/dashboard/llm/:id` (full prompt,
+response, cascade attempts). It covers the live ANALYZE pipeline, manual
+backtests (tagged with the backtest's job id, so a backtest's Runs list links
+straight to its calls) and exit-check reflections, and it records FAILED calls
+too (Gemini errors, non-JSON, schema mismatch).
+
+- **One choke point:** `agents/utils/structured.js#callStructured` writes the
+  row; agents only pass a `label`. Context (`source`, `jobId`, `runId`,
+  `ticker`) rides on `config.llmLog` (`storage/llm_calls.js#withLlmLogContext`),
+  set by `llm-worker.js` and `runPipelineForTicker`.
+- **Best-effort:** a failed log write never fails or slows the call it
+  describes. `LLM_LOG_ENABLED="false"` turns it off.
+- **Cost:** each logged call is ~4 D1 rows written (table + 3 indexes) against
+  the free tier's 100K/day. Rows older than `LLM_LOG_RETENTION_DAYS` (14) are
+  pruned on the scheduled exit-check tick; each of prompt/response is clipped
+  at `LLM_LOG_MAX_CHARS` (60000), with true lengths kept.
+- **Not logged:** stages skipped on checkpoint resume (no call was made), and
+  anything before migration 0012 is applied.
+
 ## Roadmap: Service Split (sequential, one PR per step)
 **Why:** one Worker currently runs the cron pipeline, the SSR dashboard, login, and
 long manual jobs. Free-plan limits bite per invocation (10ms CPU, 50 subrequests);

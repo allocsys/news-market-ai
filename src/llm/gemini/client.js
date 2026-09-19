@@ -69,6 +69,11 @@ async function callOnce(config, model, apiKey, body, keyIndex) {
  * exactly -- if the caller asked for the deep model, we don't silently
  * upgrade or downgrade it), with config.geminiFallbackModels tried after it
  * only if every key on the primary model is exhausted.
+ *
+ * `opts.trace`, if given, is filled in as the cascade runs (by reference, so
+ * it is populated even when this throws): `attempts` -- every model/key tried
+ * in order, incl. cooldown skips -- plus `modelUsed`/`keyIndex` on success.
+ * It exists for the LLM call log (storage/llm_calls.js); nothing here reads it.
  */
 export async function geminiGenerateContent(env, config, body, opts = {}) {
   if (!config.geminiApiKeys.length) {
@@ -78,6 +83,11 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
   const primaryModel = opts.model || config.geminiQuickModel;
   const models = [primaryModel, ...config.geminiFallbackModels.filter((m) => m !== primaryModel)];
   const cascadeStart = Date.now();
+  const trace = opts.trace;
+  const note = (attempt) => {
+    if (!trace) return;
+    (trace.attempts ||= []).push(attempt);
+  };
 
   let lastErr;
   for (let mi = 0; mi < models.length; mi++) {
@@ -95,6 +105,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
           { transient: true }
         );
         console.log(`[gemini] cascade budget exceeded: ${budgetErr.message}`);
+        note({ model, keyIndex: ki, outcome: "budget_exceeded", detail: budgetErr.message });
         throw budgetErr;
       }
 
@@ -104,11 +115,17 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
           status: 429,
           transient: true,
         });
+        note({ model, keyIndex: ki, outcome: "skipped", detail: "cooldown active" });
         continue;
       }
 
       try {
         const data = await callOnce(config, model, apiKey, body, ki);
+        note({ model, keyIndex: ki, outcome: "ok" });
+        if (trace) {
+          trace.modelUsed = model;
+          trace.keyIndex = ki;
+        }
         if (mi > 0 || ki > 0) {
           data._fallbackModelUsed = model;
           data._fallbackKeyIndex = ki;
@@ -117,6 +134,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         return data;
       } catch (err) {
         lastErr = err;
+        note({ model, keyIndex: ki, outcome: "error", status: err.status ?? null, detail: err.message });
         const isBadKey = err.status === 401 || err.status === 403;
         const isRateLimited = err.status === 429;
         const isOverloaded = err.status === 503;
