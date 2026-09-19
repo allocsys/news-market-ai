@@ -11,7 +11,7 @@
 // IS NULL` guard already makes re-running this function harmless/idempotent
 // on a position that already closed).
 //
-// HONEST SCOPE: currentPrice comes from storage/d1.js#getPriceBarsAsOf,
+// HONEST SCOPE: currentPrice comes from inputs_view.js#getPriceBarsAsOf,
 // which reads the price_bars table -- but yfinance ingestion is not yet
 // wired into graph/pipeline.js (separate, already-documented plan.md gap).
 // So in practice price_bars will be empty for most/all tickers until that
@@ -20,23 +20,27 @@
 // handling, not a silent one. Not yet exercised against real price data
 // for the same reason.
 
-import { getOpenPositionsAsOf, getPriceBarsAsOf, closePosition } from "../storage/d1.js";
+import { getPriceBarsAsOf } from "../storage/inputs_view.js";
 import { evaluateExit } from "../agents/risk_mgmt/exit.js";
 import { settlePositionOutcome } from "./settle.js";
 
 /**
+ * `ctx` is `{ inputs, store }`: `inputs` is an inputs-DB handle (read-only is
+ * enough -- pass readOnly(env.INPUTS_DB)) for price bars, `store` a RunStore
+ * for the environment being checked.
+ *
  * Evaluates every position open as of `asOf` and closes any that trigger a
  * stop-loss, take-profit, or `config.maxPositionHoldDays` time-based exit.
  * Returns the list of positions actually closed this run (empty if none
  * triggered) -- caller (src/index.js#scheduled) logs this rather than the
  * function doing its own logging, same separation as runScheduledIngestion.
  */
-export async function checkOpenPositionExits(env, config, db, { asOf }) {
-  const openPositions = await getOpenPositionsAsOf(db, { asOf });
+export async function checkOpenPositionExits(env, config, { inputs, store }, { asOf }) {
+  const openPositions = await store.getOpenPositionsAsOf({ asOf });
   const closed = [];
 
   for (const position of openPositions) {
-    const bars = await getPriceBarsAsOf(db, { ticker: position.ticker, asOf, limit: 1 });
+    const bars = await getPriceBarsAsOf(inputs, { ticker: position.ticker, asOf, limit: 1 });
     const currentPrice = bars[0]?.close ?? null;
 
     const exit = evaluateExit(position, {
@@ -49,8 +53,8 @@ export async function checkOpenPositionExits(env, config, db, { asOf }) {
       // currentPrice IS the exit price -- it's the same bar that triggered
       // this exit decision (or null for a time_based exit with no price
       // data, same honest-gap convention evaluateExit already follows).
-      await closePosition(db, { id: position.id, closedAt: asOf, closeReason: exit.reason, exitPrice: currentPrice });
-      await settlePositionOutcome(env, config, db, { position, exitPrice: currentPrice, closedAt: asOf, closeReason: exit.reason });
+      await store.closePosition({ id: position.id, closedAt: asOf, closeReason: exit.reason, exitPrice: currentPrice });
+      await settlePositionOutcome(env, config, store, { position, exitPrice: currentPrice, closedAt: asOf, closeReason: exit.reason });
       closed.push({ id: position.id, ticker: position.ticker, reason: exit.reason });
     }
   }

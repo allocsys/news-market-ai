@@ -13,8 +13,8 @@ import { fetchPriorLessons, recordAndReflect } from "../agents/utils/memory.js";
  * the enforced cutoff) and returns them ready to pass as
  * runResearchManager's `priorLessons` param.
  */
-export async function loadLessonsForDebate(db, { ticker, asOf }) {
-  return fetchPriorLessons(db, { ticker, asOf });
+export async function loadLessonsForDebate(store, { ticker, asOf }) {
+  return fetchPriorLessons(store, { ticker, asOf });
 }
 
 /**
@@ -23,8 +23,8 @@ export async function loadLessonsForDebate(db, { ticker, asOf }) {
  * computes realized/alpha return, e.g. a follow-up cron tick or the backtest
  * harness settling a simulated position).
  */
-export async function closeTheLoop(env, config, db, { decisionId, ticker, decisionSummary, realizedReturn, alphaReturn, resolvedAt }) {
-  return recordAndReflect(env, config, db, {
+export async function closeTheLoop(env, config, store, { decisionId, ticker, decisionSummary, realizedReturn, alphaReturn, resolvedAt }) {
+  return recordAndReflect(env, config, store, {
     id: `${decisionId}|reflection`,
     decisionId,
     ticker,
