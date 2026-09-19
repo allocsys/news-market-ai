@@ -300,3 +300,41 @@ test("sim schema includes backtest_runs on top of the shared state schema; live 
   const missing = await live.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='backtest_runs'`).first();
   assert.equal(missing, null, "live DB (state schema only) has no backtest_runs");
 });
+
+test("commitThesis is idempotent on a resumed re-run: the position it opened stays open", async () => {
+  const db = liveDb();
+  const store = new RunStore(db, "live");
+  const args = thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1" });
+  await store.commitThesis(args);
+  await store.commitThesis(args); // queue retry after a crash before the checkpoint write
+
+  const { results: positions } = await db.prepare(`SELECT id, closed_at, close_reason FROM positions`).all();
+  assert.deepEqual(positions, [{ id: "AAPL|t1", closed_at: null, close_reason: null }]);
+  const { results: decisions } = await db.prepare(`SELECT id, status FROM trade_decisions`).all();
+  assert.deepEqual(decisions, [{ id: "AAPL|t1", status: "opened" }]);
+});
+
+test("commitThesis re-run of an older thesis does not disturb the newer position that replaced it", async () => {
+  const db = liveDb();
+  const store = new RunStore(db, "live");
+  const t1 = thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1" });
+  await store.commitThesis(t1);
+  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2" }));
+  await store.commitThesis(t1); // retried
+
+  const { results } = await db.prepare(`SELECT id, closed_at, close_reason FROM positions ORDER BY id`).all();
+  assert.deepEqual(results, [
+    { id: "AAPL|t1", closed_at: "t2", close_reason: "replaced" },
+    { id: "AAPL|t2", closed_at: null, close_reason: null },
+  ]);
+});
+
+test("commitThesis records exitPrice on the position it replaces", async () => {
+  const db = liveDb();
+  const store = new RunStore(db, "live");
+  await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1" }));
+  await store.commitThesis({ ...thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2" }), exitPrice: 104.5 });
+
+  const old = await db.prepare(`SELECT closed_at, close_reason, exit_price FROM positions WHERE id = 'AAPL|t1'`).first();
+  assert.deepEqual(old, { closed_at: "t2", close_reason: "replaced", exit_price: 104.5 });
+});

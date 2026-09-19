@@ -543,6 +543,14 @@ four behaviors below have not been observed live end to end.
    `restless-manager-6789` on the account; dashboard UI/UX not screenshot-reviewed.
 6. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
 
+**M1 defect found while starting M2 (2026-09-19), fixed in the first M2 PR:**
+`commitThesis`'s close-old statement did not exclude the row the same batch
+inserts, so a checkpoint-resumed / queue-retried re-run of the portfolio
+stage closed its own just-opened position as `replaced` while the decision
+row still said `opened`. Now guarded by `id != ?`; `commitThesis` also takes
+`exitPrice` (recorded on the replaced position, which `settle.js` needs).
+Tests: re-run idempotency, older-thesis re-run after a newer replace, exit price.
+
 **M1 bindings wired 2026-09-19:** `wrangler.toml` (backend) now binds
 INPUTS_DB/LIVE_DB/SIM_DB alongside the old DB; `wrangler.llm.toml` binds
 LIVE_DB (rw) + INPUTS_DB (ro by convention); `wrangler.ingest.toml` binds
