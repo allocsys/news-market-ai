@@ -16,8 +16,10 @@ description: >
   `wrangler kv namespace list` first and only calls
   `wrangler kv namespace create` if that lookup finds nothing.
 
-  NOT COMMITTED BACK TO THE REPO: same pattern as ensure-d1-database --
-  the committed wrangler.toml id stays a placeholder forever.
+  NOT COMMITTED BACK TO THE REPO: the committed wrangler.toml id stays a
+  placeholder forever. (This mirrors the ensure-d1-database action that
+  existed until M5; D1 ids are now committed directly, so KV is the only
+  binding that still uses this pattern.)
 
 inputs:
   namespace-title:
@@ -28,7 +30,7 @@ inputs:
     description: >
       Path (relative to the repo root) of the wrangler config file to patch
       with the real namespace id. Defaults to the backend's 'wrangler.toml'.
-      Same reasoning as ensure-d1-database's input of the same name: each CI
+      Each CI
       job has its own fresh checkout, so every Worker whose config binds this
       namespace (wrangler.ingest.toml, wrangler.llm.toml) needs its own
       job-local config patched (plan.md Step 6).
