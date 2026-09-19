@@ -83,12 +83,12 @@ class FakeIngestDb {
     this.tickers = [];
     this.priceBars = [];
   }
-  // Mirrors D1's `meta.changes` for the two ON CONFLICT DO NOTHING inserts insertNewsItem reads it from: 1 for a new row, 0 for a conflict.
   async batch(statements) {
     const results = [];
     for (const stmt of statements) results.push(await stmt.run());
     return results;
   }
+  // run() mirrors D1's `meta.changes` for the two ON CONFLICT DO NOTHING inserts insertNewsItem reads it from: 1 for a new row, 0 for a conflict.
   prepare(sql) {
     const db = this;
     return {
@@ -269,7 +269,8 @@ test("queue() ingest_ticker sends more than 100 new items to ANALYZE in chunks o
 test("queue() ingest_ticker enqueues nothing for items it already stored on an earlier tick (Finnhub's trailing window repeats them)", async (t) => {
   const db = new FakeIngestDb();
   const env = baseEnv({ INPUTS_DB: db });
-  mockVendors(t, () => finnhubArticles(163));
+  let articles = finnhubArticles(163);
+  mockVendors(t, () => articles);
   const logs = [];
   t.mock.method(console, "log", (...args) => logs.push(args));
 
@@ -286,7 +287,7 @@ test("queue() ingest_ticker enqueues nothing for items it already stored on an e
   assert.equal(second[1].analyzeMessages, 0);
 
   // ...and a tick whose window slid forward by 3 articles enqueues exactly those 3.
-  mockVendors(t, () => finnhubArticles(163, { offset: 3 }));
+  articles = finnhubArticles(163, { offset: 3 });
   await tick();
   assert.equal(env.ANALYZE.sent.length, 166);
   assert.deepEqual(env.ANALYZE.sent.slice(163).map((m) => m.newsItem.title).sort(), ["Story 163 about Acme", "Story 164 about Acme", "Story 165 about Acme"]);
@@ -336,8 +337,8 @@ test("queue() ingest_feeds enqueues an already-stored article only for the ticke
       <description>Body text.</description>
     </item></channel></rss>`;
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, text: async () => feedXml }));
-  const tick = (feeds) => worker.queue(batchOf(new FakeMessage({ type: "ingest_feeds", asOf: "2026-09-18T00:00:00.000Z" })), baseEnv({ INPUTS_DB: db, ANALYZE: analyze, RSS_FEED_URLS: feeds }));
   const analyze = new FakeQueueBinding();
+  const tick = (feeds) => worker.queue(batchOf(new FakeMessage({ type: "ingest_feeds", asOf: "2026-09-18T00:00:00.000Z" })), baseEnv({ INPUTS_DB: db, ANALYZE: analyze, RSS_FEED_URLS: feeds }));
 
   await tick("AAPL|https://fake.test/feed.xml");
   await tick("AAPL|https://fake.test/feed.xml"); // same feed again: nothing new
