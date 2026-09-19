@@ -291,7 +291,7 @@ export function statCard(value, label, sub = null, accent = "var(--accent)") {
   </div>`;
 }
 
-// `totalExposurePct` is passed in (from storage/d1.js#getOpenPositionsExposureTotal,
+// `totalExposurePct` is passed in (from storage/run_store.js#RunStore.getOpenExposureTotal,
 // an unbounded aggregate) rather than derived from `openPositions` here -- that array
 // is capped by the Rows filter, so summing it client-side understated total exposure
 // once real open-position count exceeded the filter (plan.md Step 1).

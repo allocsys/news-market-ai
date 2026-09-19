@@ -1,19 +1,12 @@
 // Covers src/dashboard/api.js's 8 JSON /api/* routes (wired into
 // src/index.js -- see that file's "JSON API layer" block).
 //
-// Two DB fakes are used, same split-purpose convention as
-// test/dashboard_refresh.test.js vs. this file's own exposure test:
-//   - FakeDashboardDb: a generic empty-result D1 stub (same shape as
-//     dashboard_refresh.test.js/index_login.test.js's own copy) -- good
-//     enough to prove each route authenticates correctly, returns 200,
-//     JSON content-type, and the right top-level shape. Its prepare()
-//     supports BOTH `.prepare(sql).all()` directly (getDecisionStats'
-//     totals query does this, no .bind() call) and
-//     `.prepare(sql).bind(...).all()` (every other query here), by having
-//     bind() return the same object all()/first()/run() live on.
-//   - FakeExposureDb: a positions-aware fake, purpose-built to regression-
-//     test the actual bug Step 1 fixed -- total exposure must reflect
-//     EVERY open position, not just the ones a Rows-limited fetch returned.
+// Every panel runs against REAL sqlite-backed D1s (test/helpers/sqlite_d1.js):
+// LIVE_DB (state schema, run_id 'live'), INPUTS_DB (inputs schema) and SIM_DB
+// (state + sim schemas). Since M4 no route reads the old `DB` binding, and the
+// hand-written DB fakes this file used to carry are gone -- a fake that
+// returns [] for any SQL can't tell a working query from a broken one, whereas
+// these run the real migrations, so a wrong column or table name fails here.
 
 import test from "node:test";
 import { jobStateDb } from "./helpers/job_db.js";
@@ -22,91 +15,22 @@ import worker from "../src/index.js";
 import { createSessionCookie } from "../src/auth/session.js";
 import { loadConfig } from "../src/config.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
-import { SIM_DIR } from "./helpers/engine_ctx.js";
+import { STATE_DIR, INPUTS_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
+import { RunStore } from "../src/storage/run_store.js";
 import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
 
 function sessionCookieHeader(setCookieString) {
   return setCookieString.split(";")[0];
 }
 
-class FakeDashboardDb {
-  prepare() {
-    return {
-      bind() {
-        return this;
-      },
-      async all() {
-        return { results: [] };
-      },
-      async first() {
-        return undefined;
-      },
-      async run() {},
-    };
-  }
-}
-
-/**
- * Positions-aware fake for the exposure regression test. `positions` is a
- * flat array of `{ positionSizePct, closedAt }` (closedAt omitted/undefined
- * means still open). Dispatches on the SQL text the same way
- * storage/d1.js's real queries are shaped -- distinguishing the unbounded
- * SUM aggregate (getOpenPositionsExposureTotal) from the LIMIT-bound row
- * fetch (getAllOpenPositions) is the whole point of this fake.
- */
-class FakeExposureDb {
-  constructor(positions) {
-    this.positions = positions;
-  }
-  prepare(sql) {
-    const db = this;
-    const handle = {
-      _args: [],
-      bind(...args) {
-        handle._args = args;
-        return handle;
-      },
-      async all() {
-        if (/FROM positions WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT/.test(sql)) {
-          const limit = handle._args[handle._args.length - 1];
-          const open = db.positions.filter((p) => p.closedAt == null);
-          const rows = (limit != null ? open.slice(0, limit) : open).map((p, i) => ({
-            id: `pos-${i}`,
-            ticker: p.ticker ?? "AAPL",
-            trade_thesis_id: `thesis-${i}`,
-            position_size_pct: p.positionSizePct,
-            direction: p.direction ?? "long",
-            entry_price: null,
-            stop_loss_pct: null,
-            take_profit_pct: null,
-            opened_at: new Date(Date.UTC(2026, 0, i + 1)).toISOString(),
-          }));
-          return { results: rows };
-        }
-        if (/FROM positions WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT/.test(sql)) {
-          return { results: [] };
-        }
-        // Anything else this test doesn't care about (e.g. getDecisionStats'
-        // two queries, when this fake is reused for /api/snapshot) -- empty
-        // is a valid, harmless result for all of them.
-        return { results: [] };
-      },
-      async first() {
-        if (/SUM\(position_size_pct\)/.test(sql)) {
-          const open = db.positions.filter((p) => p.closedAt == null);
-          const totalPct = open.reduce((sum, p) => sum + p.positionSizePct, 0);
-          return { total_pct: totalPct, count: open.length };
-        }
-        return undefined;
-      },
-      async run() {},
-    };
-    return handle;
-  }
-}
-
+/** Empty but real databases: the state schema (LIVE_DB), the inputs schema, and the sim schema (SIM_DB). */
 function baseEnv(overrides = {}) {
-  return { DB: new FakeDashboardDb(), ...overrides };
+  return {
+    LIVE_DB: createTestD1([STATE_DIR]),
+    INPUTS_DB: createTestD1([INPUTS_DIR]),
+    SIM_DB: createTestD1([STATE_DIR, SIM_DIR]),
+    ...overrides,
+  };
 }
 
 function loginConfiguredEnv(overrides = {}) {
@@ -130,7 +54,7 @@ async function apiFetch(path, env, { cookie } = {}) {
 
 // One entry per /api/* route, with the top-level keys its data.js function
 // returns (see src/dashboard/data.js) -- used to assert response shape
-// without pinning to exact values, which the generic FakeDashboardDb can't
+// without pinning to exact values, which an empty database can't
 // meaningfully provide anyway.
 const API_ROUTES = [
   { path: "/api/snapshot", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "error"] },
@@ -171,6 +95,11 @@ for (const { path } of API_ROUTES) {
     assert.match(response.headers.get("content-type"), /application\/json/);
     const body = await response.json();
     assert.deepEqual(Object.keys(body).sort(), API_ROUTES.find((r) => r.path === path).keys.sort());
+    // Empty real DBs: every panel's query must actually RUN (a wrong table or
+    // column would surface as that panel's error, not as an empty list).
+    for (const [key, value] of Object.entries(body)) {
+      if (/error$/i.test(key)) assert.equal(value, null, `${path}: ${key} should be null on empty real databases`);
+    }
   });
 }
 
@@ -189,12 +118,18 @@ test("GET /api/snapshot returns 401 with a stale/forged session cookie (bad sign
 // positionsLimit=10 fetch returns -- would report 20% instead.
 // --------------------------------------------------------------------
 
-function twentyOpenPositionsAtTwoPercentEach() {
-  return Array.from({ length: 20 }, () => ({ positionSizePct: 0.02 }));
+/** A LIVE_DB holding `count` open positions at `pct` each -- distinct tickers, because the state schema allows one open position per ticker. */
+async function liveDbWithOpenPositions(count, pct = 0.02) {
+  const db = createTestD1([STATE_DIR]);
+  const store = new RunStore(db, "live");
+  for (let i = 0; i < count; i++) {
+    await store.openPosition({ id: `T${i}|t1`, ticker: `T${i}`, tradeThesisId: `T${i}|t1`, positionSizePct: pct, direction: "long", openedAt: new Date(Date.UTC(2026, 0, i + 1)).toISOString() });
+  }
+  return db;
 }
 
 test("GET /api/positions?positionsLimit=10 reports total exposure across ALL open positions, not just the 10 fetched rows", async () => {
-  const env = loginConfiguredEnv({ DB: new FakeExposureDb(twentyOpenPositionsAtTwoPercentEach()) });
+  const env = loginConfiguredEnv({ LIVE_DB: await liveDbWithOpenPositions(20) });
   const cookie = await loggedInCookie(env);
   const response = await apiFetch("/api/positions?positionsLimit=10", env, { cookie });
   assert.equal(response.status, 200);
@@ -205,7 +140,7 @@ test("GET /api/positions?positionsLimit=10 reports total exposure across ALL ope
 });
 
 test("GET /api/snapshot?positionsLimit=10 reports the same full-book total exposure as /api/positions, not the Rows-limited sum", async () => {
-  const env = loginConfiguredEnv({ DB: new FakeExposureDb(twentyOpenPositionsAtTwoPercentEach()) });
+  const env = loginConfiguredEnv({ LIVE_DB: await liveDbWithOpenPositions(20) });
   const cookie = await loggedInCookie(env);
   const response = await apiFetch("/api/snapshot?positionsLimit=10", env, { cookie });
   assert.equal(response.status, 200);
@@ -215,7 +150,7 @@ test("GET /api/snapshot?positionsLimit=10 reports the same full-book total expos
 });
 
 test("GET /api/positions with zero open positions reports 0% total exposure, not NaN or an error", async () => {
-  const env = loginConfiguredEnv({ DB: new FakeExposureDb([]) });
+  const env = loginConfiguredEnv({ LIVE_DB: await liveDbWithOpenPositions(0) });
   const cookie = await loggedInCookie(env);
   const response = await apiFetch("/api/positions", env, { cookie });
   assert.equal(response.status, 200);
@@ -340,4 +275,99 @@ test("GET /api/backtest-runs goes through a read-only SIM_DB handle: a write att
   const response = await apiFetch("/api/backtest-runs", env, { cookie });
   assert.equal(response.status, 200);
   assert.ok(seen.length > 0 && seen.every((sql) => /^\s*select\b/i.test(sql)));
+});
+
+// --------------------------------------------------------------------
+// M4: the state/inputs panels read LIVE_DB (run_id 'live') and INPUTS_DB, never
+// the old `DB` binding, and never another run_id's rows.
+// --------------------------------------------------------------------
+
+/** Live + inputs + sim DBs with a little of everything seeded; a decoy run 'bt-decoy' shares LIVE_DB to prove run scoping through the API. */
+async function seededEnv(extra = {}) {
+  const env = loginConfiguredEnv(extra);
+  const live = new RunStore(env.LIVE_DB, "live");
+  const decoy = new RunStore(env.LIVE_DB, "bt-decoy");
+  await live.openPosition({ id: "AAPL|1", ticker: "AAPL", tradeThesisId: "AAPL|1", positionSizePct: 0.1, direction: "long", entryPrice: 100, openedAt: "2026-01-01T00:00:00.000Z" });
+  await live.openPosition({ id: "MSFT|1", ticker: "MSFT", tradeThesisId: "MSFT|1", positionSizePct: 0.05, direction: "long", entryPrice: 200, openedAt: "2026-01-02T00:00:00.000Z" });
+  await decoy.openPosition({ id: "NVDA|1", ticker: "NVDA", tradeThesisId: "NVDA|1", positionSizePct: 0.9, direction: "long", entryPrice: 1, openedAt: "2026-01-03T00:00:00.000Z" });
+  const createdAt = new Date().toISOString();
+  await live.insertTradeDecision({ id: "AAPL|1", ticker: "AAPL", asOf: "2026-01-01T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: true }, portfolioDecision: null, status: "approved", createdAt });
+  await live.insertTradeDecision({ id: "MSFT|1", ticker: "MSFT", asOf: "2026-01-02T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: false }, portfolioDecision: null, status: "rejected", createdAt });
+  await decoy.insertTradeDecision({ id: "NVDA|1", ticker: "NVDA", asOf: "2026-01-03T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: true }, portfolioDecision: null, status: "approved", createdAt });
+  await live.saveCheckpoint({ pipelineRunId: "pipe-live", ticker: "AAPL", stage: "trader", state: null });
+  await decoy.saveCheckpoint({ pipelineRunId: "pipe-decoy", ticker: "NVDA", stage: "trader", state: null });
+  await env.INPUTS_DB.prepare(`INSERT INTO price_bars (ticker, date, open, high, low, close, volume, source, ingested_at) VALUES ('AAPL', '2026-01-01', 1, 1, 1, 101, 0, 't', '2026-01-01T00:00:00.000Z')`).run();
+  await env.INPUTS_DB.prepare(`INSERT INTO price_bars (ticker, date, open, high, low, close, volume, source, ingested_at) VALUES ('MSFT', '2026-01-01', 1, 1, 1, 202, 0, 't', '2026-01-01T00:00:00.000Z')`).run();
+  return env;
+}
+
+async function getJson(path, env) {
+  const response = await apiFetch(path, env, { cookie: await loggedInCookie(env) });
+  assert.equal(response.status, 200, path);
+  return response.json();
+}
+
+test("state panels serve LIVE_DB's own run_id only -- a second run in the same DB never appears in any route", async () => {
+  const env = await seededEnv();
+
+  const positions = await getJson("/api/positions", env);
+  assert.deepEqual(positions.openPositions.map((p) => p.ticker), ["MSFT", "AAPL"]);
+  assert.equal(Number(positions.totalExposurePct.toFixed(1)), 15, "0.10 + 0.05 -- the decoy's 0.9 is not counted");
+
+  const decisions = await getJson("/api/decisions", env);
+  assert.deepEqual(decisions.decisions.map((d) => d.ticker).sort(), ["AAPL", "MSFT"]);
+  const approved = await getJson("/api/decisions?decisionStatus=approved", env);
+  assert.deepEqual(approved.decisions.map((d) => d.ticker), ["AAPL"]);
+
+  const pipeline = await getJson("/api/pipeline", env);
+  assert.deepEqual(pipeline.checkpoints.map((c) => c.run_id), ["pipe-live"]);
+
+  const snapshot = await getJson("/api/snapshot", env);
+  assert.equal(snapshot.openPositions.length, 2);
+  assert.deepEqual(snapshot.decisionStats.totals, { approved: 1, rejected: 1 });
+  assert.equal(snapshot.error, null);
+
+  const activity = await getJson("/api/activity", env);
+  assert.deepEqual(activity.decisionStats.totals, { approved: 1, rejected: 1 });
+});
+
+test("inputs panels read INPUTS_DB: /api/health counts ingestion tables, /api/charts pulls bars for the open positions' tickers", async () => {
+  const env = await seededEnv();
+
+  const health = await getJson("/api/health", env);
+  assert.equal(health.error, null);
+  assert.equal(health.health.priceBars.count, 2);
+  assert.equal(health.health.news.count, 0);
+
+  const charts = await getJson("/api/charts", env);
+  assert.equal(charts.error, null);
+  assert.deepEqual(Object.keys(charts.priceBarsByTicker).sort(), ["AAPL", "MSFT"], "NVDA (the decoy run's position) gets no chart");
+  assert.deepEqual(charts.priceBarsByTicker.AAPL.map((b) => ({ ...b })), [{ date: "2026-01-01", close: 101 }]);
+});
+
+test("no dashboard route touches the old `DB` binding: a DB that throws on any use changes nothing", async () => {
+  const poisoned = { prepare() { throw new Error("the old DB binding must not be used by the dashboard"); }, batch() { throw new Error("old DB used"); } };
+  const env = await seededEnv({ DB: poisoned });
+
+  for (const { path } of API_ROUTES) {
+    const body = await getJson(path, env);
+    for (const [key, value] of Object.entries(body)) {
+      if (/error$/i.test(key)) assert.equal(value, null, `${path}: ${key} (a non-null error here means something read env.DB)`);
+    }
+  }
+});
+
+test("a failing LIVE_DB shows as that panel's inline error (200), not a 500 -- and the inputs panels are unaffected", async () => {
+  const broken = { prepare() { throw new Error("LIVE_DB unavailable"); } };
+  const env = await seededEnv();
+  env.LIVE_DB = broken; // seeded first, then taken down
+
+  const positions = await getJson("/api/positions", env);
+  assert.match(positions.openPositionsError, /LIVE_DB unavailable/);
+  assert.match(positions.closedPositionsError, /LIVE_DB unavailable/);
+  assert.deepEqual(positions.openPositions, []);
+
+  const health = await getJson("/api/health", env);
+  assert.equal(health.error, null);
+  assert.equal(health.health.priceBars.count, 2);
 });

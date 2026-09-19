@@ -4,26 +4,19 @@
 // `api.js`'s /api/* JSON handlers both call these same functions, so there
 // is exactly one place each section's D1 reads happen, not two copies that
 // could drift.
-import {
-  getRecentTradeDecisions,
-  getAllOpenPositions,
-  getRecentlyClosedPositions,
-  getRecentCheckpoints,
-  getIngestionHealth,
-  getDecisionStats,
-  getRecentPriceBars,
-  getOpenPositionsExposureTotal,
-} from "../storage/d1.js";
+import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.js";
 import { getRecentBacktestRuns } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
 import { parseDashboardParams, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
 
 /**
- * Read-only RunStore over LIVE_DB (run_id 'live') for the state-schema panels
- * that have moved off the old DB: the LLM-call log and job progress (M2b).
- * The dashboard API never writes, so the handle is wrapped in readOnly() --
- * a write method reaching D1 through it throws instead of running. The other
- * panels still read env.DB until M4 (which also adds an env selector).
+ * Read-only RunStore over LIVE_DB (run_id 'live'): every state-schema panel
+ * (positions, decisions, checkpoints, the LLM-call log, job progress). The
+ * dashboard API never writes, so the handle is wrapped in readOnly() -- a
+ * write method reaching D1 through it throws instead of running. Inputs
+ * panels (price charts, ingestion health) read readOnly(env.INPUTS_DB). As of
+ * M4 nothing here touches the old `DB` binding; the environment selector
+ * (reading a backtest's run_id off SIM_DB) is the next M4 step.
  */
 export function liveReadStore(env) {
   return new RunStore(readOnly(env.LIVE_DB), "live");
@@ -36,9 +29,12 @@ export function liveReadStore(env) {
  * Callers await this instead of the raw query and never need their own
  * try/catch.
  */
-async function safe(promise) {
+async function safe(promiseOrFn) {
   try {
-    return { data: await promise, error: null };
+    // A function is invoked inside the try, so a synchronous failure while
+    // building the query (a missing binding, readOnly() refusing) is reported
+    // as that panel's error instead of throwing through the caller.
+    return { data: await (typeof promiseOrFn === "function" ? promiseOrFn() : promiseOrFn), error: null };
   } catch (err) {
     console.error("dashboard panel query failed", { message: err.message });
     return { data: null, error: err.message || "failed to load" };
@@ -47,10 +43,10 @@ async function safe(promise) {
 
 export async function getSnapshotData(env, params) {
   const [openPositionsResult, closedPositionsResult, decisionStatsResult, exposureResult] = await Promise.all([
-    safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit })),
-    safe(getRecentlyClosedPositions(env.DB, { limit: 20 })),
-    safe(getDecisionStats(env.DB, { days: params.activityDays })),
-    safe(getOpenPositionsExposureTotal(env.DB)),
+    safe(() => liveReadStore(env).listOpenPositions({ limit: params.positionsLimit })),
+    safe(() => liveReadStore(env).listRecentlyClosedPositions({ limit: 20 })),
+    safe(() => liveReadStore(env).getDecisionStats({ days: params.activityDays })),
+    safe(() => liveReadStore(env).getOpenExposureTotal()),
   ]);
   // The stat grid is one combined panel drawn from all four queries, so a
   // failure in any of them is reported as one error for the section --
@@ -66,12 +62,12 @@ export async function getSnapshotData(env, params) {
 }
 
 export async function getActivityData(env, params) {
-  const decisionStatsResult = await safe(getDecisionStats(env.DB, { days: params.activityDays }));
+  const decisionStatsResult = await safe(() => liveReadStore(env).getDecisionStats({ days: params.activityDays }));
   return { decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} }, error: decisionStatsResult.error };
 }
 
 export async function getChartsData(env, params) {
-  const openPositionsResult = await safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit }));
+  const openPositionsResult = await safe(() => liveReadStore(env).listOpenPositions({ limit: params.positionsLimit }));
   let priceBarsByTicker = {};
   const error = openPositionsResult.error;
   if (!error) {
@@ -79,7 +75,7 @@ export async function getChartsData(env, params) {
     const chartTickers = [...new Set(openPositions.map((p) => p.ticker))].slice(0, PRICE_CHART_TICKER_LIMIT);
     const entries = await Promise.all(
       chartTickers.map(async (ticker) => {
-        const result = await safe(getRecentPriceBars(env.DB, { ticker, limit: 30 }));
+        const result = await safe(() => getRecentPriceBars(readOnly(env.INPUTS_DB), { ticker, limit: 30 }));
         return [ticker, result];
       })
     );
@@ -93,22 +89,22 @@ export async function getChartsData(env, params) {
 }
 
 export async function getHealthData(env) {
-  const healthResult = await safe(getIngestionHealth(env.DB));
+  const healthResult = await safe(() => getIngestionHealth(readOnly(env.INPUTS_DB)));
   return { health: healthResult.data, error: healthResult.error };
 }
 
 export async function getDecisionsData(env, params) {
-  const decisionsResult = await safe(
-    getRecentTradeDecisions(env.DB, { limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus })
+  const decisionsResult = await safe(() =>
+    liveReadStore(env).listRecentTradeDecisions({ limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus })
   );
   return { decisions: decisionsResult.data ?? [], error: decisionsResult.error };
 }
 
 export async function getPositionsData(env, params) {
   const [openPositionsResult, closedPositionsResult, exposureResult] = await Promise.all([
-    safe(getAllOpenPositions(env.DB, { limit: params.positionsLimit })),
-    safe(getRecentlyClosedPositions(env.DB, { limit: 20 })),
-    safe(getOpenPositionsExposureTotal(env.DB)),
+    safe(() => liveReadStore(env).listOpenPositions({ limit: params.positionsLimit })),
+    safe(() => liveReadStore(env).listRecentlyClosedPositions({ limit: 20 })),
+    safe(() => liveReadStore(env).getOpenExposureTotal()),
   ]);
   // Open and closed positions are two sub-panels on one page that must fail
   // independently -- each gets its own error, not one shared one. The
@@ -124,7 +120,7 @@ export async function getPositionsData(env, params) {
 }
 
 export async function getPipelineData(env) {
-  const checkpointsResult = await safe(getRecentCheckpoints(env.DB, { limit: 30 }));
+  const checkpointsResult = await safe(() => liveReadStore(env).listRecentCheckpoints({ limit: 30 }));
   return { checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error };
 }
 

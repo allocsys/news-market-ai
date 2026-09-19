@@ -12,7 +12,7 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
   const longCount = openPositions.filter((p) => p.direction === "long").length;
   const shortCount = openPositions.filter((p) => p.direction === "short").length;
   const otherCount = openPositions.length - longCount - shortCount;
-  // totalExposurePct comes in as a prop (storage/d1.js#getOpenPositionsExposureTotal,
+  // totalExposurePct comes in as a prop (storage/run_store.js#RunStore.getOpenExposureTotal,
   // an unbounded aggregate) -- see helpers.js#renderSummaryCards's own comment for why
   // this is no longer derived from the (Rows-limited) openPositions array here.
   // Counts of open positions by direction only. There is deliberately no "cash" slice:

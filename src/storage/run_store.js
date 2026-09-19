@@ -9,9 +9,9 @@
 //
 // M2: the old scope-less state functions in storage/d1.js are gone -- this
 // class is the only path to the state tables. Input reads (news/prices/
-// fundamentals) live in storage/inputs_view.js. The remaining d1.js functions
-// are the dashboard's old-DB reads and the backtest_runs registry, which move
-// in M4/M3.
+// fundamentals) live in storage/inputs_view.js. M4 moved the dashboard's
+// "current state" reads here too (the "Dashboard reads" section below) and
+// deleted d1.js; the backtest_runs registry is storage/sim_registry.js.
 
 import { LookaheadViolationError } from "../shared/errors.js";
 import { MAX_PORTFOLIO_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
@@ -454,6 +454,164 @@ export class RunStore {
 
     if (!row) return null;
     return { stage: row.stage, state: row.state ? JSON.parse(row.state) : null, updatedAt: row.updated_at };
+  }
+
+  // -------------------------------------------------------------------
+  // Dashboard reads (M4) -- unrestricted "current state" queries for the
+  // human-facing dashboard, scoped to THIS environment (run_id). They are
+  // deliberately NOT asOf-gated: the required-asOf convention above exists to
+  // stop an AGENT seeing future data during a simulated run; these describe
+  // what has already happened in this environment and never feed an agent
+  // prompt. Do not reuse them for anything that does. Pass a
+  // readOnly(db)-wrapped handle (the dashboard never writes).
+  // -------------------------------------------------------------------
+
+  /** Positions currently open (closed_at IS NULL), newest first. */
+  async listOpenPositions({ limit = 50 } = {}) {
+    const { results } = await this.db
+      .prepare(
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+         FROM positions WHERE run_id = ? AND closed_at IS NULL ORDER BY opened_at DESC LIMIT ?`
+      )
+      .bind(this.runId, limit)
+      .all();
+
+    return results.map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      tradeThesisId: r.trade_thesis_id,
+      positionSizePct: r.position_size_pct,
+      direction: r.direction,
+      entryPrice: r.entry_price,
+      stopLossPct: r.stop_loss_pct,
+      takeProfitPct: r.take_profit_pct,
+      openedAt: r.opened_at,
+    }));
+  }
+
+  /**
+   * Total exposure across EVERY open position in this environment, not just
+   * whatever page listOpenPositions fetched (summing that page client-side
+   * quietly understated exposure once open positions exceeded the Rows
+   * filter -- plan.md Step 1). A plain aggregate: no LIMIT, no asOf.
+   */
+  async getOpenExposureTotal() {
+    const row = await this.db
+      .prepare(`SELECT COALESCE(SUM(position_size_pct), 0) AS total_pct, COUNT(*) AS count FROM positions WHERE run_id = ? AND closed_at IS NULL`)
+      .bind(this.runId)
+      .first();
+
+    return { totalPct: row?.total_pct ?? 0, count: row?.count ?? 0 };
+  }
+
+  /**
+   * Most recently closed positions. `exitPrice` is nullable (a time_based
+   * exit with no price_bars data, same honest gap as a null entry_price);
+   * the realized return is not computed here -- graph/settle.js writes it to
+   * decision_memory at close time.
+   */
+  async listRecentlyClosedPositions({ limit = 20 } = {}) {
+    const { results } = await this.db
+      .prepare(
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, exit_price, opened_at, closed_at, close_reason
+         FROM positions WHERE run_id = ? AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT ?`
+      )
+      .bind(this.runId, limit)
+      .all();
+
+    return results.map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      tradeThesisId: r.trade_thesis_id,
+      positionSizePct: r.position_size_pct,
+      direction: r.direction,
+      entryPrice: r.entry_price,
+      exitPrice: r.exit_price,
+      openedAt: r.opened_at,
+      closedAt: r.closed_at,
+      closeReason: r.close_reason,
+    }));
+  }
+
+  /** Most recent trade_decisions rows, newest first. `status`, if given, filters to that exact status ("approved"/"rejected"/...). */
+  async listRecentTradeDecisions({ limit = 20, status } = {}) {
+    const cols = `id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate`;
+    const { results } = status
+      ? await this.db
+          .prepare(`SELECT ${cols} FROM trade_decisions WHERE run_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?`)
+          .bind(this.runId, status, limit)
+          .all()
+      : await this.db
+          .prepare(`SELECT ${cols} FROM trade_decisions WHERE run_id = ? ORDER BY created_at DESC LIMIT ?`)
+          .bind(this.runId, limit)
+          .all();
+
+    return results.map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      asOf: r.as_of,
+      debateId: r.debate_id,
+      thesis: JSON.parse(r.thesis),
+      riskDecision: JSON.parse(r.risk_decision),
+      portfolioDecision: r.portfolio_decision ? JSON.parse(r.portfolio_decision) : null,
+      status: r.status,
+      createdAt: r.created_at,
+      // Nullable: rows written before the LLM reasoning chain was recorded
+      // have neither column; the dashboard renders an honest "not recorded".
+      opinions: r.opinions ? JSON.parse(r.opinions) : null,
+      debate: r.debate ? JSON.parse(r.debate) : null,
+    }));
+  }
+
+  /**
+   * Most recently updated pipeline_checkpoints rows, across every (pipeline
+   * run, ticker) in this environment. A proxy for "recent pipeline
+   * activity", not a strict health signal -- a stuck run just stops appearing
+   * rather than showing a failure state. `run_id` in the result is the
+   * PIPELINE run id (the column is aliased so the dashboard view keeps its
+   * shape); the environment is this store's own scope.
+   */
+  async listRecentCheckpoints({ limit = 30 } = {}) {
+    const { results } = await this.db
+      .prepare(`SELECT pipeline_run_id AS run_id, ticker, stage, updated_at FROM pipeline_checkpoints WHERE run_id = ? ORDER BY updated_at DESC LIMIT ?`)
+      .bind(this.runId, limit)
+      .all();
+
+    return results;
+  }
+
+  /**
+   * Trade-decision counts by status (all-time totals) plus a per-day
+   * breakdown for the last `days` days, both by status -- the activity
+   * chart's stacked bars. `day` buckets on created_at's first 10 characters
+   * (an ISO string's UTC date) via substr, not strftime, so it needs no
+   * datetime parsing. The window is relative to the wall clock -- right for
+   * a live environment; a finished backtest's decisions are dated in the
+   * past, so a window over one is the environment selector's problem.
+   */
+  async getDecisionStats({ days = 14 } = {}) {
+    const totalsResult = await this.db
+      .prepare(`SELECT status, COUNT(*) AS count FROM trade_decisions WHERE run_id = ? GROUP BY status`)
+      .bind(this.runId)
+      .all();
+
+    const dailyResult = await this.db
+      .prepare(
+        `SELECT substr(created_at, 1, 10) AS day, status, COUNT(*) AS count
+         FROM trade_decisions
+         WHERE run_id = ? AND created_at >= datetime('now', ?)
+         GROUP BY day, status
+         ORDER BY day ASC`
+      )
+      .bind(this.runId, `-${days} days`)
+      .all();
+
+    const totals = totalsResult.results.reduce((acc, r) => {
+      acc[r.status] = r.count;
+      return acc;
+    }, {});
+
+    return { totals, daily: dailyResult.results, days };
   }
 
   // -------------------------------------------------------------------

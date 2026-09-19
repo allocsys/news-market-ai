@@ -10,32 +10,17 @@
 // rather than hand-building JSON fixtures -- this exercises the actual
 // /api/* and /backfill//backtest/run contracts dashboard-worker.js depends
 // on, not a guessed shape of them, at the cost of this file also owning a
-// FakeDashboardDb/FakeNewsDb the way index_login.test.js/index_backfill.test.js
+// FakeNewsDb (and real empty sqlite DBs for the panels) the way index_login.test.js/index_backfill.test.js
 // used to.
 
 import test from "node:test";
 import { jobStateDb } from "./helpers/job_db.js";
+import { createTestD1 } from "./helpers/sqlite_d1.js";
+import { STATE_DIR, INPUTS_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
 import assert from "node:assert/strict";
 import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
 import { renderShell } from "../src/dashboard/shell.js";
-
-class FakeDashboardDb {
-  prepare() {
-    return {
-      bind() {
-        return this;
-      },
-      async all() {
-        return { results: [] };
-      },
-      async first() {
-        return undefined;
-      },
-      async run() {},
-    };
-  }
-}
 
 class FakeNewsDb {
   constructor() {
@@ -64,7 +49,7 @@ function makeBackend(backendEnv, backendCtx = { promises: [], waitUntil(p) { thi
 }
 
 function baseEnv(overrides = {}) {
-  return { BACKEND: makeBackend({ DB: new FakeDashboardDb() }), ...overrides };
+  return { BACKEND: makeBackend({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: createTestD1([INPUTS_DIR]), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) }), ...overrides };
 }
 
 function loginConfiguredEnv(overrides = {}) {
