@@ -104,6 +104,10 @@ export default {
           const reason = "backtests move to the backtest Worker in M3";
           console.error("backtest job rejected: " + reason, { id, tickers });
           const reporter = createJobReporter(env.DB, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } });
+          // start() first: it upserts the row to 'running' whether or not a
+          // 'queued' row exists (a message already on the queue predates the
+          // disabled route), and fail() only updates a queued/running row.
+          await reporter.start();
           await reporter.fail(reason);
         } else if (job.type === "exit_check") {
           // Own message, own queue (plan.md Step 4) -- isolated from

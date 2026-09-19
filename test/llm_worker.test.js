@@ -13,6 +13,11 @@
 // those from anymore) and one proving `backend`'s old message types don't
 // leak back in here by accident.
 //
+// M2: analyze/exit_check now build their engine ctx from LIVE_DB + INPUTS_DB
+// (real sqlite here, see engineBindings()); the `backtest` message type is
+// rejected loudly instead of run (backtests move to the M3 backtest Worker).
+// llm_calls (retention prune) still rides env.DB until M2b.
+//
 // SCOPE NOTE on `analyze`: only the retry-on-failure path is covered here.
 // A full success round-trip through runPipelineForTicker needs the same
 // heavyweight FakePipelineDb + config.fakeModel machinery
@@ -33,7 +38,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/llm-worker.js";
-import { getRecentBacktestRuns } from "../src/storage/d1.js";
+import { createTestD1 } from "./helpers/sqlite_d1.js";
+import { STATE_DIR, INPUTS_DIR } from "./helpers/engine_ctx.js";
+
+/** Real sqlite LIVE_DB + INPUTS_DB, the two bindings llm-worker.js builds its engine ctx from (M2). */
+function engineBindings() {
+  return { LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: createTestD1([INPUTS_DIR]) };
+}
+
+/** A db whose every statement throws -- simulates a D1 outage. */
+class ThrowingDb {
+  prepare() {
+    throw new Error("simulated D1 read failure");
+  }
+}
 
 class FakeMessage {
   constructor(body) {
@@ -122,14 +140,15 @@ class FakeNoPositionsDb {
 // backtest (LLM_JOBS)
 // ---------------------------------------------------------------------------
 
-test("queue() processes a backtest job: runs runManualBacktest, persists a completed backtest_runs row, then acks", async () => {
-  const db = new FakeBacktestRunsDb();
-  const env = { DB: db };
-  // structured.js's config.fakeModel isn't wired through queue() -- this
-  // test only needs runManualBacktest to be CALLED and to persist a row;
-  // it doesn't need the "on signal" side's real Gemini path to succeed, so
-  // a window with no backfilled news (onSignalRunner reads nothing, no LLM
-  // calls) is enough to exercise the whole plumbing without live traffic.
+test("queue() REJECTS a backtest job loudly (M2): marks the job failed with an M3 pointer, runs nothing, then acks", async (t) => {
+  // job_progress still lives on the old env.DB until M2b; the state schema
+  // carries the same table, so a state-shaped sqlite DB stands in for it.
+  const db = createTestD1([STATE_DIR]);
+  const bindings = engineBindings();
+  const env = { DB: db, ...bindings };
+  const errorLogs = [];
+  t.mock.method(console, "error", (...args) => errorLogs.push(args));
+
   const message = new FakeMessage({
     type: "backtest",
     id: "backtest-1",
@@ -138,14 +157,23 @@ test("queue() processes a backtest job: runs runManualBacktest, persists a compl
     testEnd: "2024-01-02T00:00:00.000Z",
     graceDays: 0,
   });
-
   await worker.queue(batchOf(message), env);
 
+  // Acked, not retried: a retry would fail identically.
   assert.equal(message.acked, true);
   assert.equal(message.retried, false);
-  const [run] = await getRecentBacktestRuns(db, { limit: 10 });
-  assert.equal(run.id, "backtest-1");
-  assert.ok(run.status === "complete" || run.status === "failed"); // runManualBacktest never throws -- see its own header
+  assert.ok(errorLogs.some(([msg]) => msg.includes("backtest job rejected")));
+
+  // Failed loudly on the job row, with the reason the dashboard will show.
+  const job = await db.prepare("SELECT status, error FROM job_progress WHERE id = ?").bind("backtest-1").first();
+  assert.equal(job.status, "failed");
+  assert.match(job.error, /backtest Worker in M3/);
+
+  // Nothing ran: no engine state written to either binding.
+  for (const table of ["positions", "trade_decisions", "decision_memory", "pipeline_checkpoints"]) {
+    const { results } = await bindings.LIVE_DB.prepare(`SELECT * FROM ${table}`).all();
+    assert.equal(results.length, 0, `${table} must stay empty`);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -153,7 +181,7 @@ test("queue() processes a backtest job: runs runManualBacktest, persists a compl
 // ---------------------------------------------------------------------------
 
 test("queue() exit_check runs checkOpenPositionExits and acks", async () => {
-  const env = { DB: new FakeNoPositionsDb() };
+  const env = { DB: new FakeNoPositionsDb(), ...engineBindings() };
 
   const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
   await worker.queue(batchOf(message), env);
@@ -163,12 +191,8 @@ test("queue() exit_check runs checkOpenPositionExits and acks", async () => {
 });
 
 test("queue() exit_check acks (does not retry) on failure -- next scheduled tick re-evaluates every still-open position regardless", async (t) => {
-  class ThrowingPositionsDb {
-    prepare() {
-      throw new Error("simulated D1 read failure");
-    }
-  }
-  const env = { DB: new ThrowingPositionsDb() };
+  // The live state DB is what exit_check reads open positions from (M2).
+  const env = { DB: new FakeNoPositionsDb(), LIVE_DB: new ThrowingDb(), INPUTS_DB: createTestD1([INPUTS_DIR]) };
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -211,7 +235,7 @@ class PrunableDb extends FakeNoPositionsDb {
 const DAY_MS = 24 * 3600 * 1000;
 
 test("queue() exit_check prunes LLM call log rows older than the retention window (14 days by default)", async () => {
-  const env = { DB: new PrunableDb() };
+  const env = { DB: new PrunableDb(), ...engineBindings() };
   const before = Date.now();
   const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
   await worker.queue(batchOf(message), env);
@@ -223,7 +247,7 @@ test("queue() exit_check prunes LLM call log rows older than the retention windo
 });
 
 test("queue() exit_check honors LLM_LOG_RETENTION_DAYS", async () => {
-  const env = { DB: new PrunableDb(), LLM_LOG_RETENTION_DAYS: "3" };
+  const env = { DB: new PrunableDb(), ...engineBindings(), LLM_LOG_RETENTION_DAYS: "3" };
   const before = Date.now();
   await worker.queue(batchOf(new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" })), env);
 
@@ -231,7 +255,7 @@ test("queue() exit_check honors LLM_LOG_RETENTION_DAYS", async () => {
 });
 
 test("queue() exit_check skips the prune entirely when LLM_LOG_ENABLED is \"false\"", async () => {
-  const env = { DB: new PrunableDb(), LLM_LOG_ENABLED: "false" };
+  const env = { DB: new PrunableDb(), ...engineBindings(), LLM_LOG_ENABLED: "false" };
   const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
   await worker.queue(batchOf(message), env);
 
@@ -242,7 +266,7 @@ test("queue() exit_check skips the prune entirely when LLM_LOG_ENABLED is \"fals
 test("queue() exit_check still acks when the prune itself fails -- a log-retention hiccup must not look like a failed exit check", async (t) => {
   const warnings = [];
   t.mock.method(console, "warn", (...args) => warnings.push(args));
-  const env = { DB: new PrunableDb({ failDelete: true }) };
+  const env = { DB: new PrunableDb({ failDelete: true }), ...engineBindings() };
   const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
   await worker.queue(batchOf(message), env);
 
@@ -256,12 +280,9 @@ test("queue() exit_check still acks when the prune itself fails -- a log-retenti
 // ---------------------------------------------------------------------------
 
 test("queue() analyze RETRIES (does not ack) on failure -- the one deliberate exception to every other message type in this handler, since runPipelineForTicker is checkpoint-resumable", async (t) => {
-  class ThrowingCheckpointDb {
-    prepare() {
-      throw new Error("simulated D1 failure reading the checkpoint");
-    }
-  }
-  const env = { DB: new ThrowingCheckpointDb() };
+  // The checkpoint read is the first thing runPipelineForTicker does, and it
+  // goes through the live RunStore (LIVE_DB) since M2.
+  const env = { DB: new FakeNoPositionsDb(), LIVE_DB: new ThrowingDb(), INPUTS_DB: createTestD1([INPUTS_DIR]) };
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
