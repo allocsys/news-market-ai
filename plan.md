@@ -331,7 +331,9 @@ namespace, so three D1s and a second KV isolate state but add no quota.
     selector (a `?env=` reading a backtest's `run_id` off SIM_DB; note
     `getDecisionStats`' "last N days" window is wall-clock relative, so it needs an
     anchor for a finished backtest). The cron question below is now resolved.
-- **M5 — remove the old DB from code and config (done, PR pending):** the `DB`
+- **M5 — remove the old DB from code and config (done 2026-09-20, PR #57, merge
+  commit `205e4da`; the post-merge run passed test, migrate and all five deploy
+  jobs):** the `DB`
   binding (`news_market_ai`) is gone from `wrangler.toml`, `wrangler.ingest.toml`
   and `wrangler.llm.toml`; `db:migrate:{local,remote}` are deleted and the `:all`
   chains now run inputs, live and sim only; `deploy.yml` lost its four "Ensure D1
