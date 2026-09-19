@@ -219,3 +219,113 @@ test("GET /api/positions with zero open positions reports 0% total exposure, not
   assert.equal(body.openPositions.length, 0);
   assert.equal(body.totalExposurePct, 0);
 });
+
+// --------------------------------------------------------------------
+// GET /api/jobs/active -- lets the backfill/backtest pages show progress
+// for a job submitted earlier (src/storage/jobs.js's getActiveJob), rather
+// than only the by-id lookup GET /api/jobs/:id supports.
+// --------------------------------------------------------------------
+
+/**
+ * Answers job_progress reads for a single canned row (or none). Mirrors
+ * FakeDashboardDb's bind()-returns-this shape; `first()` returns the row
+ * only for a SELECT against job_progress, so this fake is safe to reuse for
+ * any other query this route might one day also issue.
+ */
+class FakeJobDb {
+  constructor(row = undefined) {
+    this.row = row;
+    this.calls = [];
+  }
+  prepare(sql) {
+    const db = this;
+    const handle = {
+      _args: [],
+      bind(...args) {
+        handle._args = args;
+        return handle;
+      },
+      async first() {
+        db.calls.push({ sql, args: handle._args });
+        return /FROM job_progress/.test(sql) ? db.row : undefined;
+      },
+      async all() {
+        return { results: [] };
+      },
+      async run() {},
+    };
+    return handle;
+  }
+}
+
+const ACTIVE_JOB_ROW = {
+  id: "backtest-1789783849291-cx0mfj",
+  type: "backtest",
+  status: "running",
+  phase: "simulating",
+  percent: 42,
+  done: 12,
+  total: 30,
+  detail: "Simulating day 12/30",
+  params: '{"tickers":["AAPL"],"testStart":"2024-01-01","testEnd":"2024-03-31"}',
+  result: null,
+  error: null,
+  created_at: "2026-09-19T11:58:00.000Z",
+  started_at: "2026-09-19T11:58:05.000Z",
+  updated_at: "2026-09-19T11:59:30.000Z",
+  finished_at: null,
+};
+
+test("GET /api/jobs/active returns 401 JSON when login is configured and there's no session cookie", async () => {
+  const response = await apiFetch("/api/jobs/active?type=backfill", loginConfiguredEnv());
+  assert.equal(response.status, 401);
+  assert.match(response.headers.get("content-type"), /application\/json/);
+  const body = await response.json();
+  assert.equal(body.error, "unauthorized");
+});
+
+test("GET /api/jobs/active renders (200 JSON) when login isn't configured at all -- same as every other /api/* route", async () => {
+  const response = await apiFetch("/api/jobs/active?type=backfill", baseEnv({ DB: new FakeJobDb() }));
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type"), /application\/json/);
+});
+
+test("GET /api/jobs/active without a type query param returns 400, not a lookup with type=null", async () => {
+  const env = loginConfiguredEnv({ DB: new FakeJobDb() });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/active", env, { cookie });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.match(body.error, /type must be one of/);
+});
+
+test("GET /api/jobs/active?type=exit_check (not backfill/backtest) returns 400", async () => {
+  const env = loginConfiguredEnv({ DB: new FakeJobDb() });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/active?type=exit_check", env, { cookie });
+  assert.equal(response.status, 400);
+});
+
+test("GET /api/jobs/active?type=backfill returns { job: null } (200, not 404) when nothing is in flight -- 'nothing running' is an ordinary answer", async () => {
+  const env = loginConfiguredEnv({ DB: new FakeJobDb(undefined) });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/active?type=backfill", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body, { job: null });
+});
+
+test("GET /api/jobs/active?type=backtest returns the newest in-flight job, camelCased and JSON-parsed, when the store has one", async () => {
+  const db = new FakeJobDb(ACTIVE_JOB_ROW);
+  const env = loginConfiguredEnv({ DB: db });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/active?type=backtest", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.job.id, "backtest-1789783849291-cx0mfj");
+  assert.equal(body.job.percent, 42);
+  assert.deepEqual(body.job.params, { tickers: ["AAPL"], testStart: "2024-01-01", testEnd: "2024-03-31" });
+  assert.equal(body.job.updatedAt, "2026-09-19T11:59:30.000Z");
+  // The route asks getActiveJob for THIS type, not any type.
+  assert.equal(db.calls[0].args[0], "backtest");
+});
