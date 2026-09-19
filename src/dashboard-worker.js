@@ -18,7 +18,7 @@
 import { loadConfig } from "./config.js";
 import { renderLoginPage } from "./login.js";
 import { renderShell } from "./dashboard/shell.js";
-import { renderRunAcceptedPage } from "./dashboard/views/status.js";
+import { renderRunAcceptedPage, renderActiveJobPanel } from "./dashboard/views/status.js";
 import { renderSnapshotView } from "./dashboard/views/snapshot.js";
 import { renderActivityView } from "./dashboard/views/activity.js";
 import { renderChartsView } from "./dashboard/views/charts.js";
@@ -85,6 +85,24 @@ async function fetchBackendJson(env, path) {
 }
 
 /**
+ * HTML for the live-progress panel of the newest in-flight job of `type`
+ * ('backfill' | 'backtest'), or "" if none. Lets the backfill/backtest pages
+ * show progress for a job submitted earlier -- the run-accepted page that
+ * used to be the only place a bar appeared is gone once the operator
+ * navigates away. BEST-EFFORT: a failed lookup must never take the page
+ * down, so any error just means no panel.
+ */
+async function activeJobPanelFor(env, type) {
+  try {
+    const { job } = await fetchBackendJson(env, `/api/jobs/active?type=${encodeURIComponent(type)}`);
+    return renderActiveJobPanel(job);
+  } catch (err) {
+    console.warn("dashboard active-job lookup failed (non-fatal)", { type, message: err.message });
+    return "";
+  }
+}
+
+/**
  * Session gate shared by every /dashboard/* route. `__disabled__` means the
  * login isn't configured at all -- distinct from `redirect: "/login"`
  * (configured, but this request has no valid session) so callers can 503
@@ -138,7 +156,8 @@ async function renderSection(request, env, config, section) {
   try {
     const data = await fetchBackendJson(env, apiPath);
     const props = SECTIONS_NEEDING_PARAMS.has(section) ? { ...data, params: parseDashboardParams(url.searchParams) } : data;
-    const bodyHtml = render(props);
+    const activePanel = section === "backtest" ? await activeJobPanelFor(env, "backtest") : "";
+    const bodyHtml = activePanel + render(props);
     return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }));
   } catch (err) {
     // backend unreachable, or returned something unexpected -- rendered as
@@ -238,7 +257,8 @@ export default {
       if (auth.redirect) return redirect(auth.redirect);
 
       if (pathname === "/dashboard/backfill") {
-        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: renderBackfillView() }));
+        const activePanel = await activeJobPanelFor(env, "backfill");
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView() }));
       }
       if (pathname === "/dashboard/backfill/confirm") {
         const bodyHtml = renderBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to") });
