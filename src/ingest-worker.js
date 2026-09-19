@@ -13,8 +13,9 @@
 // ingestPriceBars/ingestFundamentals and each adapter's entity-resolution
 // wiring) -- no other Worker in this repo has a reason to hold a Finnhub
 // key or EDGAR User-Agent identity after this step. It binds D1 directly
-// (per plan.md's Roadmap rule: "all Workers bind the same D1", only
-// `backend` runs migrations) rather than going through a service binding,
+// (M2: the INPUTS_DB binding -- this Worker is the only read-write writer
+// of the inputs database besides backend's backfill; only `backend` runs
+// migrations) rather than going through a service binding,
 // since ingestTickerData/ingestFeedNews both write straight to D1
 // (insertNewsItem/insertPriceBar/insertFundamentalFacts) -- there's no
 // synchronous caller waiting on a response the way dashboard->backend's
@@ -30,7 +31,7 @@
 // same safety-net split as backend's queue().
 
 import { loadConfig } from "./config.js";
-import { ingestTickerData, ingestFeedNews } from "./graph/pipeline.js";
+import { ingestTickerData, ingestFeedNews } from "./ingestion/ingest.js";
 
 export default {
   async fetch() {
@@ -55,7 +56,7 @@ export default {
           // ingest_ticker message for this same ticker just tries again.
           const { ticker, asOf } = job;
           try {
-            const insertedNews = await ingestTickerData(config, env.DB, env.CACHE_KV, { ticker, asOf });
+            const insertedNews = await ingestTickerData(config, env.INPUTS_DB, env.CACHE_KV, { ticker, asOf });
             const analyzeMessages = insertedNews.map((item) => ({
               body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt },
             }));
@@ -70,7 +71,7 @@ export default {
           // this enqueues one ANALYZE message per (item, ticker) pair,
           // same loop shape ingest_ticker's single-ticker case doesn't need.
           try {
-            const insertedNews = await ingestFeedNews(config, env.DB, env.CACHE_KV);
+            const insertedNews = await ingestFeedNews(config, env.INPUTS_DB, env.CACHE_KV);
             const analyzeMessages = [];
             for (const item of insertedNews) {
               for (const ticker of item.tickers) {

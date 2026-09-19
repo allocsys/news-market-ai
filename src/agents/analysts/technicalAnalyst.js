@@ -2,7 +2,7 @@
 // (see newsEventAnalyst.js's header for the shared Analyst Team reasoning).
 // Unlike those two, this agent's input is not free text -- it's a grounded
 // numeric snapshot from technicalIndicators.js#computeTechnicalSnapshot,
-// computed off real storage/d1.js#getPriceBarsAsOf rows (plan.md Adopted
+// computed off real storage/inputs_view.js#getPriceBarsAsOf rows (plan.md Adopted
 // Pattern #9: the model interprets real numbers, it never invents them).
 //
 // HONEST SCOPE: price_bars is only populated once yfinance ingestion is
@@ -19,7 +19,7 @@ import { AnalystOpinion } from "../../schemas/index.js";
 import { computeTechnicalSnapshot } from "./technicalIndicators.js";
 
 /**
- * `bars` should come from storage/d1.js#getPriceBarsAsOf (most-recent-first
+ * `bars` should come from storage/inputs_view.js#getPriceBarsAsOf (most-recent-first
  * order) for this ticker/asOf -- passed in rather than fetched here so this
  * stays a plain function like the other analysts, with DB access kept in
  * graph/pipeline.js.

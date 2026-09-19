@@ -12,7 +12,7 @@
 // -- i.e. the date the fact actually became public -- separately from the
 // fiscal period it describes. A later 10-K/A restating an earlier period
 // shows up as a distinct fact with a later `filed` date. That `filed` date
-// is exactly what storage/d1.js#getFundamentalFactsAsOf filters on, so
+// is exactly what storage/inputs_view.js#getFundamentalFactsAsOf filters on, so
 // "what did we know as of T" is answerable for real, not just documented as
 // a gap -- see that function's header for the query.
 //
@@ -140,7 +140,7 @@ export async function fetchFacts(config, { ticker, tag, cik: explicitCik }) {
       // migrations/0005_fundamental_facts.sql) and validateFundamentalFact
       // below does not check these fields -- an entry missing fy/fp (some
       // older companyfacts frames omit them entirely) previously reached
-      // storage/d1.js#insertFundamentalFact uncaught, threw a
+      // storage/inputs_view.js#insertFundamentalFact uncaught, threw a
       // SQLITE_CONSTRAINT error, and killed the whole scheduled run before
       // news/analyst/debate/trade stages ever ran. Skip rather than insert
       // garbage, same convention as the filed/val checks above.

@@ -5,15 +5,17 @@
 // total portfolio risk budget. Deliberately NOT an LLM call, same reasoning
 // as risk.js: this is the layer that has to be trustworthy and reproducible.
 //
-// UPDATE: a real positions store now exists (migrations/0003_positions.sql,
-// storage/d1.js#openPosition/closePosition/getOpenPositionsRiskPctAsOf),
+// UPDATE: a real positions store now exists (storage/run_store.js: RunStore
+// #openPosition/closePosition/getOpenPositionsRiskPctAsOf, run_id-scoped),
 // and graph/pipeline.js passes a real point-in-time openPositionsRiskPct
-// instead of a hardcoded 0.
+// instead of a hardcoded 0. The ceiling itself lives in
+// shared/constants.js (M2): RunStore#commitThesis enforces the SAME value in
+// SQL, so the two can never drift apart.
 //
 // NETTING (previously a known gap, now closed): re-evaluating a thesis for
 // a ticker that already has an open position no longer double-counts that
 // ticker's exposure. graph/pipeline.js's risk_checked stage now calls
-// getOpenPositionsRiskPctAsOf with `excludeTicker` set to the current
+// store.getOpenPositionsRiskPctAsOf with `excludeTicker` set to the current
 // ticker, so `openPositionsRiskPct` below already reflects every OTHER
 // ticker's exposure only -- this function doesn't need to know about the
 // current ticker's own old position at all for the MATH to be correct.
@@ -23,13 +25,12 @@
 // true -- see that file for the actual replace logic).
 //
 // Two things are still placeholders, though: (1) MAX_PORTFOLIO_RISK_PCT
-// below is not tuned against anything real yet, and (2) there's still no
+// (shared/constants.js) is not tuned against anything real yet, and (2) there's still no
 // correlation/cross-asset-exposure check -- this is a flat total-risk-
 // budget check only.
 
 import { PortfolioDecision } from "../../schemas/index.js";
-
-const MAX_PORTFOLIO_RISK_PCT = 0.20; // placeholder: no real cross-position exposure data yet
+import { MAX_PORTFOLIO_RISK_PCT } from "../../shared/constants.js"; // placeholder value: no real cross-position exposure data yet
 
 export function evaluatePortfolio(riskDecision, { openPositionsRiskPct = 0, isReplacingPosition = false } = {}) {
   if (!riskDecision.approved) {

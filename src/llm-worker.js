@@ -30,8 +30,12 @@
 // falls through to message.retry(), so each consumer's max_retries/
 // dead_letter_queue in wrangler.llm.toml is the safety net for that.
 //
-// Binds D1 directly (plan.md Roadmap rule: "all Workers bind the same D1",
-// only `backend` runs migrations) and the same CACHE_KV namespace the other
+// M2 STATE: analyze and exit_check run against a per-message context --
+// INPUTS_DB read-only + a RunStore("live") on LIVE_DB. llm_calls and
+// job_progress still live on the old DB binding (env.DB) until M2b. The
+// `backtest` message type is now REJECTED loudly (job marked failed, nothing
+// run): backtests move to the backtest Worker in M3, and this Worker never
+// binds SIM_DB. Only `backend` runs migrations. Same CACHE_KV namespace the other
 // Workers use -- the Gemini cascade's `gemini:cooldown:<model>:<keyIndex>`
 // keys (src/shared/cooldown.js) are prefix-namespaced, and after this step
 // only this Worker's code path writes them.
@@ -39,9 +43,18 @@
 import { loadConfig } from "./config.js";
 import { runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
-import { runManualBacktest } from "./backtest/runBacktest.js";
+import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { pruneLlmCalls, withLlmLogContext } from "./storage/llm_calls.js";
+
+// Per-message engine context (M2). `inputs` is a read-only handle onto the
+// shared inputs DB (this Worker never writes news/price/fundamentals --
+// only `ingest` and backend's backfill do), `store` is the live run's
+// RunStore on LIVE_DB. Built per message, not per Worker, so a test can hand
+// each invocation its own fake env.
+function buildLiveContext(env) {
+  return { inputs: readOnly(env.INPUTS_DB), store: new RunStore(env.LIVE_DB, "live") };
+}
 
 export default {
   async fetch() {
@@ -74,32 +87,24 @@ export default {
           // actually finish the job. wrangler.llm.toml's max_retries/
           // dead_letter_queue on the ANALYZE consumer is the real safety
           // net for a persistently failing ticker/item.
+          // The ANALYZE wire field stays `runId` (it is the news item's id,
+          // set by the ingest Worker); inside the engine it is the
+          // pipelineRunId that keys checkpoints and the thesis id.
           const { runId, ticker, newsItem, asOf: itemAsOf } = job;
-          await runPipelineForTicker(env, withLlmLogContext(config, { source: "pipeline" }), env.DB, { runId, ticker, newsItem, asOf: itemAsOf });
+          await runPipelineForTicker(env, withLlmLogContext(config, { source: "pipeline" }), buildLiveContext(env), { pipelineRunId: runId, ticker, newsItem, asOf: itemAsOf });
         } else if (job.type === "backtest") {
+          // M2: backtests no longer run here. The engine now takes a
+          // {inputs, store} context, and a backtest needs a SIM_DB-backed
+          // RunStore plus a SimClock -- both belong to the backtest Worker
+          // (M3), which this Worker must never bind (no SIM_DB on llm, by
+          // design). Fail loudly rather than ack silently: mark the job
+          // failed so the dashboard shows why, log it, and ack (a retry
+          // would fail identically).
           const { id, tickers, testStart, testEnd, graceDays } = job;
-          // job_progress (src/storage/jobs.js) is a SEPARATE, finer-grained
-          // record from backtest_runs (which runManualBacktest itself already
-          // writes 'running'/'complete'/'failed' rows to, unchanged) -- this
-          // reporter only drives the dashboard's live percent/phase display.
+          const reason = "backtests move to the backtest Worker in M3";
+          console.error("backtest job rejected: " + reason, { id, tickers });
           const reporter = createJobReporter(env.DB, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } });
-          await reporter.start();
-          // runManualBacktest persists its own 'running' row up front and
-          // 'complete'/'failed' once it resolves -- it never throws (see its
-          // own header comment), so there's no separate catch needed here
-          // for the expected-failure case.
-          // Every LLM call made anywhere inside this run -- the pipeline over
-          // each news item AND the reflections when simulated positions close
-          // -- is logged as source "backtest" with this job's id, so the
-          // dashboard's LLM-calls page can show "everything this backtest sent".
-          const backtestConfig = withLlmLogContext(config, { source: "backtest", jobId: id });
-          const outcome = await runManualBacktest(env, backtestConfig, env.DB, { id, tickers, testStart, testEnd, graceDays, onProgress: reporter.update });
-          if (outcome.status === "complete") {
-            await reporter.complete(outcome.result, "Backtest complete");
-          } else {
-            await reporter.fail(outcome.error);
-          }
-          console.log("backtest job finished", { id, status: outcome.status, tickers });
+          await reporter.fail(reason);
         } else if (job.type === "exit_check") {
           // Own message, own queue (plan.md Step 4) -- isolated from
           // INGEST/ANALYZE failures by construction. A failure here is
@@ -111,7 +116,7 @@ export default {
           // either, the next scheduled tick re-evaluates every still-open
           // position regardless.
           try {
-            const closed = await checkOpenPositionExits(env, withLlmLogContext(config, { source: "exit_check" }), env.DB, { asOf: job.asOf });
+            const closed = await checkOpenPositionExits(env, withLlmLogContext(config, { source: "exit_check" }), buildLiveContext(env), { asOf: job.asOf });
             console.log("exit_check job completed", { closed: closed.length, closed });
           } catch (err) {
             console.error("exit_check job failed", { message: err.message });

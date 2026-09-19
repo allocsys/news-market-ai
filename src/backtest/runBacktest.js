@@ -8,7 +8,7 @@
 // SCOPE / WHAT THIS DOES NOT DO: this does NOT call backfillHistoricalNews
 // itself and does NOT touch Finnhub at all -- both onSignalRunner.js and
 // noSignalBaseline.js only ever read news/price data ALREADY in D1
-// (storage/d1.js#getNewsItemsInRange / getPriceBarsAsOf), never live vendor
+// (storage/inputs_view.js#getNewsItemsInRange / getPriceBarsAsOf), never live vendor
 // traffic. A caller wanting to backtest a period with no backfilled news
 // yet must run POST /backfill for that range FIRST, as a separate,
 // deliberate step -- this module has no opinion on that and will just
@@ -49,7 +49,7 @@ import { insertBacktestRun, completeBacktestRun, failBacktestRun } from "../stor
  * their own; a failure here is reported as data (status: 'failed'), not
  * re-thrown, so a bad backtest run doesn't look like a route/server bug.
  */
-export async function runManualBacktest(env, config, db, { id, tickers, testStart, testEnd, trainDays = 0, testDays, graceDays, onProgress }) {
+export async function runManualBacktest(env, config, { inputs, store, registryDb }, { id, tickers, testStart, testEnd, trainDays = 0, testDays, graceDays, onProgress }) {
   const startedAt = new Date().toISOString();
   // A single [testStart, testEnd) window (no walk-forward roll) unless the
   // caller explicitly asks for one via testDays -- testDays defaults to the
@@ -57,7 +57,7 @@ export async function runManualBacktest(env, config, db, { id, tickers, testStar
   // window when trainDays=0, matching this function's own trainDays=0 default.
   const resolvedTestDays = testDays ?? Math.ceil((new Date(testEnd) - new Date(testStart)) / 86400000);
 
-  await insertBacktestRun(db, { id, tickers, testStart, testEnd, trainDays, testDays: resolvedTestDays, graceDays: graceDays ?? null, startedAt });
+  await insertBacktestRun(registryDb, { id, tickers, testStart, testEnd, trainDays, testDays: resolvedTestDays, graceDays: graceDays ?? null, startedAt });
 
   // Live-progress wiring (src/storage/jobs.js's percent convention: 0-95 for
   // the day-by-day walk, 98 for saving, 100 only via reporter.complete()).
@@ -87,8 +87,8 @@ export async function runManualBacktest(env, config, db, { id, tickers, testStar
     : undefined;
 
   try {
-    const getOnReturns = makeOnSignalReturns(env, config, db, { tickers, graceDays, onStep });
-    const getOffReturns = makeBuyAndHoldOffReturns(db, { tickers });
+    const getOnReturns = makeOnSignalReturns(env, config, { inputs, store }, { tickers, graceDays, onStep });
+    const getOffReturns = makeBuyAndHoldOffReturns(inputs, { tickers });
 
     const result = await compareSignalOnOffByWindow({
       startDate: testStart,
@@ -100,10 +100,10 @@ export async function runManualBacktest(env, config, db, { id, tickers, testStar
     });
 
     await onProgress?.({ phase: "saving", percent: 98, done: totalSteps, total: totalSteps, detail: "Saving backtest results", force: true });
-    await completeBacktestRun(db, { id, result, finishedAt: new Date().toISOString() });
+    await completeBacktestRun(registryDb, { id, result, finishedAt: new Date().toISOString() });
     return { id, status: "complete", result };
   } catch (err) {
-    await failBacktestRun(db, { id, error: err.message, finishedAt: new Date().toISOString() });
+    await failBacktestRun(registryDb, { id, error: err.message, finishedAt: new Date().toISOString() });
     return { id, status: "failed", error: err.message };
   }
 }

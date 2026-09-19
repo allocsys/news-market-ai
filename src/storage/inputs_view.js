@@ -84,7 +84,7 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
  * news item for `ticker` published in [from, to), so the runner can drive
  * runPipelineForTicker once per item, each call using THAT item's own
  * published_at as its asOf (exactly the live cron path's own convention,
- * see graph/pipeline.js#runScheduledIngestion). getNewsAsOf can't serve
+ * see ingestion/ingest.js (runScheduledIngestion was deleted in M2)). getNewsAsOf can't serve
  * this: it answers "what would an agent reading at one single asOf see",
  * capped at `limit` and newest-first, not "list every decision point in a
  * date range" in chronological order.
@@ -201,7 +201,7 @@ export async function insertFundamentalFact(db, fact) {
  * Each individual .run() is its own Worker subrequest, so a per-fact loop
  * over EDGAR's full companyfacts history for even one ticker/tag can blow
  * Cloudflare's per-invocation subrequest cap well before the loop
- * finishes (see graph/pipeline.js#ingestFundamentals's header for the live
+ * finishes (see ingestion/ingest.js#ingestFundamentals's header for the live
  * incident this fixes: TSLA alone threw "Too many API requests by single
  * Worker invocation" 1047 times in one 15-minute cron run). db.batch()
  * sends the whole array as ONE request to D1, so a chunk of N facts costs

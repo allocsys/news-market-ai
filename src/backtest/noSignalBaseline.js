@@ -30,7 +30,7 @@
 // buy-and-hold" is already a meaningful, well-understood bar to clear
 // first.
 
-import { getPriceBarsAsOf } from "../storage/d1.js";
+import { getPriceBarsAsOf } from "../storage/inputs_view.js";
 
 /**
  * One ticker's buy-and-hold return over [testStart, testEnd): entry at the
@@ -41,7 +41,7 @@ import { getPriceBarsAsOf } from "../storage/d1.js";
  * graph/settle.js#settlePositionOutcome.
  *
  * Point-in-time correctness: getPriceBarsAsOf(asOf: testEnd) is itself the
- * enforced cutoff (storage/d1.js, Backtesting Integrity point 1) -- this
+ * enforced cutoff (storage/inputs_view.js, Backtesting Integrity point 1) -- this
  * function only ever sees bars dated <= testEnd, so it cannot leak a price
  * from after the test window even by accident.
  *
@@ -53,9 +53,9 @@ import { getPriceBarsAsOf } from "../storage/d1.js";
  * are day/week scale, not multi-year) should pass a larger `limit`
  * explicitly rather than relying on the default.
  */
-export async function computeBuyAndHoldReturn(db, { ticker, testStart, testEnd, limit }) {
+export async function computeBuyAndHoldReturn(inputs, { ticker, testStart, testEnd, limit }) {
   const testDays = Math.ceil((new Date(testEnd) - new Date(testStart)) / 86400000);
-  const bars = await getPriceBarsAsOf(db, { ticker, asOf: testEnd, limit: limit ?? Math.max(200, testDays + 50) });
+  const bars = await getPriceBarsAsOf(inputs, { ticker, asOf: testEnd, limit: limit ?? Math.max(200, testDays + 50) });
 
   // bars is most-recent-first (DESC); the exit bar is simply the first
   // element (latest date <= testEnd). The entry bar is the OLDEST bar that
@@ -82,10 +82,10 @@ export async function computeBuyAndHoldReturn(db, { ticker, testStart, testEnd, 
  * padded with a fabricated 0, same "never fabricate" principle applied at
  * the series level.
  */
-export async function computeBuyAndHoldReturns(db, { tickers, testStart, testEnd, limit }) {
+export async function computeBuyAndHoldReturns(inputs, { tickers, testStart, testEnd, limit }) {
   const returns = [];
   for (const ticker of tickers) {
-    const r = await computeBuyAndHoldReturn(db, { ticker, testStart, testEnd, limit });
+    const r = await computeBuyAndHoldReturn(inputs, { ticker, testStart, testEnd, limit });
     if (r !== null) returns.push(r);
   }
   return returns;
@@ -97,9 +97,9 @@ export async function computeBuyAndHoldReturns(db, { tickers, testStart, testEnd
  * `getOffReturns(window)` signature -- pass this straight through as that
  * option, no adapter code needed at the call site:
  *
- *   const getOffReturns = makeBuyAndHoldOffReturns(db, { tickers: config.watchlist.map(w => w.ticker) });
+ *   const getOffReturns = makeBuyAndHoldOffReturns(inputs, { tickers: config.watchlist.map(w => w.ticker) });
  *   await compareSignalOnOffByWindow({ ..., getOnReturns, getOffReturns });
  */
-export function makeBuyAndHoldOffReturns(db, { tickers, limit }) {
-  return (window) => computeBuyAndHoldReturns(db, { tickers, testStart: window.testStart, testEnd: window.testEnd, limit });
+export function makeBuyAndHoldOffReturns(inputs, { tickers, limit }) {
+  return (window) => computeBuyAndHoldReturns(inputs, { tickers, testStart: window.testStart, testEnd: window.testEnd, limit });
 }

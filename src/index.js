@@ -51,7 +51,7 @@
 // already spent real quota once.
 
 import { loadConfig } from "./config.js";
-import { backfillHistoricalNews } from "./graph/pipeline.js";
+import { backfillHistoricalNews } from "./ingestion/ingest.js";
 import { createJobReporter } from "./storage/jobs.js";
 import {
   handleApiSnapshotRoute,
@@ -126,7 +126,8 @@ export default {
       return handleApiJobRoute(request, env, config, id);
     }
 
-    // Operational entry point for graph/pipeline.js#backfillHistoricalNews.
+    // Operational entry point for ingestion/ingest.js#backfillHistoricalNews (writes INPUTS_DB
+    // since M2; the job row itself stays on env.DB until M2b).
     // Query-string only (from/to) -- `dashboard` is the only caller and
     // always forwards as query params, whether it originally received a
     // browser form submission or a scripted JSON request. Since plan.md
@@ -158,48 +159,15 @@ export default {
       }
     }
 
-    // Operational entry point for backtest/runBacktest.js -- same
-    // query-string-only, always-enqueues shape as /backfill above, but onto
-    // LLM_JOBS (plan.md Step 6), not JOBS: the `llm` Worker is the consumer,
-    // since a backtest's "signal on" side runs the real Gemini-backed
-    // pipeline. See runBacktest.js's own COST WARNING re: real Gemini calls
-    // -- that cost is spent inside the `llm` Worker's queue(), not this
-    // request.
+    // POST /backtest/run: DISABLED in M2 (503) until the backtest Worker
+    // (M3) exists. It used to enqueue onto LLM_JOBS for the `llm` Worker; see
+    // git history (pre-M2) for the old enqueue shape, and plan.md M3.
     if (pathname === "/backtest/run" && request.method === "POST") {
-      const testStart = url.searchParams.get("testStart");
-      const testEnd = url.searchParams.get("testEnd");
-      const tickersParam = url.searchParams.get("tickers");
-      const graceDaysParam = url.searchParams.get("graceDays");
-
-      if (!isPlausibleDateString((testStart || "").slice(0, 10)) || !isPlausibleDateString((testEnd || "").slice(0, 10))) {
-        return jsonResponse({ error: "testStart/testEnd query params are required, as YYYY-MM-DD (or a full ISO timestamp)" }, { status: 400 });
-      }
-
-      const tickers = tickersParam ? tickersParam.split(",").map((t) => t.trim()).filter(Boolean) : config.watchlist.map((w) => w.ticker);
-      if (tickers.length === 0) {
-        return jsonResponse({ error: "no tickers given and config.watchlist is empty" }, { status: 400 });
-      }
-
-      const graceDays = graceDaysParam ? Number(graceDaysParam) : undefined;
-      const id = newJobId("backtest");
-
-      // Point-in-time date strings (YYYY-MM-DD) become UTC-midnight ISO
-      // timestamps -- onSignalRunner.js/noSignalBaseline.js both expect
-      // full ISO strings.
-      const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
-      const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
-
-      // Same best-effort 'queued' row as /backfill above -- the `llm` Worker
-      // (which consumes LLM_JOBS) is the one that later marks it 'running'.
-      await createJobReporter(env.DB, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } }).queued();
-
-      try {
-        await env.LLM_JOBS.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays });
-        return jsonResponse({ accepted: true, id, tickers, testStart, testEnd });
-      } catch (err) {
-        console.error("backtest enqueue failed", { id, tickers, message: err.message });
-        return jsonResponse({ error: "backtest enqueue failed", message: err.message }, { status: 500 });
-      }
+      // M2: disabled until the backtest Worker (M3). The engine now needs a
+      // SIM_DB-backed RunStore + SimClock that only that Worker will have.
+      // Returns BEFORE any job row is created or anything is enqueued, so a
+      // caller never sees a phantom 'queued' job that can't run.
+      return jsonResponse({ error: "backtests moved to the backtest Worker in M3; POST /backtest/run is disabled until then" }, { status: 503 });
     }
 
     return new Response("news-market-ai backend worker is running (private -- see wrangler.toml). Architecture in plan.md.", { status: 200 });
@@ -267,7 +235,7 @@ export default {
           const reporter = createJobReporter(env.DB, { id, type: "backfill", params: { from, to } });
           await reporter.start();
           try {
-            const result = await backfillHistoricalNews(config, env.DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
+            const result = await backfillHistoricalNews(config, env.INPUTS_DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
             console.log("backfill job completed", { id, from, to, inserted: result.inserted, errorCount: result.errors.length });
             await reporter.complete(
               { inserted: result.inserted, errorCount: result.errors.length },

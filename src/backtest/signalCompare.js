@@ -8,7 +8,7 @@
 // agent graph (analysts -> researchers -> trader -> risk -> portfolio) for
 // "signal on", and a comparable no-signal baseline strategy for "signal
 // off", against REAL closed-trade returns. Closed-trade data isn't
-// available yet either: storage/d1.js#closePosition has no caller (see
+// available yet either: storage/run_store.js#RunStore.closePosition has no caller (see
 // plan.md's positions known-gaps), so there is no realized-return series to
 // plug in today. That end-to-end wiring is explicitly listed in plan.md as
 // a separate, bigger/riskier item, not attempted here.

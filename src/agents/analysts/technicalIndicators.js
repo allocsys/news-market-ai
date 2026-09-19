@@ -3,13 +3,13 @@
 // technical analyst agent below must never let an LLM invent a moving
 // average or a price-change figure from its own "knowledge"; every number
 // in its prompt has to come from here, computed off real
-// storage/d1.js#getPriceBarsAsOf rows, or not be claimed at all).
+// storage/inputs_view.js#getPriceBarsAsOf rows, or not be claimed at all).
 //
 // Pure functions, no DB/LLM access -- same separation as risk.js/exit.js
 // keeping their own rule logic pure and letting a thin orchestration layer
 // (technicalAnalyst.js here) supply the real data.
 //
-// Bars are expected in the same order storage/d1.js#getPriceBarsAsOf
+// Bars are expected in the same order storage/inputs_view.js#getPriceBarsAsOf
 // returns them: most-recent-first (`ORDER BY date DESC`).
 
 /** Simple moving average of the `window` most recent closes, or null if there aren't enough bars. */

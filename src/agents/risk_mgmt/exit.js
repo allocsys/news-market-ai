@@ -3,12 +3,12 @@
 // #3). Whether an already-open position should close is not something an
 // LLM judges here: it's a fixed check against the thresholds risk.js
 // already decided at open time and copied onto the position row (see
-// storage/d1.js#openPosition), plus a portfolio-level max-hold-days knob.
+// storage/run_store.js#RunStore.openPosition), plus a portfolio-level max-hold-days knob.
 //
 // HONEST SCOPE: this module only judges ONE position against ONE
 // already-known currentPrice/asOf -- it does no fetching and enforces no
 // point-in-time cutoff itself. graph/exit_check.js is the caller that
-// sources currentPrice via storage/d1.js#getPriceBarsAsOf (which DOES
+// sources currentPrice via storage/inputs_view.js#getPriceBarsAsOf (which DOES
 // enforce the required-asOf convention) and calls closePosition when this
 // returns non-null.
 
@@ -26,7 +26,7 @@ function daysBetween(fromIso, toIso) {
  * Returns `{ reason }` (one of CLOSE_REASON's values) if `position` should
  * close given `currentPrice`/`asOf`/`maxHoldDays`, else `null`.
  *
- * `position` is the shape storage/d1.js#getOpenPositionsAsOf returns:
+ * `position` is the shape storage/run_store.js#RunStore.getOpenPositionsAsOf returns:
  * { direction, entryPrice, stopLossPct, takeProfitPct, openedAt, ... }.
  *
  * Priority when more than one condition is met on the same check (e.g. a
