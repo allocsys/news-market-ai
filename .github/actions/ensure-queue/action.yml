@@ -36,8 +36,15 @@ runs:
         set -euo pipefail
         QUEUE_NAME="${{ inputs.queue-name }}"
 
+        # Explicit even though wrangler v4 no longer sends an implicit
+        # default itself (this is what CI was hitting -- see this action's
+        # top-of-file description and the repo's wrangler bump for the full
+        # story): passing it here means queue creation is correct even if
+        # someone downgrades wrangler again later, and it documents the
+        # actual constraint (this account is free-tier, capped at 86400s/24h)
+        # right where it matters instead of leaving it implicit.
         set +e
-        CREATE_OUTPUT=$(npx wrangler queues create "$QUEUE_NAME" 2>&1)
+        CREATE_OUTPUT=$(npx wrangler queues create "$QUEUE_NAME" --message-retention-period-secs 86400 2>&1)
         CREATE_STATUS=$?
         set -e
 
