@@ -38,7 +38,7 @@ src/
     trader/                   # deep-tier: direction/thesis only
     risk_mgmt/                # deterministic, NOT an LLM -- position sizing
   index.js                  # Worker entry (fetch + scheduled)
-migrations/0001_init.sql    # D1 schema
+migrations/                 # D1 schemas: inputs/, state/ (live + sim), sim/ (backtest_runs)
 test/                       # includes the mandatory backtest leak-check test
 ```
 
