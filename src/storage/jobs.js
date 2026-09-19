@@ -74,7 +74,7 @@ export async function insertQueuedJob(db, { id, type, params = null, now = nowIs
        VALUES (?, ?, 'queued', 0, ?, ?, ?)
        ON CONFLICT(id) DO NOTHING`
     )
-    .bind(id, type, toJsonOrNull(params), now, now, )
+    .bind(id, type, toJsonOrNull(params), now, now)
     .run();
 }
 
