@@ -184,10 +184,14 @@ async function renderSection(request, env, config, section) {
 
   try {
     const data = await fetchBackendJson(env, apiPath);
-    const parseParams = SECTION_PARAM_PARSERS[section];
-    const props = parseParams ? { ...data, params: parseParams(url.searchParams) } : data;
-    const activePanel = section === "backtest" ? await activeJobPanelFor(env, "backtest") : "";
     const resolvedEnv = data.resolvedEnv ?? "live";
+    const parseParams = SECTION_PARAM_PARSERS[section];
+    // The view's params carry the RESOLVED env, not the requested one: every
+    // filter/pager link is built off them, so after a bogus or vanished
+    // `?env=` those links heal to live instead of re-asking for it (and
+    // re-showing the same "not found" note) on every click.
+    const props = parseParams ? { ...data, params: { ...parseParams(url.searchParams), env: resolvedEnv } } : data;
+    const activePanel = section === "backtest" ? await activeJobPanelFor(env, "backtest") : "";
     const envBar = ENV_SECTIONS.includes(section)
       ? await envSelectorFor(env, { resolvedEnv, envError: data.envError ?? null, url })
       : "";
