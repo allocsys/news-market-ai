@@ -32,16 +32,31 @@ ingest:
   - '.github/path-filters.yml'
 llm:
   # Broader than the other Workers' filters on purpose: llm-worker.js
-  # imports graph/pipeline.js, exit_check.js and backtest/runBacktest.js,
-  # which between them pull in agents/, llm/, backtest/, storage/,
-  # shared/ and (via pipeline.js's ingestion imports) ingestion/ --
+  # imports graph/pipeline.js and exit_check.js, which between them pull in
+  # agents/, llm/, storage/, shared/ and (via pipeline.js's ingestion
+  # imports) ingestion/ (src/backtest/ moved to the `backtest` Worker below) --
   # a change to any of those changes what gets bundled into this Worker.
   - 'src/llm-worker.js'
   - 'wrangler.llm.toml'
   - 'src/graph/**'
   - 'src/agents/**'
   - 'src/llm/**'
+  - 'src/schemas/**'
+  - 'src/ingestion/**'
+  - 'src/storage/**'
+  - 'src/shared/**'
+  - 'src/config.js'
+  - '.github/workflows/deploy.yml'
+  - '.github/path-filters.yml'
+backtest:
+  # The `backtest` Worker runs the real pipeline (runManualBacktest), so it
+  # bundles everything the llm Worker does plus src/backtest/**.
+  - 'src/backtest-worker.js'
+  - 'wrangler.backtest.toml'
   - 'src/backtest/**'
+  - 'src/graph/**'
+  - 'src/agents/**'
+  - 'src/llm/**'
   - 'src/schemas/**'
   - 'src/ingestion/**'
   - 'src/storage/**'
