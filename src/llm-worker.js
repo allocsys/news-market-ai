@@ -40,6 +40,7 @@ import { loadConfig } from "./config.js";
 import { runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
+import { createJobReporter } from "./storage/jobs.js";
 
 export default {
   async fetch() {
@@ -76,11 +77,22 @@ export default {
           await runPipelineForTicker(env, config, env.DB, { runId, ticker, newsItem, asOf: itemAsOf });
         } else if (job.type === "backtest") {
           const { id, tickers, testStart, testEnd, graceDays } = job;
+          // job_progress (src/storage/jobs.js) is a SEPARATE, finer-grained
+          // record from backtest_runs (which runManualBacktest itself already
+          // writes 'running'/'complete'/'failed' rows to, unchanged) -- this
+          // reporter only drives the dashboard's live percent/phase display.
+          const reporter = createJobReporter(env.DB, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } });
+          await reporter.start();
           // runManualBacktest persists its own 'running' row up front and
           // 'complete'/'failed' once it resolves -- it never throws (see its
           // own header comment), so there's no separate catch needed here
           // for the expected-failure case.
-          const outcome = await runManualBacktest(env, config, env.DB, { id, tickers, testStart, testEnd, graceDays });
+          const outcome = await runManualBacktest(env, config, env.DB, { id, tickers, testStart, testEnd, graceDays, onProgress: reporter.update });
+          if (outcome.status === "complete") {
+            await reporter.complete(outcome.result, "Backtest complete");
+          } else {
+            await reporter.fail(outcome.error);
+          }
           console.log("backtest job finished", { id, status: outcome.status, tickers });
         } else if (job.type === "exit_check") {
           // Own message, own queue (plan.md Step 4) -- isolated from
