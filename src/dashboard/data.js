@@ -32,11 +32,16 @@ export function liveReadStore(env) {
  * carries why, so the UI can say so, but every panel still renders.
  *
  * `anchor`, non-null only for a resolved backtest, is the timestamp
- * getDecisionStats should treat as "now": a finished run's decisions happened
- * at simulated dates that a wall-clock-relative window would otherwise miss
- * entirely. Prefers finishedAt (the run is done, so anchor at its end);
+ * getDecisionStats should treat as "now". A backtest's trade_decisions carry
+ * a WALL-CLOCK created_at stamped when the run wrote them (graph/pipeline.js;
+ * the simulated date lives in as_of, not created_at), so they all fall
+ * between the registry's startedAt and finishedAt -- also wall clock. A run
+ * finished weeks ago would sit entirely outside a now-relative window, so
+ * the window is anchored at the run's own end instead. Prefers finishedAt;
  * falls back to startedAt for a still-running or failed-with-no-finishedAt
- * run so the window isn't simply empty.
+ * run so the window isn't simply empty. Consequence: the per-day activity
+ * buckets (grouped on created_at) show the days the run EXECUTED, not the
+ * simulated trading days it covered.
  */
 export async function resolveEnv(env, envParam) {
   const live = () => ({ store: liveReadStore(env), resolvedEnv: "live", anchor: null, envError: null });
