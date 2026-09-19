@@ -107,10 +107,14 @@ export async function handleApiLlmCallRoute(request, env, config, id) {
   if (auth.redirect) return unauthorized();
   if (!/^\d+$/.test(id)) return jsonResponse({ error: "llm call id must be a number" }, { status: 400 });
   const envParam = parseEnvParam(new URL(request.url).searchParams);
-  const { call, error } = await getLlmCallData(env, Number(id), envParam);
+  const { call, error, resolvedEnv, envError } = await getLlmCallData(env, Number(id), envParam);
   if (error) return jsonResponse({ error }, { status: 500 });
   if (!call) return jsonResponse({ error: "llm call not found (it may have been pruned by the retention window, or belong to a different environment)" }, { status: 404 });
-  return jsonResponse(call);
+  // resolvedEnv/envError ride along so the dashboard Worker can show the
+  // environment selector against what actually resolved (a bad ?env= here
+  // falls back to live the same way every other env-aware route does),
+  // not just echo back whatever the URL asked for.
+  return jsonResponse({ ...call, resolvedEnv, envError });
 }
 
 const ACTIVE_JOB_TYPES = new Set(["backfill", "backtest"]);
