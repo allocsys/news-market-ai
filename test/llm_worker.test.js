@@ -40,6 +40,10 @@ import assert from "node:assert/strict";
 import worker from "../src/llm-worker.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR } from "./helpers/engine_ctx.js";
+import path from "node:path";
+
+// The OLD DB's schema (root migrations/*.sql) -- where job_progress and llm_calls still live until M2b.
+const OLD_DB_DIR = path.join(STATE_DIR, "..", "..", "migrations");
 
 /** Real sqlite LIVE_DB + INPUTS_DB, the two bindings llm-worker.js builds its engine ctx from (M2). */
 function engineBindings() {
@@ -141,9 +145,8 @@ class FakeNoPositionsDb {
 // ---------------------------------------------------------------------------
 
 test("queue() REJECTS a backtest job loudly (M2): marks the job failed with an M3 pointer, runs nothing, then acks", async (t) => {
-  // job_progress still lives on the old env.DB until M2b; the state schema
-  // carries the same table, so a state-shaped sqlite DB stands in for it.
-  const db = createTestD1([STATE_DIR]);
+  // job_progress still lives on the old env.DB until M2b (schema: root migrations).
+  const db = createTestD1([OLD_DB_DIR]);
   const bindings = engineBindings();
   const env = { DB: db, ...bindings };
   const errorLogs = [];
