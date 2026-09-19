@@ -407,6 +407,16 @@ test("renderLlmCallView: back/scope links carry a non-live env, and default to p
 
   const scoped = renderLlmCallView({ call, env: "backtest-1-abc" });
   assert.ok(scoped.includes('href="/dashboard/llm?env=backtest-1-abc"'), "back link carries the env");
-  const scopeMatch = scoped.match(/href="([^"]*)">All calls in this run<\/a>/);
-  assert.ok(scopeMatch[1].includes("env=backtest-1-abc") && scopeMatch[1].includes("llmJob=backtest-3"));
+
+  // Two distinct scope links when a call has both a runId and a jobId: the
+  // run-scoped link (finer-grained: one specific simulated run) carries
+  // llmRun, and the backtest-scoped link (the whole job those runs belong
+  // to) carries llmJob -- each independently, not both on either link.
+  const runMatch = scoped.match(/href="([^"]*)">All calls in this run<\/a>/);
+  assert.ok(runMatch, "run-scope link found");
+  assert.ok(runMatch[1].includes("env=backtest-1-abc") && runMatch[1].includes("llmRun=w%7CAAPL%7Cn1"), "run-scope link carries env and llmRun");
+
+  const jobMatch = scoped.match(/href="([^"]*)">All calls in this backtest<\/a>/);
+  assert.ok(jobMatch, "backtest-scope link found");
+  assert.ok(jobMatch[1].includes("env=backtest-1-abc") && jobMatch[1].includes("llmJob=backtest-3"), "backtest-scope link carries env and llmJob");
 });
