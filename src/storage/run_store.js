@@ -621,13 +621,24 @@ export class RunStore {
    * blow past D1's per-invocation limits in one call. Returns the total
    * rows deleted this call; a caller (the `backtest` Worker, in M3) should
    * keep calling until the total comes back 0.
+   *
+   * Two opt-in keeps, both DEFAULT false (so the plain call still removes
+   * everything), used to delete a FAILED run's data while retaining its
+   * error trail (backtest/cleanup.js):
+   *   - keepErroredLlmCalls: leave llm_calls rows whose status is 'error'
+   *     (the best debugging evidence for why a run died).
+   *   - keepJobProgress: leave job_progress rows alone (the dashboard's
+   *     "failed + error" job view reads the one row).
+   * A kept row is never matched by the delete, so a caller looping "until
+   * 0" still terminates.
    */
-  async deleteRun({ limit = 500 } = {}) {
+  async deleteRun({ limit = 500, keepErroredLlmCalls = false, keepJobProgress = false } = {}) {
     if (this.runId === "live") {
       throw new Error("deleteRun refuses to delete the 'live' run_id");
     }
 
-    const tables = ["positions", "trade_decisions", "decision_memory", "pipeline_checkpoints", "job_progress"];
+    const tables = ["positions", "trade_decisions", "decision_memory", "pipeline_checkpoints"];
+    if (!keepJobProgress) tables.push("job_progress");
     let totalChanges = 0;
     for (const table of tables) {
       const result = await this.db
@@ -638,7 +649,9 @@ export class RunStore {
     }
     // llm_calls uses env_run_id, not run_id -- see migrations/state/0001_init.sql's header.
     const llmResult = await this.db
-      .prepare(`DELETE FROM llm_calls WHERE rowid IN (SELECT rowid FROM llm_calls WHERE env_run_id = ? LIMIT ?)`)
+      .prepare(
+        `DELETE FROM llm_calls WHERE rowid IN (SELECT rowid FROM llm_calls WHERE env_run_id = ?${keepErroredLlmCalls ? " AND status <> 'error'" : ""} LIMIT ?)`
+      )
       .bind(this.runId, limit)
       .run();
     totalChanges += llmResult.meta?.changes ?? 0;

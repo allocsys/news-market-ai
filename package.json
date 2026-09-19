@@ -13,6 +13,8 @@
     "deploy:ingest": "wrangler deploy --config wrangler.ingest.toml",
     "dev:llm": "wrangler dev --config wrangler.llm.toml",
     "deploy:llm": "wrangler deploy --config wrangler.llm.toml",
+    "dev:backtest": "wrangler dev --config wrangler.backtest.toml",
+    "deploy:backtest": "wrangler deploy --config wrangler.backtest.toml",
     "test": "node --test $(find test -name '*.test.js')",
     "db:migrate:local": "wrangler d1 migrations apply news_market_ai --local",
     "db:migrate:remote": "wrangler d1 migrations apply news_market_ai --remote",

@@ -41,6 +41,10 @@ export function loadConfig(env) {
     llmLogMaxChars: Number(env.LLM_LOG_MAX_CHARS) || 60000,
     geminiApiBase: "https://generativelanguage.googleapis.com/v1beta",
     geminiRequestTimeoutMs: Number(env.GEMINI_REQUEST_TIMEOUT_MS) || 30000,
+    // Per-run LLM-call cap for a backtest (llm/budget.js). Kept RAW: unset/blank
+    // means no cap, and a malformed value must fail the run (createLlmBudget)
+    // rather than be coerced to "no cap" by a Number(x) || default.
+    backtestMaxLlmCalls: env.BACKTEST_MAX_LLM_CALLS,
     // Timeout for every plain-`fetch` ingestion call (shared/fetch_with_timeout.js)
     // -- gdelt.js (search + full-text enrichment), html_scrape.js, yfinance.js,
     // rss.js, edgar_fundamentals.js, edgar_cik_lookup.js. UPDATE: added after a

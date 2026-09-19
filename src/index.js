@@ -26,13 +26,17 @@
 // else this handler used to dispatch has moved out, in two steps:
 //   - `ingest_ticker` / `ingest_feeds` (INGEST) -> the `ingest` Worker,
 //     plan.md Step 5.
-//   - `analyze` (ANALYZE), `backtest` and `exit_check` (both formerly JOBS)
-//     -> the `llm` Worker, plan.md Step 6. All three call Gemini, so all
-//     three had to move for `llm` to be the only Worker holding
-//     GEMINI_API_KEYS. `backtest`/`exit_check` moved onto a new LLM_JOBS
-//     queue (this Worker still PRODUCES onto it) rather than staying on
-//     JOBS, because a queue can only have one consumer Worker and JOBS's
-//     consumer had to stay here for `backfill`.
+//   - `analyze` and `exit_check` (both formerly JOBS) -> the `llm` Worker,
+//     plan.md Step 6. Both call Gemini, so both had to move for `llm` to be
+//     the only Worker holding GEMINI_API_KEYS. They moved onto a new
+//     LLM_JOBS queue (this Worker still PRODUCES onto it) rather than
+//     staying on JOBS, because a queue can only have one consumer Worker
+//     and JOBS's consumer had to stay here for `backfill`.
+//   - `backtest` moved again in M3, off LLM_JOBS and onto its own new
+//     BACKTEST queue (this Worker still PRODUCES onto it) for the new
+//     `backtest` Worker (wrangler.backtest.toml) -- a backtest needs a
+//     SIM_DB-backed RunStore + SimClock that the `llm` Worker deliberately
+//     never gets, so it couldn't stay on a queue `llm` consumes.
 // A message of one of those moved types that somehow still reaches this
 // handler (e.g. one already sitting on JOBS at the moment of the Step 6
 // deploy) is acked without processing by the generic unrecognized-type
@@ -54,6 +58,7 @@ import { loadConfig } from "./config.js";
 import { backfillHistoricalNews } from "./ingestion/ingest.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
+import { SimClock } from "./backtest/simClock.js";
 import {
   handleApiSnapshotRoute,
   handleApiActivityRoute,
@@ -160,15 +165,81 @@ export default {
       }
     }
 
-    // POST /backtest/run: DISABLED in M2 (503) until the backtest Worker
-    // (M3) exists. It used to enqueue onto LLM_JOBS for the `llm` Worker; see
-    // git history (pre-M2) for the old enqueue shape, and plan.md M3.
+    // POST /backtest/run: RE-ENABLED (M3) -- enqueues onto BACKTEST for the
+    // new `backtest` Worker (wrangler.backtest.toml) instead of running
+    // inline or (pre-M2) via LLM_JOBS. Query-string only, same shape as the
+    // pre-M2 route (git history, commit 62ce1f8): testStart/testEnd
+    // (YYYY-MM-DD or full ISO), tickers (comma-separated, defaults to the
+    // watchlist), graceDays (optional).
+    //
+    // Two validation layers, in order:
+    //   1. shape (isPlausibleDateString, non-empty tickers) -- 400, same as
+    //      always.
+    //   2. NEW in M3: testEnd must not be in the future (SimClock's
+    //      assertNotFuture) -- a caller-requested future window is a
+    //      request-level mistake (there's no future news/price data to
+    //      backtest against), so this fails loudly here, before a job row
+    //      exists or anything is enqueued, rather than letting the backtest
+    //      Worker discover it three hops later. This deliberately checks
+    //      only testEnd, not testStart+graceDays' computed walk-end -- that
+    //      computed overshoot is clampEnd's job, inside the runner itself
+    //      (src/backtest/onSignalRunner.js), not a caller mistake worth
+    //      rejecting here.
+    //
+    // The job_progress row is written via RunStore(env.SIM_DB, id) -- NOT
+    // RunStore(env.LIVE_DB, "live") the way POST /backfill's row is above.
+    // Since M1/M2b every backtest gets its own run_id from the moment it's
+    // created, never 'live': this is a `sim` environment row, scoped and
+    // queryable (and eventually delete-by-run-cleanable) independently of
+    // every other backtest and of the live run.
     if (pathname === "/backtest/run" && request.method === "POST") {
-      // M2: disabled until the backtest Worker (M3). The engine now needs a
-      // SIM_DB-backed RunStore + SimClock that only that Worker will have.
-      // Returns BEFORE any job row is created or anything is enqueued, so a
-      // caller never sees a phantom 'queued' job that can't run.
-      return jsonResponse({ error: "backtests moved to the backtest Worker in M3; POST /backtest/run is disabled until then" }, { status: 503 });
+      const testStart = url.searchParams.get("testStart");
+      const testEnd = url.searchParams.get("testEnd");
+      const tickersParam = url.searchParams.get("tickers");
+      const graceDaysParam = url.searchParams.get("graceDays");
+
+      if (!isPlausibleDateString((testStart || "").slice(0, 10)) || !isPlausibleDateString((testEnd || "").slice(0, 10))) {
+        return jsonResponse({ error: "testStart/testEnd query params are required, as YYYY-MM-DD (or a full ISO timestamp)" }, { status: 400 });
+      }
+
+      const tickers = tickersParam
+        ? tickersParam.split(",").map((t) => t.trim()).filter(Boolean)
+        : config.watchlist.map((w) => w.ticker);
+      if (tickers.length === 0) {
+        return jsonResponse({ error: "no tickers given and config.watchlist is empty" }, { status: 400 });
+      }
+
+      const graceDaysRaw = graceDaysParam ? Number(graceDaysParam) : undefined;
+      if (graceDaysParam !== null && graceDaysParam !== "" && !Number.isFinite(graceDaysRaw)) {
+        return jsonResponse({ error: "graceDays must be a number" }, { status: 400 });
+      }
+      const graceDays = graceDaysRaw;
+
+      // Point-in-time date strings (YYYY-MM-DD) become UTC-midnight ISO
+      // timestamps -- onSignalRunner.js/noSignalBaseline.js both expect
+      // full ISO strings.
+      const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
+      const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
+
+      try {
+        new SimClock().assertNotFuture(testEndIso, "testEnd");
+      } catch (err) {
+        return jsonResponse({ error: err.message }, { status: 400 });
+      }
+
+      const id = newJobId("backtest");
+      // 'queued' row written before the message is even sent -- best-effort
+      // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
+      // progress-write hiccup here can never block the real enqueue below.
+      // env_run_id/run_id = this backtest's own id, in SIM_DB.
+      await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } }).queued();
+      try {
+        await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays });
+        return jsonResponse({ accepted: true, id, tickers, testStart, testEnd });
+      } catch (err) {
+        console.error("backtest enqueue failed", { id, tickers, message: err.message });
+        return jsonResponse({ error: "backtest enqueue failed", message: err.message }, { status: 500 });
+      }
     }
 
     return new Response("news-market-ai backend worker is running (private -- see wrangler.toml). Architecture in plan.md.", { status: 200 });

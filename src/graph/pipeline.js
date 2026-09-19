@@ -13,8 +13,12 @@
 //     decisions, memory -- goes through it, so a run can only ever see or
 //     touch its own environment's rows.
 // (Ingestion, which WRITES inputs, lives in ingestion/ingest.js.)
-// Not yet injected: a clock. `createdAt` below still reads the real time;
-// the SimClock rewrite in M3 replaces it.
+// No injected clock here: the walk is driven entirely by `asOf` (the backtest
+// runner's SimClock only validates/clamps the requested window, see
+// backtest/simClock.js). The one wall-clock read is `createdAt` below, a
+// write-time bookkeeping stamp: no asOf-gated read consults created_at
+// (the gated columns are as_of/opened_at/closed_at/resolved_at), so it cannot
+// leak the real "now" into a simulated run.
 //
 // NAMING: `pipelineRunId` is the per-(news item, ticker) pipeline execution
 // (what the old code called `runId`); the environment id is `store.runId`.

@@ -1,0 +1,130 @@
+name = "news-market-ai-backtest"
+main = "src/backtest-worker.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Private, same "no public door" convention as backend's/ingest's/llm's
+# wrangler configs -- this Worker has no meaningful HTTP surface, it only
+# ever runs via its BACKTEST queue consumer below.
+workers_dev = false
+
+# --- D1 (plan.md "Backtest / Live Isolation" redesign) --- this Worker is
+# backtest-only. SIM_DB is read/write: runManualBacktest's RunStore(SIM_DB,
+# <backtest id>) writes positions/trade_decisions/decision_memory/
+# pipeline_checkpoints/job_progress/llm_calls under that run's own run_id,
+# plus the sim-exclusive backtest_runs registry (migrations/sim/).
+# INPUTS_DB is read-only by convention (readOnly(db), src/storage/
+# run_store.js) -- a backtest reads news/price/fundamentals already
+# ingested, it never writes them (see src/backtest/onSignalRunner.js's own
+# header: a window with no backfilled news just produces thin results, this
+# Worker has no opinion on backfilling).
+#
+# DELIBERATELY NO [[d1_databases]] BLOCK FOR LIVE_DB, AND NONE FOR THE OLD
+# `news_market_ai` DB EITHER. This is the one config-level enforcement
+# plan.md calls out by name ("CI fails if wrangler.backtest.toml binds the
+# live DB") -- a CI check asserting this file has no LIVE_DB binding is
+# still to be added (M3, see plan.md's CI checks item); until that check
+# exists, this comment and code review are the only guard. D1 bindings
+# can't be made read-only by Cloudflare, so keeping LIVE_DB out of this file
+# entirely is what makes "a backtest cannot touch live state" true at the
+# infrastructure level, not just by convention in application code.
+[[d1_databases]]
+binding = "SIM_DB"
+database_name = "news-market-ai-sim"
+database_id = "55a8fab8-9f30-4c1f-9393-d5393af669fb"
+# No migrations_dir here on purpose: only `backend` (wrangler.toml) runs
+# migrations against SIM_DB (both migrations/state/ and migrations/sim/,
+# the latter via wrangler.sim-migrate.toml's second pass) -- see plan.md's
+# "Workers and bindings" table ("backend: ... runs the migrations for all
+# three"). This Worker just reads/writes rows, it never applies schema.
+
+[[d1_databases]]
+binding = "INPUTS_DB"
+database_name = "news-market-ai-inputs"
+database_id = "c14d62d9-62bb-403f-8792-1c627e076d1a"
+
+# --- KV --- this Worker's OWN namespace, separate from every other
+# Worker's CACHE_KV (plan.md, "Decided 2026-09-19": "backtest gets its own
+# KV namespace, so its gemini:cooldown:* state cannot trip live's"). Same
+# binding NAME (CACHE_KV) as the other Workers use for their own namespace
+# -- application code (src/shared/cooldown.js) reads env.CACHE_KV
+# regardless of which physical namespace a given Worker's config points it
+# at, so this Worker's cooldown writes land in backtest-CACHE_KV and never
+# collide with (or get rate-limited by) live's cooldown state in the
+# original CACHE_KV namespace.
+[[kv_namespaces]]
+binding = "CACHE_KV"
+id = "f14e4607af5843599eac863b6adb508b"
+
+# --- BACKTEST (consume) --- NEW queue (plan.md M3). `backend`
+# (wrangler.toml) produces one message per POST /backtest/run onto this
+# queue via its own BACKTEST binding; this Worker is its only consumer.
+# max_batch_size = 1: same reasoning as LLM_JOBS's backtest handling before
+# this Worker existed -- one message is already one full signal-on/off run
+# (a day-by-day walk over the whole window), batching several together
+# would just make one invocation more likely to hit its own CPU/wall-time
+# limit for no benefit. max_concurrency = 1: a backtest's "on" side calls
+# Gemini through the same shared upstream quota/keys as the `llm` Worker's
+# ANALYZE/LLM_JOBS consumers (GEMINI_API_KEYS is a repo-wide secret, not
+# per-Worker) -- keeping this at 1 avoids stacking a second full-speed
+# Gemini consumer on top of `llm`'s own concurrency of 2, on top of the
+# per-run BACKTEST_MAX_LLM_CALLS budget plan.md calls for (implemented in
+# src/llm/budget.js; see the commented-out var under [vars] below).
+[[queues.consumers]]
+queue = "news-market-ai-backtest"
+max_batch_size = 1
+max_retries = 3
+max_concurrency = 1
+dead_letter_queue = "news-market-ai-backtest-dlq"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+[vars]
+# Same two-tier model strategy as wrangler.llm.toml -- runManualBacktest's
+# "on" side calls the real pipeline (analysts/debate/trader), which reads
+# these same config.js fields regardless of which Worker is running it.
+GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
+GEMINI_DEEP_MODEL = "gemini-3.5-flash"
+GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash"
+
+# Per-run cap on LLM calls (src/llm/budget.js): a run that tries call number
+# max+1 fails with "LLM call budget exceeded". Counts logical calls (one per
+# agent call), not the HTTP attempts inside the model/key cascade. UNSET = NO
+# CAP -- the owner has not picked a value, so none is set here (a typo'd value
+# fails the run rather than meaning "no cap").
+# BACKTEST_MAX_LLM_CALLS = "..."
+
+# LLM call log (src/storage/llm_calls.js) -- off by default for backtest
+# runs specifically (plan.md's Free-plan budgets section: "It runs with
+# LLM_LOG_ENABLED=false (llm_calls is ~4 rows per call) unless a run opts
+# in"), unlike the `llm` Worker which defaults this on. A future per-run
+# opt-in (not yet built) would override this via the job's own params
+# rather than this Worker-wide var.
+LLM_LOG_ENABLED = "false"
+
+# Same watchlist convention as every other Worker's wrangler config --
+# config.js's loadConfig reads it, and a backtest with no explicit
+# `tickers` in its request falls back to config.watchlist (see src/index.js's
+# POST /backtest/run route). Keep in sync with the other configs.
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+
+# BACKTEST_DAILY_WRITE_BUDGET (plan.md's "Backtest write cap (proposed)",
+# default 40K) is NOT set here -- still awaiting owner approval as of this
+# commit (see checkpoint notes). Once approved it belongs here as a var,
+# read by the backtest Worker before starting a run to refuse if the day's
+# total D1 rows written would exceed it.
+
+# Secrets -- set via `wrangler secret put GEMINI_API_KEYS --config wrangler.backtest.toml`,
+# never committed. This Worker needs the same GEMINI_API_KEYS the `llm`
+# Worker holds (both call Gemini), copied here rather than shared via any
+# binding -- Cloudflare secrets are per-Worker, not shared across configs.
+# No FINNHUB_API_KEY: this Worker never calls Finnhub (see
+# src/backtest/onSignalRunner.js's COST WARNING -- backtests only ever read
+# news/price data already backfilled into INPUTS_DB).

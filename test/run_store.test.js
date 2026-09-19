@@ -277,6 +277,58 @@ test("deleteRun chunks and removes every row for a backtest run_id across every 
   assert.equal(remainingBt2Llm.c, 1);
 });
 
+/** Seeds one row in every table deleteRun touches, plus one 'ok' and one 'error' llm_calls row, all under `runId`. */
+async function seedEveryTable(db, runId) {
+  const store = new RunStore(db, runId);
+  await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1" }));
+  await db.prepare(`INSERT INTO llm_calls (env_run_id, created_at, source, label, status) VALUES (?, 't1', 'backtest', 'trader', 'ok')`).bind(runId).run();
+  await db.prepare(`INSERT INTO llm_calls (env_run_id, created_at, source, label, status, error) VALUES (?, 't2', 'backtest', 'trader', 'error', 'boom')`).bind(runId).run();
+  await db.prepare(`INSERT INTO job_progress (run_id, id, type, status, created_at, updated_at) VALUES (?, ?, 'backtest', 'failed', 't1', 't2')`).bind(runId, runId).run();
+  return store;
+}
+
+async function count(db, table, runId, col = "run_id") {
+  return (await db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE ${col} = ?`).bind(runId).first()).c;
+}
+
+test("deleteRun keepErroredLlmCalls: deletes ok llm_calls but leaves status='error' ones, and a caller looping until 0 still terminates", async () => {
+  const db = simDb();
+  const store = await seedEveryTable(db, "bt-1");
+
+  let total = 0;
+  for (let i = 0; i < 5; i++) {
+    const n = await store.deleteRun({ limit: 500, keepErroredLlmCalls: true });
+    if (n === 0) break;
+    total += n;
+    assert.ok(i < 4, "loop must reach 0 -- a kept row must never keep matching the delete");
+  }
+  assert.ok(total > 0);
+  assert.equal(await count(db, "positions", "bt-1"), 0);
+  assert.equal(await count(db, "job_progress", "bt-1"), 0, "job_progress is deleted unless keepJobProgress");
+  const llm = (await db.prepare(`SELECT status FROM llm_calls WHERE env_run_id = 'bt-1'`).all()).results;
+  assert.deepEqual(llm.map((r) => r.status), ["error"]);
+});
+
+test("deleteRun keepJobProgress: leaves the job_progress row, deletes the rest (including errored llm_calls when that keep is off)", async () => {
+  const db = simDb();
+  const store = await seedEveryTable(db, "bt-1");
+
+  await store.deleteRun({ limit: 500, keepJobProgress: true });
+  assert.equal(await count(db, "job_progress", "bt-1"), 1);
+  assert.equal(await count(db, "positions", "bt-1"), 0);
+  assert.equal(await count(db, "llm_calls", "bt-1", "env_run_id"), 0, "both llm_calls rows go when keepErroredLlmCalls is off");
+});
+
+test("deleteRun with no options is unchanged: removes job_progress and errored llm_calls too", async () => {
+  const db = simDb();
+  const store = await seedEveryTable(db, "bt-1");
+
+  await store.deleteRun();
+  assert.equal(await count(db, "job_progress", "bt-1"), 0);
+  assert.equal(await count(db, "llm_calls", "bt-1", "env_run_id"), 0);
+  assert.equal(await count(db, "positions", "bt-1"), 0);
+});
+
 test("readOnly(db) allows SELECT and rejects writes/batch/exec", async () => {
   const db = liveDb();
   const ro = readOnly(db);

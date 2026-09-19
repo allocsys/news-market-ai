@@ -12,9 +12,9 @@ import {
   getIngestionHealth,
   getDecisionStats,
   getRecentPriceBars,
-  getRecentBacktestRuns,
   getOpenPositionsExposureTotal,
 } from "../storage/d1.js";
+import { getRecentBacktestRuns } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
 import { parseDashboardParams, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
 
@@ -129,7 +129,8 @@ export async function getPipelineData(env) {
 }
 
 export async function getBacktestRunsData(env) {
-  const backtestRunsResult = await safe(getRecentBacktestRuns(env.DB, { limit: 10 }));
+  // The registry lives on SIM_DB (M3); the dashboard API never writes, so the handle is read-only.
+  const backtestRunsResult = await safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 10 }));
   return { backtestRuns: backtestRunsResult.data ?? [], error: backtestRunsResult.error };
 }
 

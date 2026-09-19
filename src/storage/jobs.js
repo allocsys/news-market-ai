@@ -3,16 +3,18 @@
 //   - `backend` (src/index.js): records a 'queued' row when POST /backfill
 //     enqueues, serves GET /api/jobs/:id, and reports progress while
 //     consuming JOBS's `backfill`.
-//   - `llm` (src/llm-worker.js): marks a rejected `backtest` message failed
-//     (backtests move to the backtest Worker in M3).
+//   - `backtest` (src/backtest-worker.js): reports a backtest's progress under
+//     the backtest's OWN run id in SIM_DB (backend writes its 'queued' row
+//     there too).
+//   - `llm` (src/llm-worker.js): marks a stray `backtest` message failed
+//     (backtests moved to the backtest Worker in M3; this Worker has no SIM_DB).
 //   - `dashboard` only ever READS this, through backend's /api/jobs/:id.
 //
 // M2b: this module holds NO SQL. job_progress lives in the state schema, so
 // every statement is a RunStore method (storage/run_store.js: insertQueuedJob /
 // markJobRunning / updateJobProgress / completeJob / failJob / getJob /
 // getActiveJob), scoped by the store's run_id. Backfill jobs live under the
-// 'live' run; a backtest's jobs will live in the SIM_DB under its own run id
-// (M3). What stays here is the pure part -- value normalizers, the row ->
+// 'live' run; a backtest's jobs live in the SIM_DB under its own run id. What stays here is the pure part -- value normalizers, the row ->
 // API-object mapper, the idle cutoff -- which RunStore imports, plus the
 // best-effort reporter that wraps a store.
 //

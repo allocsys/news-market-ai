@@ -7,6 +7,7 @@
 
 import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
 import { recordLlmCall } from "../../storage/llm_calls.js";
+import { chargeLlmCall } from "../../llm/budget.js";
 
 /**
  * Fake-model injection point (plan.md open item, closed 2026-09-17). Every
@@ -66,6 +67,10 @@ async function generateText(env, config, prompt, { model, schema, extraFields, t
  * this function returns or throws.
  */
 export async function callStructured(env, config, schema, prompt, { model, extraFields = {}, label, ticker } = {}) {
+  // Per-run budget (llm/budget.js): charged BEFORE anything else so an
+  // over-budget call is neither made nor logged as a vendor error, and its
+  // throw is not caught by the try blocks below.
+  chargeLlmCall(config);
   const requestedModel = model || config.geminiQuickModel;
   const trace = {};
   const startedAt = Date.now();

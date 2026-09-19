@@ -30,3 +30,17 @@ export class LookaheadViolationError extends Error {
     this.name = "LookaheadViolationError";
   }
 }
+
+/**
+ * Thrown by the per-run LLM-call budget (llm/budget.js) when a backtest tries
+ * to make a call past its cap. It is a deliberate hard stop, not a transient
+ * failure: nothing may swallow it or retry it (graph/settle.js re-throws it),
+ * so the run is recorded 'failed' with this message.
+ */
+export class LlmBudgetExceededError extends Error {
+  constructor(limit) {
+    super(`LLM call budget exceeded: this run is capped at ${limit} calls (BACKTEST_MAX_LLM_CALLS)`);
+    this.name = "LlmBudgetExceededError";
+    this.limit = limit;
+  }
+}
