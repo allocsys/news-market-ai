@@ -27,7 +27,7 @@ import {
   getPipelineData,
   getBacktestRunsData,
 } from "./data.js";
-import { getJob } from "../storage/jobs.js";
+import { getJob, getActiveJob } from "../storage/jobs.js";
 
 function jsonResponse(body, { status = 200 } = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -88,6 +88,23 @@ export async function handleApiBacktestRunsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   return jsonResponse(await getBacktestRunsData(env));
+}
+
+const ACTIVE_JOB_TYPES = new Set(["backfill", "backtest"]);
+
+/**
+ * GET /api/jobs/active?type=backfill|backtest -- `{ job }`, where `job` is the
+ * newest in-flight job of that type (src/storage/jobs.js's getActiveJob) or
+ * null. Always 200 for a valid type: "nothing running" is an ordinary answer,
+ * not a 404, unlike the by-id route below where a missing id is an error.
+ * Lets the backfill/backtest pages show progress for a job submitted earlier.
+ */
+export async function handleApiActiveJobRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const type = new URL(request.url).searchParams.get("type");
+  if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backtest" }, { status: 400 });
+  return jsonResponse({ job: await getActiveJob(env.DB, type) });
 }
 
 /** GET /api/jobs/:id -- one job_progress row (src/storage/jobs.js), for the dashboard's live progress bar. 404 (not 200 + null) when the id doesn't exist, so a typo'd/expired id is visibly distinct from "job exists, no progress yet". */
