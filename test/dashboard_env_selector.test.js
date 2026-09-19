@@ -116,7 +116,10 @@ test("renderEnvSelector: resolvedEnv not present in the (capped) runs list still
 test("renderEnvSelector: does NOT duplicate a pill for resolvedEnv when it's already in the runs list", () => {
   const runs = [{ id: "backtest-1-abc", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", status: "complete" }];
   const html = renderEnvSelector({ runs, resolvedEnv: "backtest-1-abc", pathname: "/dashboard/snapshot", search: "" });
-  assert.equal((html.match(/class="pill/g) || []).length, 2, "exactly Live + the one run pill, no extra");
+  // Anchored to <a ... class="pill -- a plain /class="pill/g also matches the
+  // wrapping <div class="pill-row">, since "pill-row" starts with that same
+  // literal substring, which overcounted by one (3 instead of 2).
+  assert.equal((html.match(/<a[^>]*class="pill/g) || []).length, 2, "exactly Live + the one run pill, no extra");
 });
 
 test("renderEnvSelector: envError renders as its own note, independent of the resolvedEnv banner", () => {
