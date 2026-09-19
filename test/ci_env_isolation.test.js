@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWranglerToml } from "./helpers/wrangler_toml.js";
@@ -296,6 +296,7 @@ test("M5: no wrangler config binds the legacy database (no `DB` binding, no plac
 test("M5: CI and npm scripts never provision, migrate or reference the legacy database", () => {
   assert.ok(!existsSync(path.join(ROOT, ".github/actions/ensure-d1-database")), "the ensure-d1-database action defaulted to the legacy name and would re-create the deleted database -- it must stay deleted");
   assert.ok(!DEPLOY_YML.includes("ensure-d1-database"), "deploy.yml still calls ensure-d1-database");
+  assert.deepEqual(readdirSync(path.join(ROOT, "migrations")).filter((f) => f.endsWith(".sql")), [], "migrations/ must hold only the inputs/, state/ and sim/ subdirectories -- the root-level *.sql files were the retired pre-split schema");
   for (const [name, cmd] of Object.entries(PACKAGE_JSON.scripts)) {
     assert.ok(!cmd.includes(LEGACY_DB_NAME), `package.json script ${name} still targets ${LEGACY_DB_NAME}`);
   }
