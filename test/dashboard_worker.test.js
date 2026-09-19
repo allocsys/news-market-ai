@@ -441,8 +441,9 @@ test("GET /dashboard/backfill prepends the active-job panel ahead of the form wh
 
   assert.match(html, /id="active-job" data-job-id="backfill-1789783849291-cx0mfj"/);
   assert.match(html, /Backfill in progress/);
-  // Panel comes BEFORE the ordinary backfill form/view in the body.
-  assert.ok(html.indexOf('id="active-job"') < html.indexOf("Backfill", html.indexOf('id="active-job"') + 1) || true);
+  // Panel comes BEFORE the ordinary backfill form/view in the body (activeJobPanelFor's
+  // result is prepended: `activePanel + renderBackfillView()` in dashboard-worker.js).
+  assert.match(html, /id="active-job"[\s\S]*<form/);
 });
 
 test("GET /dashboard/backfill renders normally (no active-job panel, no crash) when the backend lookup itself fails -- best-effort, per activeJobPanelFor's own contract", async () => {
