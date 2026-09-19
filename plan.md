@@ -120,16 +120,16 @@ queries against production D1 (`news_market_ai`, 2026-09-19 ~04:35Z).
    `closed_at` up to 2026-09-29 and 17 `decision_memory` rows have
    `resolved_at` in the future — live-opened positions (not in any backtest
    checkpoint) among them.
-2. **Ghost exposure blocks live trades.** `getOpenPositionsRiskPctAsOf(now)`
-   treats `closed_at > now` as still open, while the dashboard's
-   `getOpenPositionsExposureTotal` uses `closed_at IS NULL`. **Evidence:** the
-   dashboard shows 1 open position / 3.25%; the pipeline's own math sees 27 open
-   / 88.25% (AAPL alone: 24 / 78.5%) against `MAX_PORTFOLIO_RISK_PCT` = 0.20.
-   Six decisions on 09-18 (EVR, GOOGL, INTC, MSFT, NVDA, SKHY) were rejected
-   with "combined portfolio risk 0.58–0.89 would exceed ceiling 0.2". That fits
-   the mechanism; per-decision causation was not replayed. Separate, unverified
-   contributor: ANALYZE runs with `max_concurrency = 2` and out-of-order `asOf`,
-   which may also leave overlapping open positions per ticker.
+2. **The dashboard and the pipeline disagree about what is open.**
+   `getOpenPositionsRiskPctAsOf(now)` treats `closed_at > now` as still open,
+   while the dashboard's `getOpenPositionsExposureTotal` uses `closed_at IS
+   NULL`. **Evidence:** the dashboard shows 1 open position / 3.25%; the
+   pipeline's math sees 27 open / 88.25% (AAPL alone: 24 / 78.5%). The
+   future-dated closes do **not** change the pipeline's number (those positions
+   were open before and still count as open until the simulated date). They only
+   hide the positions from the dashboard and stamp bogus outcomes into memory.
+   The high exposure itself is a separate live bug, see "Overlapping open
+   positions" below.
 3. **Reflection contamination, both directions.**
    - Live → poisoned: `getDecisionMemoryAsOf` filters only `ticker` +
      `resolved_at < asOf`, so live debates read backtest reflections (3 of the 24
@@ -192,13 +192,34 @@ queries against production D1 (`news_market_ai`, 2026-09-19 ~04:35Z).
 scoped storage layer + tests; (3) dashboard filter + delete-by-scope.
 **Until (2) ships, don't run a backtest over a window that overlaps live data.**
 
-**Proposed one-off repair (NOT run; needs owner approval):** delete the 4
-backtest-opened positions, their 3 `decision_memory` rows, the 9 distinct
-`trade_decisions` and the 13 backtest-style checkpoints (identify via checkpoints whose `run_id`
-contains `|`, thesis id in `state.riskDecision.tradeThesisId`); then reopen the
-remaining positions with `closed_at > now` (`closed_at`, `close_reason`,
-`exit_price` → NULL) and delete `decision_memory` rows with `resolved_at > now`,
-so the live exit check handles them normally.
+### Overlapping open positions (separate live bug, found during this check)
+Not caused by backtests. 23 of the 24 open AAPL positions were opened by the
+live pipeline (09-17 13:12 → 09-18 18:41), all overlapping. Mechanism (from
+`pipeline.js`, consistent with the data): ANALYZE runs at `max_concurrency` 2
+and each run uses the article's `published_at` as `asOf`. `getOpenPositionForTickerAsOf`
+only sees positions opened at or before that `asOf`, and the replace step closes
+at most one (`LIMIT 1`). An older article processed after a newer one opens its
+own position and nothing ever closes it. Evidence: `trade_decisions.created_at`
+is not in `as_of` order (AAPL `09-18T12:47:00` was decided at 16:01, before
+`09-18T08:37:53` at 19:02).
+**Impact:** every non-AAPL live thesis sees 0.58–0.89 open exposure against the
+0.20 ceiling and is rejected (6 rejections on 09-18: EVR, GOOGL, INTC, MSFT, NVDA,
+SKHY; per-decision causation not replayed).
+**Options (needs an owner decision, changes live trading behavior):**
+(a) enforce at most one open position per ticker at write time by closing every
+other open position for it as `replaced`, regardless of `asOf` order;
+(b) process ANALYZE per ticker in `published_at` order; (c) cap the ceiling
+check per ticker. Not started.
+
+**Proposed one-off repair (NOT run; needs owner approval, copy the affected rows
+into `_bak_*` tables first):** (1) delete the backtest-derived rows: 4 positions,
+3 `decision_memory` rows, 9 distinct `trade_decisions` and 13 checkpoints
+(identify via checkpoints whose `run_id` contains `|`; thesis id in
+`state.riskDecision.tradeThesisId`); (2) delete `decision_memory` rows with
+`resolved_at > now`; (3) reopen positions with `closed_at > now` (`closed_at`,
+`close_reason`, `exit_price` → NULL). This makes the ledger honest and the
+dashboard agree with the pipeline (27 open / 88%). It does **not** unblock live
+trading; that needs the overlapping-position fix above.
 
 ## Deployment: Cloudflare Workers + D1 + KV (free tier)
 | Resource | Free limit | Implication |
@@ -392,7 +413,9 @@ CI and deploys are green across all four Workers.
 four behaviors below have not been observed live end to end.
 
 **Remaining work (nothing here blocks the system running):**
-1. **Backtest / live isolation** — see the section above. Highest priority.
+1. **Backtest / live isolation** — see the section above.
+1b. **Overlapping open positions per ticker** (live) — blocks every non-AAPL
+   live trade today; see "Overlapping open positions" above. Needs a decision.
 2. **Post-deploy smoke test** in `deploy.yml`: log in via `dashboard`, fetch one
    `/api/*` route through the service binding, fail unless 200. Would have caught
    the 401 incident.
