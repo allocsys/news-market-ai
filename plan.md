@@ -409,12 +409,16 @@ deep tier prepends `3.5-flash`.
 
 ### LLM call log (dashboard "LLM calls" page)
 Every Gemini prompt and raw response, including failed calls, goes to `llm_calls`
-(migration 0012), shown at `/dashboard/llm` (filters: source/status/ticker/
+(in the state schema, `migrations/state/`, since M2b; scoped by `env_run_id`, so
+each environment only sees and prunes its own rows), shown at `/dashboard/llm` (filters: source/status/ticker/
 backtest/run) and `/dashboard/llm/:id`.
 - **One choke point:** `agents/utils/structured.js#callStructured` writes the row.
-  Context (`source`, `jobId`, `runId`, `ticker`) rides on `config.llmLog`
-  (`storage/llm_calls.js#withLlmLogContext`), set by `llm-worker.js` and
-  `runPipelineForTicker`.
+  Context (`source`, `jobId`, `runId`, `ticker`, and the `store` the row is
+  written through) rides on `config.llmLog`
+  (`storage/llm_calls.js#withLlmLogContext`), set by `llm-worker.js`,
+  `runPipelineForTicker` and `checkOpenPositionExits`. No store on the context
+  means logging is a silent no-op. Note `runId` here is the PIPELINE run
+  (column `run_id`); the environment is the store's run id (`env_run_id`).
 - **Best-effort:** a failed log write never fails or slows the call.
   `LLM_LOG_ENABLED="false"` turns it off.
 - **Cost:** ~4 D1 rows written per call (table + 3 indexes) against 100K/day. Rows
@@ -496,8 +500,8 @@ ingestion/           # Finnhub, GDELT (unwired), EDGAR, RSS, HTML-scrape, yfinan
   market_data_validator.js  # sanity-check vendor data before agents see it (Pattern 9)
 storage/             # run_store.js (RunStore, state-DB access), inputs_view.js
                       # (input-side D1 access); d1.js is LEGACY -- dashboard's
-                      # old-DB reads + backtest_runs registry only; llm_calls.js,
-                      # jobs.js (job_progress) still on the old DB until M2b
+                      # old-DB reads + backtest_runs registry only; llm_calls.js and
+                      # jobs.js hold pure helpers only (M2b) -- their SQL is RunStore's
 llm/                 # multi-key Gemini cascade, KV-backed cooldown
 agents/
   analysts/          # news/event, sentiment, technical
@@ -603,8 +607,8 @@ per the M1 rule. `checkpointer.js`, `memory.js`, `reflection.js`, `settle.js`,
 `exit_check.js` and `pipeline.js` all take `{inputs, store}` now.
 `ingestion/ingest.js` was split out of the old scheduler; `runScheduledIngestion`
 is deleted (was dead code per the Known Gaps note, confirmed unused). `ingest-worker`
-and `index.js`'s backfill path both use `env.INPUTS_DB`; the job reporter stays on
-`env.DB` until M2b moves `job_progress` to the state schema. `llm-worker` builds
+and `index.js`'s backfill path both use `env.INPUTS_DB`; the job reporter stayed on
+`env.DB` until M2b (below) moved `job_progress` to the state schema. `llm-worker` builds
 its `{inputs, store}` context per message (`inputs = readOnly(env.INPUTS_DB)`,
 `store = new RunStore(env.LIVE_DB, "live")`); a `backtest` message on `LLM_JOBS`
 now fails loudly — starts the job row, logs, `reporter.fail("backtests move to the
@@ -637,9 +641,9 @@ row), `dashboard_worker` (503 pass-through), `ingest_worker`/`queue_consumer`
 to `ingestion/ingest.js`), `fundamentals`/`price_bars`/`technical`/
 `portfolio_manager`/`inputs_view` (updated paths/headers only), `llm_worker`
 (real `LIVE_DB`/`INPUTS_DB` via an `engineBindings()` helper; the backtest-rejection
-test still uses the OLD-DB schema — the root `migrations/` dir — for
-`job_progress`, since the state schema's `job_progress` gets a `run_id` column
-only in M2b). New `test/replaced_settle.test.js` (7 cases):
+test used the OLD-DB schema — the root `migrations/` dir — for
+`job_progress` until M2b; the state schema already had `job_progress` with a
+`run_id` column from M1, the test just hadn't been pointed at it). New `test/replaced_settle.test.js` (7 cases):
 `getUnsettledReplacedPositions` returns replaced-and-unsettled positions with
 `exitPrice`, excludes already-settled ones, matches on `closedAt`/`ticker`/
 `'replaced'` exactly, and requires `closedAt`; a pipeline retry after a
@@ -649,10 +653,39 @@ values; `skipped_no_price_data` when no bar exists. The SQL outcomes for
 superseded/opened/rejected stay pinned in `test/run_store.test.js`, unchanged.
 Full suite: 470/470 pass.
 
-**M2b (not started, tracked for after the M2 PR):** move `llm_calls` and
-`job_progress` onto the state DB via `RunStore` — the state schema already has
-both tables with `run_id`/`env_run_id` columns from M1, this is wiring, not a
-schema change. Needed before M5 can delete the old `DB` binding.
+**M2b (done — branch `m2b/llm-calls-job-progress-to-state-db`):** `llm_calls` and
+`job_progress` moved onto the state DB via `RunStore`; wiring only, no schema
+change (both tables already had `env_run_id`/`run_id` from M1). All SQL for them
+now lives in `RunStore` (`insertLlmCall`/`pruneLlmCalls`/`getRecentLlmCalls`/
+`getLlmCall`, scoped by `env_run_id`; `insertQueuedJob`/`markJobRunning`/
+`updateJobProgress`/`completeJob`/`failJob`/`getJob`/`getActiveJob`, scoped by
+`run_id`, PK `(run_id, id)`). `storage/llm_calls.js` and `storage/jobs.js` keep
+only pure helpers (row building/clipping/redaction, value normalizers, row→API
+mappers, the idle cutoff) which `RunStore` imports, plus the best-effort
+`recordLlmCall`/`createJobReporter` wrappers. Interface changes:
+`recordLlmCall(config, entry)` (was `(env, config, entry)`) writes through
+`config.llmLog.store`; `createJobReporter(store, opts)` takes a `RunStore`. The
+`store` reaches `config.llmLog` in `runPipelineForTicker` and
+`checkOpenPositionExits` (so the reflection at a position close logs to the right
+environment), not through a new `callStructured` parameter, to leave the eight
+agents untouched. Consumers: `llm-worker` (backtest-rejection job row, retention
+prune) and `index.js` (backfill `queued` row + consumer progress) use
+`RunStore(LIVE_DB, "live")` and no longer touch `env.DB`; the dashboard API reads
+jobs and LLM calls through `dashboard/data.js#liveReadStore`, a
+`readOnly(LIVE_DB)`-wrapped live store. **Decision:** backfill jobs and the
+rejected-backtest row live under `run_id = 'live'` (the `llm` Worker has no
+`SIM_DB`; a real backtest's jobs get their own run id in the backtest Worker, M3),
+so `/api/jobs/*` and `/api/llm-calls*` are live-only until the M4 env selector.
+Every other dashboard panel still reads the old `env.DB` until M4. Tests: the two
+hand-written fakes (`FakeLlmDb`, `FakeJobDb`) are gone; `storage_jobs`,
+`llm_call_log`, `dashboard_llm`, `dashboard_api`, `dashboard_worker`,
+`llm_worker`, `queue_consumer`, `index_backfill`, `index_backtest_enqueue` and
+`checkpoint_resume` now run on real sqlite state DBs (new helpers
+`test/helpers/job_db.js`, `broken_db.js`), with new cases for env/run isolation
+(a second environment's rows are invisible to and unpruned by live, including by
+id), the read-only dashboard handle, and best-effort behavior when `LIVE_DB` is
+down. Full suite: 487/487 pass. Unblocks M5 deleting the old `DB` binding on the
+engine side; the dashboard's remaining old-DB reads are M4's.
 
 **Still open, carried from M1:** whether the `package.json`/`deploy.yml` migrate
 steps for the three new D1s land in M2 or M3; `BACKTEST_DAILY_WRITE_BUDGET`

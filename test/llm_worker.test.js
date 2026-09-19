@@ -16,7 +16,9 @@
 // M2: analyze/exit_check now build their engine ctx from LIVE_DB + INPUTS_DB
 // (real sqlite here, see engineBindings()); the `backtest` message type is
 // rejected loudly instead of run (backtests move to the M3 backtest Worker).
-// llm_calls (retention prune) still rides env.DB until M2b.
+// M2b: job_progress and llm_calls live in that same LIVE_DB (state schema,
+// run_id/env_run_id 'live'), so this Worker no longer needs env.DB at all --
+// none of these tests bind one, which is the proof.
 //
 // SCOPE NOTE on `analyze`: only the retry-on-failure path is covered here.
 // A full success round-trip through runPipelineForTicker needs the same
@@ -40,10 +42,7 @@ import assert from "node:assert/strict";
 import worker from "../src/llm-worker.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR } from "./helpers/engine_ctx.js";
-import path from "node:path";
-
-// The OLD DB's schema (root migrations/*.sql) -- where job_progress and llm_calls still live until M2b.
-const OLD_DB_DIR = path.join(STATE_DIR, "..", "..", "migrations");
+import { RunStore } from "../src/storage/run_store.js";
 
 /** Real sqlite LIVE_DB + INPUTS_DB, the two bindings llm-worker.js builds its engine ctx from (M2). */
 function engineBindings() {
@@ -75,80 +74,14 @@ function batchOf(...messages) {
   return { messages };
 }
 
-// Same narrow in-memory fake as test/storage_backtest_runs.test.js -- this
-// file needs the real insert/complete/fail/list SQL shapes runManualBacktest
-// actually issues, not a hand-guessed one.
-class FakeBacktestRunsDb {
-  constructor() {
-    this.rows = new Map();
-  }
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async run() {
-            if (/INSERT INTO backtest_runs/.test(sql)) {
-              const [id, tickers, testStart, testEnd, trainDays, testDays, graceDays, startedAt] = args;
-              db.rows.set(id, {
-                id, tickers, test_start: testStart, test_end: testEnd, train_days: trainDays, test_days: testDays,
-                grace_days: graceDays, status: "running", result: null, error: null, started_at: startedAt, finished_at: null,
-              });
-              return;
-            }
-            if (/UPDATE backtest_runs SET status = 'complete'/.test(sql)) {
-              const [result, finishedAt, id] = args;
-              const row = db.rows.get(id);
-              if (row) { row.status = "complete"; row.result = result; row.finished_at = finishedAt; }
-              return;
-            }
-            if (/UPDATE backtest_runs SET status = 'failed'/.test(sql)) {
-              const [error, finishedAt, id] = args;
-              const row = db.rows.get(id);
-              if (row) { row.status = "failed"; row.error = error; row.finished_at = finishedAt; }
-              return;
-            }
-            throw new Error(`FakeBacktestRunsDb: unsupported run() query: ${sql}`);
-          },
-          async all() {
-            if (/FROM backtest_runs/.test(sql)) {
-              const [limit] = args;
-              const results = [...db.rows.values()].sort((a, b) => (a.started_at < b.started_at ? 1 : -1)).slice(0, limit);
-              return { results };
-            }
-            throw new Error(`FakeBacktestRunsDb: unsupported all() query: ${sql}`);
-          },
-        };
-      },
-    };
-  }
-}
-
-/** Minimal fake for checkOpenPositionExits: no open positions, so it never reaches closePosition/settlePositionOutcome at all -- just proving the exit_check branch wires through, not exit logic itself (see test/exit_logic.test.js for that). */
-class FakeNoPositionsDb {
-  prepare(sql) {
-    return {
-      bind() {
-        return {
-          async all() {
-            if (/FROM positions/.test(sql)) return { results: [] };
-            throw new Error(`FakeNoPositionsDb: unsupported all() query: ${sql}`);
-          },
-        };
-      },
-    };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // backtest (LLM_JOBS)
 // ---------------------------------------------------------------------------
 
 test("queue() REJECTS a backtest job loudly (M2): marks the job failed with an M3 pointer, runs nothing, then acks", async (t) => {
-  // job_progress still lives on the old env.DB until M2b (schema: root migrations).
-  const db = createTestD1([OLD_DB_DIR]);
+  // job_progress lives in LIVE_DB's state schema (M2b); there is no env.DB.
   const bindings = engineBindings();
-  const env = { DB: db, ...bindings };
+  const env = { ...bindings };
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -168,9 +101,12 @@ test("queue() REJECTS a backtest job loudly (M2): marks the job failed with an M
   assert.ok(errorLogs.some(([msg]) => msg.includes("backtest job rejected")));
 
   // Failed loudly on the job row, with the reason the dashboard will show.
-  const job = await db.prepare("SELECT status, error FROM job_progress WHERE id = ?").bind("backtest-1").first();
+  const job = await bindings.LIVE_DB.prepare("SELECT run_id, type, status, error FROM job_progress WHERE id = ?").bind("backtest-1").first();
+  assert.equal(job.run_id, "live", "no SIM_DB here, so the rejection row lands under the live run");
+  assert.equal(job.type, "backtest");
   assert.equal(job.status, "failed");
   assert.match(job.error, /backtest Worker in M3/);
+  assert.equal((await new RunStore(bindings.LIVE_DB, "live").getJob("backtest-1")).status, "failed", "and is what GET /api/jobs/:id will read back");
 
   // Nothing ran: no engine state written to either binding.
   for (const table of ["positions", "trade_decisions", "decision_memory", "pipeline_checkpoints"]) {
@@ -184,7 +120,7 @@ test("queue() REJECTS a backtest job loudly (M2): marks the job failed with an M
 // ---------------------------------------------------------------------------
 
 test("queue() exit_check runs checkOpenPositionExits and acks", async () => {
-  const env = { DB: new FakeNoPositionsDb(), ...engineBindings() };
+  const env = engineBindings();
 
   const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
   await worker.queue(batchOf(message), env);
@@ -195,7 +131,7 @@ test("queue() exit_check runs checkOpenPositionExits and acks", async () => {
 
 test("queue() exit_check acks (does not retry) on failure -- next scheduled tick re-evaluates every still-open position regardless", async (t) => {
   // The live state DB is what exit_check reads open positions from (M2).
-  const env = { DB: new FakeNoPositionsDb(), LIVE_DB: new ThrowingDb(), INPUTS_DB: createTestD1([INPUTS_DIR]) };
+  const env = { LIVE_DB: new ThrowingDb(), INPUTS_DB: createTestD1([INPUTS_DIR]) };
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -208,74 +144,77 @@ test("queue() exit_check acks (does not retry) on failure -- next scheduled tick
 });
 
 // ---------------------------------------------------------------------------
-// LLM call log retention (storage/llm_calls.js#pruneLlmCalls) rides the
-// exit_check tick
+// LLM call log retention (RunStore#pruneLlmCalls) rides the exit_check tick,
+// against the live environment's rows in LIVE_DB
 // ---------------------------------------------------------------------------
 
-/** FakeNoPositionsDb plus the one DELETE the retention prune issues. `failDelete` makes that DELETE reject. */
-class PrunableDb extends FakeNoPositionsDb {
-  constructor({ failDelete = false } = {}) {
-    super();
-    this.cutoffs = [];
-    this.failDelete = failDelete;
-  }
-  prepare(sql) {
-    if (!/DELETE FROM llm_calls/.test(sql)) return super.prepare(sql);
-    const db = this;
-    return {
-      bind(cutoff) {
-        return {
-          async run() {
-            if (db.failDelete) throw new Error("simulated D1 failure on prune");
-            db.cutoffs.push(cutoff);
-          },
-        };
-      },
-    };
-  }
+const DAY_MS = 24 * 3600 * 1000;
+const daysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
+const EXIT_CHECK = () => new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
+
+/** Bindings whose LIVE_DB holds one live llm_calls row per age in `agesDays` (label "age-<n>d"), plus one 100-day-old row for env 'bt-1'. */
+async function bindingsWithLog(agesDays) {
+  const bindings = engineBindings();
+  const live = new RunStore(bindings.LIVE_DB, "live");
+  for (const n of agesDays) await live.insertLlmCall({ label: `age-${n}d`, status: "ok", prompt: "p" }, { now: daysAgo(n) });
+  await new RunStore(bindings.LIVE_DB, "bt-1").insertLlmCall({ label: "bt-old", status: "ok", prompt: "p" }, { now: daysAgo(100) });
+  return bindings;
 }
 
-const DAY_MS = 24 * 3600 * 1000;
+const labels = async (db, env) => {
+  const { results } = await db.prepare("SELECT label FROM llm_calls WHERE env_run_id = ? ORDER BY id").bind(env).all();
+  return results.map((r) => r.label);
+};
 
-test("queue() exit_check prunes LLM call log rows older than the retention window (14 days by default)", async () => {
-  const env = { DB: new PrunableDb(), ...engineBindings() };
-  const before = Date.now();
-  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
+test("queue() exit_check prunes live LLM call log rows older than the retention window (14 days by default), and only live's", async () => {
+  const env = await bindingsWithLog([1, 13, 15, 40]);
+  const message = EXIT_CHECK();
   await worker.queue(batchOf(message), env);
 
   assert.equal(message.acked, true);
-  assert.equal(env.DB.cutoffs.length, 1);
-  const cutoffMs = Date.parse(env.DB.cutoffs[0]);
-  assert.ok(Math.abs(cutoffMs - (before - 14 * DAY_MS)) < 5000, `cutoff ${env.DB.cutoffs[0]} should be ~14 days ago`);
+  assert.deepEqual(await labels(env.LIVE_DB, "live"), ["age-1d", "age-13d"]);
+  assert.deepEqual(await labels(env.LIVE_DB, "bt-1"), ["bt-old"], "another environment's rows are never pruned by live's tick");
 });
 
 test("queue() exit_check honors LLM_LOG_RETENTION_DAYS", async () => {
-  const env = { DB: new PrunableDb(), ...engineBindings(), LLM_LOG_RETENTION_DAYS: "3" };
-  const before = Date.now();
-  await worker.queue(batchOf(new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" })), env);
+  const env = { ...(await bindingsWithLog([1, 2, 4, 10])), LLM_LOG_RETENTION_DAYS: "3" };
+  await worker.queue(batchOf(EXIT_CHECK()), env);
 
-  assert.ok(Math.abs(Date.parse(env.DB.cutoffs[0]) - (before - 3 * DAY_MS)) < 5000);
+  assert.deepEqual(await labels(env.LIVE_DB, "live"), ["age-1d", "age-2d"]);
 });
 
 test("queue() exit_check skips the prune entirely when LLM_LOG_ENABLED is \"false\"", async () => {
-  const env = { DB: new PrunableDb(), ...engineBindings(), LLM_LOG_ENABLED: "false" };
-  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
+  const env = { ...(await bindingsWithLog([1, 40])), LLM_LOG_ENABLED: "false" };
+  const message = EXIT_CHECK();
   await worker.queue(batchOf(message), env);
 
   assert.equal(message.acked, true);
-  assert.equal(env.DB.cutoffs.length, 0);
+  assert.deepEqual(await labels(env.LIVE_DB, "live"), ["age-1d", "age-40d"]);
 });
 
 test("queue() exit_check still acks when the prune itself fails -- a log-retention hiccup must not look like a failed exit check", async (t) => {
   const warnings = [];
   t.mock.method(console, "warn", (...args) => warnings.push(args));
-  const env = { DB: new PrunableDb({ failDelete: true }), ...engineBindings() };
-  const message = new FakeMessage({ type: "exit_check", asOf: "2026-09-18T00:00:00.000Z" });
+  const bindings = await bindingsWithLog([40]);
+  // Everything works except the DELETE the prune issues.
+  const realDb = bindings.LIVE_DB;
+  const env = {
+    ...bindings,
+    LIVE_DB: {
+      prepare(sql) {
+        if (/DELETE FROM llm_calls/.test(sql)) throw new Error("simulated D1 failure on prune");
+        return realDb.prepare(sql);
+      },
+      batch: (...args) => realDb.batch(...args),
+    },
+  };
+  const message = EXIT_CHECK();
   await worker.queue(batchOf(message), env);
 
   assert.equal(message.acked, true);
   assert.equal(message.retried, false);
   assert.ok(warnings.some(([msg]) => msg.includes("llm call log prune failed")));
+  assert.deepEqual(await labels(realDb, "live"), ["age-40d"], "nothing was pruned");
 });
 
 // ---------------------------------------------------------------------------
@@ -285,7 +224,7 @@ test("queue() exit_check still acks when the prune itself fails -- a log-retenti
 test("queue() analyze RETRIES (does not ack) on failure -- the one deliberate exception to every other message type in this handler, since runPipelineForTicker is checkpoint-resumable", async (t) => {
   // The checkpoint read is the first thing runPipelineForTicker does, and it
   // goes through the live RunStore (LIVE_DB) since M2.
-  const env = { DB: new FakeNoPositionsDb(), LIVE_DB: new ThrowingDb(), INPUTS_DB: createTestD1([INPUTS_DIR]) };
+  const env = { LIVE_DB: new ThrowingDb(), INPUTS_DB: createTestD1([INPUTS_DIR]) };
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -308,7 +247,7 @@ test("queue() analyze RETRIES (does not ack) on failure -- the one deliberate ex
 // ---------------------------------------------------------------------------
 
 test("queue() acks (does not retry) an unrecognized job type -- including `backfill`, which stays on backend -- logging the anomaly", async (t) => {
-  const env = { DB: new FakeBacktestRunsDb() };
+  const env = {}; // neither path touches a binding
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
@@ -330,7 +269,7 @@ test("queue() retries (does not ack) a message when the handler itself crashes u
   // the "unrecognized type" case above) -- to actually exercise the retry
   // path we need queue()'s own try/catch to see a real thrown error, e.g.
   // a completely malformed message body that isn't even an object.
-  const env = { DB: new FakeBacktestRunsDb() };
+  const env = {}; // neither path touches a binding
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 

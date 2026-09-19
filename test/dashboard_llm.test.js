@@ -3,8 +3,10 @@
 // /api/llm-calls[/:id] routes (src/index.js -> dashboard/api.js), and the
 // dashboard Worker's /dashboard/llm[/:id] routes with their session gate.
 // The dashboard tests run the REAL backend Worker behind a fake service
-// binding (same approach as dashboard_worker.test.js) over FakeLlmDb, so the
-// filter/paging query strings travel the whole way to SQL.
+// binding (same approach as dashboard_worker.test.js) over a REAL sqlite state
+// DB bound as LIVE_DB (M2b: llm_calls lives in the state schema, read through
+// a read-only RunStore), so the filter/paging query strings travel the whole
+// way to SQL.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,8 +16,10 @@ import { parseLlmParams, llmQuery, backtestRunsList } from "../src/dashboard/hel
 import { renderLlmView, renderLlmCallView } from "../src/dashboard/views/llm.js";
 import { renderShell } from "../src/dashboard/shell.js";
 import { renderMoreView } from "../src/dashboard/views/more.js";
-import { insertLlmCall } from "../src/storage/llm_calls.js";
-import { FakeLlmDb, BrokenDb } from "./helpers/fake_llm_db.js";
+import { RunStore } from "../src/storage/run_store.js";
+import { createTestD1 } from "./helpers/sqlite_d1.js";
+import { STATE_DIR } from "./helpers/engine_ctx.js";
+import { BrokenDb } from "./helpers/broken_db.js";
 
 const qs = (obj) => new URLSearchParams(obj);
 const DEFAULT_PARAMS = parseLlmParams(qs({}));
@@ -191,16 +195,17 @@ test("renderLlmCallView handles a missing call and a backend error", () => {
 // ---------------------------------------------------------------------------
 
 async function seededDb() {
-  const db = new FakeLlmDb();
-  await insertLlmCall(db, { source: "pipeline", ticker: "AAPL", runId: "news-1", label: "trader", status: "ok", prompt: "PROMPT-ONE", response: '{"instrument":"equity"}' });
-  await insertLlmCall(db, { source: "backtest", jobId: "backtest-1", ticker: "MSFT", runId: "w|MSFT|n2", label: "debate:judge", status: "error", errorStage: "parse", error: "not json", prompt: "PROMPT-TWO", response: "garbage" });
+  const db = createTestD1([STATE_DIR]);
+  const store = new RunStore(db, "live");
+  await store.insertLlmCall({ source: "pipeline", ticker: "AAPL", runId: "news-1", label: "trader", status: "ok", prompt: "PROMPT-ONE", response: '{"instrument":"equity"}' });
+  await store.insertLlmCall({ source: "backtest", jobId: "backtest-1", ticker: "MSFT", runId: "w|MSFT|n2", label: "debate:judge", status: "error", errorStage: "parse", error: "not json", prompt: "PROMPT-TWO", response: "garbage" });
   return db;
 }
 
 const backendGet = (path, env) => backendWorker.fetch(new Request(`https://backend${path}`), env, { waitUntil() {} });
 
 test("GET /api/llm-calls returns previews newest-first and honors the filter params", async () => {
-  const env = { DB: await seededDb() };
+  const env = { LIVE_DB: await seededDb() };
 
   const all = await (await backendGet("/api/llm-calls", env)).json();
   assert.deepEqual(all.calls.map((c) => c.id), [2, 1]);
@@ -216,13 +221,13 @@ test("GET /api/llm-calls returns previews newest-first and honors the filter par
 
 test("GET /api/llm-calls reports a D1 failure in the body rather than a blank 200 (so the page can show it)", async (t) => {
   t.mock.method(console, "error", () => {});
-  const body = await (await backendGet("/api/llm-calls", { DB: new BrokenDb() })).json();
+  const body = await (await backendGet("/api/llm-calls", { LIVE_DB: new BrokenDb() })).json();
   assert.deepEqual(body.calls, []);
   assert.match(body.error, /D1 exploded/);
 });
 
 test("GET /api/llm-calls/:id returns the full call; 404 for an unknown id; 400 for a non-numeric one", async () => {
-  const env = { DB: await seededDb() };
+  const env = { LIVE_DB: await seededDb() };
 
   const res = await backendGet("/api/llm-calls/2", env);
   assert.equal(res.status, 200);
@@ -235,13 +240,31 @@ test("GET /api/llm-calls/:id returns the full call; 404 for an unknown id; 400 f
   assert.equal((await backendGet("/api/llm-calls/abc", env)).status, 400);
 });
 
+test("GET /api/llm-calls only shows the live environment (another run_id's rows in the same DB are invisible, including by id)", async () => {
+  const db = await seededDb();
+  await new RunStore(db, "bt-1").insertLlmCall({ source: "backtest", label: "trader", status: "ok", prompt: "OTHER-ENV", ticker: "AAPL" });
+  const env = { LIVE_DB: db };
+
+  const body = await (await backendGet("/api/llm-calls", env)).json();
+  assert.deepEqual(body.calls.map((c) => c.id), [2, 1]);
+  assert.equal((await backendGet("/api/llm-calls/3", env)).status, 404, "bt-1's row (id 3) is not visible through the live view");
+});
+
+test("the dashboard's LLM/job reads go through a read-only handle: a write method through it throws before reaching D1", async () => {
+  const { liveReadStore } = await import("../src/dashboard/data.js");
+  const store = liveReadStore({ LIVE_DB: createTestD1([STATE_DIR]) });
+  await assert.rejects(store.insertLlmCall({ label: "x", status: "ok", prompt: "p" }), /refusing non-SELECT/);
+  await assert.rejects(store.insertQueuedJob({ id: "j", type: "backfill" }), /refusing non-SELECT/);
+  assert.deepEqual((await store.getRecentLlmCalls()).calls, [], "reads still work");
+});
+
 function makeBackend(backendEnv) {
   return { fetch: (input, init) => backendWorker.fetch(new Request(input, init), backendEnv, { waitUntil() {} }) };
 }
 
 async function dashboardEnv() {
   return {
-    BACKEND: makeBackend({ DB: await seededDb() }),
+    BACKEND: makeBackend({ LIVE_DB: await seededDb() }),
     DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key",
   };
 }

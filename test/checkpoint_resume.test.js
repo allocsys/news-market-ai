@@ -13,8 +13,9 @@
 //
 // config.fakeModel (agents/utils/structured.js) is what makes the
 // full-pipeline test possible without live Gemini calls across six agent
-// modules. Only llm_calls still uses a fake (FakeLlmDb as env.DB) -- that
-// table stays on the old DB binding until M2b.
+// modules. llm_calls (M2b) lands in the same state DB as the rest of the
+// run's state, through ctx.store, so the log tests read it back with
+// stateRows(ctx.stateDb, "llm_calls").
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -23,9 +24,9 @@ import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { runNewsEventAnalyst } from "../src/agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../src/agents/analysts/sentimentAnalyst.js";
 import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
-import { FakeLlmDb } from "./helpers/fake_llm_db.js";
 import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
 import { withLlmLogContext } from "../src/storage/llm_calls.js";
+import { RunStore } from "../src/storage/run_store.js";
 
 test("nextStage(null) starts a brand-new run at the first stage", () => {
   assert.equal(nextStage(null), STAGES[0]);
@@ -291,56 +292,73 @@ test("runPipelineForTicker returns null-confidence rejection without opening a p
 });
 
 // ---------------------------------------------------------------------------
-// LLM call log context (storage/llm_calls.js). env.DB (the old DB binding,
-// where llm_calls lives until M2b) is separate from the engine ctx, so a
-// FakeLlmDb as env.DB records exactly what the log writes.
+// LLM call log context (storage/llm_calls.js). Since M2b the engine's own
+// store (ctx.store) is where the log writes, so the rows are read straight
+// back out of the ctx's state DB; env is not involved at all.
 // ---------------------------------------------------------------------------
 
 const EXPECTED_LABELS = ["analyst:news_event", "analyst:sentiment", "analyst:technical", "debate:bear", "debate:bull", "debate:judge", "trader"];
 
+const llmRows = (ctx) => stateRows(ctx.stateDb, "llm_calls", "id");
+
 test("runPipelineForTicker logs every LLM call it makes, tagged with its runId and ticker, as source 'pipeline' by default", async () => {
   const ctx = await ctxWithEntryBar();
-  const llmDb = new FakeLlmDb();
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, llmLogEnabled: true, fakeModel: makeFakeModel() };
 
-  await runPipelineForTicker({ DB: llmDb }, config, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
+  await runPipelineForTicker({}, config, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
-  assert.deepEqual(llmDb.rows.map((r) => r.label).sort(), EXPECTED_LABELS);
-  for (const row of llmDb.rows) {
+  const rows = await llmRows(ctx);
+  assert.deepEqual(rows.map((r) => r.label).sort(), EXPECTED_LABELS);
+  for (const row of rows) {
+    assert.equal(row.env_run_id, "live", "the environment is the store's run id");
     assert.equal(row.source, "pipeline");
-    assert.equal(row.run_id, "news-1");
+    assert.equal(row.run_id, "news-1", "run_id is the PIPELINE run, not the environment");
     assert.equal(row.ticker, "AAPL");
     assert.equal(row.job_id, null);
     assert.equal(row.status, "ok");
   }
   // The exact prompt each agent sent and the raw text it got back are what's stored.
-  const trader = llmDb.rows.find((r) => r.label === "trader");
+  const trader = rows.find((r) => r.label === "trader");
   assert.match(trader.prompt, /You are a trader/);
   assert.match(trader.response, /ride the post-earnings momentum/);
   assert.equal(trader.requested_model, "deep");
-  assert.equal(llmDb.rows.find((r) => r.label === "analyst:sentiment").requested_model, "quick");
+  assert.equal(rows.find((r) => r.label === "analyst:sentiment").requested_model, "quick");
 });
 
-test("runPipelineForTicker keeps a source/jobId the caller set (a backtest), and only adds runId/ticker on top", async () => {
+test("a pipeline run in a backtest environment logs under that environment's env_run_id", async () => {
+  const ctx = makeCtx({ runId: "bt-1" });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 181 });
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, llmLogEnabled: true, fakeModel: makeFakeModel() };
+
+  await runPipelineForTicker({}, config, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
+
+  const rows = await llmRows(ctx);
+  assert.equal(rows.length, 7);
+  assert.ok(rows.every((r) => r.env_run_id === "bt-1"));
+  assert.equal((await ctx.store.getRecentLlmCalls()).calls.length, 7);
+  assert.equal((await new RunStore(ctx.stateDb, "live").getRecentLlmCalls()).calls.length, 0, "the live environment sees none of it");
+});
+
+test("runPipelineForTicker keeps a source/jobId the caller set (a backtest), and only adds runId/ticker/store on top", async () => {
   const ctx = await ctxWithEntryBar();
-  const llmDb = new FakeLlmDb();
   const base = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, llmLogEnabled: true, fakeModel: makeFakeModel() };
   const config = withLlmLogContext(base, { source: "backtest", jobId: "backtest-42" });
 
-  await runPipelineForTicker({ DB: llmDb }, config, ctx, { pipelineRunId: "2026-01-01|AAPL|news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
+  await runPipelineForTicker({}, config, ctx, { pipelineRunId: "2026-01-01|AAPL|news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
-  assert.equal(llmDb.rows.length, 7);
-  for (const row of llmDb.rows) {
+  const rows = await llmRows(ctx);
+  assert.equal(rows.length, 7);
+  for (const row of rows) {
     assert.equal(row.source, "backtest");
     assert.equal(row.job_id, "backtest-42");
     assert.equal(row.run_id, "2026-01-01|AAPL|news-1");
   }
   assert.equal(config.llmLog.runId, undefined, "the caller's config object must not be mutated");
+  assert.equal(config.llmLog.store, undefined, "...nor gain a store");
 });
 
 test("a resumed pipeline run doesn't log the stages it skips (no LLM call was made for them)", async () => {
   const ctx = await ctxWithEntryBar();
-  const firstLog = new FakeLlmDb();
   const base = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, llmLogEnabled: true };
 
   // First attempt dies at the debate stage, after the analysts were logged.
@@ -348,12 +366,13 @@ test("a resumed pipeline run doesn't log the stages it skips (no LLM call was ma
     if (opts.schema === DebateSide) throw new Error("simulated crash mid-pipeline");
     return makeFakeModel()(prompt, opts);
   };
-  await assert.rejects(runPipelineForTicker({ DB: firstLog }, { ...base, fakeModel: crashModel }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" }));
-  const analystRows = firstLog.rows.filter((r) => r.label.startsWith("analyst:"));
-  assert.equal(analystRows.length, 3);
+  await assert.rejects(runPipelineForTicker({}, { ...base, fakeModel: crashModel }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" }));
+  const afterCrash = await llmRows(ctx);
+  assert.equal(afterCrash.filter((r) => r.label.startsWith("analyst:")).length, 3);
+  const lastId = afterCrash[afterCrash.length - 1].id;
 
   // Retry: resumes at the debate stage, so the analysts must not be called (or logged) again.
-  const retryLog = new FakeLlmDb();
-  await runPipelineForTicker({ DB: retryLog }, { ...base, fakeModel: makeFakeModel() }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
-  assert.deepEqual(retryLog.rows.map((r) => r.label).sort(), ["debate:bear", "debate:bull", "debate:judge", "trader"]);
+  await runPipelineForTicker({}, { ...base, fakeModel: makeFakeModel() }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
+  const retryRows = (await llmRows(ctx)).filter((r) => r.id > lastId);
+  assert.deepEqual(retryRows.map((r) => r.label).sort(), ["debate:bear", "debate:bull", "debate:judge", "trader"]);
 });

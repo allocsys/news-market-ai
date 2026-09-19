@@ -1,6 +1,6 @@
 // A REAL-SQL stand-in for D1, built on node:sqlite (unflagged in Node
-// 22.22, ExperimentalWarning only -- run with --no-warnings). Unlike
-// test/helpers/fake_llm_db.js's hand-written regex-based fake, this
+// 22.22, ExperimentalWarning only -- run with --no-warnings). Unlike the
+// hand-written regex-based fakes this replaced, it
 // actually executes the project's migration SQL and runs real queries
 // through node:sqlite, so it can prove things a fake can't: the
 // partial-unique-index backstop actually rejects a double-open, an
