@@ -417,20 +417,40 @@ export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
  * again. Intended for a one-off backfill script/CLI, not the live cron
  * path (runScheduledIngestion/collectNewsItems below remain unchanged).
  */
-export async function backfillHistoricalNews(config, db, { from, to, kv } = {}) {
+export async function backfillHistoricalNews(config, db, { from, to, kv, onProgress } = {}) {
   if (!from || !to) {
     throw new Error("backfillHistoricalNews requires an explicit {from, to} range -- use collectNewsItems for the live trailing-window path instead");
   }
 
-  const { items, errors } = await fetchFinnhubLatest(config, { from, to }, { kv });
+  // `onProgress` (optional, the queue consumer's live-progress reporter --
+  // see src/storage/jobs.js) is told about two phases, mapped onto 0-100 here
+  // so the dashboard just draws it: fetching = 5-50 (one step per ticker),
+  // saving = 50-100 (one step per article). It must never affect the
+  // backfill's own outcome, so it is only ever awaited, never inspected.
+  const tickerCount = config.watchlist?.length ?? 0;
+  await onProgress?.({ phase: "fetching", percent: 5, done: 0, total: tickerCount, detail: `Fetching Finnhub news for ${tickerCount} ticker${tickerCount === 1 ? "" : "s"}`, force: true });
+
+  const { items, errors } = await fetchFinnhubLatest(config, { from, to }, {
+    kv,
+    onTickerDone: ({ ticker, index, total }) =>
+      onProgress?.({ phase: "fetching", percent: 5 + Math.round((45 * (index + 1)) / total), done: index + 1, total, detail: `Fetched ${ticker} (${index + 1}/${total})` }),
+  });
   for (const { error } of errors) {
     logSkippedSource("historical news backfill", "finnhub", error);
   }
+
+  const totalItems = items.length;
+  await onProgress?.({ phase: "saving", percent: 50, done: 0, total: totalItems, detail: totalItems > 0 ? `Saving ${totalItems} article${totalItems === 1 ? "" : "s"}` : "No articles returned for this range", force: true });
 
   let inserted = 0;
   for (const item of items) {
     await insertNewsItem(db, item);
     inserted++;
+    // Every 25th article, not every one: the reporter throttles writes
+    // anyway, but this also keeps the per-article loop free of extra awaits.
+    if (inserted % 25 === 0) {
+      await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * inserted) / totalItems), done: inserted, total: totalItems, detail: `Saved ${inserted}/${totalItems} articles` });
+    }
   }
 
   return { inserted, errors };
