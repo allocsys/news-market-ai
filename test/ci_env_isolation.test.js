@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWranglerToml } from "./helpers/wrangler_toml.js";
@@ -27,6 +27,15 @@ const WRANGLER_FILES = ["wrangler.toml", "wrangler.dashboard.toml", "wrangler.in
 
 const byBinding = (cfg, key) => Object.fromEntries((cfg.arrays[key] ?? []).map((b) => [b.binding, b]));
 
+/**
+ * The pre-split legacy database (M5 removed its `DB` binding from every wrangler
+ * config). Its committed database_id was always this placeholder -- the real id
+ * was only ever patched into a CI job's local checkout -- so this constant is
+ * exactly what a resurrected legacy binding would look like in a config file.
+ */
+const LEGACY_DB_NAME = "news_market_ai";
+const LEGACY_DB_PLACEHOLDER_ID = "REPLACE_WITH_D1_DATABASE_ID";
+
 /** The backend config is the single source of truth for which database/namespace each binding name means. */
 function referenceIds() {
   const backend = read("wrangler.toml");
@@ -35,7 +44,7 @@ function referenceIds() {
     live: d1.LIVE_DB.database_id,
     sim: d1.SIM_DB.database_id,
     inputs: d1.INPUTS_DB.database_id,
-    legacy: d1.DB.database_id,
+    legacy: LEGACY_DB_PLACEHOLDER_ID,
   };
 }
 
@@ -48,7 +57,7 @@ export function findBacktestConfigViolations(cfg, ids, { otherKvIds = [] } = {})
     if (!(b.binding in allowedD1)) problems.push(`unexpected D1 binding ${b.binding} (allowed: ${Object.keys(allowedD1).join(", ")})`);
     else if (b.database_id !== allowedD1[b.binding]) problems.push(`${b.binding} points at database_id ${b.database_id}, expected ${allowedD1[b.binding]}`);
     if (b.database_id === ids.live) problems.push(`binding ${b.binding} is the live database`);
-    if (b.database_id === ids.legacy || b.database_id === "REPLACE_WITH_D1_DATABASE_ID") problems.push(`binding ${b.binding} is the legacy pre-split database`);
+    if (b.database_id === ids.legacy || b.database_id === LEGACY_DB_PLACEHOLDER_ID) problems.push(`binding ${b.binding} is the legacy pre-split database`);
   }
   for (const name of Object.keys(allowedD1)) {
     if (!d1.some((b) => b.binding === name)) problems.push(`missing required D1 binding ${name}`);
@@ -263,4 +272,40 @@ test("deploy-backtest sets GEMINI_API_KEYS on its own config, never a Finnhub ke
   assert.ok(!/FINNHUB/.test(job), "the backtest Worker must not receive a Finnhub key");
   assert.ok(!/ensure-d1-database|ensure-kv-namespace/.test(job), "an ensure-* step could patch live's ids into wrangler.backtest.toml");
   assert.ok(job.includes("group: deploy-news-market-ai-backtest-"), "own concurrency group");
+});
+
+// ---------------------------------------------------------------------------
+// M5: the legacy pre-split database is gone from code/config
+// ---------------------------------------------------------------------------
+// The owner deletes the Cloudflare resource itself, out of band. If anything
+// here still named it, a deploy after that deletion could fail on the missing
+// binding -- or, worse, the old ensure-d1-database action would quietly
+// `wrangler d1 create` a fresh empty one under the same name. These checks keep
+// every such path closed.
+
+test("M5: no wrangler config binds the legacy database (no `DB` binding, no placeholder D1 ids)", () => {
+  for (const f of WRANGLER_FILES) {
+    for (const b of read(f).arrays.d1_databases ?? []) {
+      assert.notEqual(b.binding, "DB", `${f} still has a D1 binding named DB`);
+      assert.notEqual(b.database_name, LEGACY_DB_NAME, `${f} still binds database ${LEGACY_DB_NAME}`);
+      assert.ok(!String(b.database_id).startsWith("REPLACE_WITH"), `${f}: D1 binding ${b.binding} has a placeholder id -- every remaining D1 binding carries a real id, so nothing needs resolving at deploy time`);
+    }
+  }
+});
+
+test("M5: CI and npm scripts never provision, migrate or reference the legacy database", () => {
+  assert.ok(!existsSync(path.join(ROOT, ".github/actions/ensure-d1-database")), "the ensure-d1-database action defaulted to the legacy name and would re-create the deleted database -- it must stay deleted");
+  assert.ok(!DEPLOY_YML.includes("ensure-d1-database"), "deploy.yml still calls ensure-d1-database");
+  for (const [name, cmd] of Object.entries(PACKAGE_JSON.scripts)) {
+    assert.ok(!cmd.includes(LEGACY_DB_NAME), `package.json script ${name} still targets ${LEGACY_DB_NAME}`);
+  }
+  for (const name of ["db:migrate:local", "db:migrate:remote"]) {
+    assert.equal(PACKAGE_JSON.scripts[name], undefined, `${name} only ever migrated the legacy database`);
+  }
+  // The :all chains still cover the three environment-split databases.
+  for (const env of ["local", "remote"]) {
+    const chain = PACKAGE_JSON.scripts[`db:migrate:${env}:all`];
+    for (const part of ["inputs", "live", "sim"]) assert.ok(chain.includes(`db:migrate:${env}:${part}`), `db:migrate:${env}:all no longer runs ${part}`);
+    assert.equal(chain.split("&&").length, 3, `db:migrate:${env}:all should chain exactly inputs, live, sim`);
+  }
 });
