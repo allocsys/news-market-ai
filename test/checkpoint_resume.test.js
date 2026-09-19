@@ -127,6 +127,9 @@ function makeFakeModel({ onCall } = {}) {
       if (opts.extraFields.agent === "sentiment") {
         return JSON.stringify({ sentiment: "positive", summary: "market reaction positive", justification: "beat + raised guidance" });
       }
+      if (opts.extraFields.agent === "technical") {
+        return JSON.stringify({ summary: "one bar only, flat", justification: "not enough history for a trend read" });
+      }
       throw new Error(`unexpected AnalystOpinion agent in test fake model: ${opts.extraFields.agent}`);
     }
     if (opts.schema === DebateSide) {
@@ -178,10 +181,11 @@ test("runPipelineForTicker runs the FULL pipeline end-to-end via config.fakeMode
   assert.equal(decisions.length, 1);
   assert.equal(decisions[0].status, "opened");
 
-  // Exactly one call per LLM-backed agent: 2 analysts (technical self-skips,
-  // no price bars) + bull + bear + judge + trader = 6, single debate round
-  // since confidence 0.8 already clears shouldContinueDebate's threshold.
-  assert.equal(calls.length, 6);
+  // Exactly one call per LLM-backed agent: 3 analysts (the technical analyst
+  // runs now: the real inputs DB returns the seeded entry bar to it too) +
+  // bull + bear + judge + trader = 7, single debate round since confidence
+  // 0.8 already clears shouldContinueDebate's threshold.
+  assert.equal(calls.length, 7);
 });
 
 test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT re-invoking already-completed stages' LLM calls", async () => {
@@ -292,7 +296,7 @@ test("runPipelineForTicker returns null-confidence rejection without opening a p
 // FakeLlmDb as env.DB records exactly what the log writes.
 // ---------------------------------------------------------------------------
 
-const EXPECTED_LABELS = ["analyst:news_event", "analyst:sentiment", "debate:bear", "debate:bull", "debate:judge", "trader"];
+const EXPECTED_LABELS = ["analyst:news_event", "analyst:sentiment", "analyst:technical", "debate:bear", "debate:bull", "debate:judge", "trader"];
 
 test("runPipelineForTicker logs every LLM call it makes, tagged with its runId and ticker, as source 'pipeline' by default", async () => {
   const ctx = await ctxWithEntryBar();
@@ -325,7 +329,7 @@ test("runPipelineForTicker keeps a source/jobId the caller set (a backtest), and
 
   await runPipelineForTicker({ DB: llmDb }, config, ctx, { pipelineRunId: "2026-01-01|AAPL|news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
-  assert.equal(llmDb.rows.length, 6);
+  assert.equal(llmDb.rows.length, 7);
   for (const row of llmDb.rows) {
     assert.equal(row.source, "backtest");
     assert.equal(row.job_id, "backtest-42");
@@ -346,7 +350,7 @@ test("a resumed pipeline run doesn't log the stages it skips (no LLM call was ma
   };
   await assert.rejects(runPipelineForTicker({ DB: firstLog }, { ...base, fakeModel: crashModel }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" }));
   const analystRows = firstLog.rows.filter((r) => r.label.startsWith("analyst:"));
-  assert.equal(analystRows.length, 2);
+  assert.equal(analystRows.length, 3);
 
   // Retry: resumes at the debate stage, so the analysts must not be called (or logged) again.
   const retryLog = new FakeLlmDb();
