@@ -234,7 +234,11 @@ export async function runPipelineForTicker(env, config, db, { runId, ticker, new
       thesis: state.thesis,
       riskDecision: state.riskDecision,
       portfolioDecision: state.portfolioDecision,
-      status: state.portfolioDecision.approvedForExecution ? "approved" : "rejected",
+      // 'approved' only when a position was actually opened/replaced;
+      // 'skipped_no_price_data' when portfolio_manager approved but
+      // execution was blocked by missing price_bars data (see `executed`
+      // above); 'rejected' when risk_mgmt/portfolio_manager itself said no.
+      status: !state.portfolioDecision.approvedForExecution ? "rejected" : executed ? "approved" : "skipped_no_price_data",
       createdAt: new Date().toISOString(),
       // Full LLM reasoning chain (migrations/0008_trade_decisions_llm_answers.sql)
       // -- state.opinions is the Analyst Team's per-article output (news_event/
