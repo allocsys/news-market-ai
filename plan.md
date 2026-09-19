@@ -196,7 +196,8 @@ second D1" note.
 - `llm` (live only): `live` read/write, `inputs` read-only. Consumes `ANALYZE`
   and `exit_check`.
 - `backtest` (new: `wrangler.backtest.toml`, own `BACKTEST` queue + DLQ): `sim`
-  read/write, `inputs` read-only, KV for cooldowns. **No `live` binding.**
+  read/write, `inputs` read-only, its own KV namespace (`backtest-CACHE_KV`) for
+  cooldowns. **No `live` binding and no live KV.**
 - `backend`: read-only handles to all three for the dashboard API; runs the
   migrations for all three; enqueues backtest jobs.
 - `dashboard`: unchanged, except views take an environment (`live` by default);
@@ -212,8 +213,9 @@ never calls `Date.now()`. Live: real clock and queues. Backtest: `SimClock`
 backtest cannot trigger live work. This replaces PR #44 (walk clamp + guard).
 
 **Atomic portfolio commit (also fixes "Overlapping open positions").** D1 runs a
-`batch` as one transaction and serializes writers per database, so
-check-and-write goes in one batch with the checks inside the SQL:
+`batch` as one transaction (sequential, all-or-nothing; verified against the
+docs, see caveats), so check-and-write goes in one batch with the checks inside
+the SQL:
 1. Predicate P = no open position for this ticker with a later `opened_at` AND
    (open risk of *other* tickers) + new risk <= `MAX_PORTFOLIO_RISK_PCT`.
 2. `UPDATE positions` closing this ticker's older open positions as `replaced`
@@ -222,34 +224,64 @@ check-and-write goes in one batch with the checks inside the SQL:
 3. Backstop: partial unique index on `(run_id, ticker) WHERE closed_at IS NULL`,
    so a bug fails loudly instead of double-opening.
 Latest `asOf` wins, so a late-finishing older article can't open or close
-anything out of order. Behavior change to confirm: the ceiling is checked
-against other tickers' exposure, because a ticker's new position replaces its
-old one.
+anything out of order. **Decided 2026-09-19:** the ceiling is checked against
+other tickers' exposure, because a ticker's new position replaces its old one
+(a behavior change from today).
 
 **Memory** is per run. A backtest starts with empty memory; seeding from a frozen
 live snapshot is deferred (it needs a cross-environment copy, which the isolation
 rules forbid inside a backtest). **Cleanup** = delete-by-run in `sim`, chunked,
 run by the `backtest` Worker.
 
-**Caveats / open decisions**
-- Gemini quota and `gemini:cooldown:*` KV are shared, so a backtest can starve
-  live analysis. Decide: a separate key, or a hard per-run call budget.
-- D1 free-tier row read/write budgets are likely account-wide (verify), so
-  backtests spend live's daily write budget. Cap concurrent backtests
-  (`LLM_JOBS` is batch 1 / concurrency 1 today) and keep `llm_calls` retention.
+**Decided (2026-09-19)**
+- The portfolio ceiling is checked against other tickers' exposure (see above).
+- `backtest` gets its own KV namespace, so its `gemini:cooldown:*` state cannot
+  trip live's. The upstream Gemini quota per key is still shared, so backtests
+  also get a per-run LLM-call budget (`BACKTEST_MAX_LLM_CALLS`; the run fails when
+  exceeded) on top of concurrency 1.
+- The `*/15` cron was disabled by the owner on 2026-09-19 and stays off until M4.
+
+**Free-plan budgets** (the account is on Workers Free; limits from Cloudflare's
+docs, checked 2026-09-19). All of these are per account, not per DB, Worker or
+namespace, so three D1s and a second KV isolate state but add no quota.
+- D1: 5M rows read and 100K rows written per day across every DB in the account;
+  an indexed column counts as an extra row written. When exhausted, all queries
+  error until 00:00 UTC, live's included. Storage: 500 MB per DB, 5 GB per
+  account. Databases: 10 per account (7 with the three new ones, other projects'
+  DBs included).
+- **Backtest write cap (proposed):** the `backtest` Worker records
+  `meta.rows_written` per run in `backtest_runs` and refuses to start a run when
+  the day's total would pass `BACKTEST_DAILY_WRITE_BUDGET` (proposed default 40K,
+  leaving live 60K). It runs with `LLM_LOG_ENABLED=false` (`llm_calls` is ~4 rows
+  per call) unless a run opts in.
+- KV: 1K writes, 1K lists and 100K reads per day. Cooldown keys are written only
+  on rate-limit events.
+- Queues: 10K ops per day. A backtest is one message on `BACKTEST`; the
+  `SimClock` walk runs inside the consumer and never fans out per day.
+- Workers: 50 queries per invocation on Free. Whether each statement in a `batch`
+  counts is unconfirmed, so M1 measures it and `commitThesis` stays at 3
+  statements.
 - Concurrent backtests share `sim`: `run_id` prevents collisions but writes
   contend and the DB grows; delete-by-run must chunk.
 - No cross-DB joins or transactions. None needed today: the only JOIN in the code
   is `news_item_revisions` with `news_item_tickers`, both in `inputs`.
 - Backfill is still a write to `inputs`. It stays an explicit ingest job; a
   backtest over an un-backfilled window fails fast instead of fetching.
-- Verify current D1 `batch` atomicity/serialization docs and the free-plan
-  per-database size cap before M1.
+- D1 `batch`, verified against Cloudflare's docs 2026-09-19: statements run
+  sequentially and non-concurrently as one transaction, and the whole batch rolls
+  back on any error. A guarded statement that matches no rows is not an error, so
+  the `WHERE P` design works. There is no `BEGIN`/`COMMIT` and no reading a
+  result mid-batch. **Not stated in the docs:** that concurrent batches from
+  different Workers serialize (a third-party source says each DB is one SQLite
+  writer). The M1 concurrency tests are the proof; the partial unique index is
+  the backstop.
 
 **Milestones** (one PR each, squash-merge)
-- **M1** Provision `inputs`/`live`/`sim` (`ensure-d1-database`), split
-  migrations, `RunStore`, `readOnly`, `commitThesis`; tests: out-of-order `asOf`,
-  concurrent same-ticker commits, ceiling race, run isolation.
+- **M1** Provision `inputs`/`live`/`sim` (`ensure-d1-database`) and
+  `backtest-CACHE_KV` (`ensure-kv-namespace`), split migrations, `RunStore`,
+  `readOnly`, `commitThesis`; tests: out-of-order `asOf`, concurrent same-ticker
+  commits, ceiling race, run isolation, and a measurement of how many queries a
+  `batch` counts toward the 50-per-invocation Free limit.
 - **M2** Engine ports: `pipeline.js`, `settle.js`, `exit_check.js`, memory reads
   via `RunStore`/`InputsView`; split `storage/d1.js`.
 - **M3** `backtest` Worker + queue, `SimClock`, runner rewrite (walk-forward,
@@ -259,7 +291,8 @@ run by the `backtest` Worker.
 - **M5** Delete the old code and the old `news_market_ai` binding, close PR #44,
   refresh Deployment and Repo Structure.
 Until M4 live still runs on the old schema and can re-accumulate overlapping
-positions (consider pausing the `*/15` cron); don't run backtests on the old DB.
+positions. The `*/15` cron is disabled (owner, 2026-09-19), so live ingest is
+paused; don't run backtests on the old DB.
 
 ### Overlapping open positions (separate live bug, found during this check)
 Not caused by backtests. 23 of the 24 open AAPL positions were opened by the
