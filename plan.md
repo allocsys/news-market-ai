@@ -606,7 +606,7 @@ incl. leakcheck) do NOT cover: the same-day bar leak, the 500-row caps,
 multi-ticker ordering, long-window queue limits.
 
 **Fix plan, in order:**
-- **A. Historical price-bar backfill.** **STATUS: code written and tested, NOT yet
+- **A. Historical price-bar backfill.** **STATUS: code written and tests added, NOT yet
   run live.** Built: `yfinance.js#fetchHistoricalBars` (`period1`/`period2`, one
   request per ticker, ignores the shared 429 cooldown but records a fresh one),
   batched `insertPriceBars`, `ingest.js#backfillHistoricalPriceBars`, a
