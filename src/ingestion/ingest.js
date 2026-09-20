@@ -98,6 +98,23 @@ async function filterUnstoredItems(db, items) {
   return items.filter((item) => !existing.has(item.id));
 }
 
+/**
+ * Where a continuation of a capped backfill should re-start its fetch: the UTC
+ * day BEFORE the last processed item's day, never earlier than the original
+ * `from`. Finnhub's /company-news only takes YYYY-MM-DD (see finnhub.js), so a
+ * cursor can't be finer than a day, and which timezone Finnhub reads those
+ * dates in is undocumented -- stepping back one day means an item just after
+ * the last processed one can't fall outside the next fetch on a timezone
+ * boundary. Re-scanned items are already stored, so the pre-filter drops them
+ * for the price of one SELECT per chunk (no writes).
+ */
+function continuationFrom(lastPublishedAt, from) {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const fromDay = new Date(from).toISOString().slice(0, 10);
+  const steppedBack = new Date(new Date(lastPublishedAt).getTime() - DAY_MS).toISOString().slice(0, 10);
+  return steppedBack > fromDay ? steppedBack : fromDay;
+}
+
 /** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. */
 function logSkippedSource(stage, source, err) {
   console.error(`${stage} vendor failure -- skipping source`, { source, vendor: err.vendor, transient: err.transient, message: err.message });
@@ -283,7 +300,16 @@ export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
  * again. Intended for a one-off backfill script/CLI, not the live cron
  * path (collectNewsItems above is the whole-watchlist sweep, unchanged).
  */
-export async function backfillHistoricalNews(config, db, { from, to, kv, onProgress } = {}) {
+// `maxInserts` (optional, default unlimited -- unchanged behavior for callers
+// that don't pass it) caps how many NET-NEW articles one call writes. Once a
+// chunk pushes `inserted` to/over it and items remain, the loop stops and the
+// result carries `nextFrom` (a YYYY-MM-DD the caller re-enqueues a follow-up
+// backfill from); `nextFrom` is null when the whole fetched set was processed.
+// Progress is guaranteed: stopping requires `inserted >= maxInserts`, so every
+// capped call stored at least one new article, and the next call's pre-filter
+// skips everything already stored -- including inside a single day with more
+// articles than the cap, which a day-level cursor alone could never split.
+export async function backfillHistoricalNews(config, db, { from, to, kv, onProgress, maxInserts = Infinity } = {}) {
   if (!from || !to) {
     throw new Error("backfillHistoricalNews requires an explicit {from, to} range -- use collectNewsItems for the live trailing-window path instead");
   }
@@ -304,6 +330,12 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
   for (const { error } of errors) {
     logSkippedSource("historical news backfill", "finnhub", error);
   }
+
+  // Chronological (ties broken by id) so "everything up to the last processed
+  // item is done" is true -- fetchLatest returns items ticker by ticker, not
+  // in date order, and a continuation cursor is only meaningful over a sorted
+  // list.
+  items.sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : a.publishedAt > b.publishedAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const totalItems = items.length;
   await onProgress?.({ phase: "saving", percent: 50, done: 0, total: totalItems, detail: totalItems > 0 ? `Saving ${totalItems} article${totalItems === 1 ? "" : "s"}` : "No articles returned for this range", force: true });
@@ -341,6 +373,7 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
   // saving articles, so the two warrant different failure-isolation scopes.
   let processed = 0;
   let inserted = 0;
+  let nextFrom = null;
   for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
     const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
     const toInsert = await filterUnstoredItems(db, chunk);
@@ -350,9 +383,14 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
     }
     processed += chunk.length;
     await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * processed) / totalItems), done: processed, total: totalItems, detail: `Saved ${processed}/${totalItems} articles` });
+
+    if (inserted >= maxInserts && processed < totalItems) {
+      nextFrom = continuationFrom(chunk[chunk.length - 1].publishedAt, from);
+      break;
+    }
   }
 
-  return { inserted, processed, errors };
+  return { inserted, processed, errors, nextFrom };
 }
 
 /**
