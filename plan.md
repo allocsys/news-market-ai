@@ -481,10 +481,10 @@ The owner ran `POST /backfill-prices` at ~22:03 UTC (job `backfill-prices-178994
 | Finnhub | 60/min | A 2025 report says stock candles returned "no access" on the free plan (not re-verified): not usable for bars. |
 | Stooq | API key via on-site CAPTCHA since early 2026, quota unpublished | Skip. |
 
-**Owner requirement (2026-09-20/21):** add proper **gold and oil** tickers "so I can trade forex too", i.e. a watchlist beyond AAPL/MSFT/TSLA. Not specified: signals only vs execution (the pipeline has no execution layer today). Open questions before building:
+**Owner requirement (2026-09-20/21):** add proper **gold and oil** tickers "so I can trade forex too", i.e. a watchlist beyond AAPL/MSFT/TSLA. **Decided (owner, 2026-09-20/21): oil via an ETF proxy is fine for now; forex is signals only for now** (no execution layer exists and none is planned yet). Still open before building:
 - **Gold:** spot via Tiingo's Forex API (untested with a free key) or a gold ETF such as GLD as a proxy on the stock endpoint (no extra code; a proxy, trades US hours only).
-- **Oil:** no confirmed free spot source. Candidates: an oil ETF proxy (e.g. USO) on the stock endpoint, or a commodity series (Alpha Vantage unverified; Twelve Data needs paid Grow). Undecided.
-- **Forex pairs:** Tiingo's Forex API is the candidate; OHLC only, so `price_bars.volume` would be null.
+- **Oil: DECIDED, use an oil ETF proxy on the stock endpoint for now** (e.g. USO or BNO; pick the exact fund when building, not researched). No free spot-oil source was confirmed (Tiingo's Forex page does not list oil; Twelve Data needs paid Grow; Alpha Vantage unverified). Revisit if spot oil is wanted later.
+- **Forex pairs (signals only):** Tiingo's Forex API is the candidate; OHLC only, so `price_bars.volume` would be null. Signals only means no order placement; positions in the store stay paper positions.
 - **Symbols:** `POST /backfill-prices` accepts Yahoo-style symbols (`/^[A-Z0-9^.=-]{1,12}$/`, e.g. `GC=F`, `EURUSD=X`); a provider needs its own symbol map.
 - **Raw vs adjusted prices:** pick one so new bars match the existing yfinance bars (AAPL/TSLA 2026-09-14..09-18).
 - **Wider design, not started:** how news maps to a commodity/FX ticker (Finnhub `/company-news` and entity resolution are per equity symbol); position and risk model for FX and commodities (units, leverage, pip values, shorting; sizing is deterministic in `risk_mgmt/`); 24h and weekend markets vs daily bars and the hold-days/exit logic; and Queues/D1 budgets as the watchlist grows (the Deployment table already says to re-check before growing it).
