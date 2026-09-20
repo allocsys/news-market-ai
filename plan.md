@@ -1,9 +1,12 @@
 # News → Market Analysis → Trade Signal Pipeline
 
-_Trimmed 2026-09-19. Per-step PR narration, CI-run notes and investigation
-logs that used to live here are in git history (`git log -p plan.md`). Section
-names, "Adopted Pattern #N", "Backtesting Integrity point N" and "Step N"
-labels are unchanged because code comments reference them._
+_Trimmed 2026-09-21. Per-step PR narration, CI-run notes, pre-split evidence and
+investigation logs that used to live here are in git history
+(`git log -p plan.md`). Section names, "Adopted Pattern #N", "Backtesting
+Integrity point N", "Step N", "Design: environments", "Engine ports" and
+"Decided (2026-09-19)" labels are unchanged because code comments reference
+them. **Start with "Current Status" -> "Next steps: make backtests
+trustworthy".**_
 
 ## Goal
 An AI-driven pipeline that ingests financial news, summarizes it, has a second
@@ -97,116 +100,57 @@ Must be true by construction, not by discipline.
    not by row tags: design in "Backtest / Live Isolation" below. _Built: M1–M5
    are merged (see Milestones)._
 
-## Backtest / Live Isolation — REDESIGN (verified 2026-09-19; prod D1 wiped the same day)
-**Status (2026-09-20): implemented and merged (M1–M5).** What follows is the
-original problem statement (which describes the pre-split system) and the design
-as built.
-**Problem:** backtest and live runs share the same D1 tables and nothing marks
-which run wrote a row. Verified by reading the code and running read-only
-queries against production D1 (`news_market_ai`, 2026-09-19 ~04:35Z).
-**Prod D1 was wiped later that day at the owner's request (no backup), so the
-numbers below are historical evidence of why the design changed.**
+**Known violation (audit 2026-09-20):** point 1 is NOT fully true for price bars.
+`price_bars.date` is a `YYYY-MM-DD` string and `getPriceBarsAsOf` compares
+`date <= asOf`, so day D's final bar is visible at any time on day D. The point-6
+leak-check test does not cover intraday `asOf`. Fix = Next steps, step C.
 
-### What is and isn't shared
-| Store | Tagged by run type? | Notes |
-|---|---|---|
-| `positions`, `trade_decisions`, `decision_memory` | **No** | Written by both paths; every reader (agent-facing and dashboard) is unfiltered |
-| `pipeline_checkpoints` | Partly | `run_id` = news item id (live) vs `<testStart>\|<ticker>\|<itemId>` (backtest) — no live/backtest collision, but no link to `backtest_runs.id` |
-| `llm_calls` | **Yes** (`source`, `job_id`) | Already isolatable; only the default list view is unfiltered |
-| `backtest_runs`, `job_progress` | Backtest-only | Fine |
-| `news_items`, `price_bars`, `fundamental_facts` | Shared **by design** | Immutable market data; leave shared |
-
-### Verified failure modes
-1. **A backtest closes live positions, at simulated (even future) dates.**
-   `checkOpenPositionExits(asOf)` → `getOpenPositionsAsOf` has no ticker/scope
-   filter, and `onSignalRunner.js` calls it for every day in
-   `[testStart, testEnd + graceDays]` (`graceDays` defaults to
-   `maxPositionHoldDays` = 10, so the walk runs past today). Any live position
-   older than 10 simulated days gets a `time_based` exit at the latest real bar,
-   stamped with the simulated date. **Evidence:** 26 positions have
-   `closed_at` up to 2026-09-29 and 17 `decision_memory` rows have
-   `resolved_at` in the future — live-opened positions (not in any backtest
-   checkpoint) among them.
-2. **The dashboard and the pipeline disagree about what is open.**
-   `getOpenPositionsRiskPctAsOf(now)` treats `closed_at > now` as still open,
-   while the dashboard's `getOpenPositionsExposureTotal` uses `closed_at IS
-   NULL`. **Evidence:** the dashboard shows 1 open position / 3.25%; the
-   pipeline's math sees 27 open / 88.25% (AAPL alone: 24 / 78.5%). The
-   future-dated closes do **not** change the pipeline's number (those positions
-   were open before and still count as open until the simulated date). They only
-   hide the positions from the dashboard and stamp bogus outcomes into memory.
-   The high exposure itself is a separate live bug, see "Overlapping open
-   positions" below.
-3. **Reflection contamination, both directions.**
-   - Live → poisoned: `getDecisionMemoryAsOf` filters only `ticker` +
-     `resolved_at < asOf`, so live debates read backtest reflections (3 of the 24
-     memory rows come from backtest pipeline runs; the future-dated ones start
-     feeding live prompts on 09-27).
-   - Backtest → invalid: `getRealizedReturnsInRange` reads every
-     `decision_memory` row for the ticker/window, live outcomes included. The
-     signal on/off comparison (Adopted Pattern #6) is therefore not measuring
-     the strategy alone.
-4. **Silent id collisions.** `tradeThesisId` = `ticker|asOf` (`risk.js`), with
-   `asOf` = news `published_at` in both paths, and `openPosition` /
-   `insertTradeDecision` / `recordDecisionOutcome` are all `ON CONFLICT DO
-   NOTHING`. Whoever writes first wins; the other run's rows vanish silently.
-   **Observed** between two backtest windows (`AAPL|2026-09-13T08:45:00Z`, run
-   twice). **Latent** live-vs-backtest: `ingestTickerData` enqueues ANALYZE for
-   every fetched item even if `insertNewsItem` hit a conflict, so a live run on
-   an already-backfilled item will collide with the backtest's rows.
-5. **No cleanup path.** No row except `llm_calls.job_id` carries the backtest
-   id, and a failed run just marks `backtest_runs` failed. **Evidence:** 9 runs
-   (8 failed, 1 complete), 13 backtest-style checkpoints (3 stuck at `analyzed`),
-   4 backtest-opened positions still in `positions`.
-6. **Re-running an identical window is a no-op.** `runId` = `testStart|ticker|itemId`
-   has no job id, so a second run resumes the finished checkpoints and returns
-   early — stale results, no fresh LLM run, and it hides prompt/config changes.
-7. **Concurrent visibility.** Backtests run on `LLM_JOBS` and live analysis on
-   `ANALYZE` (different consumers), so live decisions made mid-backtest see its
-   intermediate positions.
-8. **Dashboard mixes streams.** `getRecentTradeDecisions`, `getAllOpenPositions`,
-   `getRecentlyClosedPositions`, `getOpenPositionsExposureTotal`,
-   `getDecisionStats` and `getRecentCheckpoints` are unfiltered.
+## Backtest / Live Isolation — REDESIGN (verified 2026-09-19; implemented, M1–M5 merged 2026-09-20)
+**Why:** before the split, backtest and live runs shared the same D1 state tables
+and nothing marked which run wrote a row. Verified failure modes: a backtest
+closed live positions at simulated (even future) dates; the dashboard and the
+pipeline disagreed about what was open; reflections leaked in both directions
+(live prompts read backtest memory; backtest returns included live outcomes);
+`ticker|asOf` thesis ids collided silently (`ON CONFLICT DO NOTHING`); a failed
+run had no cleanup path; re-running an identical window was a no-op that returned
+stale results; live decisions saw a running backtest's intermediate positions;
+dashboard panels mixed streams. Prod D1 was wiped on 2026-09-19 at the owner's
+request (no backup); the row-level evidence is in git history.
 
 ### Design: environments (rewrite, D1 only — agreed 2026-09-19, built in M1–M5)
-Backtest was bolted onto live (shared tables, then proposed row tags) and each
-fix still left a path to leak. The rewrite makes isolation structural: **one
-engine, run inside an environment; an environment owns its state, and its Worker
-holds no binding to any other environment's state.** No Durable Objects; D1 only.
-This supersedes the earlier `run_scope` tagging proposal and its "reject a
-second D1" note.
+**One engine, run inside an environment; an environment owns its state, and its
+Worker holds no binding to any other environment's state.** No Durable Objects;
+D1 only.
 
 **Three D1 databases**
 | DB | Holds | Written by |
 |---|---|---|
-| `inputs` | `news_items`, `news_item_revisions`, `news_item_tickers`, `price_bars`, `fundamental_facts`: shared, append-only, point-in-time through the existing `asOf` filters | `ingest` only (the Step 5 gap -- `backend` also holding `inputs` write access for `backfill` -- closed 2026-09-20) |
+| `inputs` | `news_items`, `news_item_revisions`, `news_item_tickers`, `price_bars`, `fundamental_facts`: shared, append-only, point-in-time through the `asOf` filters | `ingest` only |
 | `live` | run state with `run_id = 'live'`: `positions`, `trade_decisions`, `decision_memory`, `pipeline_checkpoints`, `llm_calls`, `job_progress` | `llm` (live) |
 | `sim` | the same tables with `run_id` = backtest id, plus `backtest_runs` (registry) | `backtest` |
 
 **Schema and access**
 - One state schema, `migrations/state/`, applied to both `live` and `sim`
-  (`migrations/inputs/` for `inputs`). `run_id NOT NULL` is part of every
-  primary/unique key, so `ticker|asOf` thesis ids can no longer collide across
-  runs, and an identical window re-run gets a new `run_id` and really executes.
-  CI fails if the `live` and `sim` schemas differ.
+  (`migrations/inputs/` for `inputs`, `migrations/sim/` for the registry).
+  `run_id NOT NULL` is part of every primary/unique key, so `ticker|asOf` thesis
+  ids can no longer collide across runs, and an identical window re-run gets a new
+  `run_id` and really executes. CI fails if the `live` and `sim` schemas differ.
 - `RunStore(db, runId)` is the only code that runs SQL on state tables; every
-  method filters `run_id`, and delete-by-run refuses `'live'`. The scope-less
-  functions in `storage/d1.js` are deleted, not adapted. Input reads go through
-  a separate `InputsView(db)` (`asOf` required, as today).
+  method filters `run_id`, and delete-by-run refuses `'live'`. Input reads go
+  through `InputsView(db)` (`asOf` required).
 
 **Workers and bindings**
-- `ingest`: `inputs` read/write. Enqueues ANALYZE. Since the Step 5 follow-up
-  (2026-09-20) also consumes `BACKFILL` and narrowly binds `live` (rw,
-  `job_progress` reporting only -- see that follow-up's own note).
+- `ingest`: `inputs` read/write. Enqueues ANALYZE. Also consumes `BACKFILL` and
+  narrowly binds `live` (rw, `job_progress` reporting only).
 - `llm` (live only): `live` read/write, `inputs` read-only. Consumes `ANALYZE`
   and `exit_check`.
-- `backtest` (new: `wrangler.backtest.toml`, own `BACKTEST` queue + DLQ): `sim`
+- `backtest` (`wrangler.backtest.toml`, own `BACKTEST` queue + DLQ): `sim`
   read/write, `inputs` read-only, its own KV namespace (`backtest-CACHE_KV`) for
   cooldowns. **No `live` binding and no live KV.**
 - `backend`: read-only handles to all three for the dashboard API; runs the
-  migrations for all three; enqueues backtest jobs.
-- `dashboard`: unchanged, except views take an environment (`live` by default);
-  backtest pages read the `sim` registry.
+  migrations for all three; enqueues backfill and backtest jobs.
+- `dashboard`: views read `live`/`inputs`; the environment selector is not built
+  yet (see M4).
 - Enforcement is config first, code second: CI fails if `wrangler.backtest.toml`
   binds the `live` DB; `readOnly(db)` rejects anything but SELECT (tested).
   D1 bindings can't be made read-only, so the `inputs` guard is the one that is
@@ -215,12 +159,11 @@ second D1" note.
 **Engine ports.** The pipeline receives `{ clock, inputs, store, enqueue }` and
 never calls `Date.now()`. Live: real clock and queues. Backtest: `SimClock`
 (end clamped to real now, throws on a future time) and a recording enqueue, so a
-backtest cannot trigger live work. This replaces PR #44 (walk clamp + guard).
+backtest cannot trigger live work.
 
-**Atomic portfolio commit (also fixes "Overlapping open positions").** D1 runs a
-`batch` as one transaction (sequential, all-or-nothing; verified against the
-docs, see caveats), so check-and-write goes in one batch with the checks inside
-the SQL:
+**Atomic portfolio commit.** D1 runs a `batch` as one transaction (sequential,
+all-or-nothing; verified against the docs 2026-09-19), so check-and-write goes in
+one batch with the checks inside the SQL (`RunStore#commitThesis`, 3 statements):
 1. Predicate P = no open position for this ticker with a later `opened_at` AND
    (open risk of *other* tickers) + new risk <= `MAX_PORTFOLIO_RISK_PCT`.
 2. `UPDATE positions` closing this ticker's older open positions as `replaced`
@@ -229,9 +172,12 @@ the SQL:
 3. Backstop: partial unique index on `(run_id, ticker) WHERE closed_at IS NULL`,
    so a bug fails loudly instead of double-opening.
 Latest `asOf` wins, so a late-finishing older article can't open or close
-anything out of order. **Decided 2026-09-19:** the ceiling is checked against
-other tickers' exposure, because a ticker's new position replaces its old one
-(a behavior change from today).
+anything out of order. The ceiling is checked against other tickers' exposure,
+because a ticker's new position replaces its old one. Caveat: P's exposure check
+uses live semantics (`closed_at IS NULL`), not as-of; see audit finding 5.
+`settlePositionOutcome` logs and swallows a failed reflection by design (the
+position stays closed, no reflection recorded), so `getUnsettledReplacedPositions`
+only recovers a crash or queue retry between the commit and the settle step.
 
 **Memory** is per run. A backtest starts with empty memory; seeding from a frozen
 live snapshot is deferred (it needs a cross-environment copy, which the isolation
@@ -244,172 +190,84 @@ run by the `backtest` Worker.
   trip live's. The upstream Gemini quota per key is still shared, so backtests
   also get a per-run LLM-call budget (`BACKTEST_MAX_LLM_CALLS`; the run fails when
   exceeded) on top of concurrency 1.
-  *Implemented (M3 7/N):* `src/llm/budget.js`; one counter per run on
-  `config.llmBudget`, charged at `callStructured`. It counts logical calls, not
-  cascade HTTP attempts. **Owner decided (2026-09-19): no cap** -- leave
-  `BACKTEST_MAX_LLM_CALLS` unset (backtests uncapped); the mechanism stays in
-  code. Known risk: an uncapped runaway backtest can burn the shared Gemini
-  quota that live also uses. A redelivered queue message starts a fresh counter.
+  *Implemented:* `src/llm/budget.js`; one counter per run on `config.llmBudget`,
+  charged at `callStructured` (logical calls, not cascade HTTP attempts).
+  **Owner decided (2026-09-19): no cap** -- leave `BACKTEST_MAX_LLM_CALLS` unset;
+  the mechanism stays in code. Known risk: an uncapped runaway backtest can burn
+  the Gemini quota live also uses. A redelivered queue message starts a fresh
+  counter.
 - **Failed runs are cleaned up: delete the data, keep the error log.**
-  *Implemented (M3 8/N):* when a run ends `failed`, the `backtest` Worker
-  (`src/backtest/cleanup.js`, called after the failure is recorded) deletes its
-  positions, decisions, memory, checkpoints and non-error `llm_calls`, in chunks
-  (`RunStore.deleteRun`, 500 rows/table/chunk, at most 20 chunks per run). It
-  **keeps** the `backtest_runs` row (status `failed` + the error, which now ends
-  in `[while processing <ticker> <day>]` when the failure was mid-walk), the
-  run's `llm_calls` rows with `status='error'`, and its single `job_progress`
-  row. **Complete runs are never auto-deleted**; cleanup refuses anything whose
-  registry row is not `failed`, and always refuses `live`. It is best-effort:
-  an error is logged, never retried, and never changes the ack. If cut short at
-  the chunk cap, the leftover rows simply remain (logged). Cost: D1 deletes count
-  as rows written, so a run that fails late pays roughly double its writes
-  against the 100K/day cap. A redelivered message for a run whose registry row is
-  already `complete` or `failed` is acked and skipped (it would otherwise restart
-  the walk from scratch once the checkpoints are gone); a `running` row still
-  resumes from checkpoints.
-- The `*/15` cron was disabled by the owner on 2026-09-19 and was meant to stay
-  off until M4, but `wrangler.toml` still declared it so deploys kept re-enabling
-  it; the owner decided on 2026-09-20 to leave it on now that M4a has the
-  dashboard reading `live`/`inputs` too (see "Cron state" under Milestones).
+  *Implemented:* when a run ends `failed`, the `backtest` Worker
+  (`src/backtest/cleanup.js`) deletes its positions, decisions, memory,
+  checkpoints and non-error `llm_calls`, in chunks (`RunStore.deleteRun`, 500
+  rows/table/chunk, at most 20 chunks per run). It **keeps** the `backtest_runs`
+  row (status `failed` + the error, ending in `[while processing <ticker> <day>]`
+  when the failure was mid-walk), the run's `status='error'` `llm_calls` rows and
+  its single `job_progress` row. Complete runs are never auto-deleted; cleanup
+  refuses anything whose registry row is not `failed`, and always refuses `live`.
+  Best-effort: an error is logged, never retried, never changes the ack. D1
+  deletes count as rows written, so a run that fails late pays roughly double its
+  writes against the 100K/day cap. A redelivered message for a `complete` or
+  `failed` run is acked and skipped; a `running` row resumes from checkpoints.
+- The `*/15` ingest cron stays **on** (owner, 2026-09-20). `wrangler.toml`
+  declares it, so every `backend` deploy re-applies it.
 
-**Free-plan budgets** (the account is on Workers Free; limits from Cloudflare's
-docs, checked 2026-09-19). All of these are per account, not per DB, Worker or
-namespace, so three D1s and a second KV isolate state but add no quota.
+**Free-plan budgets** (account is on Workers Free; limits from Cloudflare's docs,
+checked 2026-09-19). All are per account, not per DB, Worker or namespace, so
+three D1s and a second KV isolate state but add no quota.
 - D1: 5M rows read and 100K rows written per day across every DB in the account;
   an indexed column counts as an extra row written. When exhausted, all queries
   error until 00:00 UTC, live's included. Storage: 500 MB per DB, 5 GB per
-  account. Databases: 10 per account (7 with the three new ones, other projects'
-  DBs included).
-- **Backtest write cap (proposed):** the `backtest` Worker records
-  `meta.rows_written` per run in `backtest_runs` and refuses to start a run when
-  the day's total would pass `BACKTEST_DAILY_WRITE_BUDGET` (proposed default 40K,
-  leaving live 60K). It runs with `LLM_LOG_ENABLED=false` (`llm_calls` is ~4 rows
-  per call) unless a run opts in.
+  account. Databases: 10 per account (other projects' DBs included).
+- **Backtest write cap (proposed, NOT approved or built):** the `backtest` Worker
+  records `meta.rows_written` per run in `backtest_runs` and refuses to start a
+  run when the day's total would pass `BACKTEST_DAILY_WRITE_BUDGET` (proposed
+  default 40K, leaving live 60K). It would run with `LLM_LOG_ENABLED=false`
+  (`llm_calls` is ~4 rows per call) unless a run opts in.
 - KV: 1K writes, 1K lists and 100K reads per day. Cooldown keys are written only
   on rate-limit events.
 - Queues: 10K ops per day. A backtest is one message on `BACKTEST`; the
   `SimClock` walk runs inside the consumer and never fans out per day.
 - Workers: 50 queries per invocation on Free. Whether each statement in a `batch`
-  counts is unconfirmed, so M1 measures it and `commitThesis` stays at 3
-  statements.
+  counts is **unmeasured** (`node:sqlite` has no such cap); `commitThesis` stays
+  at 3 statements. Needs a real deploy to settle.
 - Concurrent backtests share `sim`: `run_id` prevents collisions but writes
   contend and the DB grows; delete-by-run must chunk.
-- No cross-DB joins or transactions. None needed today: the only JOIN in the code
-  is `news_item_revisions` with `news_item_tickers`, both in `inputs`.
+- No cross-DB joins or transactions. None needed today.
 - Backfill is still a write to `inputs`. It stays an explicit ingest job; a
-  backtest over an un-backfilled window fails fast instead of fetching.
-- D1 `batch`, verified against Cloudflare's docs 2026-09-19: statements run
-  sequentially and non-concurrently as one transaction, and the whole batch rolls
-  back on any error. A guarded statement that matches no rows is not an error, so
-  the `WHERE P` design works. There is no `BEGIN`/`COMMIT` and no reading a
-  result mid-batch. **Not stated in the docs:** that concurrent batches from
-  different Workers serialize (a third-party source says each DB is one SQLite
-  writer). The M1 concurrency tests are the proof; the partial unique index is
-  the backstop.
+  backtest over an un-backfilled window should fail fast instead of fetching
+  (see step E).
 
-**Milestones** (one PR each, squash-merge)
-- **M1** Provision `inputs`/`live`/`sim` (`ensure-d1-database`) and
-  `backtest-CACHE_KV` (`ensure-kv-namespace`), split migrations, `RunStore`,
-  `readOnly`, `commitThesis`; tests: out-of-order `asOf`, concurrent same-ticker
-  commits, ceiling race, run isolation, and a measurement of how many queries a
-  `batch` counts toward the 50-per-invocation Free limit.
-- **M2** Engine ports: `pipeline.js`, `settle.js`, `exit_check.js`, memory reads
-  via `RunStore`/`InputsView`; split `storage/d1.js`.
+**Milestones** (one PR each, squash-merge; all merged)
+- **M1** Provisioned `inputs`/`live`/`sim` and `backtest-CACHE_KV`, split
+  migrations, `RunStore`, `readOnly`, `commitThesis` (+ tests: out-of-order
+  `asOf`, concurrent same-ticker commits, ceiling race, run isolation). Uses a
+  real `node:sqlite` D1 adapter (`test/helpers/sqlite_d1.js`), not hand-written
+  fakes. D1 ids are committed directly, not placeholders.
+- **M2 / M2b** Engine ports: `pipeline.js`, `settle.js`, `exit_check.js`, memory
+  reads via `RunStore`/`InputsView`; `llm_calls` and `job_progress` moved onto
+  the state DB via `RunStore`. Backfill jobs and the rejected-backtest row live
+  under `run_id = 'live'`.
 - **M3** `backtest` Worker + queue, `SimClock`, runner rewrite (walk-forward,
   signal on/off), delete-by-run, CI checks (no live binding, equal schemas).
-- **M4** Cut live over to `live`/`inputs` (empty; fresh ingest), dashboard and
-  backend read paths, environment selector.
-  - **M4a — dashboard read paths (done, PR pending):** every dashboard panel now
-    reads `readOnly(LIVE_DB)` through `RunStore` (`run_id = 'live'`: positions,
-    exposure, decisions, decision stats, pipeline checkpoints, plus the LLM log and
-    jobs from M2b) or `readOnly(INPUTS_DB)` (ingestion health, price charts). Nothing
-    in `src/` reads the old `DB` binding any more, and `storage/d1.js` is deleted.
-    The reads are `RunStore.listOpenPositions / getOpenExposureTotal /
-    listRecentlyClosedPositions / listRecentTradeDecisions / listRecentCheckpoints /
-    getDecisionStats` and `inputs_view.js#getIngestionHealth / getRecentPriceBars`;
-    all are `run_id`-scoped, deliberately not asOf-gated (dashboard-only), and must
-    not feed an agent prompt. `safe()` in `dashboard/data.js` now also catches a
-    failure while *building* a query. Tests: the two hand-written DB fakes in
-    `dashboard_api`/`dashboard_worker` are gone (real sqlite LIVE_DB/INPUTS_DB/SIM_DB
-    instead), a poisoned old `DB` proves nothing reads it, a decoy run in the same
-    LIVE_DB proves run scoping through every route. **Left in M4:** the environment
-    selector (a `?env=` reading a backtest's `run_id` off SIM_DB; note
-    `getDecisionStats`' "last N days" window is wall-clock relative, so it needs an
-    anchor for a finished backtest). The cron question below is now resolved.
-- **M5 — remove the old DB from code and config (done 2026-09-20, PR #57, merge
-  commit `205e4da`; the post-merge run passed test, migrate and all five deploy
-  jobs):** the `DB`
-  binding (`news_market_ai`) is gone from `wrangler.toml`, `wrangler.ingest.toml`
-  and `wrangler.llm.toml`; `db:migrate:{local,remote}` are deleted and the `:all`
-  chains now run inputs, live and sim only; `deploy.yml` lost its four "Ensure D1
-  database exists" steps; `test/cron_fanout.test.js` lost `FakeIngestDb`; and
-  `.github/actions/ensure-d1-database` is deleted. That action defaulted to the
-  name `news_market_ai` and would have re-created an empty database on the first
-  deploy after the resource was deleted. `test/ci_env_isolation.test.js` used to
-  read the legacy id from `wrangler.toml`'s `DB` block, so it now pins the
-  placeholder constant instead, and gained two guards: no wrangler config binds
-  the legacy DB or carries a placeholder D1 id, and CI/npm scripts never
-  reference it. **The owner deletes the actual Cloudflare `news_market_ai` D1
-  resource out of band** -- nothing in the repo does. PR #44 was already closed
-  (unmerged, 2026-09-19, superseded by the SimClock isolation design). The root
-  `migrations/0001-0012` (the retired pre-split schema) are deleted too; nothing
-  read them (tests and CI use only `migrations/{inputs,state,sim}`), and a test
-  keeps `migrations/` free of root-level `.sql` files. Code comments that cited
-  them by name (`config.js`, `exit.js`, `edgar_fundamentals.js`, `status.js`,
-  `inputs_view.js`) now point at `migrations/{state,inputs}/` instead; git
-  history has the old files.
-Since M2/M2b the engine, ingest and LLM Workers already read and write
-`live`/`inputs`; M4a moved the last readers (the dashboard) over, and M5 removed
-the old DB's binding.
-**Cron state (observed 2026-09-19, decided 2026-09-20):** the owner had disabled
-the `*/15` trigger out of band, but `wrangler.toml` still declared
-`crons = ["*/15 * * * *"]` and every `backend` deploy re-applied it. Workers
-Observability showed it firing every 15 minutes from at least 18:45Z (deploy #287
-logged `schedule: */15 * * * *`), so live ingest had been running against the
-new DBs regardless of the intended pause. The owner decided (2026-09-20) to
-leave it on: `wrangler.toml` is unchanged and the cron continues to fire on its
-existing schedule with no code change required.
+- **M4** Cut live over to `live`/`inputs`; every dashboard panel reads
+  `readOnly(LIVE_DB)` through `RunStore` or `readOnly(INPUTS_DB)` (M4a). Those
+  reads are `run_id`-scoped, deliberately not asOf-gated (dashboard-only) and
+  must never feed an agent prompt. **Left:** the environment selector (a `?env=`
+  reading a backtest's `run_id` off SIM_DB; `getDecisionStats`' "last N days"
+  window is wall-clock relative, so it needs an anchor for a finished backtest).
+- **M5** (PR #57) Removed the old `news_market_ai` DB from code, config and CI
+  (`ensure-d1-database` deleted; root `migrations/0001-0012` deleted; tests pin
+  that no config binds the legacy DB). The owner deletes the actual Cloudflare
+  resource out of band.
 
-**M1 code — done on `m1/state-store-foundation`, no PR yet (2026-09-19):**
-`migrations/inputs/`, `migrations/state/`, `migrations/sim/` (the split
-described above); `test/helpers/sqlite_d1.js` (a real `node:sqlite`-backed D1
-adapter, not a hand-written fake, so the migration SQL and RunStore's own
-queries actually run); `src/storage/run_store.js` (`RunStore`, `readOnly`,
-`commitThesis`); `src/storage/inputs_view.js` (re-exports the unchanged
-inputs readers/writers from `d1.js` under the new import path). 433 old tests
-still pass; +28 new (`run_store.test.js`, `sqlite_d1_adapter.test.js`,
-`inputs_view.test.js`) covering out-of-order `asOf`, the risk-ceiling
-rejection (incl. the "own replaced position isn't double-counted" case), the
-partial-unique-index backstop, run isolation, `deleteRun`'s `'live'` refusal,
-and a local count confirming `commitThesis` stays at exactly 3 prepared
-statements. **Still open:** whether Cloudflare counts each statement inside
-a `batch()` toward the 50-queries-per-invocation Free cap is NOT settled by
-this — `node:sqlite` has no such cap to measure against, so this needs a real
-deployment to check. Not yet done: provisioning the three D1s / KV namespace,
-pushing the branch, opening the PR.
-
-### Overlapping open positions (separate live bug, found during this check)
-Not caused by backtests. 23 of the 24 open AAPL positions were opened by the
-live pipeline (09-17 13:12 → 09-18 18:41), all overlapping. Mechanism (from
-`pipeline.js`, consistent with the data): ANALYZE runs at `max_concurrency` 2
-and each run uses the article's `published_at` as `asOf`. `getOpenPositionForTickerAsOf`
-only sees positions opened at or before that `asOf`, and the replace step closes
-at most one (`LIMIT 1`). An older article processed after a newer one opens its
-own position and nothing ever closes it. Evidence: `trade_decisions.created_at`
-is not in `as_of` order (AAPL `09-18T12:47:00` was decided at 16:01, before
-`09-18T08:37:53` at 19:02).
-**Impact:** every non-AAPL live thesis saw 0.58–0.89 open exposure against the
-0.20 ceiling and was rejected (6 rejections on 09-18: EVR, GOOGL, INTC, MSFT, NVDA,
-SKHY; per-decision causation not replayed).
-**Decision:** fixed by the atomic portfolio commit in the environment design
-above (latest `asOf` wins, one open position per ticker enforced in SQL plus a
-unique-index backstop), built in M1, live from M4. Options (b) per-ticker ordered
-processing and (c) a per-ticker ceiling cap were dropped.
-
-**Data repair: not needed.** At the owner's request all 14 data tables in prod D1
-(`news_market_ai`) were emptied on 2026-09-19, with no backup; schema and
-`d1_migrations` were kept. Re-ingesting enqueues ANALYZE for every fetched item
-(LLM spend), and the overlap bug will re-accumulate until M4.
+### Overlapping open positions (former live bug)
+Cause: ANALYZE runs at `max_concurrency` 2 and each run uses the article's
+`published_at` as `asOf`, so an older article processed after a newer one opened
+its own position and nothing closed it (23 overlapping AAPL positions; every
+other ticker was rejected against the 0.20 ceiling). Fixed structurally by the
+atomic portfolio commit above (one open position per ticker in SQL + unique-index
+backstop), live since M4. Not yet observed in practice.
 
 ## Deployment: Cloudflare Workers + D1 + KV (free tier)
 | Resource | Free limit | Implication |
@@ -419,11 +277,9 @@ processing and (c) a per-ticker ceiling cap were dropped.
 | KV | 1GB storage, 100K reads/day, 1K writes/day | Only for low-frequency state (LLM key/model cooldowns) |
 | Queues | 10K ops/day | ~5 guaranteed messages per 15-min tick at 3 tickers, plus one ANALYZE per new item; re-check before growing the watchlist |
 
-**Architecture (built 2026-09-19):** five Workers connected by queues (`backtest`
-was added in M3), each binding only the D1s it needs -- `inputs`,
-`live` or `sim`; the old single `news_market_ai` DB was removed in M5 -- with
-only `backend` running migrations, and all sharing one `CACHE_KV` except
-`backtest`, which has its own.
+**Architecture:** five Workers connected by queues, each binding only the D1s it
+needs, with only `backend` running migrations, and all sharing one `CACHE_KV`
+except `backtest`, which has its own.
 - **`dashboard`** (`wrangler.dashboard.toml`, `src/dashboard-worker.js`) — the only
   public Worker: login, session cookie, server-rendered UI. Reaches `backend`
   through a service binding. Holds the dashboard login secrets.
@@ -431,52 +287,57 @@ only `backend` running migrations, and all sharing one `CACHE_KV` except
   routes). JSON `/api/*`, `POST /backfill`, `POST /backtest/run`, the `*/15` cron
   `scheduled()` (pure fan-out: per-ticker `ingest_ticker` + one `ingest_feeds`
   onto `INGEST`, one `exit_check` onto `LLM_JOBS`), D1 migrations. Holds NO
-  vendor key and has no `queue()` export (Step 5 follow-up, 2026-09-20 --
-  `backfill`'s consumer, formerly here on `JOBS`, moved to `ingest`).
+  vendor key and has no `queue()` export.
 - **`ingest`** (`wrangler.ingest.toml`) — `INGEST` consumer (`max_batch_size` 10)
-  and, since the Step 5 follow-up, `BACKFILL` consumer (`max_batch_size` 1) too.
-  Fetches Finnhub/yfinance/EDGAR/RSS/scrape, writes D1, enqueues one `analyze`
-  per item (per item×ticker for general feeds) onto `ANALYZE`. The sole holder
-  of `FINNHUB_API_KEY`; also narrowly binds `LIVE_DB` (rw, `job_progress`
-  reporting only, for the backfill branch).
+  and `BACKFILL` consumer (`max_batch_size` 1). Fetches Finnhub/yfinance/EDGAR/
+  RSS/scrape, writes D1, enqueues one `analyze` per new item (per item×ticker for
+  general feeds) onto `ANALYZE`. The sole holder of `FINNHUB_API_KEY`; also
+  narrowly binds `LIVE_DB` (rw, `job_progress` reporting only).
 - **`llm`** (`wrangler.llm.toml`) — the live Gemini caller: holds `GEMINI_API_KEYS`
   and the live `gemini:cooldown:*` KV keys. Binds `LIVE_DB` (rw) and `INPUTS_DB`
   (read-only by convention). Consumes `ANALYZE` (`max_batch_size` 5,
   `max_concurrency` 2 = the Gemini throttle; failures **retry**, since the
-  pipeline is checkpoint-resumable) and `LLM_JOBS` (`exit_check` only since M3;
-  batch 1, concurrency 1; failures are logged and acked).
+  pipeline is checkpoint-resumable) and `LLM_JOBS` (`exit_check` only; batch 1,
+  concurrency 1; failures are logged and acked; a stray `backtest` message is
+  rejected and marked failed).
 - **`backtest`** (`wrangler.backtest.toml`, `src/backtest-worker.js`) — private;
   consumes `BACKTEST` (batch 1, concurrency 1, DLQ): one message is one full
   signal-on/off run. Binds `SIM_DB` (rw), `INPUTS_DB` (read-only by convention)
-  and its own `CACHE_KV` namespace, and **no `LIVE_DB`** (pinned by
-  `test/ci_env_isolation.test.js`). Holds its own copy of `GEMINI_API_KEYS`, never
-  `FINNHUB_API_KEY`.
+  and its own `CACHE_KV`, and **no `LIVE_DB`** (pinned by
+  `test/ci_env_isolation.test.js`). Holds its own copy of `GEMINI_API_KEYS`,
+  never `FINNHUB_API_KEY`.
 
 Every queue has a DLQ (`max_retries` 3). D1 is the structured layer; KV holds
 cooldown state and light config.
 
 **CI/CD** (`.github/workflows/deploy.yml`): `test` → `migrate` (push/dispatch,
 gated on `migrations/**`) → one deploy job per Worker (`deploy`=backend,
-`deploy-dashboard`, `deploy-ingest`, `deploy-llm`, `deploy-backtest`), each with its own
-`dorny/paths-filter` output and `concurrency` group; `workflow_dispatch` runs
-all. Provisioning is idempotent via `.github/actions/ensure-{kv-namespace,queue}`
-(look up by name, create if missing, never commit ids; `ensure-kv-namespace` takes
-a `wrangler-config` input so each Worker's job patches its own file). D1 ids are
-committed directly (since M1), so there is no D1 provisioning step and
-`ensure-d1-database` was deleted in M5. Worker jobs use `needs: [changes, migrate]` with `if: always() &&
-(needs.migrate.result == 'success' || needs.migrate.result == 'skipped')`.
-Deploy path filters live in `.github/path-filters.yml`, and each target is
-diffed against its own last successful deploy.
+`deploy-dashboard`, `deploy-ingest`, `deploy-llm`, `deploy-backtest`), each with
+its own `dorny/paths-filter` output and `concurrency` group; `workflow_dispatch`
+runs all. CI triggers on `pull_request` and `main` pushes, not branch pushes.
+Provisioning is idempotent via `.github/actions/ensure-{kv-namespace,queue}`
+(look up by name, create if missing, never commit ids; `ensure-kv-namespace`
+takes a `wrangler-config` input so each Worker's job patches its own file). D1
+ids are committed directly. Worker jobs use `needs: [changes, migrate]` with
+`if: always() && (needs.migrate.result == 'success' || needs.migrate.result ==
+'skipped')`. Deploy path filters live in `.github/path-filters.yml` (exclusion
+based: `**` minus any `*.md`, so docs-only PRs deploy nothing), and each target
+is diffed against its own last successful deploy.
 
 **Per-Worker secrets:** each deploy job fails fast on its own required secrets
 and pushes them with `wrangler secret put --config <its file>`. `dashboard`:
 `DASHBOARD_USERNAME/PASSWORD`, `JWT_SECRET`, `SESSION_TTL_SECONDS`. `backend`:
-none (Step 5 follow-up, 2026-09-20). `ingest`: `FINNHUB_API_KEY` (+
-`EDGAR_USER_AGENT`/`EDGAR_CIK_MAP` vars) -- the only holder of that secret now.
-`llm` and `backtest`: `GEMINI_API_KEYS`. Repo-wide:
-`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Optional groups use a bash
-`-z` guard (the `secrets` context is rejected in a step `if:`). Provisioning
-actions mask ids before printing (a plaintext-id leak was found and fixed).
+none. `ingest`: `FINNHUB_API_KEY` (+ `EDGAR_USER_AGENT`/`EDGAR_CIK_MAP` vars) --
+the only holder of that secret. `llm` and `backtest`: `GEMINI_API_KEYS`.
+Repo-wide: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Optional groups use a
+bash `-z` guard (the `secrets` context is rejected in a step `if:`).
+Provisioning actions mask ids before printing.
+
+**Lessons:** a green deploy says nothing about live bindings; compare each
+Worker's live bindings to its wrangler file's "Secrets" comment (stale login
+secrets left on `backend` once made every `/api/*` call 401). wrangler v4 is
+required (v3 sent a 4-day queue message retention over the free 86400s cap);
+`ensure-queue` passes `--message-retention-period-secs 86400`.
 
 _Design precedent:_ the per-Worker-job/secret shape follows
 `allocsys/ai-campaign-builder`'s `deploy.yml`, minus its npm-workspaces layout
@@ -495,28 +356,28 @@ Other rules: a bad key is skipped, not fatal; an explicit non-default model
 request is honored exactly; the serving model/key is tagged for logging. Nothing
 calls Gemini directly. **The fallback list must differ from the requested model**
 — a list containing only the quick model gave quick-tier calls a one-model cascade
-(a single 503 killed a whole backtest before PR #41). `wrangler.llm.toml` now
-lists three distinct models: quick `3.1-flash-lite → 2.5-flash-lite → 2.5-flash`;
-deep tier prepends `3.5-flash`.
+(a single 503 killed a whole backtest before PR #41). `wrangler.llm.toml` lists
+three distinct models: quick `3.1-flash-lite → 2.5-flash-lite → 2.5-flash`; deep
+tier prepends `3.5-flash`.
 
 ### LLM call log (dashboard "LLM calls" page)
 Every Gemini prompt and raw response, including failed calls, goes to `llm_calls`
-(in the state schema, `migrations/state/`, since M2b; scoped by `env_run_id`, so
-each environment only sees and prunes its own rows), shown at `/dashboard/llm` (filters: source/status/ticker/
-backtest/run) and `/dashboard/llm/:id`.
+(state schema, scoped by `env_run_id`, so each environment only sees and prunes
+its own rows), shown at `/dashboard/llm` (filters: source/status/ticker/backtest/
+run) and `/dashboard/llm/:id`.
 - **One choke point:** `agents/utils/structured.js#callStructured` writes the row.
   Context (`source`, `jobId`, `runId`, `ticker`, and the `store` the row is
   written through) rides on `config.llmLog`
   (`storage/llm_calls.js#withLlmLogContext`), set by `llm-worker.js`,
   `runPipelineForTicker` and `checkOpenPositionExits`. No store on the context
-  means logging is a silent no-op. Note `runId` here is the PIPELINE run
-  (column `run_id`); the environment is the store's run id (`env_run_id`).
+  means logging is a silent no-op. `runId` here is the PIPELINE run (column
+  `run_id`); the environment is the store's run id (`env_run_id`).
 - **Best-effort:** a failed log write never fails or slows the call.
   `LLM_LOG_ENABLED="false"` turns it off.
 - **Cost:** ~4 D1 rows written per call (table + 3 indexes) against 100K/day. Rows
   older than `LLM_LOG_RETENTION_DAYS` (14) are pruned on the exit-check tick; prompt
   and response are each clipped at `LLM_LOG_MAX_CHARS` (60000), true lengths kept.
-- **Not logged:** stages skipped on checkpoint resume; anything before migration 0012.
+- **Not logged:** stages skipped on checkpoint resume.
 
 ## Roadmap: Service Split — DONE 2026-09-19
 **Why:** one Worker ran the cron pipeline, the SSR dashboard, login and long manual
@@ -531,115 +392,92 @@ work on `main` directly.
   under ~6s). Timing lined up with the entity-resolution default flip on 09-17
   (plausible, unconfirmed).
 - **Step 1 — Backend JSON API (PR #27).** `src/dashboard/data.js` per-section
-  fetchers and `src/dashboard/api.js` with 8 `/api/*` routes reusing `checkAuth`.
-  Fixed an exposure bug (summing a Rows-limited array in 3 places) with
-  `getOpenPositionsExposureTotal`.
+  fetchers and `src/dashboard/api.js` with `/api/*` routes reusing `checkAuth`.
 - **Step 2 — Dashboard Worker (PR #28).** Owns login, session and UI; `backend`
-  serves no HTML and is reachable only via service binding. Header-based
-  `X-Backfill-Secret` auth removed — the dashboard session is the only gate.
-  Live-verified with a `workflow_dispatch` deploy.
-- **Step 3 — Job queue (PR #29).** `JOBS` + DLQ; `POST /backfill` and
-  `POST /backtest/run` validate and enqueue; business failures persist as `failed`
-  rows rather than retrying (a retry would re-spend quota).
+  serves no HTML and is reachable only via service binding. The dashboard
+  session is the only gate (header-based `X-Backfill-Secret` auth removed).
+- **Step 3 — Job queue (PR #29).** `POST /backfill` and `POST /backtest/run`
+  validate and enqueue; business failures persist as `failed` rows rather than
+  retrying (a retry would re-spend quota). The queue was later renamed `BACKFILL`
+  (Step 5 follow-up).
 - **Step 4 — Cron fan-out (PR #30).** `scheduled()` is a thin scheduler onto
   `INGEST` and the exit-check queue; ANALYZE is the one consumer that retries
   (checkpoint-resumable, `openPosition` id-idempotent).
 - **Step 5 — `ingest` Worker (PR #31).** `INGEST` consumer moved out. **Gap
-  closed in a follow-up (2026-09-20, PR #61):** `backend` used to still hold
-  `FINNHUB_API_KEY` because `backfill` called Finnhub and `JOBS` allowed one
-  consumer. Fixed by renaming `JOBS` to `BACKFILL` and moving its consumer to
-  `ingest` (which also gained a narrow `LIVE_DB` binding, rw, for
-  `job_progress` reporting only) -- `backend` now holds no vendor key at all
-  and has no `queue()` export.
-  **Deploy incident, same day (PR #62):** the first deploy of that change
-  failed -- `wrangler deploy` on `backend` returned "Queue handler is
-  missing" (code 11001). Cloudflare refuses a script upload with no
-  `queue()` export while the Worker still has an active queue consumer
-  trigger attached from its LAST SUCCESSFUL deploy; `backend`'s last one
-  still had the JOBS consumer live, and wrangler.toml no longer declaring
-  that `[[queues.consumers]]` block isn't enough by itself in the same
-  deploy that also drops the handler -- the trigger detach and the handler
-  removal can't both happen in one step. Production was never at risk (a
-  failed deploy doesn't replace the running Worker), but it did mean
-  `deploy-ingest`/`deploy-llm`/`deploy-backtest`/`deploy-dashboard` -- all
-  downstream of `deploy` -- were skipped too, so nothing from this follow-up
-  (or the unrelated M5-cleanup PR #60 immediately before it) went live for
-  about 40 minutes. Fixed by restoring a TRANSITIONAL no-op `queue()` on
-  `backend` for exactly one deploy (PR #62, acks anything, logs if ever
-  actually invoked) so the upload was accepted and wrangler's trigger
-  reconciliation (driven by wrangler.toml, already consumer-block-free)
-  could detach JOBS as part of that same deploy. Confirmed detached
-  (deploy went through clean, an hour of Workers Observability on `backend`
-  showed zero queue-eventType invocations) and the transitional handler
-  removed again in a same-day follow-up (PR #63).
-- **Step 6 — `llm` Worker (PR #32).** Wider than "move ANALYZE": `backtest` and
-  `exit_check` also call Gemini, so they moved to a new `LLM_JOBS` queue. Fixed a
-  latent bug where `ensure-*` actions hard-coded `wrangler.toml` and
-  `deploy-ingest` skipped them (would have shipped `REPLACE_WITH_*` ids). Rollout
-  note: a `backtest`/`exit_check` message on `JOBS` at backend-deploy time is
-  acked and dropped.
-- **Step 7 — Cleanup and docs (PR #33).** Dead-code check in `backend` came back
-  clean (esbuild tree-shakes the shared `pipeline.js`); secrets audit matched
-  `deploy.yml` to code; docs rewritten for the 4-Worker layout. The stale
-  `GEMINI_API_KEYS` secret on `backend` was deleted in the Cloudflare dashboard.
+  closed 2026-09-20 (PR #61):** `backend` had still held `FINNHUB_API_KEY`
+  because `backfill` called Finnhub; renamed `JOBS` to `BACKFILL` and moved its
+  consumer to `ingest`. **Deploy lesson (PRs #62, #63):** Cloudflare refuses a
+  script upload with no `queue()` export while a queue-consumer trigger from the
+  last successful deploy is still attached, and the trigger detach and the
+  handler removal can't happen in one deploy. It took one deploy with a
+  transitional no-op `queue()` on `backend` (PR #62), then its removal (PR #63).
+- **Step 6 — `llm` Worker (PR #32).** `backtest` and `exit_check` also call
+  Gemini, so they moved to a new `LLM_JOBS` queue (backtests later moved to their
+  own Worker in M3). Fixed a latent bug where `ensure-*` actions hard-coded
+  `wrangler.toml`.
+- **Step 7 — Cleanup and docs (PR #33).** Dead-code check and secrets audit
+  came back clean.
 
-### Post-split follow-ups (2026-09-19)
-- **wrangler v3 → v4 (PR #34, #35).** CI had failed since run #219 at
-  `wrangler queues create`: v3 silently sent a 4-day message retention, over the
-  free tier's 86400s cap (fixed upstream only in v4, workers-sdk#12458). Now v4
-  (Node ≥ 22) with explicit `--message-retention-period-secs 86400`; `ensure-queue`
-  matches `already (exists|taken)` / `code: 11009`. Run #237 was the first fully
-  green deploy of all four Workers.
-- **Stale secrets on `backend` broke the whole dashboard (fixed).** The login
-  secrets were never deleted from `backend` after Step 2; `checkAuth` is a no-op
-  only when they're unset, so every `/api/*` call returned 401. **Lesson:** a green
-  deploy says nothing about live bindings. Compare each Worker's live bindings to
-  its wrangler file's "Secrets" comment.
-- **Config drift:** `wrangler.dashboard.toml` enables `[observability.logs]` but the
-  live dashboard Worker had logs off. The toml is the intended state; re-enable.
-- **Live pipeline produced no analysis after the M4 cutover (found 2026-09-20,
-  fixed on `fix/ingest-enqueue-new-items-only`).** `LIVE_DB` was empty (no
-  decisions, positions, checkpoints or LLM calls) while `INPUTS_DB` held 427 news
-  items, and `llm` ran only `exit_check`. Cause: every `ingest_ticker` tick threw
-  `batch message count of 163 exceeds limit of 100 (10206)` from
-  `ANALYZE.sendBatch` (Cloudflare Queues caps a batch at 100 messages / 256 KB);
-  the handler caught it, logged it and acked, so nothing ever reached ANALYZE.
-  **Second trap, fixed together:** `ingestTickerData`/`ingestFeedNews` returned
-  every fetched item, not just new ones (Finnhub returns a trailing window and
-  `insertNewsItem` said nothing about conflicts), so chunking alone would have
-  re-enqueued ~160 items per ticker every 15 minutes. Now `insertNewsItem` returns
-  `{ inserted, newTickers }` (from D1 `meta.changes`), the ingest functions return
-  `{ fetched, fresh }` (an item is fresh for a ticker when its `news_items` row or
-  its `(item, ticker)` association is new), and `ingestion/enqueue.js#sendInChunks`
-  sends in chunks of at most 100 messages / 200 KB, continues past a failed chunk
-  and reports it. **Open consequences:** (1) the items ingested before the fix
-  are stored but were never analyzed and are no longer detected as new; analyzing
-  them is LLM spend and the owner's call. (2) A queue failure after the D1 write is
-  logged (count + `ticker:runId` labels) but not retried, since a re-run would see
-  those items as already stored. (3) The per-tick cost of re-running
-  `insertNewsItem` over the whole trailing window (3-4 D1 statements per item) is
-  unchanged; if it shows up in CPU or D1 numbers, pre-filter existing ids with one
-  batched `SELECT` per ticker.
+### Live incident: no analysis after the M4 cutover (fixed 2026-09-20)
+`LIVE_DB` had no decisions while `INPUTS_DB` held 427 news items. Cause: every
+`ingest_ticker` tick threw `batch message count of 163 exceeds limit of 100` from
+`ANALYZE.sendBatch`; the handler caught it, logged it and acked. Second trap:
+ingest returned every fetched item, not just new ones. Fixed by
+`insertNewsItem` returning `{ inserted, newTickers }`, ingest returning
+`{ fetched, fresh }`, and `ingestion/enqueue.js#sendInChunks` (chunks of at most
+100 messages / 200 KB, continues past a failed chunk). **Open consequences:**
+(1) the ~427 items ingested before the fix were never analyzed and are no longer
+detected as new; analyzing them is LLM spend and the owner hasn't decided.
+(2) A queue failure after the D1 write is logged but not retried. (3) PR #64
+batched news-item D1 inserts and pre-filtered existing ids in the backfill path;
+the live per-tick cost of re-running `insertNewsItem` over the trailing window
+has not been re-measured.
+
+## Historical backfill (PRs #64–#67, verified live 2026-09-20)
+`POST /backfill?from=&to=` (dashboard: `/dashboard/backfill`) enqueues onto
+`BACKFILL`; the `ingest` Worker consumes it in self-continuing **parts**.
+- Finnhub is fetched in **date windows** (PR #67). One request returns at most
+  ~245 articles per ticker (inferred cap), so a window that hits it is split
+  adaptively. Per-invocation caps: 40 Finnhub requests
+  (`MAX_FINNHUB_REQUESTS_PER_BACKFILL_INVOCATION`, a conservative guess) and 500
+  items (`MAX_ITEMS_PER_BACKFILL_INVOCATION`); a job stops after
+  `MAX_BACKFILL_PARTS` = 50. Inserts are batched and existing ids pre-filtered.
+- **Verified:** 90-day run 2026-06-22..2026-09-20 inserted 10,025 items in 13
+  parts, 0 errors, 91/91 days, ~3.4 min. A duplicate rerun inserted 2 (dedupe
+  works). Finnhub's `to` date is **inclusive** (window-boundary days populated).
+  Totals after: 11,741 finnhub items, 13,248 ticker links, inputs DB ~33.5 MB.
+- **Sizing:** ~29 MB per ~10K articles, so a year is ~100–130 MB (500 MB per DB).
+  Free-tier Finnhub depth is ~1 year.
+- **Year run:** no code change needed if run in ~90-day slices (~13 parts each).
+  A single year-long range needs ~50 parts and may hit `MAX_BACKFILL_PARTS`.
+  Optional later PR: raise `MAX_BACKFILL_PARTS`, the 500-item and 40-request
+  caps. Not requested by the owner.
+- **Unexplained:** Aug 11–31 2026 weekday volume drops to ~25–80/day (vs 150–250
+  either side). 0 errors/truncations recorded, so probably thin Finnhub data;
+  unproven (settle with one direct Finnhub call for AAPL 2026-08-19). Owner: "It's
+  fine."
+- **Unverified:** dashboard UI after PR #66 (redirect to `/dashboard/backfill`,
+  "Backfill complete" panel, Last-run panel); Workers Observability for
+  CPU/subrequest errors on `ingest` during the 90-day run; whether the backfill
+  path enqueues ANALYZE (Queues free cap is 10K ops/day) — unassessed.
 
 ## Repo Structure
 ```
 src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill
                       # (enqueues onto BACKFILL), /backtest/run (enqueues onto
                       # BACKTEST), cron scheduler. No queue consumer, no
-                      # vendor key (Step 5 follow-up, 2026-09-20)
+                      # vendor key
 src/dashboard-worker.js  # `dashboard` Worker (wrangler.dashboard.toml) -- login,
                       # session, SSR UI; calls `backend` via service binding
 src/ingest-worker.js  # `ingest` Worker (wrangler.ingest.toml) -- INGEST and
                       # BACKFILL consumers
 src/llm-worker.js     # `llm` Worker (wrangler.llm.toml) -- ANALYZE + exit_check on
                       # {inputs, live store}; a stray backtest message on
-                      # LLM_JOBS is rejected (logged, job marked failed, acked, no
-                      # work done -- backtests run on `backtest`); holds
-                      # GEMINI_API_KEYS, as does `backtest`
+                      # LLM_JOBS is rejected (logged, job marked failed, acked)
 src/backtest-worker.js  # `backtest` Worker (wrangler.backtest.toml) -- BACKTEST
                       # consumer; binds only SIM_DB + INPUTS_DB + its own CACHE_KV
 ingestion/           # Finnhub, GDELT (unwired), EDGAR, RSS, HTML-scrape, yfinance adapters
-  ingest.js           # scheduled-ingestion entry point (split out of index.js in M2)
+  ingest.js           # scheduled-ingestion entry point
   enqueue.js          # chunked ANALYZE sendBatch (Queues caps a batch at 100 messages / 256 KB)
   errors.js           # typed vendor error taxonomy (Pattern 11)
   date_window.js       # point-in-time cutoff/boundary helpers
@@ -647,8 +485,7 @@ ingestion/           # Finnhub, GDELT (unwired), EDGAR, RSS, HTML-scrape, yfinan
 storage/             # run_store.js (RunStore, state-DB access), inputs_view.js
                       # (input-side D1 access), sim_registry.js (the backtest_runs
                       # registry, SIM_DB only); llm_calls.js and jobs.js hold pure
-                      # helpers only (M2b) -- their SQL is RunStore's. The old d1.js
-                      # is gone (M4a).
+                      # helpers only -- their SQL is RunStore's
 llm/                 # multi-key Gemini cascade, KV-backed cooldown
 agents/
   analysts/          # news/event, sentiment, technical
@@ -666,9 +503,10 @@ graph/               # orchestration
   settle.js             # realized return -> reflection on position close
   exit_check.js         # stop-loss / take-profit / time-based exits
 backtest/            # point-in-time harness, walk-forward, signal on/off comparison
+                      # (runBacktest.js, signalCompare.js, onSignalRunner.js,
+                      # noSignalBaseline.js, metrics.js, simClock.js, cleanup.js)
 dashboard/           # operational dashboard
 migrations/          # inputs/, state/, sim/ -- the three environment schemas
-                      # (the pre-split root 0001-0012 were deleted in M5)
 config/
 tests/
 ```
@@ -678,186 +516,140 @@ The pipeline is built end to end: shared schemas, Gemini cascade, bull/bear deba
 + judge, deterministic risk/sizing + portfolio sign-off, all ingestion adapters
 wired, a point-in-time positions store with stop-loss/take-profit/time-based
 exits, technical analyst on price bars, realized-return settlement feeding the
-reflection loop, a backfill entry point, the signal on/off backtest harness
-(`runManualBacktest`, persisted in `backtest_runs`) and a live-progress job panel.
-CI and deploys are green across all five Workers.
+reflection loop, date-windowed historical backfill, the signal on/off backtest
+harness (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress
+job panel. Backtest/live isolation is built (M1–M5). CI and deploys are green
+across all five Workers (`main` = `7093784`, PR #67).
 
-Backtest/live isolation is built (three D1s, `backtest` Worker, `RunStore`;
-M1–M5 merged). The behaviors in item 2 below have not been observed live end to
-end, and live produced no analysis at all until the ingest enqueue fix (see
-"Live pipeline produced no analysis" under Post-split follow-ups).
+**Backtests are NOT yet trustworthy.** An audit (2026-09-20, in response to
+"is backtesting bug free?") answered **no**: results would currently be
+meaningless. Do not run a real backtest until steps A–E below are done.
 
-**Remaining work:**
-1. **Overlapping open positions per ticker** (live) — fixed structurally: the
-   atomic portfolio commit plus a one-open-position-per-ticker unique index,
-   live since M4. Not yet observed in practice, since live had no decisions to
-   overlap.
-2. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
-   a real ANALYZE crash-and-retry (Step 4), ops/day against real Observability
-   numbers (Step 4), and the full ingest → analyze → llm flow producing decisions.
-3. **Step 5's gap: CLOSED (2026-09-20).** `backfill`'s Finnhub calls (and the
-   `FINNHUB_API_KEY` they needed) moved from `backend` to `ingest`, on a new
-   `BACKFILL` queue (renamed from `JOBS`) -- `backend` now holds no vendor
-   key and has no `queue()` export.
-4. **`restless-manager-6789` investigated (2026-09-20), not this repo's:**
-   created 2026-07-10 (before this project existed), last modified 2026-07-13,
-   deployed via a direct API call rather than `wrangler`/CI. Holds its own
-   `ADMIN_SECRET`/`BOT_TOKEN` secrets and its own D1/KV -- left alone;
-   deleting it (if warranted) is the owner's call, not something this repo's
-   tooling should touch.
-5. **Loose end:** dashboard UI/UX not screenshot-reviewed.
-6. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
-7. **New, found while verifying the ingest-enqueue fix live (2026-09-20):**
-   `price_bars` (INPUTS_DB) holds only 5 rows, all AAPL, none newer than
-   09-18 -- `yfinance chart API returned 429` for AAPL/MSFT/TSLA repeatedly in
-   ingest logs. This is now the binding constraint on live trading: of the
-   first 10 post-fix `trade_decisions`, 7 are `skipped_no_price_data` and the
-   other 3 `rejected` -- none opened, because there is no current price bar
-   to size against. The ingest-enqueue fix (see "Live pipeline produced no
-   analysis" above) unblocked ANALYZE messages from reaching the LLM, but a
-   fresh price bar is a separate, still-unmet precondition for a position to
-   ever open. Not yet investigated: whether this is yfinance rate-limiting
-   this account specifically, a cooldown misconfiguration, or an upstream
-   yfinance change.
+### Next steps: make backtests trustworthy (agreed 2026-09-20; nothing started)
+Working rules: each step is its own PR off `main` (direct GitHub-API edits on a
+feature branch; the CI `test` job is the real test; no local runner); merge
+only on the owner's explicit per-PR go-ahead, squash-merge. First thing next
+session: re-verify repo/CI state from real commits, not from notes.
 
-**M1 defect found while starting M2 (2026-09-19), fixed in the first M2 PR:**
-`commitThesis`'s close-old statement did not exclude the row the same batch
-inserts, so a checkpoint-resumed / queue-retried re-run of the portfolio
-stage closed its own just-opened position as `replaced` while the decision
-row still said `opened`. Now guarded by `id != ?`; `commitThesis` also takes
-`exitPrice` (recorded on the replaced position, which `settle.js` needs).
-Tests: re-run idempotency, older-thesis re-run after a newer replace, exit price.
+**Pipeline under audit:** `POST /backtest/run` (`src/index.js`) → `BACKTEST` queue
+→ `backtest-worker.js` (concurrency 1, batch 1; the whole run is ONE queue
+invocation, no continuation) → `backtest/runBacktest.js#runManualBacktest` →
+`compareSignalOnOffByWindow` (`signalCompare.js`), on-side
+`onSignalRunner.js#makeOnSignalReturns`, off-side
+`noSignalBaseline.js#makeBuyAndHoldOffReturns`. On side, per ticker
+(sequentially, whole window each), per UTC day from `testStart` through
+`testEnd + graceDays` (default `maxPositionHoldDays` = 10, clamped to now by
+`SimClock`): `graph/pipeline.js#runPipelineForTicker` per news item
+(`asOf = published_at`), then `graph/exit_check.js#checkOpenPositionExits`
+(`asOf` = day midnight). Returns come from `RunStore#getRealizedReturnsInRange`.
 
-**M1 bindings wired 2026-09-19:** `wrangler.toml` (backend) now binds
-INPUTS_DB/LIVE_DB/SIM_DB alongside the old DB; `wrangler.llm.toml` binds
-LIVE_DB (rw) + INPUTS_DB (ro by convention); `wrangler.ingest.toml` binds
-INPUTS_DB (rw). Real database_ids committed directly rather than through
-the usual `REPLACE_WITH_D1_DATABASE_ID` + `ensure-d1-database` placeholder
-pattern -- see next paragraph for why. No `wrangler.backtest.toml` yet
-(M3) so the KV namespace (`news-market-ai-backtest-CACHE_KV`,
-`f14e4607af5843599eac863b6adb508b`) isn't bound anywhere yet either. Not
-yet done: `package.json`/`deploy.yml` migrate steps for the three new DBs
-(they were migrated by hand for M1 -- see that section); engine code
-(pipeline.js etc.) still reads/writes the old single `DB` binding until
-M2's port lands.
+**Confirmed findings** (verified by reading code and/or querying D1), worst first:
+1. **No price history.** `price_bars` holds only 5 bars each for AAPL and TSLA
+   (2026-09-14..09-18) and none for MSFT (cause unknown; yfinance 429s were seen
+   in ingest logs, cooldown KV not checked). `config.js` `yfinanceRange` defaults
+   to `"5d"` and `ingestion/sources/yfinance.js` only fetches that trailing
+   range; there is no historical price backfill. Consequences: on a 90-day
+   window positions can't open outside those 5 days; the buy-and-hold baseline
+   takes the first bar on/after `testStart` with no horizon check, so it
+   silently measures a ~5-day return (`noSignalBaseline.js#computeBuyAndHoldReturn`);
+   MSFT is simply absent. The price check also happens **last**:
+   `pipeline.js`'s `portfolio_checked` stage calls `getPriceBarsAsOf` only after
+   every LLM stage, and records `skipped_no_price_data` if null, so an empty
+   backtest still burns the full LLM chain per news item
+   (`BACKTEST_MAX_LLM_CALLS` is uncapped by decision). This is also what makes
+   live trading skip decisions (7 of the first 10 post-fix live decisions were
+   `skipped_no_price_data`).
+2. **Silent 500-row caps.** `inputs_view.js#getNewsItemsInRange` defaults to
+   `limit=500` (`ORDER BY published_at ASC`) and `onSignalRunner.js#runOnSignalForTicker`
+   passes no limit, so only the FIRST 500 news items per ticker per window are
+   processed (~2 weeks of a 90-day window at ~35–50 items/ticker/day) while the
+   walk still runs the full window for exits. `run_store.js#getRealizedReturnsInRange`
+   also defaults to 500 (`ORDER BY resolved_at ASC`) and truncates realized
+   returns silently.
+3. **Same-day price look-ahead.** `getPriceBarsAsOf` uses `date <= ?` on a
+   `YYYY-MM-DD` string with an ISO `asOf`, so day D's bar (final OHLC/close) is
+   visible at any time on day D, including the midnight exit-check and a 09:35
+   article. The pipeline's entry price is that same bar's close, and the
+   technical analyst sees it too.
+4. **Metrics are not portfolio returns.** The baseline yields ONE return per
+   ticker per window; the on side yields one per closed trade; both go through
+   `metrics.js#summarizeReturns`, which compounds the array as if sequential,
+   ignores `position_size_pct` and concurrency, and annualizes Sharpe with
+   sqrt(252) though the periods are trades/tickers, not days. The on/off
+   comparison is apples-to-oranges.
+5. **Order-dependent multi-ticker walk.** `onSignalRunner.js#runOnSignalReturns`
+   loops tickers outermost, so ticker A's whole window runs before B starts; A
+   never sees B's exposure while B sees A's. Also `RunStore#commitThesis`'s
+   ceiling predicate and replace logic use `closed_at IS NULL` (live semantics),
+   not as-of, so in a sequential backtest it can count another ticker's later
+   positions and ignore ones closed later, making `rejected` wrong (matters only
+   near `MAX_PORTFOLIO_RISK_PCT` = 0.20). The pipeline's own pre-check uses the
+   as-of `getOpenPositionsRiskPctAsOf` (correct).
 
-**CI bug found 2026-09-19, fixed same day:**
-`.github/actions/ensure-d1-database`'s patch step used to do
-(`sed -i "s/database_id = \".*\"/.../" "$CONFIG_FILE"`), which matched and
-overwrote **every** `database_id = "..."` line in the target file, not
-only the one belonging to its own `database-name` input. Invisible with
-one `[[d1_databases]]` block per file (every prior use of this action);
-now that `wrangler.toml`/`wrangler.llm.toml`/`wrangler.ingest.toml` each
-have multiple blocks, calling this action against any of them (e.g. to
-re-resolve the old `DB` binding's id on a fresh checkout) would have
-stomped INPUTS_DB/LIVE_DB/SIM_DB's real ids with whatever single id it
-resolved. Was not triggered before the fix -- CI's
-`migrate`/`deploy`/`deploy-ingest`/`deploy-llm` jobs only ever called this
-action for the single old `DB` binding, and INPUTS_DB/LIVE_DB/SIM_DB's ids
-are committed directly (not placeholders), so there was nothing for it to
-patch there yet. **Fixed** by replacing the global sed with an awk pass
-scoped to the specific `[[d1_databases]]` block whose `database_name`
-matches `inputs.database-name`, leaving every other block's id untouched.
+**Suspected / not measured:** the whole backtest runs in one queue invocation
+(an agent asserted a 15-min queue wall limit; NOT verified) with subrequest and
+CPU limits unmeasured; redelivery could loop until the DLQ.
+**Agent-only claims (Gemini delegate run, unverified):** no `testStart < testEnd`
+validation in `POST /backtest/run` (low severity); the calendar-day walk counts
+weekends toward hold days (same as live; probably not a bug). **Rejected agent
+claim:** `maxDrawdown` NaN/negative peak (wrong: peak starts at 1; only a >100%
+"drawdown" if a single return < -1, minor).
+**Checked correct:** `asOf` is REQUIRED on news/fundamentals/price reads
+(`LookaheadViolationError`); `getFundamentalFactsAsOf` uses `filed_at <= asOf`;
+`getNewsAsOf` is revision-aware; `readOnly(INPUTS_DB)`; no `LIVE_DB` in the
+backtest Worker (`test/ci_env_isolation.test.js`); `commitThesis` is idempotent;
+failed-run cleanup keeps the error log; Sharpe guards stdev 0.
+**Not read by the audit:** `signalCompare.js`, `pointInTime.js`, `cleanup.js`,
+`simClock.js`, `llm/budget.js`, `technicalAnalyst.js`, `risk_mgmt/exit.js#evaluateExit`,
+`graph/settle.js`, prompts, dashboard views. Existing tests (`test/backtest*.test.js`,
+incl. leakcheck) do NOT cover: the same-day bar leak, the 500-row caps,
+multi-ticker ordering, long-window queue limits.
 
-**M2 code — done on `m2/engine-port-run-store`, pushed, no PR yet (2026-09-19):**
-Engine now runs on `{inputs, store}` instead of the old scope-less `d1.js`.
-`shared/constants.js` gained `MAX_PORTFOLIO_RISK_PCT` and `TRADE_DECISION_STATUS`
-(`opened`/`rejected`/`superseded`/`skipped_no_price_data` — the M1 design's
-`approved` is renamed `opened` to match); `portfolio_manager` imports the shared
-constant instead of a local copy. `RunStore` gained
-`getUnsettledReplacedPositions` (see design note below). `storage/inputs_view.js`
-now holds the input-side functions directly (no longer just a re-export);
-`storage/d1.js` is LEGACY — kept only for the dashboard's old-DB reads and the
-`backtest_runs` registry functions, everything else deleted rather than adapted,
-per the M1 rule. `checkpointer.js`, `memory.js`, `reflection.js`, `settle.js`,
-`exit_check.js` and `pipeline.js` all take `{inputs, store}` now.
-`ingestion/ingest.js` was split out of the old scheduler; `runScheduledIngestion`
-is deleted (was dead code per the Known Gaps note, confirmed unused). `ingest-worker`
-and `index.js`'s backfill path both use `env.INPUTS_DB`; the job reporter stayed on
-`env.DB` until M2b (below) moved `job_progress` to the state schema. `llm-worker` builds
-its `{inputs, store}` context per message (`inputs = readOnly(env.INPUTS_DB)`,
-`store = new RunStore(env.LIVE_DB, "live")`); a `backtest` message on `LLM_JOBS`
-now fails loudly — starts the job row, logs, `reporter.fail("backtests move to the
-backtest Worker in M3")`, acks, does no work — instead of running against live
-state. `POST /backtest/run` returns a 503 JSON body before any job row is written
-or anything enqueued (the old enqueue block is deleted, not gated). `src/backtest/*`
-is ported onto the new signature: `runManualBacktest(env, config, {inputs, store,
-registryDb}, params)`. A few stale comments referencing the old `d1.js` functions
-were fixed in passing.
+**Fix plan, in order:**
+- **A. Historical price-bar backfill.** Add an opt-in way to fetch and store
+  daily bars over a long range (yfinance `range` e.g. 1y/2y, or
+  `period1`/`period2` on the chart endpoint; batched D1 inserts via `db.batch`
+  like the news backfill; must not change the `*/15` cron's 5d default). Run it
+  for AAPL/MSFT/TSLA over the backfilled news span (>= 2026-06-22, ideally the
+  full year the owner backfills). Also find out why MSFT has zero bars (yfinance
+  cooldown KV, Workers logs, or a direct call). Design the owner-facing trigger
+  after checking how `POST /backfill` is wired in `src/index.js` and the ingest
+  Worker.
+- **B. Remove the 500-row caps.** Keyset-paginate `getNewsItemsInRange` in
+  `onSignalRunner` (or stream day by day); lift or paginate
+  `getRealizedReturnsInRange`; add tests with >500 items.
+- **C. Same-day bar leak.** Change `getPriceBarsAsOf` semantics (compare on the
+  date part with strict `<` for an intraday `asOf`, i.e. use the prior close, or
+  define availability at market close); extend the leak-check test to intraday
+  `asOf`.
+- **D. Metrics.** Position-weighted daily equity curve for BOTH on and off, same
+  horizon and universe; fix Sharpe periods; baseline returns null if the entry
+  bar is too far after `testStart`.
+- **E. Walk and preflight.** Day-major multi-ticker walk; as-of predicates in
+  `commitThesis` for backtest runs; a preflight price-coverage check in
+  `runManualBacktest` that fails fast BEFORE any LLM call; validate
+  `testStart < testEnd`.
+- **F. Small first backtest.** 1 ticker, 2–3 weeks, before any long run. Ask the
+  owner whether to set `BACKTEST_MAX_LLM_CALLS` for that run (standing decision
+  is uncapped, but the wasted-call risk in finding 1 was found), and measure queue
+  wall time and subrequests.
 
-**Design note (for the PR body):** `settlePositionOutcome` logs and swallows a
-failed reflection by design — the position stays closed, there's just no
-reflection recorded. So `getUnsettledReplacedPositions` only recovers a hard
-crash or queue retry landing between the `commitThesis` batch and the settle
-step; it is not a retry path for a thrown reflection error, and shouldn't be
-treated as one later.
-
-**M2 tests:** new `test/helpers/engine_ctx.js` builds `{inputs, store}` (plus
-`inputsDb`/`stateDb`) on real `node:sqlite`, with `seedNews`/`seedBar`/`stateRows`
-helpers and `STATE_DIR`/`INPUTS_DIR`/`SIM_DIR` exports, so tests run against real
-SQL instead of hand-written fakes. Rewritten on top of it, assertions unchanged:
-`backtest_on_signal_runner`, `backtest_run` (`registryDb = createTestD1([SIM_DIR])`),
-`checkpoint_resume` (technical analyst now actually runs — 7 LLM calls,
-`EXPECTED_LABELS` includes `analyst:technical` — plus a new env-scoped checkpoint
-case), `exit_logic` (+ run-id isolation), `positions_pointintime` (+ run-id
-isolation), `memory_pointintime`. Updated for the new bindings/contract:
-`index_backtest_enqueue` (503 contract — nothing enqueued, no `job_progress`
-row), `dashboard_worker` (503 pass-through), `ingest_worker`/`queue_consumer`
-(`INPUTS_DB`), `ingestion_wiring`/`entity_resolution_wiring` (import path moved
-to `ingestion/ingest.js`), `fundamentals`/`price_bars`/`technical`/
-`portfolio_manager`/`inputs_view` (updated paths/headers only), `llm_worker`
-(real `LIVE_DB`/`INPUTS_DB` via an `engineBindings()` helper; the backtest-rejection
-test used the OLD-DB schema — the root `migrations/` dir — for
-`job_progress` until M2b; the state schema already had `job_progress` with a
-`run_id` column from M1, the test just hadn't been pointed at it). New `test/replaced_settle.test.js` (7 cases):
-`getUnsettledReplacedPositions` returns replaced-and-unsettled positions with
-`exitPrice`, excludes already-settled ones, matches on `closedAt`/`ticker`/
-`'replaced'` exactly, and requires `closedAt`; a pipeline retry after a
-commit-before-settle crash (injected by making `store.getUnsettledReplacedPositions`
-throw once) settles the replaced position exactly once; `TRADE_DECISION_STATUS`
-values; `skipped_no_price_data` when no bar exists. The SQL outcomes for
-superseded/opened/rejected stay pinned in `test/run_store.test.js`, unchanged.
-Full suite: 470/470 pass.
-
-**M2b (done — branch `m2b/llm-calls-job-progress-to-state-db`):** `llm_calls` and
-`job_progress` moved onto the state DB via `RunStore`; wiring only, no schema
-change (both tables already had `env_run_id`/`run_id` from M1). All SQL for them
-now lives in `RunStore` (`insertLlmCall`/`pruneLlmCalls`/`getRecentLlmCalls`/
-`getLlmCall`, scoped by `env_run_id`; `insertQueuedJob`/`markJobRunning`/
-`updateJobProgress`/`completeJob`/`failJob`/`getJob`/`getActiveJob`, scoped by
-`run_id`, PK `(run_id, id)`). `storage/llm_calls.js` and `storage/jobs.js` keep
-only pure helpers (row building/clipping/redaction, value normalizers, row→API
-mappers, the idle cutoff) which `RunStore` imports, plus the best-effort
-`recordLlmCall`/`createJobReporter` wrappers. Interface changes:
-`recordLlmCall(config, entry)` (was `(env, config, entry)`) writes through
-`config.llmLog.store`; `createJobReporter(store, opts)` takes a `RunStore`. The
-`store` reaches `config.llmLog` in `runPipelineForTicker` and
-`checkOpenPositionExits` (so the reflection at a position close logs to the right
-environment), not through a new `callStructured` parameter, to leave the eight
-agents untouched. Consumers: `llm-worker` (backtest-rejection job row, retention
-prune) and `index.js` (backfill `queued` row + consumer progress) use
-`RunStore(LIVE_DB, "live")` and no longer touch `env.DB`; the dashboard API reads
-jobs and LLM calls through `dashboard/data.js#liveReadStore`, a
-`readOnly(LIVE_DB)`-wrapped live store. **Decision:** backfill jobs and the
-rejected-backtest row live under `run_id = 'live'` (the `llm` Worker has no
-`SIM_DB`; a real backtest's jobs get their own run id in the backtest Worker, M3),
-so `/api/jobs/*` and `/api/llm-calls*` are live-only until the M4 env selector.
-(M4a moved every other dashboard panel off the old `env.DB` too.) Tests: the two
-hand-written fakes (`FakeLlmDb`, `FakeJobDb`) are gone; `storage_jobs`,
-`llm_call_log`, `dashboard_llm`, `dashboard_api`, `dashboard_worker`,
-`llm_worker`, `queue_consumer`, `index_backfill`, `index_backtest_enqueue` and
-`checkpoint_resume` now run on real sqlite state DBs (new helpers
-`test/helpers/job_db.js`, `broken_db.js`), with new cases for env/run isolation
-(a second environment's rows are invisible to and unpruned by live, including by
-id), the read-only dashboard handle, and best-effort behavior when `LIVE_DB` is
-down. Full suite: 487/487 pass. Unblocks M5 deleting the old `DB` binding on the
-engine side; the dashboard's remaining old-DB reads are M4's.
-
-**Still open, carried from M1:** whether the `package.json`/`deploy.yml` migrate
-steps for the three new D1s land in M2 or M3; `BACKTEST_DAILY_WRITE_BUDGET`
-(proposed 40K) is not yet approved by the owner; whether each statement inside a
-D1 `batch()` counts individually toward the 50-queries-per-invocation Free cap is
-still unmeasured — needs a real deploy, not `node:sqlite`.
+### Other remaining work
+1. **Live verification** (not yet observed): a backtest surviving past the old
+   30s cutoff and long-window queue limits, a real ANALYZE crash-and-retry,
+   Queues/D1 ops per day against real Observability numbers (Queues free cap
+   10K/day), the atomic-commit behavior on real live decisions, and re-verify
+   fresh TSLA `pipeline_checkpoints` on the `*/15` cron.
+2. **~427 pre-fix news items never analyzed** — leave or re-enqueue (owner hasn't
+   answered).
+3. **Check whether the backfill path enqueues ANALYZE**, before/after big
+   backfills, given the Queues cap.
+4. **`BACKTEST_DAILY_WRITE_BUDGET`** proposed (40K), not approved, not built.
+5. **Optional:** the owner runs the remaining historical backfill in ~90-day
+   slices up to ~1 year (no code needed).
+6. **Dashboard environment selector** (`?env=`), left over from M4.
+7. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the
+   live dashboard Worker (config drift once observed; status unverified).
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists
@@ -868,29 +660,27 @@ still unmeasured — needs a real deploy, not `node:sqlite`.
   validated against live SEC data plus real headline traffic. Opt in with
   `ENTITY_RESOLUTION_USE_NAME_INDEX=true`.
 - **News sources:** Finnhub `/company-news` (free, 60 req/min) replaced GDELT on
-  09-18; its field mapping is written from docs and is **not live-verified**.
-  `gdelt.js` and its tests are kept, unwired (its response shape was never
-  confirmed; it rate-limited hard). RSS and HTML-scrape are live-only and can't
-  backfill (no from/to). HTML-scrape does tag-stripping only; Reuters/WSJ return
-  bot-challenge 401s; pages with no published-time meta fall back to fetch time and
-  are unsafe for point-in-time use.
-- **yfinance** is unofficial, daily bars only. **EDGAR** gives only reported
-  `us-gaap` tags (no non-GAAP), paced at 110ms. Ingestion pacing exists per
-  adapter but there is no shared cross-vendor limiter, and `ingestPriceBars`/
-  `ingestFundamentals` fetch the full watchlist with no delta fetching.
+  09-18 and is now live-verified by the backfill. `gdelt.js` and its tests are
+  kept, unwired (its response shape was never confirmed; it rate-limited hard).
+  RSS and HTML-scrape are live-only and can't backfill (no from/to).
+  HTML-scrape does tag-stripping only; Reuters/WSJ return bot-challenge 401s;
+  pages with no published-time meta fall back to fetch time and are unsafe for
+  point-in-time use.
+- **yfinance** is unofficial, daily bars only, and currently rate-limited (429) —
+  see Next steps, A. **EDGAR** gives only reported `us-gaap` tags (no non-GAAP),
+  paced at 110ms. Ingestion pacing exists per adapter but there is no shared
+  cross-vendor limiter, and `ingestPriceBars`/`ingestFundamentals` fetch the full
+  watchlist with no delta fetching.
 - **Untuned placeholders:** `MAX_PORTFOLIO_RISK_PCT` (0.20) and
   `config.maxPositionHoldDays` (10). No correlation check in portfolio sign-off.
 - **Exit logic** only fires time-based exits for a ticker until price bars exist
   before its position opens. `alphaReturn` is always `null` (no benchmark series
   ingested). Reflection failures are logged and swallowed; the position stays closed.
 - **`debates` table** has no write path (`trade_decisions.debate_id` is always null).
-- **Backtest harness:** the math layer, no-signal baseline (`noSignalBaseline.js`),
-  signal-on runner (`onSignalRunner.js`) and the persisted end-to-end run are built.
-  Every run spends real Gemini quota (several calls per news item plus one per
-  position close), so it is manual only and must never be wired into `scheduled()`.
-  Backfill it via `POST /backfill?from=&to=` first (runs read only what is in D1).
-  Isolation problems: see above.
-- **CI:** no lockfile-sync job (fine with one `package.json`); the docs-vs-code
-  path filter is exclusion-based (`**` minus any `*.md`), so new code directories
-  are gated without a workflow edit. The 2 pre-existing `dashboard_worker`
-  `POST /backfill` test failures on `main` were a known baseline as of Step 6.
+- **Backtest harness:** the math layer, no-signal baseline, signal-on runner and
+  the persisted end-to-end run are built but have the defects listed in Current
+  Status (audit, 2026-09-20). Every run spends real Gemini quota (several calls
+  per news item plus one per position close), so it is manual only and must never
+  be wired into `scheduled()`. Backfill news via `POST /backfill?from=&to=` (and,
+  once built, prices) first: runs read only what is in D1.
+- **CI:** no lockfile-sync job (fine with one `package.json`).
