@@ -104,6 +104,28 @@ async function enqueueAnalyze(queue, { jobName, context, fetched, fresh }) {
   }
 }
 
+/**
+ * Turns backfillHistoricalPriceBars' result into what the operator sees.
+ * Nothing saved is a FAILED job: reporting "complete, 0 bars" would hide
+ * exactly the failure this backfill is most likely to hit (yfinance 429s, see
+ * ingestion/sources/yfinance.js's header). Some tickers missing is still a
+ * complete job, but the detail names each one and why, so a partial fill is
+ * never mistaken for a full one.
+ */
+export function summarizePriceBackfill(result) {
+  const reasons = new Map(result.failedTickers.map(({ ticker, message }) => [ticker, message]));
+  for (const ticker of result.tickersWithNoBars) reasons.set(ticker, "returned no bars for this range");
+  const missing = [...reasons].map(([ticker, message]) => `${ticker} (${message})`);
+
+  if (result.inserted === 0) {
+    return { ok: false, error: `No price bars saved${missing.length ? ` -- ${missing.join("; ")}` : ""}` };
+  }
+
+  const filled = result.tickers - reasons.size;
+  const bars = `Saved ${result.inserted} price bar${result.inserted === 1 ? "" : "s"} for ${filled} of ${result.tickers} ticker${result.tickers === 1 ? "" : "s"}`;
+  return { ok: true, detail: missing.length ? `${bars}; no bars for ${missing.join("; ")}` : bars };
+}
+
 export default {
   async fetch() {
     return new Response("news-market-ai ingest worker is running (private, queue-consumer only -- see wrangler.ingest.toml). Architecture in plan.md.", { status: 200 });
@@ -224,11 +246,12 @@ export default {
           await reporter.start();
           try {
             const result = await backfillHistoricalPriceBars(config, env.INPUTS_DB, env.CACHE_KV, { tickers, from, to, onProgress: reporter.update });
-            console.log("backfill_prices job completed", { id, from, to, tickers: result.tickers, inserted: result.inserted, errorCount: result.errors.length, tickersWithNoBars: result.tickersWithNoBars });
-            await reporter.complete(
-              { inserted: result.inserted, errorCount: result.errors.length, tickers: result.tickers, tickersWithNoBars: result.tickersWithNoBars },
-              `Inserted ${result.inserted} price bar${result.inserted === 1 ? "" : "s"} across ${result.tickers} ticker${result.tickers === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
-            );
+            const summary = summarizePriceBackfill(result);
+            const failedTickers = result.failedTickers.map((f) => f.ticker);
+            console.log("backfill_prices job finished", { id, from, to, tickers: result.tickers, inserted: result.inserted, failedTickers, tickersWithNoBars: result.tickersWithNoBars, ok: summary.ok });
+            // Nothing saved is a failure, not a 'complete' with 0 bars: the catch below reports it as `failed`.
+            if (!summary.ok) throw new Error(summary.error);
+            await reporter.complete({ inserted: result.inserted, tickers: result.tickers, failedTickers, tickersWithNoBars: result.tickersWithNoBars }, summary.detail);
           } catch (err) {
             console.error("backfill_prices job failed", { id, from, to, message: err.message });
             await reporter.fail(err.message);
