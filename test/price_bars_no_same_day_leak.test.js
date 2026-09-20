@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getPriceBarsAsOf } from "../src/storage/inputs_view.js";
-import { priceBarCutoffDate, assertNoPriceBarLookahead } from "../src/shared/price_availability.js";
+import { priceBarCutoffDate, assertNoPriceBarLookahead, utcDateOf } from "../src/shared/price_availability.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { checkOpenPositionExits } from "../src/graph/exit_check.js";
@@ -23,6 +23,14 @@ test("priceBarCutoffDate is the UTC calendar date of asOf, whatever the time of 
   }
   assert.equal(priceBarCutoffDate("2026-01-05T23:30:00-05:00"), "2026-01-06"); // 04:30Z the next day
   assert.equal(priceBarCutoffDate("2026-01-06T01:00:00+05:00"), "2026-01-05"); // 20:00Z the day before
+});
+
+test("utcDateOf lines a timestamp up with a bar date; a raw string compare does not", () => {
+  assert.equal(utcDateOf("2026-01-05T00:00:00.000Z"), "2026-01-05");
+  assert.equal(utcDateOf("2026-01-05"), "2026-01-05");
+  assert.equal("2026-01-05" >= "2026-01-05T00:00:00.000Z", false); // the trap utcDateOf exists to avoid
+  assert.equal("2026-01-05" >= utcDateOf("2026-01-05T00:00:00.000Z"), true);
+  assert.throws(() => utcDateOf("garbage"), LookaheadViolationError);
 });
 
 test("priceBarCutoffDate refuses an asOf it cannot parse (no cutoff is never the fallback)", () => {

@@ -23,18 +23,29 @@
 import { LookaheadViolationError } from "./errors.js";
 
 /**
- * The exclusive upper bound, as a `YYYY-MM-DD` string, for bar dates visible at
- * `asOf`: a bar is visible iff `bar.date < priceBarCutoffDate(asOf)`. `asOf` is
- * any ISO timestamp (with a `Z` or an explicit offset) or a bare date. Anything
- * that does not parse throws LookaheadViolationError: a cutoff that cannot be
+ * The UTC calendar date (`YYYY-MM-DD`) of `timestamp`, an ISO timestamp (with a
+ * `Z` or an explicit offset) or a bare date. Use this, never a raw string
+ * compare, to line a bar's `date` up against a timestamp: `"2026-01-05" >=
+ * "2026-01-05T00:00:00.000Z"` is FALSE (the shorter string sorts first), which
+ * is how noSignalBaseline.js used to skip the bar on testStart's own day. Anything
+ * that does not parse throws LookaheadViolationError: a date that cannot be
  * computed must never quietly become "no cutoff".
  */
-export function priceBarCutoffDate(asOf) {
-  const ms = typeof asOf === "string" ? Date.parse(asOf) : Number.NaN;
+export function utcDateOf(timestamp) {
+  const ms = typeof timestamp === "string" ? Date.parse(timestamp) : Number.NaN;
   if (Number.isNaN(ms)) {
-    throw new LookaheadViolationError(`price bar reads need a parseable ISO asOf timestamp, got ${JSON.stringify(asOf)}`);
+    throw new LookaheadViolationError(`price bar reads need a parseable ISO timestamp, got ${JSON.stringify(timestamp)}`);
   }
   return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * The exclusive upper bound, as a `YYYY-MM-DD` string, for bar dates visible at
+ * `asOf`: a bar is visible iff `bar.date < priceBarCutoffDate(asOf)`. That is
+ * `asOf`'s UTC date (see utcDateOf for what parses).
+ */
+export function priceBarCutoffDate(asOf) {
+  return utcDateOf(asOf);
 }
 
 /**

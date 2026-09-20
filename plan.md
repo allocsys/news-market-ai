@@ -688,11 +688,10 @@ multi-ticker ordering, long-window queue limits.
   spec: compare on the date part with strict `<` for an intraday `asOf`.
 - **D. Metrics.** Position-weighted daily equity curve for BOTH on and off, same
   horizon and universe; fix Sharpe periods; baseline returns null if the entry
-  bar is too far after `testStart`. Also found while doing C:
-  `noSignalBaseline.js` filters entry bars with `b.date >= testStart`, a string
-  compare of `YYYY-MM-DD` against an ISO timestamp (`walkForwardWindows` yields
-  `...T00:00:00.000Z`), which is false for the bar dated exactly on testStart's
-  day, so the baseline enters one bar late.
+  bar is too far after `testStart`. (The baseline's late-entry bug found while
+  doing C is FIXED in the step-C PR: it compared `b.date >= testStart`, a string
+  compare of `YYYY-MM-DD` against an ISO timestamp, false for the bar dated on
+  testStart's own day; it now compares date to date via `utcDateOf`.)
 - **E. Walk and preflight.** Day-major multi-ticker walk; as-of predicates in
   `commitThesis` for backtest runs; a preflight price-coverage check in
   `runManualBacktest` that fails fast BEFORE any LLM call; validate

@@ -82,3 +82,42 @@ test("makeBuyAndHoldOffReturns returns a function matching compareSignalOnOffByW
   assert.equal(returns.length, 1);
   assert.ok(Math.abs(returns[0] - 0.05) < 1e-9);
 });
+
+// The window shape walkForwardWindows actually yields is ISO timestamps, not bare dates.
+// "2024-01-01" >= "2024-01-01T00:00:00.000Z" is false as a string compare, so the bar dated
+// on testStart's own day used to be skipped and the baseline entered one bar late.
+test("computeBuyAndHoldReturn enters at the bar dated on testStart's own day when testStart is an ISO timestamp", async () => {
+  const db = await dbWith([
+    { ticker: "AAPL", date: "2023-12-29", close: 50 }, // before testStart: never the entry
+    { ticker: "AAPL", date: "2024-01-01", close: 100 }, // testStart's own day: the entry
+    { ticker: "AAPL", date: "2024-01-02", close: 200 }, // the bar the old string compare wrongly entered at
+    { ticker: "AAPL", date: "2024-01-30", close: 110 },
+  ]);
+
+  const r = await computeBuyAndHoldReturn(db, { ticker: "AAPL", testStart: "2024-01-01T00:00:00.000Z", testEnd: "2024-01-31T00:00:00.000Z" });
+  assert.ok(Math.abs(r - 0.1) < 1e-9, `expected +10% from the Jan 1 bar, got ${r}`); // (110 - 100) / 100, NOT (110 - 200) / 200
+});
+
+test("computeBuyAndHoldReturn treats an ISO testStart and a bare-date testStart the same", async () => {
+  const db = await dbWith([
+    { ticker: "AAPL", date: "2024-01-01", close: 100 },
+    { ticker: "AAPL", date: "2024-01-30", close: 130 },
+  ]);
+  const iso = await computeBuyAndHoldReturn(db, { ticker: "AAPL", testStart: "2024-01-01T00:00:00.000Z", testEnd: "2024-01-31T00:00:00.000Z" });
+  const bare = await computeBuyAndHoldReturn(db, { ticker: "AAPL", testStart: "2024-01-01", testEnd: "2024-01-31" });
+  assert.equal(iso, bare);
+  assert.ok(Math.abs(iso - 0.3) < 1e-9);
+});
+
+test("makeBuyAndHoldOffReturns over a window shaped like walkForwardWindows' output uses the testStart-day bar", async () => {
+  const db = await dbWith([
+    { ticker: "AAPL", date: "2024-01-01", close: 100 },
+    { ticker: "AAPL", date: "2024-01-15", close: 300 },
+    { ticker: "AAPL", date: "2024-01-30", close: 105 },
+  ]);
+  const returns = await makeBuyAndHoldOffReturns(db, { tickers: ["AAPL"] })({
+    trainStart: "2023-12-01T00:00:00.000Z", trainEnd: "2024-01-01T00:00:00.000Z", testStart: "2024-01-01T00:00:00.000Z", testEnd: "2024-01-31T00:00:00.000Z",
+  });
+  assert.equal(returns.length, 1);
+  assert.ok(Math.abs(returns[0] - 0.05) < 1e-9);
+});
