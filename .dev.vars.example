@@ -20,6 +20,14 @@ FINNHUB_API_KEY=your-finnhub-key-here
 # FINNHUB_MIN_REQUEST_INTERVAL_MS=1100
 # FINNHUB_LOOKBACK_DAYS=3
 
+# Tiingo -- the historical price backfill's source (src/ingestion/sources/tiingo.js,
+# plan.md step A2). Free key from https://www.tiingo.com. With it set the
+# backfill uses Tiingo; without it, Yahoo (which 429s from Workers).
+# TIINGO_API_KEY=your-tiingo-key-here
+# Optional overrides -- see config.js for defaults.
+# PRICE_BACKFILL_SOURCE=tiingo
+# TIINGO_MIN_REQUEST_INTERVAL_MS=0
+
 # POST /backfill and POST /backtest/run (src/index.js) no longer accept a
 # shared secret -- a logged-in dashboard session is the only way to call
 # either route now. To exercise them locally: set DASHBOARD_USERNAME/
