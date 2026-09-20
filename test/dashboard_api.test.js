@@ -229,6 +229,79 @@ test("GET /api/jobs/active?type=backtest returns the newest in-flight job, camel
   assert.equal(body.job.updatedAt, updatedAt);
 });
 
+// --------------------------------------------------------------------
+// GET /api/jobs/latest -- how the most recently FINISHED backfill job
+// ended, for the Backfill page's "Last run" panel (RunStore#getLatestFinishedJob
+// over LIVE_DB's job_progress, run_id 'live'). Backfill only (see
+// api.js#handleApiLatestJobRoute's own header for why).
+// --------------------------------------------------------------------
+
+test("GET /api/jobs/latest returns 401 JSON when login is configured and there's no session cookie", async () => {
+  const response = await apiFetch("/api/jobs/latest?type=backfill", loginConfiguredEnv());
+  assert.equal(response.status, 401);
+  const body = await response.json();
+  assert.equal(body.error, "unauthorized");
+});
+
+test("GET /api/jobs/latest?type=backtest (not backfill) returns 400 -- a backtest's result is the backtest run itself, not a job row", async () => {
+  const env = loginConfiguredEnv({ LIVE_DB: (await jobStateDb()).db });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/latest?type=backtest", env, { cookie });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.match(body.error, /type must be: backfill/);
+});
+
+test("GET /api/jobs/latest?type=backfill returns { job: null } (200, not 404) when nothing has finished yet", async () => {
+  const env = loginConfiguredEnv({ LIVE_DB: (await jobStateDb()).db });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/latest?type=backfill", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body, { job: null });
+});
+
+test("GET /api/jobs/latest?type=backfill returns the most recently FINISHED job, not an in-flight one", async () => {
+  const db = createTestD1([STATE_DIR]);
+  const store = new RunStore(db, "live");
+  // An older finished run, then a currently-running one -- the running one
+  // must NOT be what this route reports (that's /api/jobs/active's job).
+  await store.insertQueuedJob({ id: "backfill-old", type: "backfill", params: { from: "2024-01-01", to: "2024-01-31" }, now: "2026-01-01T00:00:00.000Z" });
+  await store.markJobRunning({ id: "backfill-old", type: "backfill", now: "2026-01-01T00:00:01.000Z" });
+  await store.completeJob({ id: "backfill-old", result: { inserted: 146, errorCount: 0, parts: 1 }, detail: "Inserted 146 articles", now: "2026-01-01T00:05:00.000Z" });
+  await store.insertQueuedJob({ id: "backfill-new", type: "backfill", params: { from: "2024-02-01", to: "2024-02-28" }, now: "2026-02-01T00:00:00.000Z" });
+
+  const env = loginConfiguredEnv({ LIVE_DB: db });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/latest?type=backfill", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.job.id, "backfill-old");
+  assert.equal(body.job.status, "complete");
+  assert.equal(body.job.detail, "Inserted 146 articles");
+  assert.deepEqual(body.job.result, { inserted: 146, errorCount: 0, parts: 1 });
+  assert.deepEqual(body.job.params, { from: "2024-01-01", to: "2024-01-31" });
+  assert.equal(body.job.finishedAt, "2026-01-01T00:05:00.000Z");
+});
+
+test("GET /api/jobs/latest?type=backfill returns a failed job too, with its error", async () => {
+  const db = createTestD1([STATE_DIR]);
+  const store = new RunStore(db, "live");
+  await store.insertQueuedJob({ id: "backfill-1", type: "backfill", params: { from: "2024-01-01", to: "2024-01-31" }, now: "2026-01-01T00:00:00.000Z" });
+  await store.markJobRunning({ id: "backfill-1", type: "backfill", now: "2026-01-01T00:00:01.000Z" });
+  await store.updateJobProgress({ id: "backfill-1", phase: "saving", percent: 44, done: 325, total: 733, detail: "Saved 325/733 articles", now: "2026-01-01T00:02:00.000Z" });
+  await store.failJob({ id: "backfill-1", error: "Too many API requests by single Worker invocation", detail: "Saved 325/733 articles", now: "2026-01-01T00:02:01.000Z" });
+
+  const env = loginConfiguredEnv({ LIVE_DB: db });
+  const cookie = await loggedInCookie(env);
+  const response = await apiFetch("/api/jobs/latest?type=backfill", env, { cookie });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.job.status, "failed");
+  assert.equal(body.job.error, "Too many API requests by single Worker invocation");
+  assert.equal(body.job.detail, "Saved 325/733 articles");
+});
+
 test("GET /api/jobs/:id returns the job by id from LIVE_DB, and 404 for an unknown one", async () => {
   const { db } = await jobStateDb([ACTIVE_BACKTEST]);
   const env = loginConfiguredEnv({ LIVE_DB: db });
