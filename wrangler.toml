@@ -62,35 +62,26 @@ migrations_dir = "migrations/state"
 binding = "CACHE_KV"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
-# --- Queues (plan.md Step 3) --- POST /backfill validates + enqueues and
-# returns immediately; the actual (slow, vendor-calling) work runs in this
-# Worker's `queue()` consumer instead of inside `ctx.waitUntil` on the
-# original request. This is the fix for the ~30-second cutoff
-# `ctx.waitUntil` only guarantees past the response -- a queue consumer is
-# its own separate invocation with its own wall-time budget, not a tail
-# extension of a request that already returned.
-# Since plan.md Step 6, JOBS carries `backfill` ONLY -- `backtest` and
-# `exit_check` moved to the LLM_JOBS queue below (both call Gemini, which
-# now lives exclusively in the `llm` Worker).
-# max_batch_size = 1: each message here is already the heavy, slow item
-# this queue exists for (one full backfill) -- batching several together
-# would just make one consumer invocation more likely to hit its own
-# CPU/wall-time limit for no benefit.
-# dead_letter_queue only catches an unexpected crash in queue() itself (a
-# genuine bug, e.g. a malformed message) -- ordinary business-logic
-# failures (a vendor error mid-backfill) are caught inside queue(), logged
-# (see src/index.js's queue() handler), then acked, not retried: retrying a
-# call that already spent real Finnhub quota on failure would just spend it
-# again for the same result.
+# --- BACKFILL (produce only, plan.md Step 3, consumer moved to the
+# `ingest` Worker in this Step 5 follow-up) --- POST /backfill validates +
+# enqueues and returns immediately; the actual (slow, vendor-calling) work
+# runs in a queue consumer instead of inside `ctx.waitUntil` on the
+# original request -- the fix for the ~30-second cutoff `ctx.waitUntil`
+# only guarantees past the response, since a queue consumer is its own
+# separate invocation with its own wall-time budget, not a tail extension
+# of a request that already returned.
+# UPDATE (Step 5 follow-up, 2026-09-20): this queue used to be called JOBS
+# and `backend` consumed it directly, which is why `backend` held its own
+# copy of FINNHUB_API_KEY (backfillHistoricalNews calls Finnhub) even after
+# Step 5 moved every other Finnhub call to the `ingest` Worker -- see that
+# step's own plan.md section and wrangler.ingest.toml's now-closed "known,
+# deliberate gap" note. Renamed to BACKFILL and its consumer moved to
+# `ingest` (wrangler.ingest.toml) so `backend` never needs a Finnhub key at
+# all. `backend` therefore no longer has a `[[queues.consumers]]` block or a
+# `queue()` export -- there is nothing left for it to consume.
 [[queues.producers]]
-queue = "news-market-ai-jobs"
-binding = "JOBS"
-
-[[queues.consumers]]
-queue = "news-market-ai-jobs"
-max_batch_size = 1
-max_retries = 3
-dead_letter_queue = "news-market-ai-jobs-dlq"
+queue = "news-market-ai-backfill"
+binding = "BACKFILL"
 
 # --- INGEST (produce only, plan.md Step 4, consumer moved to the new
 # `ingest` Worker in Step 5) --- scheduled() no longer runs the pipeline
@@ -167,14 +158,13 @@ WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
 # not touching that function).
 
 # Secrets -- set via `wrangler secret put <NAME>`, never committed:
-#   FINNHUB_API_KEY = STILL held here too (not just on wrangler.ingest.toml)
-#     -- POST /backfill's JOBS `backfill` job (src/index.js's queue(),
-#     plan.md Step 3) calls graph/pipeline.js#backfillHistoricalNews
-#     directly, which hits Finnhub itself. This is a known, deliberate
-#     partial exception to plan.md Step 5's "backend no longer holds
-#     vendor keys" goal -- see that step's own plan.md section for why
-#     moving backfill's consumer isn't in scope here (JOBS can only have
-#     one consumer Worker; splitting it would be a larger redesign).
+#   FINNHUB_API_KEY -- NO LONGER held here (Step 5 follow-up, 2026-09-20):
+#     backfill's actual work moved to the `ingest` Worker's new BACKFILL
+#     consumer (see that queue's own comment above), so nothing in this
+#     Worker calls Finnhub anymore. A copy set by an earlier deploy still
+#     exists on Cloudflare until deleted (`wrangler secret delete
+#     FINNHUB_API_KEY`) -- same dead-weight-until-cleaned-up situation as
+#     GEMINI_API_KEYS below, tracked for plan.md Step 7's secrets audit.
 #   GEMINI_API_KEYS -- NO LONGER held here (moved to wrangler.llm.toml,
 #     plan.md Step 6). deploy.yml no longer pushes it to this Worker, but a
 #     copy set by an earlier deploy still exists on Cloudflare until it is

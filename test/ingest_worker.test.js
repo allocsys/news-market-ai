@@ -6,12 +6,19 @@
 // since the underlying code (src/ingestion/ingest.js#ingestTickerData /
 // #ingestFeedNews) didn't change at all in this step, only which Worker's
 // queue() calls it. Plus one unrecognized-type/crash-retry pair for parity
-// with backend's own queue() test coverage (test/queue_consumer.test.js),
-// since this Worker's queue() has the same two-tier ack-vs-retry structure.
+// with backend's own queue() test coverage, since this Worker's queue() has
+// the same two-tier ack-vs-retry structure. UPDATE (Step 5 follow-up,
+// 2026-09-20): also covers the new `backfill` message type, moved here
+// (with its tests) from the now-deleted test/queue_consumer.test.js when
+// the BACKFILL queue's consumer moved from `backend` to this Worker.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/ingest-worker.js";
+import { createTestD1 } from "./helpers/sqlite_d1.js";
+import { STATE_DIR } from "./helpers/engine_ctx.js";
+import { BrokenDb } from "./helpers/broken_db.js";
+import { RunStore } from "../src/storage/run_store.js";
 
 class FakeMessage {
   constructor(body) {
@@ -206,6 +213,82 @@ test("queue() ingest_feeds fans ANALYZE messages out per (item, ticker) pair, si
   assert.equal(env.ANALYZE.sent.length, 2);
   assert.deepEqual(env.ANALYZE.sent.map((m) => m.ticker).sort(), ["AAPL", "MSFT"]);
   assert.equal(message.acked, true);
+});
+
+// ---------------------------------------------------------------------------
+// queue(): backfill (Step 5 follow-up, 2026-09-20 -- moved here from the
+// deleted test/queue_consumer.test.js, which covered backend's old JOBS
+// consumer before that queue was renamed BACKFILL and its consumer moved
+// here. Same assertions, only the env shape changed: LIVE_DB is now this
+// Worker's own binding, added solely for job_progress reporting -- see
+// wrangler.ingest.toml's comment on it.)
+// ---------------------------------------------------------------------------
+
+test("queue() processes a backfill job: runs the real backfill, then acks the message", async (t) => {
+  const db = new FakeIngestDb();
+  // M2: news writes go to INPUTS_DB; M2b: the job_progress row goes to LIVE_DB (run_id 'live').
+  // Single-ticker watchlist (unlike this file's other tests): backfillHistoricalNews
+  // fetches per watchlist ticker, and mockFinnhubJson() returns the SAME
+  // fixed article regardless of ticker, so a multi-ticker watchlist would
+  // fetch it twice and the assertions below expect exactly one stored item.
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL" });
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-1", from: "2024-01-01", to: "2024-01-31" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(db.newsItems.length, 1);
+  assert.equal(message.acked, true);
+  assert.equal(message.retried, false);
+
+  // The progress row: written even though no 'queued' row existed (upsert), finished 'complete' with the real counts.
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-1");
+  assert.equal(job.status, "complete");
+  assert.equal(job.type, "backfill");
+  assert.equal(job.percent, 100);
+  assert.deepEqual(job.params, { from: "2024-01-01", to: "2024-01-31" });
+  assert.equal(job.result.inserted, 1);
+  assert.match(job.detail, /Inserted 1 article/);
+});
+
+test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and still acks -- no lasting state to retry into", async (t) => {
+  class ThrowingDb extends FakeIngestDb {
+    prepare() {
+      throw new Error("simulated D1 write failure");
+    }
+  }
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: new ThrowingDb(), WATCHLIST_TICKERS: "AAPL" });
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
+
+  const errorLogs = [];
+  t.mock.method(console, "error", (...args) => errorLogs.push(args));
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-2", from: "2024-01-01", to: "2024-01-31" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  assert.equal(message.retried, false);
+  assert.ok(errorLogs.some(([msg]) => msg.includes("backfill job failed")));
+
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-2");
+  assert.equal(job.status, "failed");
+  assert.match(job.error, /simulated D1 write failure/);
+});
+
+test("queue() still runs and acks a backfill when LIVE_DB (the progress store) is down -- progress is best-effort", async (t) => {
+  const db = new FakeIngestDb();
+  const env = baseEnv({ LIVE_DB: new BrokenDb(), INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL" });
+  t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
+  const warnings = [];
+  t.mock.method(console, "warn", (...args) => warnings.push(args));
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-3", from: "2024-01-01", to: "2024-01-31" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(db.newsItems.length, 1, "the backfill itself is unaffected");
+  assert.equal(message.acked, true);
+  assert.equal(message.retried, false);
+  assert.ok(warnings.some(([msg]) => msg.includes("job progress write failed")));
 });
 
 // ---------------------------------------------------------------------------

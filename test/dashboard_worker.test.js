@@ -289,7 +289,7 @@ test("POST /backtest/run returns 401 with a stale/forged cookie (bad signature) 
   assert.equal(response.status, 401);
 });
 
-/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. Since plan.md Step 3, backend's POST /backfill never runs the backfill itself: it validates, enqueues onto JOBS and returns an immediate ack. POST /backtest/run followed the same shape onto LLM_JOBS (Step 6), was disabled with a 503 during M2 pending the backtest Worker, and (M3) is re-enabled onto its own new BACKTEST queue -- see the test below. These tests were originally written for the pre-Step-3 synchronous/waitUntil behavior and had been failing on main ever since -- backend's env had no JOBS binding, so the enqueue threw and the route returned 500. */
+/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. Since plan.md Step 3, backend's POST /backfill never runs the backfill itself: it validates, enqueues onto BACKFILL (renamed from JOBS in a Step 5 follow-up, 2026-09-20, when its consumer moved from `backend` to `ingest`) and returns an immediate ack. POST /backtest/run followed the same shape onto LLM_JOBS (Step 6), was disabled with a 503 during M2 pending the backtest Worker, and (M3) is re-enabled onto its own new BACKTEST queue -- see the test below. These tests were originally written for the pre-Step-3 synchronous/waitUntil behavior and had been failing on main ever since -- backend's env had no JOBS binding, so the enqueue threw and the route returned 500. */
 class FakeQueue {
   constructor() {
     this.sent = [];
@@ -301,7 +301,7 @@ class FakeQueue {
 
 test("POST /backfill succeeds on a valid session cookie (scripted/non-form caller gets backend's enqueue ack forwarded verbatim)", async () => {
   const jobs = new FakeQueue();
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), JOBS: jobs }) });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), BACKFILL: jobs }) });
   const cookie = await loggedInCookie(env);
 
   const response = await worker.fetch(
@@ -318,9 +318,9 @@ test("POST /backfill succeeds on a valid session cookie (scripted/non-form calle
   assert.deepEqual(jobs.sent[0], { type: "backfill", id: body.id, from: "2024-01-01", to: "2024-01-31" });
 });
 
-test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto JOBS), and renders the accepted HTML page immediately", async () => {
+test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto BACKFILL), and renders the accepted HTML page immediately", async () => {
   const jobs = new FakeQueue();
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), JOBS: jobs }) });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), BACKFILL: jobs }) });
   const cookie = await loggedInCookie(env);
 
   const body = new URLSearchParams({ from: "2024-01-01", to: "2024-01-31" });
@@ -338,8 +338,9 @@ test("POST /backfill accepts a form-encoded body -- checks the session, forwards
   assert.match(html, /2024-01-01/);
   assert.match(html, /2024-01-31/);
 
-  // The route only enqueues (plan.md Step 3) -- the real backfill runs in
-  // backend's queue() consumer, covered by test/queue_consumer.test.js.
+  // The route only enqueues (plan.md Step 3) -- the real backfill now runs
+  // in the `ingest` Worker's queue() consumer (Step 5 follow-up,
+  // 2026-09-20), covered by test/ingest_worker.test.js.
   assert.equal(jobs.sent.length, 1);
   assert.equal(jobs.sent[0].type, "backfill");
   assert.equal(jobs.sent[0].from, "2024-01-01");

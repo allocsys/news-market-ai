@@ -268,17 +268,26 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Ensure JOBS queue exists (plan.md Step 3)
+      - name: Ensure BACKFILL queue exists (plan.md Step 3, renamed from JOBS in a Step 5 follow-up)
+        # Renamed from news-market-ai-jobs when its consumer moved from
+        # `backend` to the `ingest` Worker (2026-09-20) -- see wrangler.toml's
+        # own comment on this queue and wrangler.ingest.toml's new consumer
+        # block. The old JOBS queue (+ its DLQ) has no producer or consumer
+        # left as of this change; ensure-queue only creates, never deletes,
+        # so those two now-unused queue resources are left provisioned on
+        # Cloudflare until the owner deletes them by hand (same
+        # owner-deletes-cloud-resources-themselves precedent as the retired
+        # pre-split D1 database, plan.md M5).
         uses: ./.github/actions/ensure-queue
         with:
-          queue-name: news-market-ai-jobs
+          queue-name: news-market-ai-backfill
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Ensure JOBS dead-letter queue exists (plan.md Step 3)
+      - name: Ensure BACKFILL dead-letter queue exists (plan.md Step 3)
         uses: ./.github/actions/ensure-queue
         with:
-          queue-name: news-market-ai-jobs-dlq
+          queue-name: news-market-ai-backfill-dlq
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -351,24 +360,12 @@ jobs:
       # only job that ever sees that secret. A copy pushed to this Worker by an
       # earlier deploy still exists on Cloudflare until deleted; see
       # wrangler.toml's secrets comment and plan.md Step 7's secrets audit.)
-      - name: Set FINNHUB_API_KEY on the deployed Worker
-        # Same idempotent, non-blocking shape as the GEMINI_API_KEYS step
-        # above -- Finnhub replaced GDELT as the news source (2026-09-18,
-        # see plan.md), and like the Gemini key, an unset Finnhub key
-        # shouldn't block a first deploy of everything else. Without it,
-        # finnhub.js's fetchLatest logs a 401 VendorError per ticker and
-        # that source is skipped (see pipeline.js's failure-isolation
-        # model) rather than anything crashing.
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-        run: |
-          if [ -z "$FINNHUB_API_KEY" ]; then
-            echo "FINNHUB_API_KEY repo secret not set -- skipping. The Worker is deployed but Finnhub news ingestion will fail (401, logged and skipped) until this is configured."
-            exit 0
-          fi
-          echo "$FINNHUB_API_KEY" | npx wrangler secret put FINNHUB_API_KEY
+      # (No FINNHUB_API_KEY push here anymore either, as of the Step 5
+      # follow-up, 2026-09-20 -- backfill's Finnhub calls moved to the
+      # `ingest` Worker along with the BACKFILL queue consumer, so this
+      # Worker holds no vendor keys at all now. See wrangler.toml's own
+      # secrets comment and deploy-ingest's FINNHUB_API_KEY step below,
+      # which is now the only place this secret is pushed.)
 
   # `dashboard` Worker (plan.md Step 2) -- own path-filtered job, own
   # concurrency group (an unrelated backend-only push must never cancel an
@@ -427,12 +424,13 @@ jobs:
             echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS --config wrangler.dashboard.toml
           fi
 
-  # `ingest` Worker (plan.md Step 5) -- own path-filtered job, own
-  # concurrency group (same reasoning as deploy-dashboard above: an
-  # unrelated push must never cancel this Worker's in-flight deploy, and
-  # vice versa). Depends on backend's own `deploy` job, not just `test`,
-  # since backend's deploy job is what provisions the news-market-ai-ingest
-  # and news-market-ai-analyze queues (+ DLQs) this Worker's
+  # `ingest` Worker (plan.md Step 5, extended by a Step 5 follow-up,
+  # 2026-09-20) -- own path-filtered job, own concurrency group (same
+  # reasoning as deploy-dashboard above: an unrelated push must never cancel
+  # this Worker's in-flight deploy, and vice versa). Depends on backend's
+  # own `deploy` job, not just `test`, since backend's deploy job is what
+  # provisions the news-market-ai-ingest, news-market-ai-analyze, and (as of
+  # the follow-up) news-market-ai-backfill queues (+ DLQs) this Worker's
   # wrangler.ingest.toml binds to (via the same ensure-queue composite
   # action, reused unmodified) -- matters most on a first-ever deploy of
   # both.
@@ -480,11 +478,11 @@ jobs:
         # deploy of everything else. Without it, finnhub.js's fetchLatest
         # logs a 401 VendorError per ticker and that source is skipped
         # (see pipeline.js's failure-isolation model) rather than anything
-        # crashing. This Worker is now the primary holder of this secret
-        # for LIVE ingestion (ingest_ticker/ingest_feeds) -- backend still
-        # separately holds its own copy too, for the backfill JOBS job
-        # only (see wrangler.toml's own comment on that known, deliberate
-        # exception).
+        # crashing. This Worker is now the ONLY holder of this secret,
+        # for live ingestion (ingest_ticker/ingest_feeds) AND backfill (the
+        # BACKFILL consumer, moved here from backend in the Step 5
+        # follow-up, 2026-09-20) -- `backend` no longer holds a copy at all
+        # (see wrangler.toml's own secrets comment).
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

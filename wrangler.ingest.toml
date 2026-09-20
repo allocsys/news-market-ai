@@ -21,6 +21,22 @@ binding = "INPUTS_DB"
 database_name = "news-market-ai-inputs"
 database_id = "c14d62d9-62bb-403f-8792-1c627e076d1a"
 
+# LIVE_DB (Step 5 follow-up, 2026-09-20): added ONLY so the new BACKFILL
+# consumer below can report job progress the same way backend's old JOBS
+# consumer did -- createJobReporter/RunStore(env.LIVE_DB, "live") write to
+# job_progress (migrations/state/), the one state-schema table this Worker
+# ever touches. This Worker still never reads or writes positions/
+# trade_decisions/decision_memory/pipeline_checkpoints/llm_calls; nothing
+# in ingest-worker.js's ingest_ticker/ingest_feeds branches uses this
+# binding at all, only the backfill branch does. A D1 binding can't be
+# scoped to one table, so this is a wider grant than the code strictly
+# needs, same trust level `llm` already has -- flagged here rather than
+# silently widened.
+[[d1_databases]]
+binding = "LIVE_DB"
+database_name = "news-market-ai-live"
+database_id = "215b7856-a888-41e1-b929-e9612e99ebd8"
+
 # --- KV --- this Worker is now the ONLY one that touches the EDGAR CIK
 # lookup cache (edgar_cik_lookup.js) and the entity-resolution SEC
 # name-index cache (entity_resolution.js), plus Finnhub/yfinance's
@@ -41,6 +57,22 @@ queue = "news-market-ai-ingest"
 max_batch_size = 10
 max_retries = 3
 dead_letter_queue = "news-market-ai-ingest-dlq"
+
+# --- BACKFILL (consume, Step 5 follow-up, 2026-09-20) --- `backend`'s
+# POST /backfill (src/index.js) PRODUCES onto this queue via its own
+# BACKFILL binding (renamed from JOBS -- see wrangler.toml's own comment);
+# this Worker is the only consumer. Moved here, not left on `backend`, so
+# `backend` never needs FINNHUB_API_KEY at all -- backfillHistoricalNews
+# calls Finnhub directly, same as ingest_ticker/ingest_feeds do. Same
+# max_batch_size = 1 as the old JOBS consumer: one message is already the
+# heavy, slow item this queue exists for (one full backfill), batching
+# more together would just make one invocation more likely to hit its own
+# CPU/wall-time limit for no benefit.
+[[queues.consumers]]
+queue = "news-market-ai-backfill"
+max_batch_size = 1
+max_retries = 3
+dead_letter_queue = "news-market-ai-backfill-dlq"
 
 # --- ANALYZE (produce) --- ingestTickerData/ingestFeedNews's callers
 # (queue() below) enqueue one `analyze` message per resulting news item/
@@ -84,12 +116,8 @@ EDGAR_CIK_MAP = "AAPL|0000320193,MSFT|0000789019,TSLA|0001318605"
 # Secrets -- set via `wrangler secret put FINNHUB_API_KEY --config wrangler.ingest.toml`,
 # never committed:
 #   FINNHUB_API_KEY -- moved here from backend's wrangler.toml (Step 5).
-#   This Worker is now the only one that calls Finnhub for LIVE ingestion
-#   (ingest_ticker/ingest_feeds). NOTE (known, deliberate gap -- see
-#   plan.md's Step 5 section): `backend` STILL separately holds its own
-#   FINNHUB_API_KEY, because POST /backfill's JOBS-queue `backfill` job
-#   (src/index.js's queue(), plan.md Step 3) also calls Finnhub directly
-#   (graph/pipeline.js#backfillHistoricalNews) and JOBS has no consumer
-#   here to move that job to without a larger redesign (a queue can only
-#   have one consumer Worker) -- out of scope for this step, flagged for a
-#   future cleanup rather than silently left unmentioned.
+#   This Worker is now the ONLY one that calls Finnhub, for BOTH live
+#   ingestion (ingest_ticker/ingest_feeds) AND backfill (the BACKFILL
+#   consumer above, added in the Step 5 follow-up 2026-09-20 that closed
+#   the gap this note used to describe -- `backend` no longer holds a
+#   Finnhub key at all, see wrangler.toml's own secrets comment).

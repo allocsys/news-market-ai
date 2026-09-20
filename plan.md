@@ -179,7 +179,7 @@ second D1" note.
 **Three D1 databases**
 | DB | Holds | Written by |
 |---|---|---|
-| `inputs` | `news_items`, `news_item_revisions`, `news_item_tickers`, `price_bars`, `fundamental_facts`: shared, append-only, point-in-time through the existing `asOf` filters | `ingest` only (`backend` too until `backfill` moves, the Step 5 gap) |
+| `inputs` | `news_items`, `news_item_revisions`, `news_item_tickers`, `price_bars`, `fundamental_facts`: shared, append-only, point-in-time through the existing `asOf` filters | `ingest` only (the Step 5 gap -- `backend` also holding `inputs` write access for `backfill` -- closed 2026-09-20) |
 | `live` | run state with `run_id = 'live'`: `positions`, `trade_decisions`, `decision_memory`, `pipeline_checkpoints`, `llm_calls`, `job_progress` | `llm` (live) |
 | `sim` | the same tables with `run_id` = backtest id, plus `backtest_runs` (registry) | `backtest` |
 
@@ -195,7 +195,9 @@ second D1" note.
   a separate `InputsView(db)` (`asOf` required, as today).
 
 **Workers and bindings**
-- `ingest`: `inputs` read/write. Enqueues ANALYZE.
+- `ingest`: `inputs` read/write. Enqueues ANALYZE. Since the Step 5 follow-up
+  (2026-09-20) also consumes `BACKFILL` and narrowly binds `live` (rw,
+  `job_progress` reporting only -- see that follow-up's own note).
 - `llm` (live only): `live` read/write, `inputs` read-only. Consumes `ANALYZE`
   and `exit_check`.
 - `backtest` (new: `wrangler.backtest.toml`, own `BACKTEST` queue + DLQ): `sim`
@@ -428,11 +430,15 @@ only `backend` running migrations, and all sharing one `CACHE_KV` except
 - **`backend`** (`wrangler.toml`, `src/index.js`) — private (no workers.dev, no
   routes). JSON `/api/*`, `POST /backfill`, `POST /backtest/run`, the `*/15` cron
   `scheduled()` (pure fan-out: per-ticker `ingest_ticker` + one `ingest_feeds`
-  onto `INGEST`, one `exit_check` onto `LLM_JOBS`), D1 migrations, and the `JOBS`
-  consumer (`backfill` only). Holds `FINNHUB_API_KEY` for `backfill` only.
-- **`ingest`** (`wrangler.ingest.toml`) — `INGEST` consumer (`max_batch_size` 10).
+  onto `INGEST`, one `exit_check` onto `LLM_JOBS`), D1 migrations. Holds NO
+  vendor key and has no `queue()` export (Step 5 follow-up, 2026-09-20 --
+  `backfill`'s consumer, formerly here on `JOBS`, moved to `ingest`).
+- **`ingest`** (`wrangler.ingest.toml`) — `INGEST` consumer (`max_batch_size` 10)
+  and, since the Step 5 follow-up, `BACKFILL` consumer (`max_batch_size` 1) too.
   Fetches Finnhub/yfinance/EDGAR/RSS/scrape, writes D1, enqueues one `analyze`
-  per item (per item×ticker for general feeds) onto `ANALYZE`.
+  per item (per item×ticker for general feeds) onto `ANALYZE`. The sole holder
+  of `FINNHUB_API_KEY`; also narrowly binds `LIVE_DB` (rw, `job_progress`
+  reporting only, for the backfill branch).
 - **`llm`** (`wrangler.llm.toml`) — the live Gemini caller: holds `GEMINI_API_KEYS`
   and the live `gemini:cooldown:*` KV keys. Binds `LIVE_DB` (rw) and `INPUTS_DB`
   (read-only by convention). Consumes `ANALYZE` (`max_batch_size` 5,
@@ -465,8 +471,9 @@ diffed against its own last successful deploy.
 **Per-Worker secrets:** each deploy job fails fast on its own required secrets
 and pushes them with `wrangler secret put --config <its file>`. `dashboard`:
 `DASHBOARD_USERNAME/PASSWORD`, `JWT_SECRET`, `SESSION_TTL_SECONDS`. `backend`:
-`FINNHUB_API_KEY`. `ingest`: `FINNHUB_API_KEY` (+ `EDGAR_USER_AGENT`/
-`EDGAR_CIK_MAP` vars). `llm` and `backtest`: `GEMINI_API_KEYS`. Repo-wide:
+none (Step 5 follow-up, 2026-09-20). `ingest`: `FINNHUB_API_KEY` (+
+`EDGAR_USER_AGENT`/`EDGAR_CIK_MAP` vars) -- the only holder of that secret now.
+`llm` and `backtest`: `GEMINI_API_KEYS`. Repo-wide:
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Optional groups use a bash
 `-z` guard (the `secrets` context is rejected in a step `if:`). Provisioning
 actions mask ids before printing (a plaintext-id leak was found and fixed).
@@ -537,9 +544,13 @@ work on `main` directly.
 - **Step 4 — Cron fan-out (PR #30).** `scheduled()` is a thin scheduler onto
   `INGEST` and the exit-check queue; ANALYZE is the one consumer that retries
   (checkpoint-resumable, `openPosition` id-idempotent).
-- **Step 5 — `ingest` Worker (PR #31).** `INGEST` consumer moved out. **Deliberate
-  gap:** `backend` still holds `FINNHUB_API_KEY` because `backfill` calls Finnhub
-  and `JOBS` allows one consumer; closing it needs a second queue.
+- **Step 5 — `ingest` Worker (PR #31).** `INGEST` consumer moved out. **Gap
+  closed in a follow-up (2026-09-20):** `backend` used to still hold
+  `FINNHUB_API_KEY` because `backfill` called Finnhub and `JOBS` allowed one
+  consumer. Fixed by renaming `JOBS` to `BACKFILL` and moving its consumer to
+  `ingest` (which also gained a narrow `LIVE_DB` binding, rw, for
+  `job_progress` reporting only) -- `backend` now holds no vendor key at all
+  and has no `queue()` export.
 - **Step 6 — `llm` Worker (PR #32).** Wider than "move ANALYZE": `backtest` and
   `exit_check` also call Gemini, so they moved to a new `LLM_JOBS` queue. Fixed a
   latent bug where `ensure-*` actions hard-coded `wrangler.toml` and
@@ -591,12 +602,14 @@ work on `main` directly.
 
 ## Repo Structure
 ```
-src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill,
-                      # /backtest/run (enqueues onto BACKTEST), cron
-                      # scheduler, JOBS (backfill-only) consumer
+src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill
+                      # (enqueues onto BACKFILL), /backtest/run (enqueues onto
+                      # BACKTEST), cron scheduler. No queue consumer, no
+                      # vendor key (Step 5 follow-up, 2026-09-20)
 src/dashboard-worker.js  # `dashboard` Worker (wrangler.dashboard.toml) -- login,
                       # session, SSR UI; calls `backend` via service binding
-src/ingest-worker.js  # `ingest` Worker (wrangler.ingest.toml) -- INGEST consumer
+src/ingest-worker.js  # `ingest` Worker (wrangler.ingest.toml) -- INGEST and
+                      # BACKFILL consumers
 src/llm-worker.js     # `llm` Worker (wrangler.llm.toml) -- ANALYZE + exit_check on
                       # {inputs, live store}; a stray backtest message on
                       # LLM_JOBS is rejected (logged, job marked failed, acked, no
@@ -661,10 +674,30 @@ end, and live produced no analysis at all until the ingest enqueue fix (see
 2. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
    a real ANALYZE crash-and-retry (Step 4), ops/day against real Observability
    numbers (Step 4), and the full ingest → analyze → llm flow producing decisions.
-3. **Step 5's gap:** `backend` still holds `FINNHUB_API_KEY` for `backfill`.
-4. **Loose ends:** a stray unrelated Worker
-   `restless-manager-6789` on the account; dashboard UI/UX not screenshot-reviewed.
-5. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
+3. **Step 5's gap: CLOSED (2026-09-20).** `backfill`'s Finnhub calls (and the
+   `FINNHUB_API_KEY` they needed) moved from `backend` to `ingest`, on a new
+   `BACKFILL` queue (renamed from `JOBS`) -- `backend` now holds no vendor
+   key and has no `queue()` export.
+4. **`restless-manager-6789` investigated (2026-09-20), not this repo's:**
+   created 2026-07-10 (before this project existed), last modified 2026-07-13,
+   deployed via a direct API call rather than `wrangler`/CI. Holds its own
+   `ADMIN_SECRET`/`BOT_TOKEN` secrets and its own D1/KV -- left alone;
+   deleting it (if warranted) is the owner's call, not something this repo's
+   tooling should touch.
+5. **Loose end:** dashboard UI/UX not screenshot-reviewed.
+6. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
+7. **New, found while verifying the ingest-enqueue fix live (2026-09-20):**
+   `price_bars` (INPUTS_DB) holds only 5 rows, all AAPL, none newer than
+   09-18 -- `yfinance chart API returned 429` for AAPL/MSFT/TSLA repeatedly in
+   ingest logs. This is now the binding constraint on live trading: of the
+   first 10 post-fix `trade_decisions`, 7 are `skipped_no_price_data` and the
+   other 3 `rejected` -- none opened, because there is no current price bar
+   to size against. The ingest-enqueue fix (see "Live pipeline produced no
+   analysis" above) unblocked ANALYZE messages from reaching the LLM, but a
+   fresh price bar is a separate, still-unmet precondition for a position to
+   ever open. Not yet investigated: whether this is yfinance rate-limiting
+   this account specifically, a cooldown misconfiguration, or an upstream
+   yfinance change.
 
 **M1 defect found while starting M2 (2026-09-19), fixed in the first M2 PR:**
 `commitThesis`'s close-old statement did not exclude the row the same batch

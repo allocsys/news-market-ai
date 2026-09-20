@@ -21,41 +21,30 @@
 // scheduled() invocation doing everything (which is what originally hit the
 // free-tier CPU cap Step 0 diagnosed).
 //
-// `queue` (plan.md Step 3) is now the consumer for ONE queue and ONE message
-// type: JOBS's `backfill`, enqueued by POST /backfill below. Everything
-// else this handler used to dispatch has moved out, in two steps:
+// This Worker has NO `queue()` export and consumes nothing (Step 5
+// follow-up, 2026-09-20). Its last consumer, JOBS's `backfill` handler,
+// moved to the `ingest` Worker (src/ingest-worker.js) along with the queue
+// itself, renamed BACKFILL -- see wrangler.toml's own comment on that
+// queue's history. Everything else this Worker used to consume had already
+// moved out earlier:
 //   - `ingest_ticker` / `ingest_feeds` (INGEST) -> the `ingest` Worker,
 //     plan.md Step 5.
 //   - `analyze` and `exit_check` (both formerly JOBS) -> the `llm` Worker,
-//     plan.md Step 6. Both call Gemini, so both had to move for `llm` to be
-//     the only Worker holding GEMINI_API_KEYS. They moved onto a new
-//     LLM_JOBS queue (this Worker still PRODUCES onto it) rather than
-//     staying on JOBS, because a queue can only have one consumer Worker
-//     and JOBS's consumer had to stay here for `backfill`.
-//   - `backtest` moved again in M3, off LLM_JOBS and onto its own new
-//     BACKTEST queue (this Worker still PRODUCES onto it) for the new
-//     `backtest` Worker (wrangler.backtest.toml) -- a backtest needs a
-//     SIM_DB-backed RunStore + SimClock that the `llm` Worker deliberately
-//     never gets, so it couldn't stay on a queue `llm` consumes.
-// A message of one of those moved types that somehow still reaches this
-// handler (e.g. one already sitting on JOBS at the moment of the Step 6
-// deploy) is acked without processing by the generic unrecognized-type
-// branch below -- see plan.md Step 6's notes on that transient window.
+//     plan.md Step 6, onto a new LLM_JOBS queue (this Worker still
+//     PRODUCES onto it).
+//   - `backtest` moved again in M3, off LLM_JOBS and onto its own BACKTEST
+//     queue (this Worker still PRODUCES onto it) for the new `backtest`
+//     Worker (wrangler.backtest.toml).
+// This Worker now PRODUCES onto four queues (INGEST, LLM_JOBS, BACKTEST,
+// BACKFILL) and consumes none of them -- every message type it used to
+// handle now runs in the Worker that actually needs the matching vendor
+// key (Finnhub for `ingest`, Gemini for `llm`/`backtest`).
 //
-// This Worker still separately holds its own FINNHUB_API_KEY, because the
-// `backfill` job below calls Finnhub directly via backfillHistoricalNews,
-// and JOBS has no other consumer to move that to without a larger redesign
-// (see wrangler.toml's own comment on this). It holds NO Gemini key: nothing
-// in this file calls the LLM pipeline anymore.
-//
-// A business-logic failure (vendor error mid-backfill, etc.) is caught
-// inside its own branch and logged, then acked -- not left to the queue's
-// own retry/dead-letter mechanism, which exists only for a genuine crash in
-// queue() itself (a real bug), not an expected operational failure that
-// already spent real quota once.
+// This Worker holds NO vendor key at all anymore: no FINNHUB_API_KEY (moved
+// to wrangler.ingest.toml with the BACKFILL consumer) and no Gemini key
+// (moved to wrangler.llm.toml in Step 6).
 
 import { loadConfig } from "./config.js";
-import { backfillHistoricalNews } from "./ingestion/ingest.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
 import { SimClock } from "./backtest/simClock.js";
@@ -137,13 +126,15 @@ export default {
     // Query-string only (from/to) -- `dashboard` is the only caller and
     // always forwards as query params, whether it originally received a
     // browser form submission or a scripted JSON request. Since plan.md
-    // Step 3, this always enqueues onto JOBS and returns an immediate ack --
-    // there's no more synchronous "wait for the real counts" mode, and no
-    // more ctx.waitUntil fire-and-forget mode -- both scripted and
-    // form-submitted callers get the same `{accepted, id, from, to}` shape,
-    // same as the old `?async=1` response did (kept intentionally: any
-    // legacy `async` query param `dashboard` still sends is simply ignored
-    // now, harmless). See queue() below for where the real work happens.
+    // Step 3, this always enqueues (onto BACKFILL as of the Step 5
+    // follow-up -- see wrangler.toml; used to be JOBS, consumed here) and
+    // returns an immediate ack -- there's no more synchronous "wait for the
+    // real counts" mode, and no more ctx.waitUntil fire-and-forget mode --
+    // both scripted and form-submitted callers get the same
+    // `{accepted, id, from, to}` shape, same as the old `?async=1` response
+    // did (kept intentionally: any legacy `async` query param `dashboard`
+    // still sends is simply ignored now, harmless). The real work now runs
+    // in the `ingest` Worker's queue() (src/ingest-worker.js).
     if (pathname === "/backfill" && request.method === "POST") {
       const from = url.searchParams.get("from");
       const to = url.searchParams.get("to");
@@ -157,7 +148,7 @@ export default {
       // progress-write hiccup here can never block the real enqueue below.
       await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } }).queued();
       try {
-        await env.JOBS.send({ type: "backfill", id, from, to });
+        await env.BACKFILL.send({ type: "backfill", id, from, to });
         return jsonResponse({ accepted: true, id, from, to });
       } catch (err) {
         console.error("backfill enqueue failed", { id, from, to, message: err.message });
@@ -244,6 +235,13 @@ export default {
 
     return new Response("news-market-ai backend worker is running (private -- see wrangler.toml). Architecture in plan.md.", { status: 200 });
   },
+  // No `queue()` export: this Worker has no queue consumers left (Step 5
+  // follow-up, 2026-09-20). Its last one, JOBS's `backfill` handler, moved
+  // to the `ingest` Worker (src/ingest-worker.js) along with the queue
+  // itself (renamed BACKFILL) -- see that queue's own comment in
+  // wrangler.toml. This Worker still PRODUCES onto INGEST/LLM_JOBS/BACKTEST
+  // (scheduled() and the two POST routes above) and now BACKFILL too, but
+  // consumes none of them.
 
   async scheduled(event, env) {
     const config = loadConfig(env);
@@ -281,50 +279,6 @@ export default {
       await env.LLM_JOBS.send({ type: "exit_check", asOf });
     } catch (err) {
       console.error("scheduled: exit_check enqueue failed", { message: err.message });
-    }
-  },
-
-  // Consumer for JOBS (`backfill` only since Step 6 -- see module header
-  // above). max_batch_size is 1 (wrangler.toml), but this still loops
-  // generically over `batch.messages` rather than assuming that.
-  //
-  // Per message: a business-logic failure (backfillHistoricalNews throwing
-  // on a vendor/DB error, etc.) is caught inside the `backfill` branch,
-  // logged, and the message is still acked -- retrying a call that already
-  // spent real Finnhub quota on failure would just spend it again for the
-  // same result. An unexpected crash in this handler itself (a real bug --
-  // e.g. a malformed message with no recognizable `type`, or a throw from
-  // code we didn't anticipate) falls through to message.retry(), so
-  // wrangler.toml's max_retries/dead_letter_queue on JOBS is the safety net
-  // for that, not for ordinary operational failures.
-  async queue(batch, env) {
-    const config = loadConfig(env);
-    for (const message of batch.messages) {
-      const job = message.body;
-      try {
-        if (job.type === "backfill") {
-          const { id, from, to } = job;
-          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } });
-          await reporter.start();
-          try {
-            const result = await backfillHistoricalNews(config, env.INPUTS_DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
-            console.log("backfill job completed", { id, from, to, inserted: result.inserted, errorCount: result.errors.length });
-            await reporter.complete(
-              { inserted: result.inserted, errorCount: result.errors.length },
-              `Inserted ${result.inserted} article${result.inserted === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
-            );
-          } catch (err) {
-            console.error("backfill job failed", { id, from, to, message: err.message });
-            await reporter.fail(err.message);
-          }
-        } else {
-          console.error("queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
-        }
-        message.ack();
-      } catch (err) {
-        console.error("queue message handler crashed unexpectedly, retrying", { message: err.message });
-        message.retry();
-      }
     }
   },
 };

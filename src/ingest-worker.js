@@ -1,25 +1,36 @@
-// `ingest` Worker entry point (plan.md Step 5). Owns the INGEST queue's
-// consumer -- `ingest_ticker` / `ingest_feeds`, moved here verbatim from
-// `backend`'s queue() (src/index.js), which no longer has an INGEST
-// consumer binding at all (see wrangler.toml there) and therefore never
-// receives these message types anymore. `backend`'s scheduled() still
-// PRODUCES onto INGEST (unchanged) -- this Worker is the other end of that
-// same queue, just living in its own deployable unit now, same relationship
-// `dashboard` has to `backend` via its BACKEND service binding (Step 2),
-// just via a queue instead of a service binding here.
+// `ingest` Worker entry point (plan.md Step 5, extended in a Step 5
+// follow-up on 2026-09-20). Owns two queues' consumers now:
+//   - INGEST: `ingest_ticker` / `ingest_feeds`, moved here verbatim from
+//     `backend`'s queue() (src/index.js), which no longer has an INGEST
+//     consumer binding at all (see wrangler.toml there) and therefore
+//     never receives these message types anymore. `backend`'s scheduled()
+//     still PRODUCES onto INGEST (unchanged) -- this Worker is the other
+//     end of that same queue, just living in its own deployable unit now,
+//     same relationship `dashboard` has to `backend` via its BACKEND
+//     service binding (Step 2), just via a queue instead of a service
+//     binding here.
+//   - BACKFILL (added in the follow-up): `backfill`, moved here from
+//     `backend`'s old JOBS consumer for the same reason -- `backend`'s
+//     POST /backfill still PRODUCES the message (now onto BACKFILL,
+//     renamed from JOBS), this Worker is the only consumer.
 //
-// This Worker alone holds `FINNHUB_API_KEY` and touches the EDGAR CIK/
-// name-index KV cache (via ingestTickerData/ingestFeedNews's own calls into
-// ingestPriceBars/ingestFundamentals and each adapter's entity-resolution
-// wiring) -- no other Worker in this repo has a reason to hold a Finnhub
-// key or EDGAR User-Agent identity after this step. It binds D1 directly
-// (M2: the INPUTS_DB binding -- this Worker is the only read-write writer
-// of the inputs database besides backend's backfill; only `backend` runs
-// migrations) rather than going through a service binding,
-// since ingestTickerData/ingestFeedNews both write straight to D1
-// (insertNewsItem/insertPriceBar/insertFundamentalFacts) -- there's no
-// synchronous caller waiting on a response the way dashboard->backend's
-// service binding has one.
+// This Worker alone holds `FINNHUB_API_KEY` now, for BOTH live ingestion
+// AND backfill, and touches the EDGAR CIK/name-index KV cache (via
+// ingestTickerData/ingestFeedNews's own calls into ingestPriceBars/
+// ingestFundamentals and each adapter's entity-resolution wiring) -- no
+// other Worker in this repo has a reason to hold a Finnhub key or EDGAR
+// User-Agent identity anymore; `backend` gave up its own copy in the same
+// follow-up that added the BACKFILL consumer here. It binds D1 directly
+// (M2: the INPUTS_DB binding -- this Worker is now the only writer of the
+// inputs database, live ingestion and backfill alike; only `backend` runs
+// migrations) rather than going through a service binding, since
+// ingestTickerData/ingestFeedNews/backfillHistoricalNews all write straight
+// to D1 (insertNewsItem/insertPriceBar/insertFundamentalFacts) -- there's
+// no synchronous caller waiting on a response the way dashboard->backend's
+// service binding has one. It also binds LIVE_DB (rw, added in the
+// follow-up) -- narrowly, for job_progress reporting during backfill only;
+// see wrangler.ingest.toml's own comment on why that's a wider grant than
+// the ingest_ticker/ingest_feeds code paths need.
 //
 // Same ack-and-log-on-business-logic-failure convention as every other
 // non-`analyze` message type in `backend`'s queue() (see that file's own
@@ -31,8 +42,10 @@
 // same safety-net split as backend's queue().
 
 import { loadConfig } from "./config.js";
-import { ingestTickerData, ingestFeedNews } from "./ingestion/ingest.js";
+import { ingestTickerData, ingestFeedNews, backfillHistoricalNews } from "./ingestion/ingest.js";
 import { sendInChunks } from "./ingestion/enqueue.js";
+import { createJobReporter } from "./storage/jobs.js";
+import { RunStore } from "./storage/run_store.js";
 
 /**
  * Enqueues one ANALYZE message per (fresh item, ticker) pair onto `queue`, in
@@ -103,6 +116,32 @@ export default {
             await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_feeds", context: {}, fetched, fresh });
           } catch (err) {
             console.error("ingest_feeds job failed", { message: err.message });
+          }
+        } else if (job.type === "backfill") {
+          // BACKFILL consumer (Step 5 follow-up, 2026-09-20) -- moved here
+          // verbatim from backend's old JOBS consumer (src/index.js), so
+          // `backend` never needs a Finnhub key. Same reporter
+          // start/complete/fail shape, same LIVE_DB job_progress target
+          // (RunStore(env.LIVE_DB, "live") -- this Worker's only use of
+          // that binding, see wrangler.ingest.toml's own comment on it).
+          // Same business-logic-failure-acks convention as ingest_ticker/
+          // ingest_feeds above: a vendor/D1 error mid-backfill is caught,
+          // logged and reported as `failed`, not retried -- retrying a call
+          // that already spent real Finnhub quota on failure would just
+          // spend it again for the same result.
+          const { id, from, to } = job;
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } });
+          await reporter.start();
+          try {
+            const result = await backfillHistoricalNews(config, env.INPUTS_DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
+            console.log("backfill job completed", { id, from, to, inserted: result.inserted, errorCount: result.errors.length });
+            await reporter.complete(
+              { inserted: result.inserted, errorCount: result.errors.length },
+              `Inserted ${result.inserted} article${result.inserted === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
+            );
+          } catch (err) {
+            console.error("backfill job failed", { id, from, to, message: err.message });
+            await reporter.fail(err.message);
           }
         } else {
           console.error("ingest queue message with unrecognized type, acking without processing", { type: job?.type });
