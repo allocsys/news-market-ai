@@ -116,6 +116,15 @@ class FakeIngestDb {
             else throw new Error(`FakeIngestDb: unsupported run() query: ${sql}`);
           },
           async all() {
+            // UPDATE (2026-09-20): backfillHistoricalNews now pre-filters
+            // already-stored ids via SELECT id FROM news_items WHERE id IN
+            // (...) before inserting each chunk (see ingestion/ingest.js's
+            // filterUnstoredItems) -- everything else here is still
+            // genuinely unsupported.
+            if (/^\s*SELECT id FROM news_items/.test(sql)) {
+              const results = args.filter((id) => db.newsItems.some((n) => n.id === id)).map((id) => ({ id }));
+              return { results };
+            }
             throw new Error(`FakeIngestDb: unsupported all() query: ${sql}`);
           },
         };
@@ -289,6 +298,106 @@ test("queue() still runs and acks a backfill when LIVE_DB (the progress store) i
   assert.equal(message.acked, true);
   assert.equal(message.retried, false);
   assert.ok(warnings.some(([msg]) => msg.includes("job progress write failed")));
+});
+
+// ---------------------------------------------------------------------------
+// queue(): backfill self-continuation (a range too big for one invocation's
+// write cap is finished by a follow-up message the Worker sends itself)
+// ---------------------------------------------------------------------------
+
+test("queue() splits a backfill bigger than one invocation's write cap into parts: part 1 enqueues a continuation, part 2 finishes the job", async (t) => {
+  const db = new FakeIngestDb();
+  const BACKFILL = new FakeQueueBinding();
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
+  // 650 articles, all on 2025-09-15 UTC: more than the 500 cap, and a single day, so this also covers the in-day overflow a day-level cursor alone can't split.
+  mockVendors(t, () => finnhubArticles(650));
+  t.mock.method(console, "log", () => {});
+  const store = new RunStore(env.LIVE_DB, "live");
+
+  const first = new FakeMessage({ type: "backfill", id: "backfill-split", from: "2025-09-01", to: "2025-09-30" });
+  await worker.queue(batchOf(first), env);
+
+  assert.equal(first.acked, true);
+  assert.equal(first.retried, false);
+  assert.equal(db.newsItems.length, 500, "part 1 stops at the cap");
+  assert.equal(BACKFILL.sent.length, 1, "and enqueues exactly one continuation");
+  assert.deepEqual(BACKFILL.sent[0], {
+    type: "backfill",
+    id: "backfill-split",
+    from: "2025-09-14", // one day before the last processed item's day (Finnhub's date timezone is undocumented)
+    to: "2025-09-30",
+    originalFrom: "2025-09-01",
+    part: 2,
+    insertedSoFar: 500,
+    errorCountSoFar: 0,
+  });
+  const midway = await store.getJob("backfill-split");
+  assert.equal(midway.status, "running", "the job must NOT be marked complete after part 1");
+  assert.deepEqual(midway.params, { from: "2025-09-01", to: "2025-09-30" });
+
+  const second = new FakeMessage(BACKFILL.sent[0]);
+  await worker.queue(batchOf(second), env);
+
+  assert.equal(second.acked, true);
+  assert.equal(db.newsItems.length, 650, "part 2 saves only what part 1 left");
+  assert.equal(BACKFILL.sent.length, 1, "no third part");
+  const job = await store.getJob("backfill-split");
+  assert.equal(job.status, "complete");
+  assert.equal(job.percent, 100);
+  assert.equal(job.result.inserted, 650, "carries part 1's 500 into the final total");
+  assert.equal(job.result.parts, 2);
+  assert.deepEqual(job.params, { from: "2025-09-01", to: "2025-09-30" }, "params keep the range the operator asked for, not the cursor");
+  assert.match(job.detail, /Inserted 650 articles/);
+});
+
+test("queue() does not enqueue a continuation when the backfill fits in one invocation", async (t) => {
+  const db = new FakeIngestDb();
+  const BACKFILL = new FakeQueueBinding();
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
+  mockVendors(t, () => finnhubArticles(163));
+  t.mock.method(console, "log", () => {});
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-small", from: "2025-09-01", to: "2025-09-30" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(db.newsItems.length, 163);
+  assert.equal(BACKFILL.sent.length, 0);
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-small");
+  assert.equal(job.status, "complete");
+  assert.equal(job.result.parts, 1);
+});
+
+test("queue() fails a backfill that would need more than the part limit instead of re-enqueueing forever", async (t) => {
+  const db = new FakeIngestDb();
+  const BACKFILL = new FakeQueueBinding();
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
+  mockVendors(t, () => finnhubArticles(650));
+  t.mock.method(console, "error", () => {});
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-loop", from: "2025-09-14", to: "2025-09-30", originalFrom: "2025-09-01", part: 50, insertedSoFar: 20000, errorCountSoFar: 0 });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  assert.equal(BACKFILL.sent.length, 0, "nothing re-enqueued past the limit");
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-loop");
+  assert.equal(job.status, "failed");
+  assert.match(job.error, /more than 50 parts/);
+});
+
+test("queue() reports the job failed (not stuck running) when the continuation message can't be sent", async (t) => {
+  const db = new FakeIngestDb();
+  const BACKFILL = { async send() { throw new Error("simulated queue outage"); } };
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
+  mockVendors(t, () => finnhubArticles(650));
+  t.mock.method(console, "error", () => {});
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-nosend", from: "2025-09-01", to: "2025-09-30" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-nosend");
+  assert.equal(job.status, "failed");
+  assert.match(job.error, /simulated queue outage/);
 });
 
 // ---------------------------------------------------------------------------

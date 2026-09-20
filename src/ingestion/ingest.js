@@ -58,8 +58,62 @@ import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
 import { fetchDailyBars } from "../ingestion/sources/yfinance.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
-import { insertNewsItem, insertPriceBar, insertFundamentalFacts } from "../storage/inputs_view.js";
+import { insertNewsItems, insertPriceBar, insertFundamentalFacts } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
+
+// D1/subrequest budget for the batched news-item inserts below (backfill,
+// ingestTickerData, ingestFeedNews). Deliberately kept at 100, not the
+// fundamentals path's 200 (FUNDAMENTALS_INSERT_CHUNK_SIZE): a news item's
+// batch entry count is variable (item row + revision row + one row per
+// ticker, vs. a fundamental fact's fixed one row), and this same size also
+// bounds filterUnstoredIds' own `WHERE id IN (...)` below, which D1 caps at
+// ~100 bound params per statement -- so this one constant has to satisfy
+// both, and 100 is the smaller/safer of the two limits. See
+// backfillHistoricalNews's own header for the live incident this fixes
+// ("Too many API requests by single Worker invocation", backfill job
+// backfill-1789920460728-4lahlf, 2026-09-20).
+const NEWS_ITEM_INSERT_CHUNK_SIZE = 100;
+
+/**
+ * Pre-filters `items` down to ones NOT already in news_items, via one
+ * batched `SELECT id ... WHERE id IN (...)` per call (the caller is
+ * responsible for keeping `items.length` within NEWS_ITEM_INSERT_CHUNK_SIZE,
+ * same D1 bound-param reasoning as that constant's own comment). This is
+ * what makes a retried or overlapping backfill cheap: without it, re-running
+ * the same date range re-does insertNewsItems' full write batch (news_items
+ * + revisions + tickers) for articles already stored, just to have every
+ * statement no-op on ON CONFLICT DO NOTHING -- correct, but a wasted D1
+ * round trip at exactly the scale (hundreds of articles) this fix is
+ * trying to keep cheap. A no-op (returns `items` unchanged) on an empty
+ * array, same convention as insertNewsItems/insertFundamentalFacts.
+ */
+async function filterUnstoredItems(db, items) {
+  if (items.length === 0) return items;
+  const ids = items.map((item) => item.id);
+  const { results } = await db
+    .prepare(`SELECT id FROM news_items WHERE id IN (${ids.map(() => "?").join(",")})`)
+    .bind(...ids)
+    .all();
+  const existing = new Set(results.map((row) => row.id));
+  return items.filter((item) => !existing.has(item.id));
+}
+
+/**
+ * Where a continuation of a capped backfill should re-start its fetch: the UTC
+ * day BEFORE the last processed item's day, never earlier than the original
+ * `from`. Finnhub's /company-news only takes YYYY-MM-DD (see finnhub.js), so a
+ * cursor can't be finer than a day, and which timezone Finnhub reads those
+ * dates in is undocumented -- stepping back one day means an item just after
+ * the last processed one can't fall outside the next fetch on a timezone
+ * boundary. Re-scanned items are already stored, so the pre-filter drops them
+ * for the price of one SELECT per chunk (no writes).
+ */
+function continuationFrom(lastPublishedAt, from) {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const fromDay = new Date(from).toISOString().slice(0, 10);
+  const steppedBack = new Date(new Date(lastPublishedAt).getTime() - DAY_MS).toISOString().slice(0, 10);
+  return steppedBack > fromDay ? steppedBack : fromDay;
+}
 
 /** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. */
 function logSkippedSource(stage, source, err) {
@@ -246,7 +300,16 @@ export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
  * again. Intended for a one-off backfill script/CLI, not the live cron
  * path (collectNewsItems above is the whole-watchlist sweep, unchanged).
  */
-export async function backfillHistoricalNews(config, db, { from, to, kv, onProgress } = {}) {
+// `maxInserts` (optional, default unlimited -- unchanged behavior for callers
+// that don't pass it) caps how many NET-NEW articles one call writes. Once a
+// chunk pushes `inserted` to/over it and items remain, the loop stops and the
+// result carries `nextFrom` (a YYYY-MM-DD the caller re-enqueues a follow-up
+// backfill from); `nextFrom` is null when the whole fetched set was processed.
+// Progress is guaranteed: stopping requires `inserted >= maxInserts`, so every
+// capped call stored at least one new article, and the next call's pre-filter
+// skips everything already stored -- including inside a single day with more
+// articles than the cap, which a day-level cursor alone could never split.
+export async function backfillHistoricalNews(config, db, { from, to, kv, onProgress, maxInserts = Infinity } = {}) {
   if (!from || !to) {
     throw new Error("backfillHistoricalNews requires an explicit {from, to} range -- use collectNewsItems for the live trailing-window path instead");
   }
@@ -268,21 +331,66 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
     logSkippedSource("historical news backfill", "finnhub", error);
   }
 
+  // Chronological (ties broken by id) so "everything up to the last processed
+  // item is done" is true -- fetchLatest returns items ticker by ticker, not
+  // in date order, and a continuation cursor is only meaningful over a sorted
+  // list.
+  items.sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : a.publishedAt > b.publishedAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
   const totalItems = items.length;
   await onProgress?.({ phase: "saving", percent: 50, done: 0, total: totalItems, detail: totalItems > 0 ? `Saving ${totalItems} article${totalItems === 1 ? "" : "s"}` : "No articles returned for this range", force: true });
 
+  // UPDATE (2026-09-20): chunked plus pre-filtered plus batched, replacing
+  // the old one-insertNewsItem-call-per-article loop. That loop did 2-3
+  // unbatched D1 .run()s per article -- 733 articles times roughly 3
+  // statements blew Cloudflare's per-invocation subrequest cap partway
+  // through a real backfill run (live incident: job
+  // backfill-1789920460728-4lahlf, crashed mid-saving at 325/733 on 'Too
+  // many API requests by single Worker invocation' -- see
+  // NEWS_ITEM_INSERT_CHUNK_SIZE's own comment). filterUnstoredItems first,
+  // then insertNewsItems as one db.batch() per chunk, mirrors
+  // ingestFundamentals' own fix for the identical fundamentals-side
+  // failure. `inserted` now means net-new articles (insertedIds.size), not
+  // articles processed -- a real improvement, not just a rename: filtering
+  // already-stored ids first means a retried/overlapping backfill can now
+  // report zero inserted accurately instead of re-claiming credit for
+  // articles a previous run already saved. `processed` keeps the old
+  // how-far-through-the-fetched-set-are-we meaning for progress-percent
+  // math, since that needs to advance even through chunks that turn out to
+  // be all duplicates.
+  // UNLIKE ingestFundamentals' own chunk loop, a chunk's write failure here
+  // is NOT caught-and-skipped -- it propagates, same as the old unbatched
+  // per-article loop did (which had no try/catch at all). This is
+  // deliberate, not an oversight: the caller (ingest-worker.js's `backfill`
+  // branch) wraps the whole call in its own try/catch and reports the job
+  // `failed` via the progress reporter on any error (see that Worker's own
+  // comment: "retrying a call that already spent real Finnhub quota on
+  // failure would just spend it again") -- a D1 write error here means the
+  // job's core deliverable (saved articles) is broken, which should surface
+  // as a failed job for the operator to see, not a silently-degraded
+  // partial save. Fundamentals are a strict enhancement to the pipeline
+  // (see ingestFundamentals' own header); a backfill's whole point IS
+  // saving articles, so the two warrant different failure-isolation scopes.
+  let processed = 0;
   let inserted = 0;
-  for (const item of items) {
-    await insertNewsItem(db, item);
-    inserted++;
-    // Every 25th article, not every one: the reporter throttles writes
-    // anyway, but this also keeps the per-article loop free of extra awaits.
-    if (inserted % 25 === 0) {
-      await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * inserted) / totalItems), done: inserted, total: totalItems, detail: `Saved ${inserted}/${totalItems} articles` });
+  let nextFrom = null;
+  for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
+    const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
+    const toInsert = await filterUnstoredItems(db, chunk);
+    if (toInsert.length > 0) {
+      const { insertedIds } = await insertNewsItems(db, toInsert);
+      inserted += insertedIds.size;
+    }
+    processed += chunk.length;
+    await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * processed) / totalItems), done: processed, total: totalItems, detail: `Saved ${processed}/${totalItems} articles` });
+
+    if (inserted >= maxInserts && processed < totalItems) {
+      nextFrom = continuationFrom(chunk[chunk.length - 1].publishedAt, from);
+      break;
     }
   }
 
-  return { inserted, errors };
+  return { inserted, processed, errors, nextFrom };
 }
 
 /**
@@ -318,10 +426,27 @@ export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
     logSkippedSource("ticker ingest", "finnhub", error);
   }
 
+  // UPDATE (2026-09-20): batched, replacing a plain per-item insertNewsItem
+  // loop. Same subrequest-cap fix as backfillHistoricalNews above -- this
+  // loop runs on EVERY 15-minute cron tick, not just a one-off backfill, and
+  // observability confirmed it as the live cause of TSLA silently getting no
+  // fresh news for hours: TSLA is processed last in a 4-message ingest
+  // batch (ingest_feeds + 3x ingest_ticker), so by the time its own
+  // Finnhub page (~100-160 items) hit this loop, AAPL/MSFT's own unbatched
+  // inserts had already spent most of the invocation's shared subrequest
+  // budget. No pre-filter here (unlike backfill) -- unlike a backfill's
+  // deliberately overlapping ranges, Finnhub's trailing-window page is not
+  // expected to be mostly-duplicate on a normal tick, so the extra SELECT
+  // round trip isn't worth it; ON CONFLICT DO NOTHING already makes a
+  // redundant insert a correct no-op either way.
   const fresh = [];
-  for (const item of items) {
-    const { inserted, newTickers } = await insertNewsItem(db, item);
-    if (inserted || newTickers.includes(ticker)) fresh.push({ item, tickers: [ticker] });
+  for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
+    const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
+    const { insertedIds, newTickersPerItem } = await insertNewsItems(db, chunk);
+    for (let j = 0; j < chunk.length; j++) {
+      const item = chunk[j];
+      if (insertedIds.has(item.id) || newTickersPerItem[j].includes(ticker)) fresh.push({ item, tickers: [ticker] });
+    }
   }
 
   // Price bars / fundamentals are a strict enhancement, not a hard
@@ -381,10 +506,17 @@ export async function ingestFeedNews(config, db, kv) {
     }
   }
 
+  // UPDATE (2026-09-20): batched, same subrequest-cap fix and no-pre-filter
+  // reasoning as ingestTickerData above -- this runs once per cron tick
+  // alongside the per-ticker ingest_ticker messages, sharing the same kind
+  // of invocation-wide subrequest budget.
   const fresh = [];
-  for (const item of items) {
-    const { newTickers } = await insertNewsItem(db, item);
-    if (newTickers.length > 0) fresh.push({ item, tickers: newTickers });
+  for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
+    const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
+    const { newTickersPerItem } = await insertNewsItems(db, chunk);
+    for (let j = 0; j < chunk.length; j++) {
+      if (newTickersPerItem[j].length > 0) fresh.push({ item: chunk[j], tickers: newTickersPerItem[j] });
+    }
   }
   return { fetched: items.length, fresh };
 }

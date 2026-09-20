@@ -73,6 +73,101 @@ export async function insertNewsItem(db, item) {
 }
 
 /**
+ * Batched sibling of insertNewsItem -- same idempotent per-article writes
+ * (news_items row, revision-1 row, ticker associations), but for many items
+ * in ONE db.batch() call instead of ~2-5 unbatched .run()s PER ARTICLE. Each
+ * individual .run() is its own Worker subrequest, so an unbatched loop over
+ * hundreds of articles -- a full historical backfill, or even one ticker's
+ * live 15-minute Finnhub page -- can blow Cloudflare's per-invocation
+ * subrequest cap partway through (live incident: backfill job
+ * backfill-1789920460728-4lahlf crashed mid-"saving" phase at 325/733 on
+ * "Too many API requests by single Worker invocation", confirmed via
+ * cf_workers_observability_query against news-market-ai-ingest,
+ * 2026-09-20). This is the same fix insertFundamentalFacts already applied
+ * for fundamentals on 2026-09-17 -- see that function's own header for the
+ * matching incident on that path.
+ *
+ * Returns `{ insertedIds, newTickersPerItem }` so freshness-tracking
+ * callers (ingestTickerData/ingestFeedNews's "enqueue analyze only for new
+ * material" logic) keep working: `insertedIds` is the Set of item ids whose
+ * `news_items` row did not exist before this call; `newTickersPerItem` is an
+ * array PARALLEL TO `items` (same index, not keyed by id) -- each entry is
+ * the tickers newly associated by THAT item's own ticker-insert statements.
+ *
+ * Deliberately parallel-array, not id-keyed: `items` can contain two
+ * entries with the SAME id (ingestFeedNews's actual live case -- the same
+ * article surfacing under two different feed configs, each carrying its
+ * own single-ticker hint), and the two must NOT have their new-ticker
+ * results merged together. Because a batch executes as one sequential
+ * transaction, the second same-id entry's own ticker insert already sees
+ * the first entry's ticker as committed (so a genuinely repeated ticker
+ * correctly reports empty), while each entry still gets credited only for
+ * the ticker(s) IT ITSELF newly added -- exactly the same outcome the old
+ * per-item sequential insertNewsItem loop produced one call at a time.
+ * `insertedIds` has no equivalent ambiguity worth solving here: it only
+ * answers "does this id now exist", not "which item made it exist", so a
+ * Set of ids is unambiguous and is left as-is.
+ *
+ * No-op on an empty array (mirrors insertFundamentalFacts). Callers are
+ * expected to chunk `items` themselves (see ingestion/ingest.js's
+ * NEWS_ITEM_INSERT_CHUNK_SIZE) -- this function does not chunk internally,
+ * same division of responsibility as insertFundamentalFacts/
+ * ingestFundamentals.
+ */
+export async function insertNewsItems(db, items) {
+  if (items.length === 0) return { insertedIds: new Set(), newTickersPerItem: [] };
+
+  const itemStmt = db.prepare(
+    `INSERT INTO news_items (id, source, url, first_published_at, ingested_at, title, body, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`
+  );
+  const revisionStmt = db.prepare(
+    `INSERT INTO news_item_revisions (news_item_id, revision, published_at, ingested_at, title, body, raw)
+     VALUES (?, 1, ?, ?, ?, ?, ?)
+     ON CONFLICT(news_item_id, revision) DO NOTHING`
+  );
+  const tickerStmt = db.prepare(`INSERT INTO news_item_tickers (news_item_id, ticker) VALUES (?, ?) ON CONFLICT DO NOTHING`);
+
+  // One batch entry per statement, same per-item sequence (item row, its
+  // revision, then each ticker association) as the unbatched insertNewsItem
+  // above -- kept identical purely so the two are easy to diff against each
+  // other, not because order matters here (nothing in this batch depends on
+  // another statement in the SAME batch having already committed).
+  const batch = [];
+  for (const item of items) {
+    batch.push(itemStmt.bind(item.id, item.source, item.url, item.publishedAt, item.ingestedAt, item.title, item.body, JSON.stringify(item.raw ?? null)));
+    batch.push(revisionStmt.bind(item.id, item.publishedAt, item.ingestedAt, item.title, item.body, JSON.stringify(item.raw ?? null)));
+    for (const ticker of item.tickers) {
+      batch.push(tickerStmt.bind(item.id, ticker));
+    }
+  }
+
+  const results = await db.batch(batch);
+
+  // Walk `results` in the exact order statements were pushed above to
+  // recover per-item/per-ticker outcomes -- db.batch() returns one result
+  // per statement, in order, same convention rowsChanged() already reads
+  // for insertNewsItem's own single-row .run() calls.
+  const insertedIds = new Set();
+  const newTickersPerItem = [];
+  let i = 0;
+  for (const item of items) {
+    const itemResult = results[i++];
+    i++; // revisionResult -- unused beyond advancing the index, same as insertNewsItem never inspecting its own revision write's outcome
+    if (rowsChanged(itemResult) > 0) insertedIds.add(item.id);
+    const newTickers = [];
+    for (const ticker of item.tickers) {
+      const tickerResult = results[i++];
+      if (rowsChanged(tickerResult) > 0) newTickers.push(ticker);
+    }
+    newTickersPerItem.push(newTickers);
+  }
+
+  return { insertedIds, newTickersPerItem };
+}
+
+/**
  * Point-in-time read: news for `ticker` whose LATEST-AS-OF-asOf revision
  * published at or before `asOf`. This is what makes it revision-aware
  * (plan.md Backtesting Integrity, point 2) -- it serves whichever version of

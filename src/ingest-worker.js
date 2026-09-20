@@ -47,6 +47,21 @@ import { sendInChunks } from "./ingestion/enqueue.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
 
+// Backfill self-continuation (see wrangler.ingest.toml's BACKFILL producer
+// binding). One invocation writes at most about this many NET-NEW articles
+// (checked per 100-item chunk, so it can overshoot by up to one chunk), then
+// re-enqueues a follow-up message for the rest. Deliberately conservative and
+// NOT yet measured against real D1/CPU limits -- the 2026-09-20 incident died
+// at ~325 articles on the old unbatched path, the batched path costs ~2
+// subrequests per 100 articles, so this leaves wide headroom; raise it once a
+// real run shows how much one invocation can take.
+export const MAX_ITEMS_PER_BACKFILL_INVOCATION = 500;
+
+// Hard stop on a continuation chain, so a bug or a pathological range can't
+// re-enqueue itself forever. Hitting it fails the job (with the count saved so
+// far in the error) rather than looping.
+export const MAX_BACKFILL_PARTS = 50;
+
 /**
  * Enqueues one ANALYZE message per (fresh item, ticker) pair onto `queue`, in
  * chunks that respect Cloudflare Queues' sendBatch limits (see
@@ -129,16 +144,46 @@ export default {
           // logged and reported as `failed`, not retried -- retrying a call
           // that already spent real Finnhub quota on failure would just
           // spend it again for the same result.
-          const { id, from, to } = job;
-          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } });
+          // `from` is the cursor for THIS part's fetch; `originalFrom` is the
+          // range the operator asked for (what the job row's params show).
+          // A first message (from backend's POST /backfill) has none of the
+          // continuation fields, so the defaults make it part 1 with zero
+          // carried totals.
+          const { id, from, to, originalFrom = from, part = 1, insertedSoFar = 0, errorCountSoFar = 0 } = job;
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from: originalFrom, to } });
           await reporter.start();
           try {
-            const result = await backfillHistoricalNews(config, env.INPUTS_DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
-            console.log("backfill job completed", { id, from, to, inserted: result.inserted, errorCount: result.errors.length });
-            await reporter.complete(
-              { inserted: result.inserted, errorCount: result.errors.length },
-              `Inserted ${result.inserted} article${result.inserted === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
-            );
+            const result = await backfillHistoricalNews(config, env.INPUTS_DB, {
+              from,
+              to,
+              kv: env.CACHE_KV,
+              maxInserts: MAX_ITEMS_PER_BACKFILL_INVOCATION,
+              // The progress bar restarts each part; label the part so that's
+              // not mistaken for a stall.
+              onProgress: part > 1 ? (p) => reporter.update({ ...p, detail: p.detail ? `Part ${part}: ${p.detail}` : p.detail }) : reporter.update,
+            });
+            const inserted = insertedSoFar + result.inserted;
+            const errorCount = errorCountSoFar + result.errors.length;
+            if (result.nextFrom) {
+              // More left than one invocation should write: hand the rest to a
+              // follow-up message. A send failure lands in the catch below and
+              // fails the job, same as any other error in this branch. Not
+              // acked-before-send: if this invocation dies between send and ack
+              // the message is redelivered and the same part re-runs, which is
+              // safe (pre-filter + ON CONFLICT DO NOTHING) but may start a
+              // second chain over the same range -- harmless duplicate work.
+              if (part >= MAX_BACKFILL_PARTS) {
+                throw new Error(`backfill needed more than ${MAX_BACKFILL_PARTS} parts -- stopped after ${inserted} articles saved; narrow the range and re-run`);
+              }
+              await env.BACKFILL.send({ type: "backfill", id, from: result.nextFrom, to, originalFrom, part: part + 1, insertedSoFar: inserted, errorCountSoFar: errorCount });
+              console.log("backfill part completed, continuation enqueued", { id, part, nextFrom: result.nextFrom, inserted, errorCount });
+            } else {
+              console.log("backfill job completed", { id, from: originalFrom, to, parts: part, inserted, errorCount });
+              await reporter.complete(
+                { inserted, errorCount, parts: part },
+                `Inserted ${inserted} article${inserted === 1 ? "" : "s"}${errorCount ? `, ${errorCount} vendor error${errorCount === 1 ? "" : "s"}` : ""}`
+              );
+            }
           } catch (err) {
             console.error("backfill job failed", { id, from, to, message: err.message });
             await reporter.fail(err.message);

@@ -74,6 +74,19 @@ max_batch_size = 1
 max_retries = 3
 dead_letter_queue = "news-market-ai-backfill-dlq"
 
+# --- BACKFILL (produce, 2026-09-20 follow-up to the follow-up) --- this
+# Worker is now ALSO a producer on its own BACKFILL queue, not just the
+# consumer above: a range too large to safely save in one invocation (see
+# ingest-worker.js's MAX_ITEMS_PER_BACKFILL_INVOCATION) re-enqueues a
+# continuation message for the SAME {id, from, to} onto this same queue,
+# which this Worker's own consumer above then picks back up. `backend`'s
+# POST /backfill still produces the FIRST message for a given id; this
+# binding is only ever used for a Worker-initiated continuation of a job
+# already in progress, never for a brand-new job.
+[[queues.producers]]
+queue = "news-market-ai-backfill"
+binding = "BACKFILL"
+
 # --- ANALYZE (produce) --- ingestTickerData/ingestFeedNews's callers
 # (queue() below) enqueue one `analyze` message per resulting news item/
 # ticker pair here, same as backend's former INGEST consumer did.
