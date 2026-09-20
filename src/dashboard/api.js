@@ -139,6 +139,25 @@ export async function handleApiActiveJobRoute(request, env, config) {
   return jsonResponse({ job: await store.getActiveJob(type) });
 }
 
+/**
+ * GET /api/jobs/latest?type=backfill -- `{ job }`, where `job` is the most recent
+ * FINISHED ('complete' or 'failed') backfill job (RunStore#getLatestFinishedJob) or
+ * null if none has finished. Always 200 for a valid type, like /api/jobs/active:
+ * "nothing has run yet" is an ordinary answer. Lets the Backfill page show how the
+ * last run ended after its progress bar is gone. Backfill only: a backtest's job row
+ * lives under that backtest's own run id, so "the latest backtest job" isn't a
+ * question one environment can answer -- its result is the backtest run itself.
+ */
+export async function handleApiLatestJobRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const searchParams = new URL(request.url).searchParams;
+  const type = searchParams.get("type");
+  if (type !== "backfill") return jsonResponse({ error: "type must be: backfill" }, { status: 400 });
+  const { store } = await resolveEnv(env, parseEnvParam(searchParams));
+  return jsonResponse({ job: await store.getLatestFinishedJob(type) });
+}
+
 /** GET /api/jobs/:id?env=... -- one job_progress row (RunStore#getJob) for the resolved environment, for the dashboard's live progress bar. 404 (not 200 + null) when the id doesn't exist in that environment, so a typo'd/expired id -- or an id that belongs to a different environment -- is visibly distinct from "job exists, no progress yet". */
 export async function handleApiJobRoute(request, env, config, id) {
   const auth = await checkAuth(request, config);
