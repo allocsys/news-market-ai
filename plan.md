@@ -474,7 +474,7 @@ The owner ran `POST /backfill-prices` at ~22:03 UTC (job `backfill-prices-178994
 
 | Provider (free plan) | Limits | Notes |
 |---|---|---|
-| **Tiingo** (recommended, unconfirmed by owner) | 50 req/hour, 1,000/day, 500 unique symbols/month | EOD endpoint (from memory: start/end dates, raw and adjusted prices; verify in docs). Separate Forex API: 140+ pairs incl. **gold, silver, platinum** (per its product page), OHLC only (no volume), 3+ years of history, free plan listed with the same request limits, internal-use licence. **Oil not listed.** |
+| **Tiingo** (confirmed by the owner 2026-09-21; adapter merged in PR #71, not yet run live) | 50 req/hour, 1,000/day, 500 unique symbols/month | EOD endpoint (from memory: start/end dates, raw and adjusted prices; verify in docs). Separate Forex API: 140+ pairs incl. **gold, silver, platinum** (per its product page), OHLC only (no volume), 3+ years of history, free plan listed with the same request limits, internal-use licence. **Oil not listed.** |
 | Twelve Data | 8 credits/min, 800/day, 1 credit per symbol per `/time_series`, 5,000 rows/request, resets 00:00 UTC | Second choice. Supports start/end dates. Forex is on the free plan, but its Commodity market (XAU/USD gold spot, WTI, etc.) needs the Grow plan (about $29/month). |
 | Massive (ex-Polygon) | 5 calls/min, end-of-day, 2 years of history | Fine for 3-month windows but slow and limits older backtests. Free-plan forex/commodity coverage not checked. |
 | Alpha Vantage | 25 req/day, 5/min | Enough for 3 tickers, exhausted fast. Reportedly has commodity series (unverified). |
@@ -482,11 +482,11 @@ The owner ran `POST /backfill-prices` at ~22:03 UTC (job `backfill-prices-178994
 | Stooq | API key via on-site CAPTCHA since early 2026, quota unpublished | Skip. |
 
 **Owner requirement (2026-09-20/21):** add proper **gold and oil** tickers "so I can trade forex too", i.e. a watchlist beyond AAPL/MSFT/TSLA. **Decided (owner, 2026-09-20/21): oil via an ETF proxy is fine for now; forex is signals only for now** (no execution layer exists and none is planned yet). Still open before building:
-- **Gold:** spot via Tiingo's Forex API (untested with a free key) or a gold ETF such as GLD as a proxy on the stock endpoint (no extra code; a proxy, trades US hours only).
+- **Gold: DECIDED (owner, 2026-09-21), spot XAUUSD via Tiingo's Forex API, not a GLD proxy.** Built in PR #71 but untested with a free key.
 - **Oil: DECIDED, use an oil ETF proxy on the stock endpoint for now** (e.g. USO or BNO; pick the exact fund when building, not researched). No free spot-oil source was confirmed (Tiingo's Forex page does not list oil; Twelve Data needs paid Grow; Alpha Vantage unverified). Revisit if spot oil is wanted later.
 - **Forex pairs (signals only):** Tiingo's Forex API is the candidate; OHLC only, so `price_bars.volume` would be null. Signals only means no order placement; positions in the store stay paper positions.
 - **Symbols:** `POST /backfill-prices` accepts Yahoo-style symbols (`/^[A-Z0-9^.=-]{1,12}$/`, e.g. `GC=F`, `EURUSD=X`); a provider needs its own symbol map.
-- **Raw vs adjusted prices:** pick one so new bars match the existing yfinance bars (AAPL/TSLA 2026-09-14..09-18).
+- **Raw vs adjusted prices:** PR #71 stores RAW prices so new bars match the existing yfinance bars (AAPL/TSLA 2026-09-14..09-18). Not yet discussed with the owner; note that splits and dividends are then not reflected in stored prices over a long window.
 - **Wider design, not started:** how news maps to a commodity/FX ticker (Finnhub `/company-news` and entity resolution are per equity symbol); position and risk model for FX and commodities (units, leverage, pip values, shorting; sizing is deterministic in `risk_mgmt/`); 24h and weekend markets vs daily bars and the hold-days/exit logic; and Queues/D1 budgets as the watchlist grows (the Deployment table already says to re-check before growing it).
 
 ## Repo Structure
@@ -547,13 +547,13 @@ exits, technical analyst on price bars, realized-return settlement feeding the
 reflection loop, date-windowed historical backfill, the signal on/off backtest
 harness (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress
 job panel. Backtest/live isolation is built (M1–M5). CI and deploys are green
-across all five Workers (`main` = `031825d`: PR #69, step A, squash-merged 2026-09-20 on top of PR #68 = `8d8775b`; deploy #349 green). Price bars still do not exist: the first live price backfill failed (see "Live incident: first price backfill failed").
+across all five Workers (step A = PR #69 `031825d`, deploy #349 green; step A2 = PR #71 `bff216a`; plan.md update = PR #70 `d25b6c0`; all squash-merged 2026-09-21 or the night before). Price bars still do not exist: the first live price backfill failed on Yahoo (see "Live incident: first price backfill failed") and the Tiingo replacement (A2) has not been run yet because the owner has not added `TIINGO_API_KEY`.
 
 **Backtests are NOT yet trustworthy.** An audit (2026-09-20, in response to
 "is backtesting bug free?") answered **no**: results would currently be
 meaningless. Do not run a real backtest until steps A–E below are done.
 
-### Next steps: make backtests trustworthy (agreed 2026-09-20; step A merged as PR #69 but its first live run FAILED, so no price bars exist yet; A2 (new price source) is next; B-F not started)
+### Next steps: make backtests trustworthy (agreed 2026-09-20; A merged as PR #69, its first live run FAILED on Yahoo; A2 (Tiingo source) merged as PR #71 but not run live, so no price bars exist yet; B in review; C-F not started)
 Working rules: each step is its own PR off `main` (direct GitHub-API edits on a
 feature branch; the CI `test` job is the real test; no local runner); merge
 only on the owner's explicit per-PR go-ahead, squash-merge. First thing next
@@ -587,7 +587,7 @@ invocation, no continuation) → `backtest/runBacktest.js#runManualBacktest` →
    (`BACKTEST_MAX_LLM_CALLS` is uncapped by decision). This is also what makes
    live trading skip decisions (7 of the first 10 post-fix live decisions were
    `skipped_no_price_data`).
-2. **Silent 500-row caps.** `inputs_view.js#getNewsItemsInRange` defaults to
+2. **Silent 500-row caps (FIXED by step B; the text below is the pre-fix state).** `inputs_view.js#getNewsItemsInRange` defaults to
    `limit=500` (`ORDER BY published_at ASC`) and `onSignalRunner.js#runOnSignalForTicker`
    passes no limit, so only the FIRST 500 news items per ticker per window are
    processed (~2 weeks of a 90-day window at ~35–50 items/ticker/day) while the
@@ -630,7 +630,7 @@ failed-run cleanup keeps the error log; Sharpe guards stdev 0.
 **Not read by the audit:** `signalCompare.js`, `pointInTime.js`, `cleanup.js`,
 `simClock.js`, `llm/budget.js`, `technicalAnalyst.js`, `risk_mgmt/exit.js#evaluateExit`,
 `graph/settle.js`, prompts, dashboard views. Existing tests (`test/backtest*.test.js`,
-incl. leakcheck) do NOT cover: the same-day bar leak, the 500-row caps,
+incl. leakcheck) do NOT cover: the same-day bar leak, (the 500-row caps are covered since step B),
 multi-ticker ordering, long-window queue limits.
 
 **Fix plan, in order:**
@@ -657,8 +657,8 @@ multi-ticker ordering, long-window queue limits.
   cooldown KV, Workers logs, or a direct call). Design the owner-facing trigger
   after checking how `POST /backfill` is wired in `src/index.js` and the ingest
   Worker.
-- **A2. Replace Yahoo as the price-bar source, then re-run the backfill (NEXT).** Recommended provider: Tiingo (owner has NOT confirmed; alternative Twelve Data); limits, gold/oil/forex coverage and open questions are in "Price data sources". Do not retry the Yahoo backfill. Blocked on: (a) an API key stored as a secret on the `ingest` Worker (the owner creates the key; never paste it in chat), and (b) the D1 daily write cap resetting at 00:00 UTC or a plan upgrade. Scope: a provider adapter behind the same `fetchHistoricalBars` contract so `backfillHistoricalPriceBars`, `insertPriceBars`, `POST /backfill-prices` and the dashboard form stay as merged; a watchlist-symbol to provider-symbol map; a distinct `source` value on stored bars; a fix so a failed terminal `job_progress` write cannot leave a job `queued` forever (see Other remaining work #8). First run small (3 tickers, ~1 month), then the full span.
-- **B. Remove the 500-row caps.** Keyset-paginate `getNewsItemsInRange` in
+- **A2. Replace Yahoo as the price-bar source, then re-run the backfill.** **STATUS: merged as PR #71 (`bff216a`, CI green). Code only: nothing has been called against real Tiingo yet.** Owner decisions (2026-09-21): Tiingo is the price source; gold is SPOT (XAUUSD via Tiingo's forex endpoint), not GLD; oil via an ETF stand-in (USO is the example in code and tests, exact fund TBD); forex is signals only. The owner will add the `TIINGO_API_KEY` repo secret after the code steps, but it is needed before step F (no bars, no backtest), and the ingest Worker needs a redeploy (Deploy workflow, `workflow_dispatch`) to receive it. Built: `ingestion/sources/tiingo.js#fetchHistoricalBars` (same contract as yfinance: `{bars, errors, requests}`). Stocks/ETFs come from `/tiingo/daily/<T>/prices` as RAW unadjusted OHLCV, to match the existing yfinance bars (raw was chosen in code and NOT discussed with the owner), `source` `tiingo`. Spot gold and FX (`TIINGO_FX_TICKERS`: XAUUSD, XAGUSD, XPTUSD, EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD) come from `/tiingo/fx/<pair>/prices` at 1day, with no volume (stored as 0, because `price_bars.volume` is NOT NULL), `source` `tiingo_fx`. Auth is an `Authorization: Token` header, never in a URL or error text; a 429 is not retried. Config: `TIINGO_API_KEY`, `PRICE_BACKFILL_SOURCE` (defaults to `tiingo` when a key exists, else `yfinance`). The dashboard price form has an optional Tickers field (blank = watchlist). `deploy.yml` pushes the secret to the ingest Worker (optional, non-blocking). **Not changed:** the `*/15` cron's live bars still use Yahoo (429); the watchlist is not expanded (XAUUSD and the oil ETF are backfilled by naming them in the Tickers field); the stuck-`queued` bug (Other remaining work #8). **Unverified until the first live run:** that the free plan can pull the forex API; that `xauusd` is Tiingo's spot-gold symbol; how FX daily bars are date-stamped and where the day cuts off; that class-share symbols (BRK.B) pass through unchanged; the free limits (50 requests/hour, 1,000/day). First live run small (AAPL, MSFT, TSLA, XAUUSD, USO, about one month), then the full span. Original spec: Do not retry the Yahoo backfill. Blocked on: (a) an API key stored as a secret on the `ingest` Worker (the owner creates the key; never paste it in chat), and (b) the D1 daily write cap resetting at 00:00 UTC or a plan upgrade. Scope: a provider adapter behind the same `fetchHistoricalBars` contract so `backfillHistoricalPriceBars`, `insertPriceBars`, `POST /backfill-prices` and the dashboard form stay as merged; a watchlist-symbol to provider-symbol map; a distinct `source` value on stored bars; a fix so a failed terminal `job_progress` write cannot leave a job `queued` forever (see Other remaining work #8). First run small (3 tickers, ~1 month), then the full span.
+- **B. Remove the 500-row caps.** **STATUS: done in the step-B PR (in review).** `getNewsItemsInRange` now keyset-pages the whole range (`pageSize` 500, ordered by `(published_at, news_item_id)`, so a page boundary inside identical timestamps skips and repeats nothing); `getRealizedReturnsInRange` has no limit and a deterministic order (`resolved_at, id`). Tests: `test/backtest_no_row_caps.test.js` (over 500 news items, page boundaries inside a tie, over 500 returns, and a 505-item `runOnSignalForTicker` run). Untouched on purpose: `cleanupFailedRun`'s 500-row chunks (at most 20 chunks per run, so a failed run over roughly 10K rows per table would leave the rest; not measured). Original spec: Keyset-paginate `getNewsItemsInRange` in
   `onSignalRunner` (or stream day by day); lift or paginate
   `getRealizedReturnsInRange`; add tests with >500 items.
 - **C. Same-day bar leak.** Change `getPriceBarsAsOf` semantics (compare on the

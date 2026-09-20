@@ -139,6 +139,8 @@ export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart
   const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
   const prefix = runIdPrefix ?? testStart;
 
+  // Every item in [testStart, testEnd), however many: getNewsItemsInRange pages
+  // through the whole range (it used to stop silently at 500 per ticker).
   const newsItems = await getNewsItemsInRange(ctx.inputs, { ticker, from: testStart, to: testEnd });
   const itemsByDay = groupItemsByDay(newsItems);
 

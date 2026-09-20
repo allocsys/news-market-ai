@@ -408,8 +408,13 @@ export class RunStore {
     return results;
   }
 
-  /** Backtest-result read, deliberately not asOf-gated -- same carve-out as d1.js#getRealizedReturnsInRange (see that function's header). */
-  async getRealizedReturnsInRange({ ticker, from, to, limit = 500 }) {
+  /**
+   * Backtest-result read, deliberately not asOf-gated -- same carve-out as d1.js#getRealizedReturnsInRange (see that function's header).
+   * Returns EVERY realized return resolved in [from, to), oldest first (ties by row id, so the order is
+   * deterministic and safe to compound). It used to default to `limit = 500` and truncate silently
+   * (plan.md Next steps, step B); a row here is one number, so there is nothing to page.
+   */
+  async getRealizedReturnsInRange({ ticker, from, to }) {
     if (!from || !to) {
       throw new LookaheadViolationError("getRealizedReturnsInRange requires an explicit {from, to} range");
     }
@@ -419,10 +424,9 @@ export class RunStore {
         `SELECT realized_return
          FROM decision_memory
          WHERE run_id = ? AND ticker = ? AND resolved_at >= ? AND resolved_at < ? AND realized_return IS NOT NULL
-         ORDER BY resolved_at ASC
-         LIMIT ?`
+         ORDER BY resolved_at ASC, id ASC`
       )
-      .bind(this.runId, ticker, from, to, limit)
+      .bind(this.runId, ticker, from, to)
       .all();
 
     return results.map((r) => r.realized_return);
