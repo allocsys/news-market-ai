@@ -224,7 +224,7 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
  * plan.md Next Steps step A (backtest audit finding 1: price_bars has almost
  * no history, so a backtest window can't open positions outside a handful
  * of days). Deliberately a SEPARATE function/call path, not an extra param
- * on fetchDailyBars: the `*/15` cron's ingestPriceBars -> fetchDailyBars call
+ * on fetchDailyBars: the 15-minute cron's ingestPriceBars -> fetchDailyBars call
  * must keep asking for exactly its 5d trailing default, unchanged.
  *
  * UNLIKE Finnhub's news backfill (ingestion/date_windows.js), this makes
