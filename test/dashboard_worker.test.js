@@ -22,6 +22,7 @@ import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
 import { renderShell } from "../src/dashboard/shell.js";
 import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
+import { RunStore } from "../src/storage/run_store.js";
 import { ENV_SECTIONS } from "../src/dashboard/helpers.js";
 
 class FakeNewsDb {
