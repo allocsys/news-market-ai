@@ -243,6 +243,13 @@ export default {
 
     return new Response("news-market-ai backend worker is running (private -- see wrangler.toml). Architecture in plan.md.", { status: 200 });
   },
+  // No `queue()` export: this Worker has no queue consumers left (Step 5
+  // follow-up, 2026-09-20). Its last one, JOBS's `backfill` handler, moved
+  // to the `ingest` Worker (src/ingest-worker.js) along with the queue
+  // itself (renamed BACKFILL) -- see that queue's own comment in
+  // wrangler.toml. This Worker still PRODUCES onto INGEST/LLM_JOBS/BACKTEST
+  // (scheduled() and the two POST routes above) and now BACKFILL too, but
+  // consumes none of them.
 
   async scheduled(event, env) {
     const config = loadConfig(env);
