@@ -58,6 +58,7 @@ import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 // if GDELT is ever reinstated as a source.
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
 import { fetchDailyBars, fetchHistoricalBars } from "../ingestion/sources/yfinance.js";
+import { fetchHistoricalBars as fetchTiingoHistoricalBars } from "../ingestion/sources/tiingo.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
 import { insertNewsItems, insertPriceBar, insertPriceBars, insertFundamentalFacts } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
@@ -473,6 +474,19 @@ export async function backfillHistoricalNews(config, db, { from, to, originalFro
 // per-request article-style cap to walk around).
 const PRICE_BAR_INSERT_CHUNK_SIZE = 200;
 
+// Which vendor the price backfill asks (config.priceBackfillSource, see config.js):
+// "tiingo" or "yfinance". A bare config object with no value (tests, one-off
+// scripts) keeps the original yfinance behaviour. Both fetchers share one
+// contract -- `{ bars, errors: [{ ticker, error }], requests }` -- so nothing
+// below cares which one ran. An unknown value throws rather than silently
+// falling back, so a typo in PRICE_BACKFILL_SOURCE fails the job loudly.
+function resolvePriceBackfillSource(config) {
+  const source = config.priceBackfillSource ?? "yfinance";
+  if (source === "tiingo") return { name: "tiingo", fetchBars: fetchTiingoHistoricalBars };
+  if (source === "yfinance") return { name: "yfinance", fetchBars: fetchHistoricalBars };
+  throw new Error(`unknown PRICE_BACKFILL_SOURCE "${source}" (expected "tiingo" or "yfinance")`);
+}
+
 /**
  * Historical price-bar backfill -- plan.md Next Steps step A (backtest audit
  * finding 1: price_bars held only 5 days each for AAPL/TSLA and zero for
@@ -516,17 +530,18 @@ export async function backfillHistoricalPriceBars(config, db, kv, { tickers, fro
   }
 
   const resolvedTickers = tickers && tickers.length > 0 ? tickers : (config.watchlist ?? []).map((w) => w.ticker);
+  const priceSource = resolvePriceBackfillSource(config);
 
   await onProgress?.({
     phase: "fetching",
     percent: 5,
-    detail: `Fetching yfinance daily bars for ${resolvedTickers.length} ticker${resolvedTickers.length === 1 ? "" : "s"}, ${from}..${to}`,
+    detail: `Fetching ${priceSource.name} daily bars for ${resolvedTickers.length} ticker${resolvedTickers.length === 1 ? "" : "s"}, ${from}..${to}`,
     force: true,
   });
 
-  const { bars, errors, requests } = await fetchHistoricalBars(config, { tickers: resolvedTickers, from, to }, { kv });
+  const { bars, errors, requests } = await priceSource.fetchBars(config, { tickers: resolvedTickers, from, to }, { kv });
   for (const { ticker, error } of errors) {
-    logSkippedSource("historical price backfill", "yfinance", error, { ticker });
+    logSkippedSource("historical price backfill", priceSource.name, error, { ticker });
   }
 
   await onProgress?.({
@@ -558,7 +573,7 @@ export async function backfillHistoricalPriceBars(config, db, kv, { tickers, fro
   });
 
   const failedTickers = errors.map(({ ticker, error }) => ({ ticker, message: error.message }));
-  return { inserted, errors, failedTickers, tickers: resolvedTickers.length, requests, tickersWithNoBars };
+  return { inserted, errors, failedTickers, tickers: resolvedTickers.length, requests, tickersWithNoBars, source: priceSource.name };
 }
 
 /**
