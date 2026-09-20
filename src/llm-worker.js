@@ -34,9 +34,10 @@
 // INPUTS_DB read-only + a RunStore("live") on LIVE_DB. llm_calls and
 // job_progress live in that same state DB (M2b), through that same RunStore.
 // The old DB binding (env.DB) is no longer read or written here. The
-// `backtest` message type is now REJECTED loudly (job marked failed, nothing
-// run): backtests move to the backtest Worker in M3, and this Worker never
-// binds SIM_DB. Only `backend` runs migrations. Same CACHE_KV namespace the other
+// `backtest` message type is REJECTED loudly (job marked failed, nothing
+// run): backtests run on the `backtest` Worker off the BACKTEST queue (M3), and
+// this Worker never binds SIM_DB. Nothing produces one on LLM_JOBS any more; the
+// branch stays as a loud guard against a stray or stale message. Only `backend` runs migrations. Same CACHE_KV namespace the other
 // Workers use -- the Gemini cascade's `gemini:cooldown:<model>:<keyIndex>`
 // keys (src/shared/cooldown.js) are prefix-namespaced, and after this step
 // only this Worker's code path writes them.
@@ -102,14 +103,14 @@ export default {
           // failed so the dashboard shows why, log it, and ack (a retry
           // would fail identically).
           const { id, tickers, testStart, testEnd, graceDays } = job;
-          const reason = "backtests move to the backtest Worker in M3";
+          const reason = "backtests run on the backtest Worker (BACKTEST queue), not on LLM_JOBS";
           console.error("backtest job rejected: " + reason, { id, tickers });
           // The row lands under the 'live' run: this Worker has no SIM_DB, and
           // a real backtest's jobs get their own run id in the backtest Worker (M3).
           const reporter = createJobReporter(buildLiveContext(env).store, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } });
           // start() first: it upserts the row to 'running' whether or not a
-          // 'queued' row exists (a message already on the queue predates the
-          // disabled route), and fail() only updates a queued/running row.
+          // 'queued' row exists (a message already on the queue predates
+          // backtests moving to the BACKTEST queue), and fail() only updates a queued/running row.
           await reporter.start();
           await reporter.fail(reason);
         } else if (job.type === "exit_check") {
