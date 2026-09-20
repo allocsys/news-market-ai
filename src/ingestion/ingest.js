@@ -493,7 +493,8 @@ function resolvePriceBackfillSource(config) {
  * MSFT, so a backtest window couldn't open positions outside a handful of
  * days and the buy-and-hold baseline silently measured a ~5-day return).
  * Fetches `tickers` (default config.watchlist) over an explicit [from, to]
- * range via ingestion/sources/yfinance.js#fetchHistoricalBars and writes
+ * range via the configured vendor (resolvePriceBackfillSource above: Tiingo or
+ * yfinance, each ingestion/sources/<vendor>.js#fetchHistoricalBars) and writes
  * every returned bar through the batched storage/inputs_view.js#insertPriceBars
  * -- the exact same point-in-time (ticker, date) upsert live ingestion uses,
  * so a backfilled bar is indistinguishable from a live-ingested one to any
