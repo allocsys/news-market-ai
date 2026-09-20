@@ -318,7 +318,7 @@ test("POST /backfill succeeds on a valid session cookie (scripted/non-form calle
   assert.deepEqual(jobs.sent[0], { type: "backfill", id: body.id, from: "2024-01-01", to: "2024-01-31" });
 });
 
-test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto BACKFILL), and renders the accepted HTML page immediately", async () => {
+test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto BACKFILL), and 303-redirects to /dashboard/backfill (Post/Redirect/Get -- part 1 of the dashboard backfill-completion UX fix) instead of rendering the accepted HTML directly", async () => {
   const jobs = new FakeQueue();
   const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), BACKFILL: jobs }) });
   const cookie = await loggedInCookie(env);
@@ -331,12 +331,9 @@ test("POST /backfill accepts a form-encoded body -- checks the session, forwards
   });
 
   const response = await worker.fetch(request, env);
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type"), /text\/html/);
-  const html = await response.text();
-  assert.match(html, /Backfill accepted/);
-  assert.match(html, /2024-01-01/);
-  assert.match(html, /2024-01-31/);
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("Location"), "/dashboard/backfill");
+  assert.equal(await response.text(), "", "a 303 has no body to accidentally re-show/re-submit");
 
   // The route only enqueues (plan.md Step 3) -- the real backfill now runs
   // in the `ingest` Worker's queue() consumer (Step 5 follow-up,
@@ -345,6 +342,19 @@ test("POST /backfill accepts a form-encoded body -- checks the session, forwards
   assert.equal(jobs.sent[0].type, "backfill");
   assert.equal(jobs.sent[0].from, "2024-01-01");
   assert.equal(jobs.sent[0].to, "2024-01-31");
+
+  // Following the redirect (a plain GET, as any browser/user agent does on a
+  // 303) lands on /dashboard/backfill and shows the just-queued job via the
+  // ordinary active-job panel wiring -- confirming the redirect target
+  // actually closes the "had to refresh or go back to Backfill" gap, not
+  // just that a redirect happens. Uses backend's real GET /api/jobs/active,
+  // same as the "prepends the active-job panel" tests below.
+  const followed = await worker.fetch(new Request(`https://dashboard.example${response.headers.get("Location")}`, { headers: { Cookie: cookie } }), env);
+  assert.equal(followed.status, 200);
+  const followedHtml = await followed.text();
+  assert.match(followedHtml, /id="active-job"/);
+  assert.match(followedHtml, /2024-01-01/);
+  assert.match(followedHtml, /2024-01-31/);
 });
 
 test("POST /backtest/run with a valid session cookie is forwarded to backend, which (M3) enqueues onto BACKTEST and returns an accepted ack", async () => {
