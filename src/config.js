@@ -173,6 +173,17 @@ export function loadConfig(env) {
     // conservative starting point, not tuned against real traffic yet --
     // same untuned-placeholder caveat as maxPositionHoldDays.
     finnhubLookbackDays: Number(env.FINNHUB_LOOKBACK_DAYS) || 3,
+    // Historical backfill only (ingestion/ingest.js#backfillHistoricalNews):
+    // Finnhub returns at most ~245 (INFERRED from stored data, not
+    // documented) of the newest articles per /company-news request however
+    // wide the range, so a backfill walks the range in windows of this many
+    // days. The three-ticker watchlist averages ~35 articles/ticker/day, so 5
+    // days (~175) normally stays under the cap; a window that comes back at
+    // or above finnhubWindowSplitThreshold RAW articles is assumed capped and
+    // is split in half and refetched (down to one day). Neither number is
+    // tuned beyond that one observation.
+    finnhubBackfillWindowDays: Number(env.FINNHUB_BACKFILL_WINDOW_DAYS) || 5,
+    finnhubWindowSplitThreshold: Number(env.FINNHUB_WINDOW_SPLIT_THRESHOLD) || 230,
     // yfinance's unofficial chart API (ingestion/sources/yfinance.js) --
     // see that file's header for the real risk that this endpoint now often
     // requires a cookie+crumb handshake this adapter does not perform.
