@@ -87,13 +87,26 @@ export async function insertNewsItem(db, item) {
  * for fundamentals on 2026-09-17 -- see that function's own header for the
  * matching incident on that path.
  *
- * Returns `{ insertedIds, newTickersByItemId }` so freshness-tracking
+ * Returns `{ insertedIds, newTickersPerItem }` so freshness-tracking
  * callers (ingestTickerData/ingestFeedNews's "enqueue analyze only for new
  * material" logic) keep working: `insertedIds` is the Set of item ids whose
- * `news_items` row did not exist before this call; `newTickersByItemId` maps
- * an item id to the tickers whose `(news_item_id, ticker)` association is
- * new -- present even for an already-stored item that just gained a new
- * ticker association, same as insertNewsItem's own `newTickers` return.
+ * `news_items` row did not exist before this call; `newTickersPerItem` is an
+ * array PARALLEL TO `items` (same index, not keyed by id) -- each entry is
+ * the tickers newly associated by THAT item's own ticker-insert statements.
+ *
+ * Deliberately parallel-array, not id-keyed: `items` can contain two
+ * entries with the SAME id (ingestFeedNews's actual live case -- the same
+ * article surfacing under two different feed configs, each carrying its
+ * own single-ticker hint), and the two must NOT have their new-ticker
+ * results merged together. Because a batch executes as one sequential
+ * transaction, the second same-id entry's own ticker insert already sees
+ * the first entry's ticker as committed (so a genuinely repeated ticker
+ * correctly reports empty), while each entry still gets credited only for
+ * the ticker(s) IT ITSELF newly added -- exactly the same outcome the old
+ * per-item sequential insertNewsItem loop produced one call at a time.
+ * `insertedIds` has no equivalent ambiguity worth solving here: it only
+ * answers "does this id now exist", not "which item made it exist", so a
+ * Set of ids is unambiguous and is left as-is.
  *
  * No-op on an empty array (mirrors insertFundamentalFacts). Callers are
  * expected to chunk `items` themselves (see ingestion/ingest.js's
@@ -102,7 +115,7 @@ export async function insertNewsItem(db, item) {
  * ingestFundamentals.
  */
 export async function insertNewsItems(db, items) {
-  if (items.length === 0) return { insertedIds: new Set(), newTickersByItemId: new Map() };
+  if (items.length === 0) return { insertedIds: new Set(), newTickersPerItem: [] };
 
   const itemStmt = db.prepare(
     `INSERT INTO news_items (id, source, url, first_published_at, ingested_at, title, body, raw)
@@ -137,22 +150,21 @@ export async function insertNewsItems(db, items) {
   // per statement, in order, same convention rowsChanged() already reads
   // for insertNewsItem's own single-row .run() calls.
   const insertedIds = new Set();
-  const newTickersByItemId = new Map();
+  const newTickersPerItem = [];
   let i = 0;
   for (const item of items) {
     const itemResult = results[i++];
     i++; // revisionResult -- unused beyond advancing the index, same as insertNewsItem never inspecting its own revision write's outcome
     if (rowsChanged(itemResult) > 0) insertedIds.add(item.id);
+    const newTickers = [];
     for (const ticker of item.tickers) {
       const tickerResult = results[i++];
-      if (rowsChanged(tickerResult) > 0) {
-        if (!newTickersByItemId.has(item.id)) newTickersByItemId.set(item.id, []);
-        newTickersByItemId.get(item.id).push(ticker);
-      }
+      if (rowsChanged(tickerResult) > 0) newTickers.push(ticker);
     }
+    newTickersPerItem.push(newTickers);
   }
 
-  return { insertedIds, newTickersByItemId };
+  return { insertedIds, newTickersPerItem };
 }
 
 /**
