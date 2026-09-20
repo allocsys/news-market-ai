@@ -496,11 +496,16 @@ const PRICE_BAR_INSERT_CHUNK_SIZE = 200;
  * this staying single-shot.
  *
  * Same failure-isolation convention as every other ingestion path here: a
- * per-ticker VendorError (network failure, non-2xx, or an active 429
- * cross-invocation cooldown -- see yfinance.js's header on how sustained
- * that 429 has been observed to be, MSFT especially) is logged and that
- * ticker's bars are simply absent from the result, never aborts the rest of
- * the tickers. `from`/`to` are required, same explicit-range-only convention
+ * per-ticker VendorError (network failure or a non-2xx such as yfinance's
+ * sustained 429 -- see yfinance.js's header; this path ignores the shared
+ * 429 cooldown, so it is never skipped by one) is logged and that ticker's
+ * bars are simply absent from the result, never aborts the rest of the
+ * tickers. Unlike the live path it does NOT swallow the outcome: the result
+ * carries `failedTickers` (ticker + message) and `tickersWithNoBars`, and the
+ * `ingest` Worker turns them into the job's detail or, when nothing at all
+ * was saved, a failed job (ingest-worker.js's `backfill_prices` branch).
+ * `inserted` counts bars WRITTEN (upserts), not net-new rows: rerunning a
+ * range that is already stored reports the same number again. `from`/`to` are required, same explicit-range-only convention
  * as backfillHistoricalNews (no silent trailing-window default).
  */
 export async function backfillHistoricalPriceBars(config, db, kv, { tickers, from, to, onProgress } = {}) {
@@ -550,7 +555,8 @@ export async function backfillHistoricalPriceBars(config, db, kv, { tickers, fro
     force: true,
   });
 
-  return { inserted, errors, tickers: resolvedTickers.length, requests, tickersWithNoBars };
+  const failedTickers = errors.map(({ ticker, error }) => ({ ticker, message: error.message }));
+  return { inserted, errors, failedTickers, tickers: resolvedTickers.length, requests, tickersWithNoBars };
 }
 
 /**
