@@ -382,10 +382,27 @@ export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
     logSkippedSource("ticker ingest", "finnhub", error);
   }
 
+  // UPDATE (2026-09-20): batched, replacing a plain per-item insertNewsItem
+  // loop. Same subrequest-cap fix as backfillHistoricalNews above -- this
+  // loop runs on EVERY 15-minute cron tick, not just a one-off backfill, and
+  // observability confirmed it as the live cause of TSLA silently getting no
+  // fresh news for hours: TSLA is processed last in a 4-message ingest
+  // batch (ingest_feeds + 3x ingest_ticker), so by the time its own
+  // Finnhub page (~100-160 items) hit this loop, AAPL/MSFT's own unbatched
+  // inserts had already spent most of the invocation's shared subrequest
+  // budget. No pre-filter here (unlike backfill) -- unlike a backfill's
+  // deliberately overlapping ranges, Finnhub's trailing-window page is not
+  // expected to be mostly-duplicate on a normal tick, so the extra SELECT
+  // round trip isn't worth it; ON CONFLICT DO NOTHING already makes a
+  // redundant insert a correct no-op either way.
   const fresh = [];
-  for (const item of items) {
-    const { inserted, newTickers } = await insertNewsItem(db, item);
-    if (inserted || newTickers.includes(ticker)) fresh.push({ item, tickers: [ticker] });
+  for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
+    const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
+    const { insertedIds, newTickersByItemId } = await insertNewsItems(db, chunk);
+    for (const item of chunk) {
+      const newTickers = newTickersByItemId.get(item.id) ?? [];
+      if (insertedIds.has(item.id) || newTickers.includes(ticker)) fresh.push({ item, tickers: [ticker] });
+    }
   }
 
   // Price bars / fundamentals are a strict enhancement, not a hard
