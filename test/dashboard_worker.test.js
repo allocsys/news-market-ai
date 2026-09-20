@@ -452,6 +452,67 @@ test("GET /dashboard/snapshot never shows an active-job panel -- only backfill/b
 });
 
 // --------------------------------------------------------------------
+// "Last run" panel wiring (dashboard backfill-completion UX, part 3): GET
+// /dashboard/backfill also prepends how the most recently FINISHED backfill
+// job ended (backend's GET /api/jobs/latest?type=backfill via
+// dashboard-worker.js's lastFinishedBackfillJob, rendered by
+// backfill.js#renderLastRunPanel), so the page shows something once the
+// active-job panel above has aged out or the operator just navigates back.
+// --------------------------------------------------------------------
+
+async function liveDbWithFinishedBackfill(overrides = {}) {
+  const db = (await jobStateDb()).db;
+  const store = new RunStore(db, "live");
+  await store.insertQueuedJob({ id: "backfill-done-1", type: "backfill", params: { from: "2024-01-01", to: "2024-01-31" }, now: "2026-01-01T00:00:00.000Z" });
+  await store.markJobRunning({ id: "backfill-done-1", type: "backfill", now: "2026-01-01T00:00:01.000Z" });
+  if (overrides.status === "failed") {
+    await store.failJob({ id: "backfill-done-1", error: overrides.error ?? "boom", detail: overrides.detail ?? null, now: "2026-01-01T00:05:00.000Z" });
+  } else {
+    await store.completeJob({ id: "backfill-done-1", result: overrides.result ?? { inserted: 146, errorCount: 0, parts: 1 }, detail: overrides.detail ?? "Inserted 146 articles", now: "2026-01-01T00:05:00.000Z" });
+  }
+  return db;
+}
+
+test("GET /dashboard/backfill shows no Last-run panel when nothing has ever finished", async () => {
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
+  assert.doesNotMatch(html, /Last run/);
+});
+
+test("GET /dashboard/backfill shows the Last-run panel for a completed job, with its detail and range", async () => {
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: await liveDbWithFinishedBackfill() }) });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
+  assert.match(html, /Last run/);
+  assert.match(html, /Complete/);
+  assert.match(html, /2024-01-01 to 2024-01-31/);
+  assert.match(html, /Inserted 146 articles/);
+});
+
+test("GET /dashboard/backfill shows the Last-run panel for a failed job, with its error", async () => {
+  const env = loginConfiguredEnv({
+    BACKEND: makeBackend({ LIVE_DB: await liveDbWithFinishedBackfill({ status: "failed", error: "Too many API requests by single Worker invocation", detail: "Saved 325/733 articles" }) }),
+  });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
+  assert.match(html, /Last run/);
+  assert.match(html, /Failed/);
+  assert.match(html, /Saved 325\/733 articles/);
+  assert.match(html, /Too many API requests by single Worker invocation/);
+});
+
+test("GET /dashboard/backfill renders normally (no Last-run panel, no crash) when the /api/jobs/latest lookup itself fails -- best-effort", async () => {
+  const brokenBackend = { fetch: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }) };
+  const env = loginConfiguredEnv({ BACKEND: brokenBackend });
+  const cookie = await loggedInCookie(env);
+  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env);
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.doesNotMatch(html, /Last run/);
+});
+
+// --------------------------------------------------------------------
 // M4b environment selector -- the bar itself (rendering, healing, and
 // best-effort fallback) on renderSection pages. Backend plumbing is
 // already covered by test/dashboard_env.test.js; the view-only pieces
