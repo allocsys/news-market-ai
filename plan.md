@@ -537,9 +537,13 @@ work on `main` directly.
 - **Step 4 — Cron fan-out (PR #30).** `scheduled()` is a thin scheduler onto
   `INGEST` and the exit-check queue; ANALYZE is the one consumer that retries
   (checkpoint-resumable, `openPosition` id-idempotent).
-- **Step 5 — `ingest` Worker (PR #31).** `INGEST` consumer moved out. **Deliberate
-  gap:** `backend` still holds `FINNHUB_API_KEY` because `backfill` calls Finnhub
-  and `JOBS` allows one consumer; closing it needs a second queue.
+- **Step 5 — `ingest` Worker (PR #31).** `INGEST` consumer moved out. **Gap
+  closed in a follow-up (2026-09-20):** `backend` used to still hold
+  `FINNHUB_API_KEY` because `backfill` called Finnhub and `JOBS` allowed one
+  consumer. Fixed by renaming `JOBS` to `BACKFILL` and moving its consumer to
+  `ingest` (which also gained a narrow `LIVE_DB` binding, rw, for
+  `job_progress` reporting only) -- `backend` now holds no vendor key at all
+  and has no `queue()` export.
 - **Step 6 — `llm` Worker (PR #32).** Wider than "move ANALYZE": `backtest` and
   `exit_check` also call Gemini, so they moved to a new `LLM_JOBS` queue. Fixed a
   latent bug where `ensure-*` actions hard-coded `wrangler.toml` and
