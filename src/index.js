@@ -289,48 +289,4 @@ export default {
       console.error("scheduled: exit_check enqueue failed", { message: err.message });
     }
   },
-
-  // Consumer for JOBS (`backfill` only since Step 6 -- see module header
-  // above). max_batch_size is 1 (wrangler.toml), but this still loops
-  // generically over `batch.messages` rather than assuming that.
-  //
-  // Per message: a business-logic failure (backfillHistoricalNews throwing
-  // on a vendor/DB error, etc.) is caught inside the `backfill` branch,
-  // logged, and the message is still acked -- retrying a call that already
-  // spent real Finnhub quota on failure would just spend it again for the
-  // same result. An unexpected crash in this handler itself (a real bug --
-  // e.g. a malformed message with no recognizable `type`, or a throw from
-  // code we didn't anticipate) falls through to message.retry(), so
-  // wrangler.toml's max_retries/dead_letter_queue on JOBS is the safety net
-  // for that, not for ordinary operational failures.
-  async queue(batch, env) {
-    const config = loadConfig(env);
-    for (const message of batch.messages) {
-      const job = message.body;
-      try {
-        if (job.type === "backfill") {
-          const { id, from, to } = job;
-          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } });
-          await reporter.start();
-          try {
-            const result = await backfillHistoricalNews(config, env.INPUTS_DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
-            console.log("backfill job completed", { id, from, to, inserted: result.inserted, errorCount: result.errors.length });
-            await reporter.complete(
-              { inserted: result.inserted, errorCount: result.errors.length },
-              `Inserted ${result.inserted} article${result.inserted === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
-            );
-          } catch (err) {
-            console.error("backfill job failed", { id, from, to, message: err.message });
-            await reporter.fail(err.message);
-          }
-        } else {
-          console.error("queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
-        }
-        message.ack();
-      } catch (err) {
-        console.error("queue message handler crashed unexpectedly, retrying", { message: err.message });
-        message.retry();
-      }
-    }
-  },
 };
