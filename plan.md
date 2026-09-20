@@ -602,12 +602,14 @@ work on `main` directly.
 
 ## Repo Structure
 ```
-src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill,
-                      # /backtest/run (enqueues onto BACKTEST), cron
-                      # scheduler, JOBS (backfill-only) consumer
+src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill
+                      # (enqueues onto BACKFILL), /backtest/run (enqueues onto
+                      # BACKTEST), cron scheduler. No queue consumer, no
+                      # vendor key (Step 5 follow-up, 2026-09-20)
 src/dashboard-worker.js  # `dashboard` Worker (wrangler.dashboard.toml) -- login,
                       # session, SSR UI; calls `backend` via service binding
-src/ingest-worker.js  # `ingest` Worker (wrangler.ingest.toml) -- INGEST consumer
+src/ingest-worker.js  # `ingest` Worker (wrangler.ingest.toml) -- INGEST and
+                      # BACKFILL consumers
 src/llm-worker.js     # `llm` Worker (wrangler.llm.toml) -- ANALYZE + exit_check on
                       # {inputs, live store}; a stray backtest message on
                       # LLM_JOBS is rejected (logged, job marked failed, acked, no
