@@ -46,7 +46,8 @@
 // log line. A non-VendorError (an actual bug, not a vendor failure) still
 // propagates immediately, same as before.
 
-import { fetchLatest as fetchFinnhubLatest } from "../ingestion/sources/finnhub.js";
+import { fetchLatest as fetchFinnhubLatest, createWindowedFetcher } from "../ingestion/sources/finnhub.js";
+import { toDayString, addDays, daysBetween, buildWindows } from "./date_windows.js";
 import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 // gdelt.js is intentionally NOT imported here anymore (2026-09-18) -- see
 // plan.md's GDELT correction/replacement note. The file and its test
@@ -99,25 +100,30 @@ async function filterUnstoredItems(db, items) {
 }
 
 /**
- * Where a continuation of a capped backfill should re-start its fetch: the UTC
- * day BEFORE the last processed item's day, never earlier than the original
- * `from`. Finnhub's /company-news only takes YYYY-MM-DD (see finnhub.js), so a
- * cursor can't be finer than a day, and which timezone Finnhub reads those
- * dates in is undocumented -- stepping back one day means an item just after
- * the last processed one can't fall outside the next fetch on a timezone
- * boundary. Re-scanned items are already stored, so the pre-filter drops them
- * for the price of one SELECT per chunk (no writes).
+ * Collapses items that share an id into one whose `tickers` is the union. The
+ * same article comes back from several tickers' /company-news queries (each
+ * carrying its own hint), and its id is derived from url + publishedAt only. A
+ * backfill window fetches every ticker before saving, so merging here keeps
+ * every ticker association: left as separate entries, a duplicate that landed
+ * in a later 100-item chunk than its twin would be dropped whole by the
+ * already-stored pre-filter, and its ticker never written.
  */
-function continuationFrom(lastPublishedAt, from) {
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const fromDay = new Date(from).toISOString().slice(0, 10);
-  const steppedBack = new Date(new Date(lastPublishedAt).getTime() - DAY_MS).toISOString().slice(0, 10);
-  return steppedBack > fromDay ? steppedBack : fromDay;
+function mergeDuplicateItems(items) {
+  const byId = new Map();
+  for (const item of items) {
+    const existing = byId.get(item.id);
+    if (!existing) {
+      byId.set(item.id, item);
+    } else if (item.tickers.some((ticker) => !existing.tickers.includes(ticker))) {
+      byId.set(item.id, { ...existing, tickers: [...new Set([...existing.tickers, ...item.tickers])] });
+    }
+  }
+  return [...byId.values()];
 }
 
-/** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. */
-function logSkippedSource(stage, source, err) {
-  console.error(`${stage} vendor failure -- skipping source`, { source, vendor: err.vendor, transient: err.transient, message: err.message });
+/** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. `context` (optional) adds fields to the log line, e.g. the ticker and window of a backfill request. */
+function logSkippedSource(stage, source, err, context = {}) {
+  console.error(`${stage} vendor failure -- skipping source`, { source, vendor: err.vendor, transient: err.transient, message: err.message, ...context });
 }
 
 /**
@@ -278,7 +284,7 @@ export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
  * wired (see graph/settle.js): every ingestion adapter was "what's new
  * now" only, with finnhub.js hardcoding a trailing lookback window even
  * though Finnhub's /company-news endpoint accepts an arbitrary from/to
- * range. This just calls that range through and persists whatever comes
+ * range. This walks that range in date windows (see WINDOWED FETCH below) and persists whatever comes
  * back via storage/inputs_view.js#insertNewsItem -- the exact same point-in-time
  * storage path live ingestion uses, so a backfilled article is
  * indistinguishable from a live-ingested one to any asOf-gated read
