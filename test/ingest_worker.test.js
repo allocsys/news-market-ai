@@ -6,8 +6,11 @@
 // since the underlying code (src/ingestion/ingest.js#ingestTickerData /
 // #ingestFeedNews) didn't change at all in this step, only which Worker's
 // queue() calls it. Plus one unrecognized-type/crash-retry pair for parity
-// with backend's own queue() test coverage (test/queue_consumer.test.js),
-// since this Worker's queue() has the same two-tier ack-vs-retry structure.
+// with backend's own queue() test coverage, since this Worker's queue() has
+// the same two-tier ack-vs-retry structure. UPDATE (Step 5 follow-up,
+// 2026-09-20): also covers the new `backfill` message type, moved here
+// (with its tests) from the now-deleted test/queue_consumer.test.js when
+// the BACKFILL queue's consumer moved from `backend` to this Worker.
 
 import test from "node:test";
 import assert from "node:assert/strict";
