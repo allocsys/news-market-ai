@@ -51,8 +51,8 @@ function htmlResponse(html, { status = 200 } = {}) {
 function jsonResponse(body, { status = 200 } = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
-function redirect(location, extraHeaders = {}) {
-  return new Response(null, { status: 302, headers: { Location: location, ...extraHeaders } });
+function redirect(location, extraHeaders = {}, status = 302) {
+  return new Response(null, { status, headers: { Location: location, ...extraHeaders } });
 }
 function currentPath(request) {
   const url = new URL(request.url);
@@ -101,6 +101,25 @@ async function activeJobPanelFor(env, type) {
   } catch (err) {
     console.warn("dashboard active-job lookup failed (non-fatal)", { type, message: err.message });
     return "";
+  }
+}
+
+/**
+ * The most recently FINISHED backfill job's row (backend's GET
+ * /api/jobs/latest?type=backfill, RunStore#getLatestFinishedJob), or null.
+ * Lets the Backfill page show how the last run ended once its progress bar
+ * is gone -- see activeJobPanelFor's header for why this must stay
+ * best-effort. Backfill only: a backtest's result is the backtest run
+ * itself (the existing "Recent runs" list on /dashboard/backtest), not a
+ * job row -- see api.js#handleApiLatestJobRoute's own header.
+ */
+async function lastFinishedBackfillJob(env) {
+  try {
+    const { job } = await fetchBackendJson(env, "/api/jobs/latest?type=backfill");
+    return job;
+  } catch (err) {
+    console.warn("dashboard last-finished-backfill lookup failed (non-fatal)", { message: err.message });
+    return null;
   }
 }
 
@@ -274,8 +293,19 @@ async function handleTriggerRoute(request, env, config, { backendPath, buildQuer
         : jsonResponse(body, { status: res.status });
     }
     if (isFormSubmit) {
-      const bodyHtml = renderRunAcceptedPage(formSubmitAccepted(built.params, body));
-      return htmlResponse(renderShell({ activeSection: built.activeSection, sessionUsername, bodyHtml }));
+      // Post/Redirect/Get (dashboard backfill-completion UX, part 1):
+      // redirect the browser to a GET of the section's own page rather than
+      // returning the "accepted" HTML directly as this POST's response, so a
+      // refresh or back-navigation just re-GETs that page instead of
+      // re-submitting the form and starting a second run. The freshly
+      // queued job is picked up by that page's own activeJobPanelFor lookup
+      // (GET /api/jobs/active), which renders the same live-progress
+      // panel/poller renderRunAcceptedPage used to -- describeJob(job) reads
+      // the job's own stored params (from/to, tickers/range), so none of
+      // the detail formSubmitAccepted used to build for this page is lost.
+      // 303 (not 302): explicitly "the result of this POST is over there,
+      // fetch it with GET", so no user agent ever replays the POST body.
+      return redirect(`/dashboard/${built.activeSection}`, {}, 303);
     }
     return jsonResponse(body);
   } catch (err) {
@@ -330,7 +360,8 @@ export default {
 
       if (pathname === "/dashboard/backfill") {
         const activePanel = await activeJobPanelFor(env, "backfill");
-        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView() }));
+        const lastRun = await lastFinishedBackfillJob(env);
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView({ lastRun }) }));
       }
       if (pathname === "/dashboard/backfill/confirm") {
         const bodyHtml = renderBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to") });
