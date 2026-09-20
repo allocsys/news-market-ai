@@ -35,7 +35,9 @@ import { getPriceBarsAsOf } from "../storage/inputs_view.js";
 /**
  * One ticker's buy-and-hold return over [testStart, testEnd): entry at the
  * close of the first bar on or after testStart, exit at the close of the
- * last bar on or before testEnd. Returns null (never fabricates a number)
+ * last bar VISIBLE at testEnd (dated strictly before testEnd's UTC date, since
+ * a bar is not final until its day is over -- shared/price_availability.js).
+ * Returns null (never fabricates a number)
  * if there's no bar on or after testStart within the window -- same "don't
  * invent a return you can't compute" convention as
  * graph/settle.js#settlePositionOutcome.
@@ -58,7 +60,7 @@ export async function computeBuyAndHoldReturn(inputs, { ticker, testStart, testE
   const bars = await getPriceBarsAsOf(inputs, { ticker, asOf: testEnd, limit: limit ?? Math.max(200, testDays + 50) });
 
   // bars is most-recent-first (DESC); the exit bar is simply the first
-  // element (latest date <= testEnd). The entry bar is the OLDEST bar that
+  // element (latest date before testEnd's UTC date). The entry bar is the OLDEST bar that
   // is still >= testStart -- i.e. the last element in ascending-within-
   // window order, found by filtering then taking the min.
   const inWindow = bars.filter((b) => b.date >= testStart);

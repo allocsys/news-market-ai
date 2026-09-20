@@ -100,10 +100,19 @@ Must be true by construction, not by discipline.
    not by row tags: design in "Backtest / Live Isolation" below. _Built: M1–M5
    are merged (see Milestones)._
 
-**Known violation (audit 2026-09-20):** point 1 is NOT fully true for price bars.
-`price_bars.date` is a `YYYY-MM-DD` string and `getPriceBarsAsOf` compares
-`date <= asOf`, so day D's final bar is visible at any time on day D. The point-6
-leak-check test does not cover intraday `asOf`. Fix = Next steps, step C.
+**Price bars: the same-day leak (audit 2026-09-20) is FIXED by step C.**
+`price_bars.date` is a `YYYY-MM-DD` string holding that day's final bar, and
+`getPriceBarsAsOf` used to compare `date <= asOf`, so day D's close was visible
+at any time on day D. The rule now (`shared/price_availability.js`): a bar is
+visible from the UTC day AFTER its date (`date < UTC date of asOf`), so the
+freshest price anyone can see is the previous UTC day's close. Live sees the
+same rule, so live no longer acts on a partial same-day bar. The result set is
+re-checked by `assertNoPriceBarLookahead` before it leaves the read;
+`test/price_bars_no_same_day_leak.test.js` covers intraday `asOf`, offsets, the
+pipeline's entry price, the technical analyst's input and the exit check.
+Residual: `pointInTime.js#assertNoLookahead` is a string compare on timestamp
+fields and is not called from `src/` at all (tests only), so it is a test helper,
+not a runtime guard; the price-bar read has its own guard.
 
 ## Backtest / Live Isolation — REDESIGN (verified 2026-09-19; implemented, M1–M5 merged 2026-09-20)
 **Why:** before the split, backtest and live runs shared the same D1 state tables
@@ -547,13 +556,13 @@ exits, technical analyst on price bars, realized-return settlement feeding the
 reflection loop, date-windowed historical backfill, the signal on/off backtest
 harness (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress
 job panel. Backtest/live isolation is built (M1–M5). CI and deploys are green
-across all five Workers (step A = PR #69 `031825d`, deploy #349 green; step A2 = PR #71 `bff216a`; plan.md update = PR #70 `d25b6c0`; all squash-merged 2026-09-21 or the night before). Price bars still do not exist: the first live price backfill failed on Yahoo (see "Live incident: first price backfill failed") and the Tiingo replacement (A2) has not been run yet because the owner has not added `TIINGO_API_KEY`.
+across all five Workers (step A = PR #69 `031825d`, deploy #349 green; step A2 = PR #71 `bff216a`; plan.md update = PR #70 `d25b6c0`; step B = PR #72 `617aec4`; all squash-merged 2026-09-21 or the night before; step C in review). Price bars still do not exist: the first live price backfill failed on Yahoo (see "Live incident: first price backfill failed") and the Tiingo replacement (A2) has not been run yet because the owner has not added `TIINGO_API_KEY`.
 
 **Backtests are NOT yet trustworthy.** An audit (2026-09-20, in response to
 "is backtesting bug free?") answered **no**: results would currently be
 meaningless. Do not run a real backtest until steps A–E below are done.
 
-### Next steps: make backtests trustworthy (agreed 2026-09-20; A merged as PR #69, its first live run FAILED on Yahoo; A2 (Tiingo source) merged as PR #71 but not run live, so no price bars exist yet; B in review; C-F not started)
+### Next steps: make backtests trustworthy (agreed 2026-09-20; A merged as PR #69, its first live run FAILED on Yahoo; A2 (Tiingo source) merged as PR #71 but not run live, so no price bars exist yet; B merged as PR #72; C in review; D-F not started)
 Working rules: each step is its own PR off `main` (direct GitHub-API edits on a
 feature branch; the CI `test` job is the real test; no local runner); merge
 only on the owner's explicit per-PR go-ahead, squash-merge. First thing next
@@ -594,7 +603,7 @@ invocation, no continuation) → `backtest/runBacktest.js#runManualBacktest` →
    walk still runs the full window for exits. `run_store.js#getRealizedReturnsInRange`
    also defaults to 500 (`ORDER BY resolved_at ASC`) and truncates realized
    returns silently.
-3. **Same-day price look-ahead.** `getPriceBarsAsOf` uses `date <= ?` on a
+3. **Same-day price look-ahead (FIXED by step C; the text below is the pre-fix state).** `getPriceBarsAsOf` uses `date <= ?` on a
    `YYYY-MM-DD` string with an ISO `asOf`, so day D's bar (final OHLC/close) is
    visible at any time on day D, including the midnight exit-check and a 09:35
    article. The pipeline's entry price is that same bar's close, and the
@@ -630,7 +639,7 @@ failed-run cleanup keeps the error log; Sharpe guards stdev 0.
 **Not read by the audit:** `signalCompare.js`, `pointInTime.js`, `cleanup.js`,
 `simClock.js`, `llm/budget.js`, `technicalAnalyst.js`, `risk_mgmt/exit.js#evaluateExit`,
 `graph/settle.js`, prompts, dashboard views. Existing tests (`test/backtest*.test.js`,
-incl. leakcheck) do NOT cover: the same-day bar leak, (the 500-row caps are covered since step B),
+incl. leakcheck) did NOT cover: (the same-day bar leak and the 500-row caps are covered since steps C and B),
 multi-ticker ordering, long-window queue limits.
 
 **Fix plan, in order:**
@@ -658,16 +667,32 @@ multi-ticker ordering, long-window queue limits.
   after checking how `POST /backfill` is wired in `src/index.js` and the ingest
   Worker.
 - **A2. Replace Yahoo as the price-bar source, then re-run the backfill.** **STATUS: merged as PR #71 (`bff216a`, CI green). Code only: nothing has been called against real Tiingo yet.** Owner decisions (2026-09-21): Tiingo is the price source; gold is SPOT (XAUUSD via Tiingo's forex endpoint), not GLD; oil via an ETF stand-in (USO is the example in code and tests, exact fund TBD); forex is signals only. The owner will add the `TIINGO_API_KEY` repo secret after the code steps, but it is needed before step F (no bars, no backtest), and the ingest Worker needs a redeploy (Deploy workflow, `workflow_dispatch`) to receive it. Built: `ingestion/sources/tiingo.js#fetchHistoricalBars` (same contract as yfinance: `{bars, errors, requests}`). Stocks/ETFs come from `/tiingo/daily/<T>/prices` as RAW unadjusted OHLCV, to match the existing yfinance bars (raw was chosen in code and NOT discussed with the owner), `source` `tiingo`. Spot gold and FX (`TIINGO_FX_TICKERS`: XAUUSD, XAGUSD, XPTUSD, EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD) come from `/tiingo/fx/<pair>/prices` at 1day, with no volume (stored as 0, because `price_bars.volume` is NOT NULL), `source` `tiingo_fx`. Auth is an `Authorization: Token` header, never in a URL or error text; a 429 is not retried. Config: `TIINGO_API_KEY`, `PRICE_BACKFILL_SOURCE` (defaults to `tiingo` when a key exists, else `yfinance`). The dashboard price form has an optional Tickers field (blank = watchlist). `deploy.yml` pushes the secret to the ingest Worker (optional, non-blocking). **Not changed:** the `*/15` cron's live bars still use Yahoo (429); the watchlist is not expanded (XAUUSD and the oil ETF are backfilled by naming them in the Tickers field); the stuck-`queued` bug (Other remaining work #8). **Unverified until the first live run:** that the free plan can pull the forex API; that `xauusd` is Tiingo's spot-gold symbol; how FX daily bars are date-stamped and where the day cuts off; that class-share symbols (BRK.B) pass through unchanged; the free limits (50 requests/hour, 1,000/day). First live run small (AAPL, MSFT, TSLA, XAUUSD, USO, about one month), then the full span. Original spec: Do not retry the Yahoo backfill. Blocked on: (a) an API key stored as a secret on the `ingest` Worker (the owner creates the key; never paste it in chat), and (b) the D1 daily write cap resetting at 00:00 UTC or a plan upgrade. Scope: a provider adapter behind the same `fetchHistoricalBars` contract so `backfillHistoricalPriceBars`, `insertPriceBars`, `POST /backfill-prices` and the dashboard form stay as merged; a watchlist-symbol to provider-symbol map; a distinct `source` value on stored bars; a fix so a failed terminal `job_progress` write cannot leave a job `queued` forever (see Other remaining work #8). First run small (3 tickers, ~1 month), then the full span.
-- **B. Remove the 500-row caps.** **STATUS: done in the step-B PR (in review).** `getNewsItemsInRange` now keyset-pages the whole range (`pageSize` 500, ordered by `(published_at, news_item_id)`, so a page boundary inside identical timestamps skips and repeats nothing); `getRealizedReturnsInRange` has no limit and a deterministic order (`resolved_at, id`). Tests: `test/backtest_no_row_caps.test.js` (over 500 news items, page boundaries inside a tie, over 500 returns, and a 505-item `runOnSignalForTicker` run). Untouched on purpose: `cleanupFailedRun`'s 500-row chunks (at most 20 chunks per run, so a failed run over roughly 10K rows per table would leave the rest; not measured). Original spec: Keyset-paginate `getNewsItemsInRange` in
+- **B. Remove the 500-row caps.** **STATUS: merged as PR #72 (`617aec4`).** `getNewsItemsInRange` now keyset-pages the whole range (`pageSize` 500, ordered by `(published_at, news_item_id)`, so a page boundary inside identical timestamps skips and repeats nothing); `getRealizedReturnsInRange` has no limit and a deterministic order (`resolved_at, id`). Tests: `test/backtest_no_row_caps.test.js` (over 500 news items, page boundaries inside a tie, over 500 returns, and a 505-item `runOnSignalForTicker` run). Untouched on purpose: `cleanupFailedRun`'s 500-row chunks (at most 20 chunks per run, so a failed run over roughly 10K rows per table would leave the rest; not measured). Original spec: Keyset-paginate `getNewsItemsInRange` in
   `onSignalRunner` (or stream day by day); lift or paginate
   `getRealizedReturnsInRange`; add tests with >500 items.
-- **C. Same-day bar leak.** Change `getPriceBarsAsOf` semantics (compare on the
-  date part with strict `<` for an intraday `asOf`, i.e. use the prior close, or
-  define availability at market close); extend the leak-check test to intraday
-  `asOf`.
+- **C. Same-day bar leak.** **STATUS: done in the step-C PR (in review).**
+  `getPriceBarsAsOf` now returns only bars dated strictly before `asOf`'s UTC
+  date (bar D visible from D+1 00:00Z; UTC midnight is a conservative stand-in
+  for the close of every market), computed by `shared/price_availability.js`,
+  parsing `asOf` (offsets normalized to UTC; unparseable throws
+  `LookaheadViolationError`) and re-checking its own result. Effects: entry and
+  exit prices, the technical analyst's snapshot and stop-loss checks all use the
+  prior close; the buy-and-hold baseline's exit bar is the last bar before
+  `testEnd`'s date. **Live changes too:** it no longer sees the partial bar of
+  the current day, so a stop-loss or entry is priced off the previous close
+  (Yahoo bars were never usable from Workers anyway; revisit if intraday
+  freshness is wanted, with an explicit live-only read, never by loosening this
+  one). Tests: `test/price_bars_no_same_day_leak.test.js`; three test files that
+  had the leak baked in were fixed (exit_logic, baseline, price_bars_pointintime;
+  the last two now run on real sqlite instead of hand-written fakes). Original
+  spec: compare on the date part with strict `<` for an intraday `asOf`.
 - **D. Metrics.** Position-weighted daily equity curve for BOTH on and off, same
   horizon and universe; fix Sharpe periods; baseline returns null if the entry
-  bar is too far after `testStart`.
+  bar is too far after `testStart`. Also found while doing C:
+  `noSignalBaseline.js` filters entry bars with `b.date >= testStart`, a string
+  compare of `YYYY-MM-DD` against an ISO timestamp (`walkForwardWindows` yields
+  `...T00:00:00.000Z`), which is false for the bar dated exactly on testStart's
+  day, so the baseline enters one bar late.
 - **E. Walk and preflight.** Day-major multi-ticker walk; as-of predicates in
   `commitThesis` for backtest runs; a preflight price-coverage check in
   `runManualBacktest` that fails fast BEFORE any LLM call; validate
