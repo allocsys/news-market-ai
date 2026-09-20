@@ -166,6 +166,62 @@ test("job rows are scoped by run_id: same job id in two runs is two rows, and ne
   assert.deepEqual(rows.map((r) => r.run_id), ["bt-1", "live"]);
 });
 
+// ---- getLatestFinishedJob: how the last run ended, for the Backfill page ----
+
+test("getLatestFinishedJob returns null when no job of the type has finished", async () => {
+  const { store } = freshStore();
+  assert.equal(await store.getLatestFinishedJob("backfill"), null);
+
+  await seedRunning(store);
+  assert.equal(await store.getLatestFinishedJob("backfill"), null, "an in-flight job is not a finished one");
+});
+
+test("getLatestFinishedJob returns the job that finished most recently, complete or failed, and ignores in-flight rows and other types", async () => {
+  const { store } = freshStore();
+  await store.insertQueuedJob({ id: "b-old", type: "backfill", now: "2026-09-19T10:00:00.000Z" });
+  await store.completeJob({ id: "b-old", result: { inserted: 1 }, now: "2026-09-19T10:05:00.000Z" });
+  await store.insertQueuedJob({ id: "b-failed", type: "backfill", now: "2026-09-19T11:00:00.000Z" });
+  await store.failJob({ id: "b-failed", error: "boom", now: "2026-09-19T11:05:00.000Z" });
+  // Newer than both, but still running -> must not win.
+  await store.insertQueuedJob({ id: "b-running", type: "backfill", now: "2026-09-19T11:50:00.000Z" });
+  // Finished later than everything above, but a different type -> must not win.
+  await store.insertQueuedJob({ id: "t-done", type: "backtest", now: "2026-09-19T11:55:00.000Z" });
+  await store.completeJob({ id: "t-done", now: "2026-09-19T11:56:00.000Z" });
+
+  const latest = await store.getLatestFinishedJob("backfill");
+  assert.equal(latest.id, "b-failed");
+  assert.equal(latest.status, "failed");
+  assert.equal(latest.error, "boom");
+
+  // Once a later job completes, that one is the latest.
+  await store.completeJob({ id: "b-running", result: { inserted: 9 }, now: "2026-09-19T11:58:00.000Z" });
+  assert.equal((await store.getLatestFinishedJob("backfill")).id, "b-running");
+  assert.equal((await store.getLatestFinishedJob("backtest")).id, "t-done");
+});
+
+test("getLatestFinishedJob returns the same camelCased, JSON-parsed shape as getJob", async () => {
+  const { store } = freshStore();
+  await store.insertQueuedJob({ id: "j", type: "backfill", params: { from: "2024-01-01", to: "2024-01-31" }, now: "2026-09-19T11:00:00.000Z" });
+  await store.completeJob({ id: "j", result: { inserted: 146, errorCount: 0, parts: 1 }, detail: "Inserted 146 articles", now: "2026-09-19T11:05:00.000Z" });
+
+  const latest = await store.getLatestFinishedJob("backfill");
+  assert.deepEqual(latest, await store.getJob("j"));
+  assert.deepEqual(latest.params, { from: "2024-01-01", to: "2024-01-31" });
+  assert.deepEqual(latest.result, { inserted: 146, errorCount: 0, parts: 1 });
+  assert.equal(latest.finishedAt, "2026-09-19T11:05:00.000Z");
+});
+
+test("getLatestFinishedJob is scoped by run_id: another run's finished job is invisible", async () => {
+  const db = createTestD1([STATE_DIR]);
+  const live = new RunStore(db, "live");
+  const other = new RunStore(db, "bt-1");
+  await other.insertQueuedJob({ id: "other-job", type: "backfill", now: "2026-09-19T11:00:00.000Z" });
+  await other.completeJob({ id: "other-job", now: "2026-09-19T11:05:00.000Z" });
+
+  assert.equal(await live.getLatestFinishedJob("backfill"), null);
+  assert.equal((await other.getLatestFinishedJob("backfill")).id, "other-job");
+});
+
 // ---- the best-effort reporter over a store --------------------------------
 
 test("createJobReporter drives the full lifecycle through the store (queued, start, forced update, complete)", async () => {
