@@ -58,8 +58,45 @@ import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
 import { fetchDailyBars } from "../ingestion/sources/yfinance.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
-import { insertNewsItem, insertPriceBar, insertFundamentalFacts } from "../storage/inputs_view.js";
+import { insertNewsItem, insertNewsItems, insertPriceBar, insertFundamentalFacts } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
+
+// D1/subrequest budget for the batched news-item inserts below (backfill,
+// ingestTickerData, ingestFeedNews). Deliberately kept at 100, not the
+// fundamentals path's 200 (FUNDAMENTALS_INSERT_CHUNK_SIZE): a news item's
+// batch entry count is variable (item row + revision row + one row per
+// ticker, vs. a fundamental fact's fixed one row), and this same size also
+// bounds filterUnstoredIds' own `WHERE id IN (...)` below, which D1 caps at
+// ~100 bound params per statement -- so this one constant has to satisfy
+// both, and 100 is the smaller/safer of the two limits. See
+// backfillHistoricalNews's own header for the live incident this fixes
+// ("Too many API requests by single Worker invocation", backfill job
+// backfill-1789920460728-4lahlf, 2026-09-20).
+const NEWS_ITEM_INSERT_CHUNK_SIZE = 100;
+
+/**
+ * Pre-filters `items` down to ones NOT already in news_items, via one
+ * batched `SELECT id ... WHERE id IN (...)` per call (the caller is
+ * responsible for keeping `items.length` within NEWS_ITEM_INSERT_CHUNK_SIZE,
+ * same D1 bound-param reasoning as that constant's own comment). This is
+ * what makes a retried or overlapping backfill cheap: without it, re-running
+ * the same date range re-does insertNewsItems' full write batch (news_items
+ * + revisions + tickers) for articles already stored, just to have every
+ * statement no-op on ON CONFLICT DO NOTHING -- correct, but a wasted D1
+ * round trip at exactly the scale (hundreds of articles) this fix is
+ * trying to keep cheap. A no-op (returns `items` unchanged) on an empty
+ * array, same convention as insertNewsItems/insertFundamentalFacts.
+ */
+async function filterUnstoredItems(db, items) {
+  if (items.length === 0) return items;
+  const ids = items.map((item) => item.id);
+  const { results } = await db
+    .prepare(`SELECT id FROM news_items WHERE id IN (${ids.map(() => "?").join(",")})`)
+    .bind(...ids)
+    .all();
+  const existing = new Set(results.map((row) => row.id));
+  return items.filter((item) => !existing.has(item.id));
+}
 
 /** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. */
 function logSkippedSource(stage, source, err) {
