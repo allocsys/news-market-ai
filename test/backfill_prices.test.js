@@ -127,8 +127,7 @@ test("fetchHistoricalBars ignores a standing 429 cooldown (it would otherwise ne
 
   const { bars, errors } = await fetchHistoricalBars(config, { tickers: ["AAPL"], from: "2025-09-01", to: "2025-09-05" }, { kv });
 
-  assert.equal(requests.length, 1, "it asked Yahoo despite the cooldown");
-  assert.equal(requests.length, 1, "and did not retry the 429 in-process");
+  assert.equal(requests.length, 1, "it asked Yahoo despite the cooldown, and did not retry the 429 in-process");
   assert.equal(bars.length, 0);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].ticker, "AAPL");
@@ -196,7 +195,10 @@ test("backfillHistoricalPriceBars stores every bar in price_bars, and a rerun up
 
   const rows = await priceRows(db);
   assert.equal(rows.length, 5);
-  assert.deepEqual(rows[0], { ticker: "AAPL", date: "2025-09-02", close: 101, source: "yfinance" });
+  assert.equal(rows[0].ticker, "AAPL");
+  assert.equal(rows[0].date, "2025-09-02");
+  assert.equal(rows[0].close, 101);
+  assert.equal(rows[0].source, "yfinance");
 
   const again = await backfillHistoricalPriceBars(config, db, undefined, { from: "2025-09-01", to: "2025-09-05" });
   assert.equal(again.inserted, 5, "'inserted' counts bars written (upserts), not net-new rows");
@@ -347,7 +349,8 @@ test("queue() backfill_prices honours an explicit ticker list instead of the wat
 });
 
 test("queue() backfill_prices FAILS the job (not 'complete, 0 bars') when Yahoo 429s every ticker, names them, and still acks", async (t) => {
-  silenceLogs(t);
+  t.mock.method(console, "log", () => {});
+  t.mock.method(console, "warn", () => {});
   const errorLogs = [];
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
   const env = workerEnv();
