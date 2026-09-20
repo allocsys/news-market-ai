@@ -519,13 +519,13 @@ exits, technical analyst on price bars, realized-return settlement feeding the
 reflection loop, date-windowed historical backfill, the signal on/off backtest
 harness (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress
 job panel. Backtest/live isolation is built (M1–M5). CI and deploys are green
-across all five Workers (`main` = `7093784`, PR #67).
+across all five Workers (`main` = `8d8775b`, PR #68, before the step A PR).
 
 **Backtests are NOT yet trustworthy.** An audit (2026-09-20, in response to
 "is backtesting bug free?") answered **no**: results would currently be
 meaningless. Do not run a real backtest until steps A–E below are done.
 
-### Next steps: make backtests trustworthy (agreed 2026-09-20; nothing started)
+### Next steps: make backtests trustworthy (agreed 2026-09-20; step A code written, not yet run live; B-F not started)
 Working rules: each step is its own PR off `main` (direct GitHub-API edits on a
 feature branch; the CI `test` job is the real test; no local runner); merge
 only on the owner's explicit per-PR go-ahead, squash-merge. First thing next
@@ -606,7 +606,21 @@ incl. leakcheck) do NOT cover: the same-day bar leak, the 500-row caps,
 multi-ticker ordering, long-window queue limits.
 
 **Fix plan, in order:**
-- **A. Historical price-bar backfill.** Add an opt-in way to fetch and store
+- **A. Historical price-bar backfill.** **STATUS: code written and tested, NOT yet
+  run live.** Built: `yfinance.js#fetchHistoricalBars` (`period1`/`period2`, one
+  request per ticker, ignores the shared 429 cooldown but records a fresh one),
+  batched `insertPriceBars`, `ingest.js#backfillHistoricalPriceBars`, a
+  `backfill_prices` branch on the `BACKFILL` consumer (nothing saved = failed job;
+  a partial fill names the missing tickers), `POST /backfill-prices` and a
+  dashboard form on `/dashboard/backfill` (confirm page, progress panel, "Last
+  price backfill" panel). The */15 cron path (`fetchDailyBars`, `range=5d`) is
+  unchanged. **Risk:** Workers Observability for `ingest` (2026-09-20) showed
+  yfinance 429s for AAPL, MSFT and TSLA on every attempt, so MSFT's zero bars is
+  not MSFT-specific; suspected cause (unproven) is Yahoo rate-limiting Cloudflare's
+  shared egress IPs, and the historical call may 429 too. If it does, the fallback
+  is another daily-bar source or seeding bars by hand. Unverified until a real run:
+  that `to`'s own bar is included (`period2` = 23:59:59 of `to`). Original spec:
+  add an opt-in way to fetch and store
   daily bars over a long range (yfinance `range` e.g. 1y/2y, or
   `period1`/`period2` on the chart endpoint; batched D1 inserts via `db.batch`
   like the news backfill; must not change the `*/15` cron's 5d default). Run it
