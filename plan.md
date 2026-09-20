@@ -430,11 +430,15 @@ only `backend` running migrations, and all sharing one `CACHE_KV` except
 - **`backend`** (`wrangler.toml`, `src/index.js`) — private (no workers.dev, no
   routes). JSON `/api/*`, `POST /backfill`, `POST /backtest/run`, the `*/15` cron
   `scheduled()` (pure fan-out: per-ticker `ingest_ticker` + one `ingest_feeds`
-  onto `INGEST`, one `exit_check` onto `LLM_JOBS`), D1 migrations, and the `JOBS`
-  consumer (`backfill` only). Holds `FINNHUB_API_KEY` for `backfill` only.
-- **`ingest`** (`wrangler.ingest.toml`) — `INGEST` consumer (`max_batch_size` 10).
+  onto `INGEST`, one `exit_check` onto `LLM_JOBS`), D1 migrations. Holds NO
+  vendor key and has no `queue()` export (Step 5 follow-up, 2026-09-20 --
+  `backfill`'s consumer, formerly here on `JOBS`, moved to `ingest`).
+- **`ingest`** (`wrangler.ingest.toml`) — `INGEST` consumer (`max_batch_size` 10)
+  and, since the Step 5 follow-up, `BACKFILL` consumer (`max_batch_size` 1) too.
   Fetches Finnhub/yfinance/EDGAR/RSS/scrape, writes D1, enqueues one `analyze`
-  per item (per item×ticker for general feeds) onto `ANALYZE`.
+  per item (per item×ticker for general feeds) onto `ANALYZE`. The sole holder
+  of `FINNHUB_API_KEY`; also narrowly binds `LIVE_DB` (rw, `job_progress`
+  reporting only, for the backfill branch).
 - **`llm`** (`wrangler.llm.toml`) — the live Gemini caller: holds `GEMINI_API_KEYS`
   and the live `gemini:cooldown:*` KV keys. Binds `LIVE_DB` (rw) and `INPUTS_DB`
   (read-only by convention). Consumes `ANALYZE` (`max_batch_size` 5,
@@ -467,8 +471,9 @@ diffed against its own last successful deploy.
 **Per-Worker secrets:** each deploy job fails fast on its own required secrets
 and pushes them with `wrangler secret put --config <its file>`. `dashboard`:
 `DASHBOARD_USERNAME/PASSWORD`, `JWT_SECRET`, `SESSION_TTL_SECONDS`. `backend`:
-`FINNHUB_API_KEY`. `ingest`: `FINNHUB_API_KEY` (+ `EDGAR_USER_AGENT`/
-`EDGAR_CIK_MAP` vars). `llm` and `backtest`: `GEMINI_API_KEYS`. Repo-wide:
+none (Step 5 follow-up, 2026-09-20). `ingest`: `FINNHUB_API_KEY` (+
+`EDGAR_USER_AGENT`/`EDGAR_CIK_MAP` vars) -- the only holder of that secret now.
+`llm` and `backtest`: `GEMINI_API_KEYS`. Repo-wide:
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Optional groups use a bash
 `-z` guard (the `secrets` context is rejected in a step `if:`). Provisioning
 actions mask ids before printing (a plaintext-id leak was found and fixed).
