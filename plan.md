@@ -550,7 +550,7 @@ work on `main` directly.
   secrets were never deleted from `backend` after Step 2; `checkAuth` is a no-op
   only when they're unset, so every `/api/*` call returned 401. **Lesson:** a green
   deploy says nothing about live bindings. Compare each Worker's live bindings to
-  its wrangler file's "Secrets" comment, or add the smoke test below.
+  its wrangler file's "Secrets" comment.
 - **Config drift:** `wrangler.dashboard.toml` enables `[observability.logs]` but the
   live dashboard Worker had logs off. The toml is the intended state; re-enable.
 - **Live pipeline produced no analysis after the M4 cutover (found 2026-09-20,
@@ -643,16 +643,13 @@ four behaviors below have not been observed live end to end.
 1b. **Overlapping open positions per ticker** (live) — fixed by the atomic
    portfolio commit in M1 (live from M4); until then live can re-accumulate
    overlapping positions and reject non-AAPL trades.
-2. **Post-deploy smoke test** in `deploy.yml`: log in via `dashboard`, fetch one
-   `/api/*` route through the service binding, fail unless 200. Would have caught
-   the 401 incident.
-3. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
+2. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
    a real ANALYZE crash-and-retry (Step 4), ops/day against real Observability
    numbers (Step 4), and the full ingest → analyze → llm flow producing decisions.
-4. **Step 5's gap:** `backend` still holds `FINNHUB_API_KEY` for `backfill`.
-5. **Loose ends:** unreferenced `src/dashboard.js` shim; a stray unrelated Worker
+3. **Step 5's gap:** `backend` still holds `FINNHUB_API_KEY` for `backfill`.
+4. **Loose ends:** unreferenced `src/dashboard.js` shim; a stray unrelated Worker
    `restless-manager-6789` on the account; dashboard UI/UX not screenshot-reviewed.
-6. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
+5. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
 
 **M1 defect found while starting M2 (2026-09-19), fixed in the first M2 PR:**
 `commitThesis`'s close-old statement did not exclude the row the same batch
