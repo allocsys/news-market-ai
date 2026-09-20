@@ -31,8 +31,10 @@
 // same safety-net split as backend's queue().
 
 import { loadConfig } from "./config.js";
-import { ingestTickerData, ingestFeedNews } from "./ingestion/ingest.js";
+import { ingestTickerData, ingestFeedNews, backfillHistoricalNews } from "./ingestion/ingest.js";
 import { sendInChunks } from "./ingestion/enqueue.js";
+import { createJobReporter } from "./storage/jobs.js";
+import { RunStore } from "./storage/run_store.js";
 
 /**
  * Enqueues one ANALYZE message per (fresh item, ticker) pair onto `queue`, in
@@ -103,6 +105,32 @@ export default {
             await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_feeds", context: {}, fetched, fresh });
           } catch (err) {
             console.error("ingest_feeds job failed", { message: err.message });
+          }
+        } else if (job.type === "backfill") {
+          // BACKFILL consumer (Step 5 follow-up, 2026-09-20) -- moved here
+          // verbatim from backend's old JOBS consumer (src/index.js), so
+          // `backend` never needs a Finnhub key. Same reporter
+          // start/complete/fail shape, same LIVE_DB job_progress target
+          // (RunStore(env.LIVE_DB, "live") -- this Worker's only use of
+          // that binding, see wrangler.ingest.toml's own comment on it).
+          // Same business-logic-failure-acks convention as ingest_ticker/
+          // ingest_feeds above: a vendor/D1 error mid-backfill is caught,
+          // logged and reported as `failed`, not retried -- retrying a call
+          // that already spent real Finnhub quota on failure would just
+          // spend it again for the same result.
+          const { id, from, to } = job;
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } });
+          await reporter.start();
+          try {
+            const result = await backfillHistoricalNews(config, env.INPUTS_DB, { from, to, kv: env.CACHE_KV, onProgress: reporter.update });
+            console.log("backfill job completed", { id, from, to, inserted: result.inserted, errorCount: result.errors.length });
+            await reporter.complete(
+              { inserted: result.inserted, errorCount: result.errors.length },
+              `Inserted ${result.inserted} article${result.inserted === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
+            );
+          } catch (err) {
+            console.error("backfill job failed", { id, from, to, message: err.message });
+            await reporter.fail(err.message);
           }
         } else {
           console.error("ingest queue message with unrecognized type, acking without processing", { type: job?.type });
