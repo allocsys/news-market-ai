@@ -321,7 +321,11 @@ test("POST /backfill succeeds on a valid session cookie (scripted/non-form calle
 
 test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto BACKFILL), and 303-redirects to /dashboard/backfill (Post/Redirect/Get -- part 1 of the dashboard backfill-completion UX fix) instead of rendering the accepted HTML directly", async () => {
   const jobs = new FakeQueue();
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), BACKFILL: jobs }) });
+  // A real (empty) LIVE_DB, not just DB+BACKFILL: backend's POST /backfill
+  // writes the 'queued' job_progress row via RunStore(env.LIVE_DB, "live")
+  // (best-effort -- see createJobReporter), and the follow-through check
+  // below needs that row to actually exist for GET /api/jobs/active to find.
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), LIVE_DB: createTestD1([STATE_DIR]), BACKFILL: jobs }) });
   const cookie = await loggedInCookie(env);
 
   const body = new URLSearchParams({ from: "2024-01-01", to: "2024-01-31" });
