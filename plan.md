@@ -79,7 +79,7 @@ signals. Needs a historical archive for backtesting and fine-tuning.
 Must be true by construction, not by discipline.
 1. **Hard cutoff per simulated timestamp `T`** — agents may only read news/price
    data timestamped `<= T` and memory entries strictly before `T`. Enforced at the
-   data-access layer (`storage/d1.js` requires an explicit `asOf`), not by trusting the agent.
+   data-access layer (`storage/inputs_view.js` requires an explicit `asOf`), not by trusting the agent.
 2. **Revision-aware storage** — every article revision stored with its own timestamp;
    serve the version that existed at `T`.
 3. **Point-in-time fundamentals** — built for XBRL filers via EDGAR companyfacts
@@ -94,10 +94,13 @@ Must be true by construction, not by discipline.
    the agent have a timestamp after `T`.
 7. **Backtest state must not touch live state, and vice versa.** Enforced
    structurally (separate D1 for state, no live binding in the backtest Worker),
-   not by row tags: design in "Backtest / Live Isolation" below. _Not built yet;
-   currently violated._
+   not by row tags: design in "Backtest / Live Isolation" below. _Built: M1–M5
+   are merged (see Milestones)._
 
 ## Backtest / Live Isolation — REDESIGN (verified 2026-09-19; prod D1 wiped the same day)
+**Status (2026-09-20): implemented and merged (M1–M5).** What follows is the
+original problem statement (which describes the pre-split system) and the design
+as built.
 **Problem:** backtest and live runs share the same D1 tables and nothing marks
 which run wrote a row. Verified by reading the code and running read-only
 queries against production D1 (`news_market_ai`, 2026-09-19 ~04:35Z).
@@ -165,7 +168,7 @@ numbers below are historical evidence of why the design changed.**
    `getRecentlyClosedPositions`, `getOpenPositionsExposureTotal`,
    `getDecisionStats` and `getRecentCheckpoints` are unfiltered.
 
-### Design: environments (rewrite, D1 only — agreed 2026-09-19, not built)
+### Design: environments (rewrite, D1 only — agreed 2026-09-19, built in M1–M5)
 Backtest was bolted onto live (shared tables, then proposed row tags) and each
 fix still left a path to leak. The rewrite makes isolation structural: **one
 engine, run inside an environment; an environment owns its state, and its Worker
@@ -412,8 +415,8 @@ processing and (c) a per-ticker ceiling cap were dropped.
 | KV | 1GB storage, 100K reads/day, 1K writes/day | Only for low-frequency state (LLM key/model cooldowns) |
 | Queues | 10K ops/day | ~5 guaranteed messages per 15-min tick at 3 tickers, plus one ANALYZE per new item; re-check before growing the watchlist |
 
-**Architecture (built 2026-09-19):** four Workers connected by queues (a fifth,
-`backtest`, was added in M3), each binding only the D1s it needs -- `inputs`,
+**Architecture (built 2026-09-19):** five Workers connected by queues (`backtest`
+was added in M3), each binding only the D1s it needs -- `inputs`,
 `live` or `sim`; the old single `news_market_ai` DB was removed in M5 -- with
 only `backend` running migrations, and all sharing one `CACHE_KV` except
 `backtest`, which has its own.
@@ -428,18 +431,25 @@ only `backend` running migrations, and all sharing one `CACHE_KV` except
 - **`ingest`** (`wrangler.ingest.toml`) — `INGEST` consumer (`max_batch_size` 10).
   Fetches Finnhub/yfinance/EDGAR/RSS/scrape, writes D1, enqueues one `analyze`
   per item (per item×ticker for general feeds) onto `ANALYZE`.
-- **`llm`** (`wrangler.llm.toml`) — the only Worker holding `GEMINI_API_KEYS` and
-  the `gemini:cooldown:*` KV keys. Consumes `ANALYZE` (`max_batch_size` 5,
+- **`llm`** (`wrangler.llm.toml`) — the live Gemini caller: holds `GEMINI_API_KEYS`
+  and the live `gemini:cooldown:*` KV keys. Binds `LIVE_DB` (rw) and `INPUTS_DB`
+  (read-only by convention). Consumes `ANALYZE` (`max_batch_size` 5,
   `max_concurrency` 2 = the Gemini throttle; failures **retry**, since the
-  pipeline is checkpoint-resumable) and `LLM_JOBS` (`backtest`, `exit_check`;
+  pipeline is checkpoint-resumable) and `LLM_JOBS` (`exit_check` only since M3;
   batch 1, concurrency 1; failures are logged and acked).
+- **`backtest`** (`wrangler.backtest.toml`, `src/backtest-worker.js`) — private;
+  consumes `BACKTEST` (batch 1, concurrency 1, DLQ): one message is one full
+  signal-on/off run. Binds `SIM_DB` (rw), `INPUTS_DB` (read-only by convention)
+  and its own `CACHE_KV` namespace, and **no `LIVE_DB`** (pinned by
+  `test/ci_env_isolation.test.js`). Holds its own copy of `GEMINI_API_KEYS`, never
+  `FINNHUB_API_KEY`.
 
 Every queue has a DLQ (`max_retries` 3). D1 is the structured layer; KV holds
 cooldown state and light config.
 
 **CI/CD** (`.github/workflows/deploy.yml`): `test` → `migrate` (push/dispatch,
 gated on `migrations/**`) → one deploy job per Worker (`deploy`=backend,
-`deploy-dashboard`, `deploy-ingest`, `deploy-llm`), each with its own
+`deploy-dashboard`, `deploy-ingest`, `deploy-llm`, `deploy-backtest`), each with its own
 `dorny/paths-filter` output and `concurrency` group; `workflow_dispatch` runs
 all. Provisioning is idempotent via `.github/actions/ensure-{kv-namespace,queue}`
 (look up by name, create if missing, never commit ids; `ensure-kv-namespace` takes
@@ -454,7 +464,7 @@ diffed against its own last successful deploy.
 and pushes them with `wrangler secret put --config <its file>`. `dashboard`:
 `DASHBOARD_USERNAME/PASSWORD`, `JWT_SECRET`, `SESSION_TTL_SECONDS`. `backend`:
 `FINNHUB_API_KEY`. `ingest`: `FINNHUB_API_KEY` (+ `EDGAR_USER_AGENT`/
-`EDGAR_CIK_MAP` vars). `llm`: `GEMINI_API_KEYS`. Repo-wide:
+`EDGAR_CIK_MAP` vars). `llm` and `backtest`: `GEMINI_API_KEYS`. Repo-wide:
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Optional groups use a bash
 `-z` guard (the `secrets` context is rejected in a step `if:`). Provisioning
 actions mask ids before printing (a plaintext-id leak was found and fixed).
@@ -580,19 +590,21 @@ work on `main` directly.
 ## Repo Structure
 ```
 src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill,
-                      # /backtest/run (disabled, returns 503 until M3), cron
+                      # /backtest/run (enqueues onto BACKTEST), cron
                       # scheduler, JOBS (backfill-only) consumer
 src/dashboard-worker.js  # `dashboard` Worker (wrangler.dashboard.toml) -- login,
                       # session, SSR UI; calls `backend` via service binding
 src/ingest-worker.js  # `ingest` Worker (wrangler.ingest.toml) -- INGEST consumer
 src/llm-worker.js     # `llm` Worker (wrangler.llm.toml) -- ANALYZE + exit_check on
-                      # {inputs, live store}; a backtest message on LLM_JOBS is
-                      # rejected (logged, job marked failed, acked, no work done)
-                      # until M3; only holder of GEMINI_API_KEYS
+                      # {inputs, live store}; a stray backtest message on
+                      # LLM_JOBS is rejected (logged, job marked failed, acked, no
+                      # work done -- backtests run on `backtest`); holds
+                      # GEMINI_API_KEYS, as does `backtest`
 src/backtest-worker.js  # `backtest` Worker (wrangler.backtest.toml) -- BACKTEST
                       # consumer; binds only SIM_DB + INPUTS_DB + its own CACHE_KV
 ingestion/           # Finnhub, GDELT (unwired), EDGAR, RSS, HTML-scrape, yfinance adapters
   ingest.js           # scheduled-ingestion entry point (split out of index.js in M2)
+  enqueue.js          # chunked ANALYZE sendBatch (Queues caps a batch at 100 messages / 256 KB)
   errors.js           # typed vendor error taxonomy (Pattern 11)
   date_window.js       # point-in-time cutoff/boundary helpers
   market_data_validator.js  # sanity-check vendor data before agents see it (Pattern 9)
@@ -634,20 +646,21 @@ reflection loop, a backfill entry point, the signal on/off backtest harness
 (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress job panel.
 CI and deploys are green across all four Workers.
 
-**Not yet true:** backtests are not isolated from live state (see above). The
-four behaviors below have not been observed live end to end.
+Backtest/live isolation is built (three D1s, `backtest` Worker, `RunStore`;
+M1–M5 merged). The behaviors in item 2 below have not been observed live end to
+end, and live produced no analysis at all until the ingest enqueue fix (see
+"Live pipeline produced no analysis" under Post-split follow-ups).
 
-**Remaining work (item 1b blocks non-AAPL live trades; nothing else blocks the system running):**
-1. **Backtest / live isolation** — environment redesign (three D1s, `backtest`
-   Worker, `RunStore`), milestones M1–M5 in the section above.
-1b. **Overlapping open positions per ticker** (live) — fixed by the atomic
-   portfolio commit in M1 (live from M4); until then live can re-accumulate
-   overlapping positions and reject non-AAPL trades.
+**Remaining work:**
+1. **Overlapping open positions per ticker** (live) — fixed structurally: the
+   atomic portfolio commit plus a one-open-position-per-ticker unique index,
+   live since M4. Not yet observed in practice, since live had no decisions to
+   overlap.
 2. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
    a real ANALYZE crash-and-retry (Step 4), ops/day against real Observability
    numbers (Step 4), and the full ingest → analyze → llm flow producing decisions.
 3. **Step 5's gap:** `backend` still holds `FINNHUB_API_KEY` for `backfill`.
-4. **Loose ends:** unreferenced `src/dashboard.js` shim; a stray unrelated Worker
+4. **Loose ends:** a stray unrelated Worker
    `restless-manager-6789` on the account; dashboard UI/UX not screenshot-reviewed.
 5. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
 
