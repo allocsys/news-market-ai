@@ -205,11 +205,11 @@ test("maxInserts stops at a window boundary and the cursor is the next window's 
 
 test("maxRequests stops a rerun over an already-stored range, which maxInserts alone never would", async (t) => {
   const db = createTestD1([INPUTS_DIR]);
-  mockFinnhub(t, { perDay: 10 });
+  const requests = mockFinnhub(t, { perDay: 10 });
   const config = makeConfig();
   await backfillHistoricalNews(config, db, { from: "2025-09-01", to: "2025-09-20" });
+  requests.length = 0; // count only the rerun's requests
 
-  const requests = mockFinnhub(t, { perDay: 10 });
   const rerun = await backfillHistoricalNews(config, db, { from: "2025-09-01", to: "2025-09-20", maxRequests: 2 });
 
   assert.equal(rerun.inserted, 0, "everything was already stored");
