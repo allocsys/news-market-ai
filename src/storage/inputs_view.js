@@ -266,6 +266,37 @@ export async function insertPriceBar(db, bar) {
 }
 
 /**
+ * Batched sibling of insertPriceBar -- same (ticker, date) upsert, but for
+ * many bars in ONE db.batch() call instead of one .run() per bar. Each
+ * individual .run() is its own Worker subrequest, same reasoning as
+ * insertFundamentalFacts/insertNewsItems' own headers -- a historical
+ * price-bar backfill (ingestion/ingest.js#backfillHistoricalPriceBars,
+ * plan.md Next Steps step A) can easily write several hundred rows across a
+ * multi-ticker, multi-month range in one Worker invocation, and an unbatched
+ * loop over that many .run() calls risks the same per-invocation subrequest
+ * cap other unbatched insert loops in this codebase have already hit live
+ * (see insertNewsItems' own header for that incident). No-op on an empty
+ * array (mirrors insertFundamentalFacts/insertNewsItems).
+ */
+export async function insertPriceBars(db, bars) {
+  if (bars.length === 0) return;
+
+  const stmt = db.prepare(
+    `INSERT INTO price_bars (ticker, date, open, high, low, close, volume, source, ingested_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(ticker, date) DO UPDATE SET
+       open = excluded.open, high = excluded.high, low = excluded.low,
+       close = excluded.close, volume = excluded.volume,
+       source = excluded.source, ingested_at = excluded.ingested_at`
+  );
+
+  const ingestedAt = new Date().toISOString();
+  const batch = bars.map((bar) => stmt.bind(bar.ticker, bar.date, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source, ingestedAt));
+
+  await db.batch(batch);
+}
+
+/**
  * Point-in-time read: bars for `ticker` dated at or before `asOf`. Same
  * required-asOf, no-"give me everything" convention as getNewsAsOf and
  * getDecisionMemoryAsOf (Backtesting Integrity, point 1) -- a technical

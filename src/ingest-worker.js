@@ -42,7 +42,7 @@
 // same safety-net split as backend's queue().
 
 import { loadConfig } from "./config.js";
-import { ingestTickerData, ingestFeedNews, backfillHistoricalNews } from "./ingestion/ingest.js";
+import { ingestTickerData, ingestFeedNews, backfillHistoricalNews, backfillHistoricalPriceBars } from "./ingestion/ingest.js";
 import { sendInChunks } from "./ingestion/enqueue.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
@@ -102,6 +102,28 @@ async function enqueueAnalyze(queue, { jobName, context, fetched, fresh }) {
       failures,
     });
   }
+}
+
+/**
+ * Turns backfillHistoricalPriceBars' result into what the operator sees.
+ * Nothing saved is a FAILED job: reporting "complete, 0 bars" would hide
+ * exactly the failure this backfill is most likely to hit (yfinance 429s, see
+ * ingestion/sources/yfinance.js's header). Some tickers missing is still a
+ * complete job, but the detail names each one and why, so a partial fill is
+ * never mistaken for a full one.
+ */
+export function summarizePriceBackfill(result) {
+  const reasons = new Map(result.failedTickers.map(({ ticker, message }) => [ticker, message]));
+  for (const ticker of result.tickersWithNoBars) reasons.set(ticker, "returned no bars for this range");
+  const missing = [...reasons].map(([ticker, message]) => `${ticker} (${message})`);
+
+  if (result.inserted === 0) {
+    return { ok: false, error: `No price bars saved${missing.length ? ` -- ${missing.join("; ")}` : ""}` };
+  }
+
+  const filled = result.tickers - reasons.size;
+  const bars = `Saved ${result.inserted} price bar${result.inserted === 1 ? "" : "s"} for ${filled} of ${result.tickers} ticker${result.tickers === 1 ? "" : "s"}`;
+  return { ok: true, detail: missing.length ? `${bars}; no bars for ${missing.join("; ")}` : bars };
 }
 
 export default {
@@ -204,6 +226,34 @@ export default {
             }
           } catch (err) {
             console.error("backfill job failed", { id, from, to, message: err.message });
+            await reporter.fail(err.message);
+          }
+        } else if (job.type === "backfill_prices") {
+          // BACKFILL_PRICES (Next Steps step A, plan.md) -- rides the SAME
+          // BACKFILL queue/consumer as the news `backfill` branch above
+          // (same LIVE_DB job_progress target, same ack-and-log-on-
+          // business-logic-failure convention) rather than provisioning a
+          // new queue: backfillHistoricalPriceBars is a single-request-
+          // per-ticker, single-invocation job with none of the
+          // parts/continuation machinery the news backfill needs (see that
+          // function's own header), so it doesn't need a queue of its own
+          // either -- max_batch_size 1 here already gives it a whole
+          // invocation to itself. No `part`/`insertedSoFar`-style
+          // continuation fields: unlike `backfill`, this message type is
+          // never re-enqueued by this Worker.
+          const { id, from, to, tickers } = job;
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill_prices", params: { from, to, tickers } });
+          await reporter.start();
+          try {
+            const result = await backfillHistoricalPriceBars(config, env.INPUTS_DB, env.CACHE_KV, { tickers, from, to, onProgress: reporter.update });
+            const summary = summarizePriceBackfill(result);
+            const failedTickers = result.failedTickers.map((f) => f.ticker);
+            console.log("backfill_prices job finished", { id, from, to, tickers: result.tickers, inserted: result.inserted, failedTickers, tickersWithNoBars: result.tickersWithNoBars, ok: summary.ok });
+            // Nothing saved is a failure, not a 'complete' with 0 bars: the catch below reports it as `failed`.
+            if (!summary.ok) throw new Error(summary.error);
+            await reporter.complete({ inserted: result.inserted, tickers: result.tickers, failedTickers, tickersWithNoBars: result.tickersWithNoBars }, summary.detail);
+          } catch (err) {
+            console.error("backfill_prices job failed", { id, from, to, message: err.message });
             await reporter.fail(err.message);
           }
         } else {

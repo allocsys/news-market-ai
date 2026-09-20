@@ -57,9 +57,9 @@ import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 // add a "gdelt" entry back into collectNewsItems's `sources` array below
 // if GDELT is ever reinstated as a source.
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
-import { fetchDailyBars } from "../ingestion/sources/yfinance.js";
+import { fetchDailyBars, fetchHistoricalBars } from "../ingestion/sources/yfinance.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
-import { insertNewsItems, insertPriceBar, insertFundamentalFacts } from "../storage/inputs_view.js";
+import { insertNewsItems, insertPriceBar, insertPriceBars, insertFundamentalFacts } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
 
 // D1/subrequest budget for the batched news-item inserts below (backfill,
@@ -461,6 +461,104 @@ export async function backfillHistoricalNews(config, db, { from, to, originalFro
   }
 
   return { inserted, processed, errors, truncated, nextFrom, windows: windowsDone, requests: fetcher.requestCount() };
+}
+
+// D1 batch-insert chunk size for backfillHistoricalPriceBars below, same
+// one-subrequest-per-db.batch()-call reasoning as FUNDAMENTALS_INSERT_CHUNK_SIZE.
+// A year of daily bars is only ~252 rows per ticker, so even the full
+// 3-ticker watchlist over a year (~750 rows) fits in a handful of chunks at
+// this size, comfortably inside one Worker invocation -- unlike the news
+// backfill, this never needs continuation/parts (see fetchHistoricalBars's
+// own header: one HTTP request per ticker for the whole range, not a
+// per-request article-style cap to walk around).
+const PRICE_BAR_INSERT_CHUNK_SIZE = 200;
+
+/**
+ * Historical price-bar backfill -- plan.md Next Steps step A (backtest audit
+ * finding 1: price_bars held only 5 days each for AAPL/TSLA and zero for
+ * MSFT, so a backtest window couldn't open positions outside a handful of
+ * days and the buy-and-hold baseline silently measured a ~5-day return).
+ * Fetches `tickers` (default config.watchlist) over an explicit [from, to]
+ * range via ingestion/sources/yfinance.js#fetchHistoricalBars and writes
+ * every returned bar through the batched storage/inputs_view.js#insertPriceBars
+ * -- the exact same point-in-time (ticker, date) upsert live ingestion uses,
+ * so a backfilled bar is indistinguishable from a live-ingested one to any
+ * asOf-gated read (getPriceBarsAsOf).
+ *
+ * UNLIKE backfillHistoricalNews, this is a SINGLE Worker invocation with no
+ * parts/continuation mechanism: fetchHistoricalBars makes exactly one HTTP
+ * request per ticker for the WHOLE range (see that function's own header),
+ * so even a full-year, 3-ticker backfill is 3 requests and (at 252
+ * trading days/ticker) under 1,000 rows -- well inside one invocation's
+ * CPU/subrequest budget once writes are chunked/batched (see
+ * PRICE_BAR_INSERT_CHUNK_SIZE above). If this project's watchlist or backfill
+ * range grows enough to change that assumption, revisit before relying on
+ * this staying single-shot.
+ *
+ * Same failure-isolation convention as every other ingestion path here: a
+ * per-ticker VendorError (network failure or a non-2xx such as yfinance's
+ * sustained 429 -- see yfinance.js's header; this path ignores the shared
+ * 429 cooldown, so it is never skipped by one) is logged and that ticker's
+ * bars are simply absent from the result, never aborts the rest of the
+ * tickers. Unlike the live path it does NOT swallow the outcome: the result
+ * carries `failedTickers` (ticker + message) and `tickersWithNoBars`, and the
+ * `ingest` Worker turns them into the job's detail or, when nothing at all
+ * was saved, a failed job (ingest-worker.js's `backfill_prices` branch).
+ * `inserted` counts bars WRITTEN (upserts), not net-new rows: rerunning a
+ * range that is already stored reports the same number again.
+ *
+ * `from`/`to` are required, same explicit-range-only convention
+ * as backfillHistoricalNews (no silent trailing-window default).
+ */
+export async function backfillHistoricalPriceBars(config, db, kv, { tickers, from, to, onProgress } = {}) {
+  if (!from || !to) {
+    throw new Error("backfillHistoricalPriceBars requires an explicit {from, to} range -- use ingestPriceBars for the live trailing-window path instead");
+  }
+
+  const resolvedTickers = tickers && tickers.length > 0 ? tickers : (config.watchlist ?? []).map((w) => w.ticker);
+
+  await onProgress?.({
+    phase: "fetching",
+    percent: 5,
+    detail: `Fetching yfinance daily bars for ${resolvedTickers.length} ticker${resolvedTickers.length === 1 ? "" : "s"}, ${from}..${to}`,
+    force: true,
+  });
+
+  const { bars, errors, requests } = await fetchHistoricalBars(config, { tickers: resolvedTickers, from, to }, { kv });
+  for (const { ticker, error } of errors) {
+    logSkippedSource("historical price backfill", "yfinance", error, { ticker });
+  }
+
+  await onProgress?.({
+    phase: "saving",
+    percent: 50,
+    detail: `Saving ${bars.length} bar${bars.length === 1 ? "" : "s"}`,
+    force: true,
+  });
+
+  let inserted = 0;
+  for (let i = 0; i < bars.length; i += PRICE_BAR_INSERT_CHUNK_SIZE) {
+    const chunk = bars.slice(i, i + PRICE_BAR_INSERT_CHUNK_SIZE);
+    await insertPriceBars(db, chunk);
+    inserted += chunk.length;
+  }
+
+  // A ticker with neither an error nor any returned bars is its own signal
+  // (an empty-but-200 response, e.g. a bad/delisted symbol or a range with no
+  // trading days) -- surfaced separately from `errors` so a caller/operator
+  // can tell "we don't know why this ticker has no bars" apart from a logged
+  // vendor failure.
+  const tickersWithNoBars = resolvedTickers.filter((ticker) => !bars.some((bar) => bar.ticker === ticker) && !errors.some((e) => e.ticker === ticker));
+
+  await onProgress?.({
+    phase: "saving",
+    percent: 100,
+    detail: `Saved ${inserted} bar${inserted === 1 ? "" : "s"} across ${resolvedTickers.length} ticker${resolvedTickers.length === 1 ? "" : "s"}`,
+    force: true,
+  });
+
+  const failedTickers = errors.map(({ ticker, error }) => ({ ticker, message: error.message }));
+  return { inserted, errors, failedTickers, tickers: resolvedTickers.length, requests, tickersWithNoBars };
 }
 
 /**

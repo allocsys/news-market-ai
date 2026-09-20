@@ -211,6 +211,10 @@ export function describeJob(job) {
     return `Running a backtest for ${tickers || "the full watchlist"}${range}.`;
   }
   const range = p.from && p.to ? ` from ${p.from} to ${p.to}` : "";
+  if (job?.type === "backfill_prices") {
+    const tickers = Array.isArray(p.tickers) && p.tickers.length > 0 ? ` for ${p.tickers.length > MAX_TICKERS_LISTED ? `${p.tickers.length} tickers` : p.tickers.join(", ")}` : " for the whole watchlist";
+    return `Backfilling historical price bars${tickers}${range}.`;
+  }
   return `Backfilling historical news${range}.`;
 }
 
@@ -223,7 +227,7 @@ export function describeJob(job) {
 export function renderActiveJobPanel(job) {
   if (!job || !job.id) return "";
   const pollUrl = jobPollUrl(job.id, job.type);
-  const label = job.type === "backtest" ? "Backtest" : "Backfill";
+  const label = job.type === "backtest" ? "Backtest" : job.type === "backfill_prices" ? "Price backfill" : "Backfill";
   const backLink = job.type === "backtest" ? "/dashboard/backtest" : "/dashboard/backfill";
 
   return `<section id="active-job" data-job-id="${escapeHtml(job.id)}">

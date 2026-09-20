@@ -28,7 +28,7 @@ import { renderPositionsView } from "./dashboard/views/positions.js";
 import { renderPipelineView } from "./dashboard/views/pipeline.js";
 import { renderLlmView, renderLlmCallView } from "./dashboard/views/llm.js";
 import { renderMoreView } from "./dashboard/views/more.js";
-import { renderBackfillView, renderBackfillConfirmPage } from "./dashboard/views/backfill.js";
+import { renderBackfillView, renderBackfillConfirmPage, renderPriceBackfillConfirmPage } from "./dashboard/views/backfill.js";
 import { renderBacktestView, renderBacktestConfirmPage } from "./dashboard/views/backtest.js";
 import { renderEnvSelector } from "./dashboard/views/env_selector.js";
 import { parseDashboardParams, parseLlmParams, parseEnvParam, envSuffix, errorState, ENV_SECTIONS } from "./dashboard/helpers.js";
@@ -113,12 +113,12 @@ async function activeJobPanelFor(env, type) {
  * itself (the existing "Recent runs" list on /dashboard/backtest), not a
  * job row -- see api.js#handleApiLatestJobRoute's own header.
  */
-async function lastFinishedBackfillJob(env) {
+async function lastFinishedBackfillJob(env, type = "backfill") {
   try {
-    const { job } = await fetchBackendJson(env, "/api/jobs/latest?type=backfill");
+    const { job } = await fetchBackendJson(env, `/api/jobs/latest?type=${encodeURIComponent(type)}`);
     return job;
   } catch (err) {
-    console.warn("dashboard last-finished-backfill lookup failed (non-fatal)", { message: err.message });
+    console.warn("dashboard last-finished-backfill lookup failed (non-fatal)", { type, message: err.message });
     return null;
   }
 }
@@ -353,18 +353,26 @@ export default {
     if (pathname === "/dashboard/backtest") return renderSection(request, env, config, "backtest");
 
     // Pure UI, no backend data needed -- forms and their confirm pages.
-    if (pathname === "/dashboard/backfill" || pathname === "/dashboard/backtest/confirm" || pathname === "/dashboard/backfill/confirm" || pathname === "/dashboard/more") {
+    if (pathname === "/dashboard/backfill" || pathname === "/dashboard/backtest/confirm" || pathname === "/dashboard/backfill/confirm" || pathname === "/dashboard/backfill-prices/confirm" || pathname === "/dashboard/more") {
       const auth = await requireSession(request, config);
       if (auth.redirect === "__disabled__") return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
       if (auth.redirect) return redirect(auth.redirect);
 
       if (pathname === "/dashboard/backfill") {
-        const activePanel = await activeJobPanelFor(env, "backfill");
+        // The progress panel uses fixed element ids (status.js), so only ONE can be on the
+        // page: an in-flight news backfill wins, otherwise an in-flight price backfill.
+        const newsPanel = await activeJobPanelFor(env, "backfill");
+        const activePanel = newsPanel || (await activeJobPanelFor(env, "backfill_prices"));
         const lastRun = await lastFinishedBackfillJob(env);
-        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView({ lastRun }) }));
+        const lastPriceRun = await lastFinishedBackfillJob(env, "backfill_prices");
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView({ lastRun, lastPriceRun }) }));
       }
       if (pathname === "/dashboard/backfill/confirm") {
         const bodyHtml = renderBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to") });
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
+      }
+      if (pathname === "/dashboard/backfill-prices/confirm") {
+        const bodyHtml = renderPriceBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to") });
         return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
       }
       if (pathname === "/dashboard/backtest/confirm") {
@@ -417,6 +425,37 @@ export default {
         formSubmitAccepted: ({ from, to }, body) => ({
           title: "Backfill",
           detail: `Backfilling historical news from ${from} to ${to}.`,
+          backLink: "/dashboard/backfill",
+          backLabel: "Backfill",
+          jobId: body.id,
+        }),
+      });
+    }
+
+    // Price-bar backfill (plan.md Next Steps step A). The form on
+    // /dashboard/backfill reaches this via /dashboard/backfill-prices/confirm;
+    // a scripted POST with the same session cookie works too. Same
+    // handleTriggerRoute shape as /backfill and /backtest/run: session
+    // check here, forward to backend's POST /backfill-prices, which trusts
+    // any caller reaching it the same way (only this Worker can, via the
+    // service binding).
+    if (pathname === "/backfill-prices" && request.method === "POST") {
+      return handleTriggerRoute(request, env, config, {
+        backendPath: "/backfill-prices",
+        buildQuery: (searchParams, fromForm) => {
+          const from = searchParams.get("from") ?? fromForm("from");
+          const to = searchParams.get("to") ?? fromForm("to");
+          const tickers = searchParams.get("tickers") ?? fromForm("tickers");
+          if (!isPlausibleDateString(from) || !isPlausibleDateString(to)) {
+            return { error: "from/to query params are required, as YYYY-MM-DD" };
+          }
+          const params = { from, to };
+          if (tickers) params.tickers = tickers;
+          return { params, activeSection: "backfill" };
+        },
+        formSubmitAccepted: ({ from, to }, body) => ({
+          title: "Price backfill",
+          detail: `Backfilling historical price bars from ${from} to ${to}.`,
           backLink: "/dashboard/backfill",
           backLabel: "Backfill",
           jobId: body.id,

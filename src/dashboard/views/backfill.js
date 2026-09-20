@@ -25,7 +25,7 @@ function formatUtc(iso) {
  * so it can never drift out of sync with what the progress panel itself
  * showed while the job was running.
  */
-function renderLastRunPanel(job) {
+function renderLastRunPanel(job, { title = "Last run" } = {}) {
   if (!job || !job.id) return "";
   const p = job.params || {};
   const range = p.from && p.to ? `${p.from} to ${p.to}` : "unknown range";
@@ -33,7 +33,7 @@ function renderLastRunPanel(job) {
   const failed = job.status === "failed";
 
   return `<div class="panel" style="margin-bottom:1.5rem">
-    <div class="panel-header"><span class="panel-title">Last run</span></div>
+    <div class="panel-header"><span class="panel-title">${escapeHtml(title)}</span></div>
     <div class="panel-body">
       <p class="note" style="${failed ? "color: var(--color-danger-text); font-weight: 600;" : ""}">${failed ? "Failed" : "Complete"} &mdash; ${escapeHtml(range)}, finished ${escapeHtml(finished)}.</p>
       <p class="note">${escapeHtml(job.detail || (failed ? job.error || "unknown error" : ""))}</p>
@@ -62,7 +62,28 @@ export function backfillTriggerForm() {
   </form>`;
 }
 
-export function renderBackfillView({ lastRun } = {}) {
+/** Form for the historical price-bar backfill: a range (default: the last year), whole watchlist. GET to the confirm page, like the news form. */
+export function priceBackfillTriggerForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+  return `<form method="get" action="/dashboard/backfill-prices/confirm" class="filter-bar">
+    ${rangePresetButtons("priceBackfillFrom", "priceBackfillTo")}
+    <div class="filter-group">
+      <span class="filter-label">From</span>
+      <input class="filter-form ${DATE_INPUT_STYLE}" id="priceBackfillFrom" type="date" name="from" value="${yearAgo}">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">To</span>
+      <input class="filter-form ${DATE_INPUT_STYLE}" id="priceBackfillTo" type="date" name="to" value="${today}">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">&nbsp;</span>
+      <button type="submit" class="btn">Review &amp; run price backfill</button>
+    </div>
+  </form>`;
+}
+
+export function renderBackfillView({ lastRun, lastPriceRun } = {}) {
   return `<section id="backfill">
     <h2>Historical news backfill</h2>
     <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. rss/scrape sources can't be backfilled this way (see ingestion/ingest.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
@@ -75,6 +96,37 @@ export function renderBackfillView({ lastRun } = {}) {
         ${backfillTriggerForm()}
       </div>
     </div>
+
+    <h2 style="margin-top:2rem">Historical price bars</h2>
+    <p class="note">Triggers <code>POST /backfill-prices</code> -- one Yahoo Finance daily-bars request per watchlist ticker for the chosen range, saved the same way live ingestion saves bars. Backtests need this: with no price history a backtest can't open positions outside the last few days. Yahoo has been answering 429 to every ticker from Cloudflare Workers, so this can fail; a failed job says which tickers and why.</p>
+
+    ${renderLastRunPanel(lastPriceRun, { title: "Last price backfill" })}
+
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Price backfill parameters</span></div>
+      <div class="panel-body">
+        ${priceBackfillTriggerForm()}
+      </div>
+    </div>
+  </section>`;
+}
+
+export function renderPriceBackfillConfirmPage({ from, to }) {
+  return `<section id="price-backfill-confirm">
+    <h2>Confirm historical price backfill</h2>
+    <p class="note">You are about to backfill daily price bars for the whole watchlist with the following range:</p>
+    <div class="llm-answer-body" style="max-width:none; margin-bottom: 1.5rem;">
+      <div class="llm-block"><span class="llm-agent">From</span> <span class="num">${escapeHtml(from)}</span></div>
+      <div class="llm-block"><span class="llm-agent">To</span> <span class="num">${escapeHtml(to)}</span></div>
+    </div>
+    <p class="note">This makes one request per watchlist ticker to Yahoo Finance's unofficial chart API. It ignores the live ingest's 429 cooldown; if Yahoo answers 429 the job fails and names the tickers. No paid quota is used.</p>
+    <form method="post" action="/backfill-prices" class="filter-bar">
+      <input type="hidden" name="from" value="${escapeHtml(from)}">
+      <input type="hidden" name="to" value="${escapeHtml(to)}">
+      <div class="filter-group">
+        <button type="submit" class="btn">Confirm and run price backfill</button>
+      </div>
+    </form>
   </section>`;
 }
 
