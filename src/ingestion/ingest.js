@@ -308,18 +308,45 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
   const totalItems = items.length;
   await onProgress?.({ phase: "saving", percent: 50, done: 0, total: totalItems, detail: totalItems > 0 ? `Saving ${totalItems} article${totalItems === 1 ? "" : "s"}` : "No articles returned for this range", force: true });
 
+  // UPDATE (2026-09-20): chunked plus pre-filtered plus batched, replacing
+  // the old one-insertNewsItem-call-per-article loop. That loop did 2-3
+  // unbatched D1 .run()s per article -- 733 articles times roughly 3
+  // statements blew Cloudflare's per-invocation subrequest cap partway
+  // through a real backfill run (live incident: job
+  // backfill-1789920460728-4lahlf, crashed mid-saving at 325/733 on 'Too
+  // many API requests by single Worker invocation' -- see
+  // NEWS_ITEM_INSERT_CHUNK_SIZE's own comment). filterUnstoredItems first,
+  // then insertNewsItems as one db.batch() per chunk, mirrors
+  // ingestFundamentals' own fix for the identical fundamentals-side
+  // failure. `inserted` now means net-new articles (insertedIds.size), not
+  // articles processed -- a real improvement, not just a rename: filtering
+  // already-stored ids first means a retried/overlapping backfill can now
+  // report zero inserted accurately instead of re-claiming credit for
+  // articles a previous run already saved. `processed` keeps the old
+  // how-far-through-the-fetched-set-are-we meaning for progress-percent
+  // math, since that needs to advance even through chunks that turn out to
+  // be all duplicates.
+  let processed = 0;
   let inserted = 0;
-  for (const item of items) {
-    await insertNewsItem(db, item);
-    inserted++;
-    // Every 25th article, not every one: the reporter throttles writes
-    // anyway, but this also keeps the per-article loop free of extra awaits.
-    if (inserted % 25 === 0) {
-      await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * inserted) / totalItems), done: inserted, total: totalItems, detail: `Saved ${inserted}/${totalItems} articles` });
+  for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
+    const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
+    try {
+      const toInsert = await filterUnstoredItems(db, chunk);
+      if (toInsert.length > 0) {
+        const { insertedIds } = await insertNewsItems(db, toInsert);
+        inserted += insertedIds.size;
+      }
+    } catch (err) {
+      // Same Failure Isolation spirit as ingestFundamentals' own chunk
+      // try/catch: a malformed chunk (e.g. a D1 constraint violation) loses
+      // only that chunk's articles, not the whole backfill's remaining work.
+      console.error("historical news backfill -- skipping one chunk of article inserts", { chunkStart: i, chunkSize: chunk.length, message: err.message });
     }
+    processed += chunk.length;
+    await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * processed) / totalItems), done: processed, total: totalItems, detail: `Saved ${processed}/${totalItems} articles` });
   }
 
-  return { inserted, errors };
+  return { inserted, processed, errors };
 }
 
 /**
