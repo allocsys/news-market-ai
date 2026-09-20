@@ -158,14 +158,13 @@ WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
 # not touching that function).
 
 # Secrets -- set via `wrangler secret put <NAME>`, never committed:
-#   FINNHUB_API_KEY = STILL held here too (not just on wrangler.ingest.toml)
-#     -- POST /backfill's JOBS `backfill` job (src/index.js's queue(),
-#     plan.md Step 3) calls graph/pipeline.js#backfillHistoricalNews
-#     directly, which hits Finnhub itself. This is a known, deliberate
-#     partial exception to plan.md Step 5's "backend no longer holds
-#     vendor keys" goal -- see that step's own plan.md section for why
-#     moving backfill's consumer isn't in scope here (JOBS can only have
-#     one consumer Worker; splitting it would be a larger redesign).
+#   FINNHUB_API_KEY -- NO LONGER held here (Step 5 follow-up, 2026-09-20):
+#     backfill's actual work moved to the `ingest` Worker's new BACKFILL
+#     consumer (see that queue's own comment above), so nothing in this
+#     Worker calls Finnhub anymore. A copy set by an earlier deploy still
+#     exists on Cloudflare until deleted (`wrangler secret delete
+#     FINNHUB_API_KEY`) -- same dead-weight-until-cleaned-up situation as
+#     GEMINI_API_KEYS below, tracked for plan.md Step 7's secrets audit.
 #   GEMINI_API_KEYS -- NO LONGER held here (moved to wrangler.llm.toml,
 #     plan.md Step 6). deploy.yml no longer pushes it to this Worker, but a
 #     copy set by an earlier deploy still exists on Cloudflare until it is
