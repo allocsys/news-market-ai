@@ -674,10 +674,30 @@ end, and live produced no analysis at all until the ingest enqueue fix (see
 2. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
    a real ANALYZE crash-and-retry (Step 4), ops/day against real Observability
    numbers (Step 4), and the full ingest → analyze → llm flow producing decisions.
-3. **Step 5's gap:** `backend` still holds `FINNHUB_API_KEY` for `backfill`.
-4. **Loose ends:** a stray unrelated Worker
-   `restless-manager-6789` on the account; dashboard UI/UX not screenshot-reviewed.
-5. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
+3. **Step 5's gap: CLOSED (2026-09-20).** `backfill`'s Finnhub calls (and the
+   `FINNHUB_API_KEY` they needed) moved from `backend` to `ingest`, on a new
+   `BACKFILL` queue (renamed from `JOBS`) -- `backend` now holds no vendor
+   key and has no `queue()` export.
+4. **`restless-manager-6789` investigated (2026-09-20), not this repo's:**
+   created 2026-07-10 (before this project existed), last modified 2026-07-13,
+   deployed via a direct API call rather than `wrangler`/CI. Holds its own
+   `ADMIN_SECRET`/`BOT_TOKEN` secrets and its own D1/KV -- left alone;
+   deleting it (if warranted) is the owner's call, not something this repo's
+   tooling should touch.
+5. **Loose end:** dashboard UI/UX not screenshot-reviewed.
+6. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
+7. **New, found while verifying the ingest-enqueue fix live (2026-09-20):**
+   `price_bars` (INPUTS_DB) holds only 5 rows, all AAPL, none newer than
+   09-18 -- `yfinance chart API returned 429` for AAPL/MSFT/TSLA repeatedly in
+   ingest logs. This is now the binding constraint on live trading: of the
+   first 10 post-fix `trade_decisions`, 7 are `skipped_no_price_data` and the
+   other 3 `rejected` -- none opened, because there is no current price bar
+   to size against. The ingest-enqueue fix (see "Live pipeline produced no
+   analysis" above) unblocked ANALYZE messages from reaching the LLM, but a
+   fresh price bar is a separate, still-unmet precondition for a position to
+   ever open. Not yet investigated: whether this is yfinance rate-limiting
+   this account specifically, a cooldown misconfiguration, or an upstream
+   yfinance change.
 
 **M1 defect found while starting M2 (2026-09-19), fixed in the first M2 PR:**
 `commitThesis`'s close-old statement did not exclude the row the same batch
