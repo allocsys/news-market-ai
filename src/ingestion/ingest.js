@@ -75,6 +75,11 @@ import { VendorError } from "../shared/errors.js";
 // backfill-1789920460728-4lahlf, 2026-09-20).
 const NEWS_ITEM_INSERT_CHUNK_SIZE = 100;
 
+// Window size backfillHistoricalNews falls back to when the config carries no
+// usable finnhubBackfillWindowDays (loadConfig always sets it; this is for the
+// bare config objects tests and one-off scripts pass). Same value as config.js.
+const DEFAULT_BACKFILL_WINDOW_DAYS = 5;
+
 /**
  * Pre-filters `items` down to ones NOT already in news_items, via one
  * batched `SELECT id ... WHERE id IN (...)` per call (the caller is
