@@ -81,6 +81,22 @@ function jsonResponse(body, { status = 200 } = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+/**
+ * A real calendar date in YYYY-MM-DD form. isPlausibleDateString accepts
+ * "2024-02-30"; POST /backfill leaves that to Finnhub, but a price backfill
+ * turns from/to into unix timestamps, so a bad date would only fail later,
+ * inside the job. Used by POST /backfill-prices.
+ */
+function isRealDate(value) {
+  if (!isPlausibleDateString(value)) return false;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+// POST /backfill-prices ticker list: Yahoo-style symbols (BRK-B, ^GSPC, EURUSD=X), bounded.
+const MAX_PRICE_BACKFILL_TICKERS = 10;
+const PRICE_TICKER_PATTERN = /^[A-Z0-9^.=-]{1,12}$/;
+
 function newJobId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -175,8 +191,23 @@ export default {
       if (!isPlausibleDateString(from) || !isPlausibleDateString(to)) {
         return jsonResponse({ error: "from/to query params are required, as YYYY-MM-DD" }, { status: 400 });
       }
+      if (!isRealDate(from) || !isRealDate(to)) {
+        return jsonResponse({ error: "from/to must be real calendar dates (YYYY-MM-DD)" }, { status: 400 });
+      }
+      if (from > to) {
+        return jsonResponse({ error: "from must not be after to" }, { status: 400 });
+      }
+
+      // Omitted or empty means the whole watchlist. Otherwise every entry must look like a symbol,
+      // so an arbitrary string never reaches the Yahoo URL or the job row.
       const tickersParam = url.searchParams.get("tickers");
-      const tickers = tickersParam ? tickersParam.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+      let tickers;
+      if (tickersParam) {
+        tickers = [...new Set(tickersParam.split(",").map((t) => t.trim().toUpperCase()).filter(Boolean))];
+        if (tickers.length === 0 || tickers.length > MAX_PRICE_BACKFILL_TICKERS || tickers.some((t) => !PRICE_TICKER_PATTERN.test(t))) {
+          return jsonResponse({ error: `tickers must be 1-${MAX_PRICE_BACKFILL_TICKERS} comma-separated symbols (letters, digits, . - ^ =)` }, { status: 400 });
+        }
+      }
 
       const id = newJobId("backfill-prices");
       await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill_prices", params: { from, to, tickers } }).queued();
