@@ -19,16 +19,61 @@ import { fetchLatest as fetchFinnhubLatest } from "../src/ingestion/sources/finn
 import { VendorError } from "../src/shared/errors.js";
 
 /**
- * Minimal in-memory fake of storage/d1.js#insertNewsItem's three tables
+ * Minimal in-memory fake of storage/inputs_view.js's news tables
  * (news_items, news_item_revisions, news_item_tickers) -- FakeDb above only
  * understands the price_bars/fundamental_facts INSERT shapes ingestPriceBars/
- * ingestFundamentals issue, so backfillHistoricalNews (which calls
- * insertNewsItem) needs its own fake rather than overloading that one.
+ * ingestFundamentals issue, so backfillHistoricalNews (which now calls
+ * filterUnstoredItems + insertNewsItems, not the single-row insertNewsItem)
+ * needs its own fake rather than overloading that one.
+ *
+ * UPDATE (2026-09-20): now respects ON CONFLICT DO NOTHING (tracks seen ids/
+ * ticker-pairs and reports meta.changes: 0 on a repeat) and implements
+ * .all()/.batch(), same shape as helpers/sqlite_d1.js's SqliteD1 -- needed
+ * once backfillHistoricalNews started pre-filtering already-stored ids via a
+ * SELECT ... WHERE id IN (...) and inserting via one db.batch() per chunk
+ * instead of a single unbatched INSERT .run() per statement. batchCalls
+ * records each db.batch() call's statement count, mirroring FakeDb's own
+ * field, so a test here could assert the batching fix the same way
+ * ingestFundamentals' tests already do, even though none currently does.
  */
 class FakeNewsDb {
   constructor() {
     this.newsItems = [];
+    this.newsItemIds = new Set();
     this.tickers = [];
+    this.tickerKeys = new Set();
+    this.batchCalls = [];
+  }
+
+  _execute(sql, args) {
+    if (/^\s*SELECT id FROM news_items/.test(sql)) {
+      const results = args.filter((id) => this.newsItemIds.has(id)).map((id) => ({ id }));
+      return { results, success: true, meta: { changes: 0 } };
+    }
+    if (/INSERT INTO news_items/.test(sql)) {
+      const [id, source, url, firstPublishedAt] = args;
+      const isNew = !this.newsItemIds.has(id);
+      if (isNew) {
+        this.newsItemIds.add(id);
+        this.newsItems.push({ id, source, url, firstPublishedAt });
+      }
+      return { results: [], success: true, meta: { changes: isNew ? 1 : 0 } };
+    }
+    if (/INSERT INTO news_item_revisions/.test(sql)) {
+      // exercised by insertNewsItem(s) but not asserted on here -- news_items/news_item_tickers are the signal this test suite cares about
+      return { results: [], success: true, meta: { changes: 1 } };
+    }
+    if (/INSERT INTO news_item_tickers/.test(sql)) {
+      const [newsItemId, ticker] = args;
+      const key = `${newsItemId}:${ticker}`;
+      const isNew = !this.tickerKeys.has(key);
+      if (isNew) {
+        this.tickerKeys.add(key);
+        this.tickers.push({ newsItemId, ticker });
+      }
+      return { results: [], success: true, meta: { changes: isNew ? 1 : 0 } };
+    }
+    throw new Error(`FakeNewsDb: unsupported query: ${sql}`);
   }
 
   prepare(sql) {
@@ -37,21 +82,24 @@ class FakeNewsDb {
       bind(...args) {
         return {
           async run() {
-            if (/INSERT INTO news_items/.test(sql)) {
-              const [id, source, url, firstPublishedAt] = args;
-              db.newsItems.push({ id, source, url, firstPublishedAt });
-            } else if (/INSERT INTO news_item_revisions/.test(sql)) {
-              // exercised by insertNewsItem but not asserted on here -- news_items is the signal this test suite cares about
-            } else if (/INSERT INTO news_item_tickers/.test(sql)) {
-              const [newsItemId, ticker] = args;
-              db.tickers.push({ newsItemId, ticker });
-            } else {
-              throw new Error(`FakeNewsDb: unsupported run() query: ${sql}`);
-            }
+            return db._execute(sql, args);
           },
+          async all() {
+            return db._execute(sql, args);
+          },
+          // Not part of the real D1 client API -- lets a bound statement be
+          // passed straight into db.batch() below, same convention
+          // helpers/sqlite_d1.js's BoundStatement uses.
+          _execute: () => db._execute(sql, args),
         };
       },
     };
+  }
+
+  /** Mirrors SqliteD1#batch: sequential execution, one result per statement, in order. */
+  async batch(statements) {
+    this.batchCalls.push(statements.length);
+    return statements.map((stmt) => stmt._execute());
   }
 }
 
