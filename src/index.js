@@ -235,28 +235,20 @@ export default {
 
     return new Response("news-market-ai backend worker is running (private -- see wrangler.toml). Architecture in plan.md.", { status: 200 });
   },
-  // TRANSITIONAL no-op queue() (added 2026-09-20, hours after the Step 5
-  // follow-up above removed the real one): Cloudflare rejects uploading a
-  // script version with no queue() export while the WORKER STILL HAS an
-  // active queue consumer trigger attached from its last successful deploy
-  // ("Queue handler is missing", code 11001) -- this Worker's last deploy
-  // still had the JOBS consumer live, and wrangler.toml no longer
-  // declaring that `[[queues.consumers]]` block isn't enough BY ITSELF to
-  // detach it in the same deploy that also drops the handler; the trigger
-  // removal and the handler removal can't both happen in one step. This
-  // handler only exists to get this one deploy accepted so wrangler's
-  // trigger reconciliation (driven by wrangler.toml, which has zero
-  // `[[queues.consumers]]` blocks) can actually detach JOBS. It does
-  // nothing but ack -- no message should ever reach it, since nothing
-  // produces onto JOBS anymore either (renamed BACKFILL, produced by this
-  // Worker, consumed by `ingest`). REMOVE in the very next deploy, once
-  // `cf_workers_get_worker news-market-ai` (or the dashboard) confirms no
-  // queue trigger remains on this script -- do not let this linger past
-  // that check.
-  async queue(batch) {
-    console.error("backend queue() invoked unexpectedly -- this Worker has no real consumer, see the transitional handler's own comment", { messageCount: batch.messages.length });
-    for (const message of batch.messages) message.ack();
-  },
+  // No `queue()` export: this Worker has no queue consumers (Step 5
+  // follow-up, 2026-09-20). It briefly needed a TRANSITIONAL no-op handler
+  // here for one deploy (see git history / plan.md) -- Cloudflare rejects a
+  // script upload with no queue() export while a queue consumer trigger is
+  // still attached from the Worker's last successful deploy ("Queue
+  // handler is missing", code 11001), and this Worker's last deploy before
+  // that still had the old JOBS consumer live. That deploy (#328) went
+  // through clean, and the observability log shows zero queue-eventType
+  // invocations on this Worker since -- confirming JOBS's trigger actually
+  // detached, not just that no messages happened to arrive (nothing
+  // produces onto JOBS anymore either way, so silence alone wouldn't have
+  // proven it). The transitional handler and its test
+  // (test/index_queue_transitional.test.js) are removed in this same
+  // commit.
 
   async scheduled(event, env) {
     const config = loadConfig(env);
