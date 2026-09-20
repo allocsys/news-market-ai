@@ -25,6 +25,21 @@
 // see gdelt.js's header for the live silent-scheduled-run-death incident
 // that made a timeout on every ingestion fetch (not just this one) a hard
 // requirement.
+// UPDATE (2026-09-2x, plan.md Next Steps step A -- backtest audit finding
+// 1, "no price history"): the 429s this file already isolates and cools
+// down per-ticker turned out to be SUSTAINED, not occasional -- Workers
+// Observability shows MSFT hitting `yfinance chart API returned 429` on
+// effectively every `*/15` tick since ingestion started (same "possible
+// shared/rate-limited egress IP" suspicion already documented for GDELT
+// elsewhere in this repo), which is the actual reason price_bars has zero
+// MSFT rows: it is not a code bug, every MSFT request this adapter has
+// made has been rate-limited. AAPL/TSLA got through often enough to have
+// 5 bars each. This is a real, currently-unresolved vendor-access risk,
+// not something a historical-range backfill call below can route around
+// -- a backfill attempt can and likely will hit the same 429s, just with
+// (at most) one request per ticker instead of one per cron tick, so the
+// per-ticker failure isolation and cross-invocation cooldown below apply
+// to it exactly as they do to the live path.
 //
 // Every returned bar is run through market_data_validator.js#validatePriceBar
 // before being handed back, matching gdelt.js's validate-before-return
@@ -45,16 +60,128 @@ function timestampToDate(unixSeconds) {
 }
 
 /**
+ * Fetches and parses ONE ticker's chart data, with `extraParams` (e.g.
+ * `{ range: "5d" }` for the live trailing window, or `{ period1, period2 }`
+ * for an explicit historical range -- see fetchDailyBars/fetchHistoricalBars
+ * below, the only two callers) appended to the query string alongside
+ * `interval`. Factored out of what used to be fetchDailyBars's own per-ticker
+ * loop body (2026-09-2x, plan.md Next Steps step A) so fetchHistoricalBars
+ * can reuse the EXACT SAME cooldown-check / throttle / retry / parse /
+ * validate behavior instead of a second, drifting copy of it -- the two
+ * request shapes differ ONLY in which Yahoo query params they ask for, never
+ * in how a response or a vendor failure is handled. Throws a VendorError on
+ * any failure (including "already cooling down" and a non-2xx response,
+ * recording a fresh cooldown itself on a 429) -- callers keep their own
+ * per-ticker try/catch around this call, same isolation shape as before.
+ */
+async function fetchTickerChart(config, ticker, extraParams, { kv, throttle } = {}) {
+  // A prior call already got a 429 for this ticker and recorded a
+  // cross-invocation cooldown (see below) -- skip the attempt entirely
+  // rather than re-running a fetch (and, before this fix, a whole
+  // exponential-backoff retry ladder) already known to be blocked. This
+  // is what stops a sustained rate-limit from re-costing wall time on
+  // every single 15-minute cron tick (see config.js#yfinanceCooldownSeconds).
+  if (await isVendorCoolingDown(kv, "yfinance", ticker)) {
+    throw new VendorError("yfinance", `yfinance cooling down for ${ticker} after a recent 429 -- skipping until cooldown expires`, { status: 429, transient: false });
+  }
+
+  await throttle?.wait();
+
+  const qs = new URLSearchParams({ interval: config.yfinanceInterval, ...extraParams }).toString();
+  const url = `${config.yfinanceApiBase}/${encodeURIComponent(ticker)}?${qs}`;
+
+  // The fetch + status check (not JSON parsing/validation below) is
+  // what withRetry wraps -- those are the failure modes retry.js's
+  // default shouldRetry considers worth retrying (network error, 5xx),
+  // via the transient: true VendorError already thrown here. A
+  // malformed/unexpected payload is a permanent failure, not a vendor
+  // hiccup -- retrying it would just reproduce the same bad response.
+  //
+  // 429 is deliberately EXCLUDED from shouldRetry here (unlike the
+  // shared default, which retries any transient: true failure) -- live
+  // traffic showed yfinance's 429 is a sustained block lasting hours (see
+  // this file's header for how sustained), not a short burst retry.js's
+  // backoff is meant to ride out. Retrying it in-process just burns
+  // 500ms/1000ms/... of wall time per attempt for a call already known
+  // to fail; failing fast here and recording a cooldown below (so the
+  // NEXT call, live or backfill, skips it, see above) is what actually
+  // stops the wall-time/CPU blowup, not a bigger backoff ladder.
+  const response = await withRetry(
+    async () => {
+      let res;
+      try {
+        res = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
+      } catch (err) {
+        throw new VendorError("yfinance", `network failure fetching yfinance chart API: ${err.message}`, { transient: true });
+      }
+
+      if (!res.ok) {
+        if (res.status === 429) {
+          await setVendorCooldown(kv, "yfinance", ticker, config.yfinanceCooldownSeconds);
+        }
+        throw new VendorError("yfinance", `yfinance chart API returned ${res.status} for ${ticker}`, {
+          status: res.status,
+          transient: res.status >= 500, // 429 handled separately, see comment above
+        });
+      }
+
+      return res;
+    },
+    { maxAttempts: config.retryMaxAttempts, baseDelayMs: config.retryBaseDelayMs },
+  );
+
+  const data = await response.json();
+  const result = data?.chart?.result?.[0];
+  const chartError = data?.chart?.error;
+  if (chartError) {
+    throw new VendorError("yfinance", `yfinance chart API returned an error payload for ${ticker}: ${JSON.stringify(chartError)}`);
+  }
+  if (!result) {
+    throw new VendorError("yfinance", `yfinance chart API returned no result for ${ticker} -- unexpected response shape`);
+  }
+
+  const timestamps = result.timestamp ?? [];
+  const quote = result.indicators?.quote?.[0] ?? {};
+
+  const bars = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    // Yahoo returns null for fields it couldn't compute (e.g. a halted
+    // session) -- skip rather than insert a bar with fabricated numbers.
+    if (quote.open?.[i] == null || quote.high?.[i] == null || quote.low?.[i] == null || quote.close?.[i] == null || quote.volume?.[i] == null) {
+      continue;
+    }
+
+    const bar = PriceBar.parse({
+      ticker,
+      date: timestampToDate(timestamps[i]),
+      open: quote.open[i],
+      high: quote.high[i],
+      low: quote.low[i],
+      close: quote.close[i],
+      volume: quote.volume[i],
+      source: "yfinance",
+    });
+
+    validatePriceBar(bar, { source: "yfinance" });
+    bars.push(bar);
+  }
+
+  return bars;
+}
+
+/**
  * Fetches recent daily bars for each ticker in `tickers` (defaults to
  * config.watchlist's tickers). One request per ticker, since the chart
- * endpoint is single-symbol only -- there is no batch mode.
+ * endpoint is single-symbol only -- there is no batch mode. Live trailing-
+ * window path (config.yfinanceRange, 5d default) -- see fetchHistoricalBars
+ * below for an explicit historical range instead.
  */
 export async function fetchDailyBars(config, { tickers = config.watchlist.map((w) => w.ticker) } = {}, { kv } = {}) {
   const bars = [];
   // Per-ticker failures (rate limit, timeout, malformed payload) are
   // isolated below -- collected here and returned alongside `bars` rather
   // than thrown, so one bad ticker never blocks the others in the same
-  // run. See this function's own per-ticker try/catch for why.
+  // run. See fetchTickerChart's own per-ticker try/catch for why.
   const errors = [];
   // No documented Yahoo rate limit (this is an unofficial endpoint to begin
   // with, see this file's header) -- config.yfinanceMinRequestIntervalMs
@@ -64,94 +191,8 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
   const throttle = createThrottle({ minIntervalMs: config.yfinanceMinRequestIntervalMs ?? 0 });
 
   for (const ticker of tickers) {
-    // A prior call already got a 429 for this ticker and recorded a
-    // cross-invocation cooldown (see below) -- skip the attempt entirely
-    // rather than re-running a fetch (and, before this fix, a whole
-    // exponential-backoff retry ladder) already known to be blocked. This
-    // is what stops a sustained rate-limit from re-costing wall time on
-    // every single 15-minute cron tick (see config.js#yfinanceCooldownSeconds).
-    if (await isVendorCoolingDown(kv, "yfinance", ticker)) {
-      errors.push({
-        ticker,
-        error: new VendorError("yfinance", `yfinance cooling down for ${ticker} after a recent 429 -- skipping until cooldown expires`, { status: 429, transient: false }),
-      });
-      continue;
-    }
-
-    await throttle.wait();
     try {
-      const url = `${config.yfinanceApiBase}/${encodeURIComponent(ticker)}?interval=${config.yfinanceInterval}&range=${config.yfinanceRange}`;
-
-      // The fetch + status check (not JSON parsing/validation below) is
-      // what withRetry wraps -- those are the failure modes retry.js's
-      // default shouldRetry considers worth retrying (network error, 5xx),
-      // via the transient: true VendorError already thrown here. A
-      // malformed/unexpected payload is a permanent failure, not a vendor
-      // hiccup -- retrying it would just reproduce the same bad response.
-      //
-      // 429 is deliberately EXCLUDED from shouldRetry here (unlike the
-      // shared default, which retries any transient: true failure) -- live
-      // traffic showed yfinance's 429 is a sustained block lasting hours,
-      // not a short burst retry.js's backoff is meant to ride out. Retrying
-      // it in-process just burns 500ms/1000ms/... of wall time per attempt
-      // for a call already known to fail; failing fast here and recording a
-      // cooldown below (so the NEXT invocation skips it, see above) is what
-      // actually stops the wall-time/CPU blowup, not a bigger backoff ladder.
-      const response = await withRetry(
-        async () => {
-          let res;
-          try {
-            res = await fetchWithTimeout(url, { timeoutMs: config.fetchTimeoutMs });
-          } catch (err) {
-            throw new VendorError("yfinance", `network failure fetching yfinance chart API: ${err.message}`, { transient: true });
-          }
-
-          if (!res.ok) {
-            throw new VendorError("yfinance", `yfinance chart API returned ${res.status} for ${ticker}`, {
-              status: res.status,
-              transient: res.status >= 500, // 429 handled separately, see comment above
-            });
-          }
-
-          return res;
-        },
-        { maxAttempts: config.retryMaxAttempts, baseDelayMs: config.retryBaseDelayMs },
-      );
-
-      const data = await response.json();
-      const result = data?.chart?.result?.[0];
-      const chartError = data?.chart?.error;
-      if (chartError) {
-        throw new VendorError("yfinance", `yfinance chart API returned an error payload for ${ticker}: ${JSON.stringify(chartError)}`);
-      }
-      if (!result) {
-        throw new VendorError("yfinance", `yfinance chart API returned no result for ${ticker} -- unexpected response shape`);
-      }
-
-      const timestamps = result.timestamp ?? [];
-      const quote = result.indicators?.quote?.[0] ?? {};
-
-      for (let i = 0; i < timestamps.length; i++) {
-        // Yahoo returns null for fields it couldn't compute (e.g. a halted
-        // session) -- skip rather than insert a bar with fabricated numbers.
-        if (quote.open?.[i] == null || quote.high?.[i] == null || quote.low?.[i] == null || quote.close?.[i] == null || quote.volume?.[i] == null) {
-          continue;
-        }
-
-        const bar = PriceBar.parse({
-          ticker,
-          date: timestampToDate(timestamps[i]),
-          open: quote.open[i],
-          high: quote.high[i],
-          low: quote.low[i],
-          close: quote.close[i],
-          volume: quote.volume[i],
-          source: "yfinance",
-        });
-
-        validatePriceBar(bar, { source: "yfinance" });
-        bars.push(bar);
-      }
+      bars.push(...(await fetchTickerChart(config, ticker, { range: config.yfinanceRange }, { kv, throttle })));
     } catch (err) {
       // A single ticker's failure (rate limit, timeout, bad payload) does
       // NOT abort the rest of the watchlist -- see header comment on this
@@ -159,9 +200,6 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
       // real bug, e.g. a schema/validation throw) still propagates, same
       // convention as pipeline.js's collectNewsItems.
       if (err instanceof VendorError) {
-        if (err.status === 429) {
-          await setVendorCooldown(kv, "yfinance", ticker, config.yfinanceCooldownSeconds);
-        }
         errors.push({ ticker, error: err });
       } else {
         throw err;
@@ -170,4 +208,67 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
   }
 
   return { bars, errors };
+}
+
+/**
+ * Historical daily bars for `tickers` over an explicit [from, to] range
+ * (YYYY-MM-DD, inclusive), via Yahoo's chart endpoint's `period1`/`period2`
+ * unix-second params instead of fetchDailyBars' live `range=Nd` default --
+ * plan.md Next Steps step A (backtest audit finding 1: price_bars has almost
+ * no history, so a backtest window can't open positions outside a handful
+ * of days). Deliberately a SEPARATE function/call path, not an extra param
+ * on fetchDailyBars: the `*/15` cron's ingestPriceBars -> fetchDailyBars call
+ * must keep asking for exactly its 5d trailing default, unchanged.
+ *
+ * UNLIKE Finnhub's news backfill (ingestion/date_windows.js), this makes
+ * exactly ONE request per ticker for the WHOLE range -- Yahoo's chart
+ * endpoint returns the entire requested period's daily bars in one response;
+ * no per-request article-style cap has ever been observed here, so there is
+ * no window-splitting/continuation to do. A caller backfilling a year of
+ * daily bars for the 3-ticker watchlist costs 3 HTTP requests total.
+ *
+ * Same cooldown/throttle/retry/parse/validate path as fetchDailyBars (both
+ * go through fetchTickerChart) -- including the fails-fast-on-429-then-
+ * cross-invocation-cooldown behavior (see this file's header for how
+ * sustained that 429 has been observed to be, MSFT especially): a backfill
+ * call made while a ticker's cooldown is still active correctly skips it
+ * rather than repeating a request already known to be blocked, and a 429
+ * hit here records the same cooldown the live path would honor on its next
+ * tick.
+ *
+ * `period2` is pushed to 23:59:59 of `to` so `to`'s own trading day is
+ * included -- UNVERIFIED against a real response (no live network egress
+ * from this sandbox, see ingestion/ingest.js's own header on that gap);
+ * confirm after a real backfill run that `to`'s bar is actually present,
+ * same "verify after a real run" caveat backfillHistoricalNews's own
+ * inclusive/exclusive `to` assumption carries.
+ */
+export async function fetchHistoricalBars(config, { tickers = config.watchlist.map((w) => w.ticker), from, to } = {}, { kv } = {}) {
+  if (!from || !to) {
+    throw new Error("fetchHistoricalBars requires an explicit {from, to} range -- use fetchDailyBars for the live trailing-window path instead");
+  }
+
+  const period1 = Math.floor(Date.parse(`${from}T00:00:00.000Z`) / 1000);
+  const period2 = Math.floor(Date.parse(`${to}T23:59:59.000Z`) / 1000);
+  if (!Number.isFinite(period1) || !Number.isFinite(period2)) {
+    throw new Error(`fetchHistoricalBars: invalid from/to (${from}, ${to})`);
+  }
+
+  const bars = [];
+  const errors = [];
+  const throttle = createThrottle({ minIntervalMs: config.yfinanceMinRequestIntervalMs ?? 0 });
+
+  for (const ticker of tickers) {
+    try {
+      bars.push(...(await fetchTickerChart(config, ticker, { period1, period2 }, { kv, throttle })));
+    } catch (err) {
+      if (err instanceof VendorError) {
+        errors.push({ ticker, error: err });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  return { bars, errors, requests: tickers.length };
 }
