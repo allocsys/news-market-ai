@@ -21,38 +21,28 @@
 // scheduled() invocation doing everything (which is what originally hit the
 // free-tier CPU cap Step 0 diagnosed).
 //
-// `queue` (plan.md Step 3) is now the consumer for ONE queue and ONE message
-// type: JOBS's `backfill`, enqueued by POST /backfill below. Everything
-// else this handler used to dispatch has moved out, in two steps:
+// This Worker has NO `queue()` export and consumes nothing (Step 5
+// follow-up, 2026-09-20). Its last consumer, JOBS's `backfill` handler,
+// moved to the `ingest` Worker (src/ingest-worker.js) along with the queue
+// itself, renamed BACKFILL -- see wrangler.toml's own comment on that
+// queue's history. Everything else this Worker used to consume had already
+// moved out earlier:
 //   - `ingest_ticker` / `ingest_feeds` (INGEST) -> the `ingest` Worker,
 //     plan.md Step 5.
 //   - `analyze` and `exit_check` (both formerly JOBS) -> the `llm` Worker,
-//     plan.md Step 6. Both call Gemini, so both had to move for `llm` to be
-//     the only Worker holding GEMINI_API_KEYS. They moved onto a new
-//     LLM_JOBS queue (this Worker still PRODUCES onto it) rather than
-//     staying on JOBS, because a queue can only have one consumer Worker
-//     and JOBS's consumer had to stay here for `backfill`.
-//   - `backtest` moved again in M3, off LLM_JOBS and onto its own new
-//     BACKTEST queue (this Worker still PRODUCES onto it) for the new
-//     `backtest` Worker (wrangler.backtest.toml) -- a backtest needs a
-//     SIM_DB-backed RunStore + SimClock that the `llm` Worker deliberately
-//     never gets, so it couldn't stay on a queue `llm` consumes.
-// A message of one of those moved types that somehow still reaches this
-// handler (e.g. one already sitting on JOBS at the moment of the Step 6
-// deploy) is acked without processing by the generic unrecognized-type
-// branch below -- see plan.md Step 6's notes on that transient window.
+//     plan.md Step 6, onto a new LLM_JOBS queue (this Worker still
+//     PRODUCES onto it).
+//   - `backtest` moved again in M3, off LLM_JOBS and onto its own BACKTEST
+//     queue (this Worker still PRODUCES onto it) for the new `backtest`
+//     Worker (wrangler.backtest.toml).
+// This Worker now PRODUCES onto four queues (INGEST, LLM_JOBS, BACKTEST,
+// BACKFILL) and consumes none of them -- every message type it used to
+// handle now runs in the Worker that actually needs the matching vendor
+// key (Finnhub for `ingest`, Gemini for `llm`/`backtest`).
 //
-// This Worker still separately holds its own FINNHUB_API_KEY, because the
-// `backfill` job below calls Finnhub directly via backfillHistoricalNews,
-// and JOBS has no other consumer to move that to without a larger redesign
-// (see wrangler.toml's own comment on this). It holds NO Gemini key: nothing
-// in this file calls the LLM pipeline anymore.
-//
-// A business-logic failure (vendor error mid-backfill, etc.) is caught
-// inside its own branch and logged, then acked -- not left to the queue's
-// own retry/dead-letter mechanism, which exists only for a genuine crash in
-// queue() itself (a real bug), not an expected operational failure that
-// already spent real quota once.
+// This Worker holds NO vendor key at all anymore: no FINNHUB_API_KEY (moved
+// to wrangler.ingest.toml with the BACKFILL consumer) and no Gemini key
+// (moved to wrangler.llm.toml in Step 6).
 
 import { loadConfig } from "./config.js";
 import { createJobReporter } from "./storage/jobs.js";
@@ -136,13 +126,15 @@ export default {
     // Query-string only (from/to) -- `dashboard` is the only caller and
     // always forwards as query params, whether it originally received a
     // browser form submission or a scripted JSON request. Since plan.md
-    // Step 3, this always enqueues onto JOBS and returns an immediate ack --
-    // there's no more synchronous "wait for the real counts" mode, and no
-    // more ctx.waitUntil fire-and-forget mode -- both scripted and
-    // form-submitted callers get the same `{accepted, id, from, to}` shape,
-    // same as the old `?async=1` response did (kept intentionally: any
-    // legacy `async` query param `dashboard` still sends is simply ignored
-    // now, harmless). See queue() below for where the real work happens.
+    // Step 3, this always enqueues (onto BACKFILL as of the Step 5
+    // follow-up -- see wrangler.toml; used to be JOBS, consumed here) and
+    // returns an immediate ack -- there's no more synchronous "wait for the
+    // real counts" mode, and no more ctx.waitUntil fire-and-forget mode --
+    // both scripted and form-submitted callers get the same
+    // `{accepted, id, from, to}` shape, same as the old `?async=1` response
+    // did (kept intentionally: any legacy `async` query param `dashboard`
+    // still sends is simply ignored now, harmless). The real work now runs
+    // in the `ingest` Worker's queue() (src/ingest-worker.js).
     if (pathname === "/backfill" && request.method === "POST") {
       const from = url.searchParams.get("from");
       const to = url.searchParams.get("to");
