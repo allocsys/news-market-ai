@@ -326,21 +326,27 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
   // how-far-through-the-fetched-set-are-we meaning for progress-percent
   // math, since that needs to advance even through chunks that turn out to
   // be all duplicates.
+  // UNLIKE ingestFundamentals' own chunk loop, a chunk's write failure here
+  // is NOT caught-and-skipped -- it propagates, same as the old unbatched
+  // per-article loop did (which had no try/catch at all). This is
+  // deliberate, not an oversight: the caller (ingest-worker.js's `backfill`
+  // branch) wraps the whole call in its own try/catch and reports the job
+  // `failed` via the progress reporter on any error (see that Worker's own
+  // comment: "retrying a call that already spent real Finnhub quota on
+  // failure would just spend it again") -- a D1 write error here means the
+  // job's core deliverable (saved articles) is broken, which should surface
+  // as a failed job for the operator to see, not a silently-degraded
+  // partial save. Fundamentals are a strict enhancement to the pipeline
+  // (see ingestFundamentals' own header); a backfill's whole point IS
+  // saving articles, so the two warrant different failure-isolation scopes.
   let processed = 0;
   let inserted = 0;
   for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
     const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
-    try {
-      const toInsert = await filterUnstoredItems(db, chunk);
-      if (toInsert.length > 0) {
-        const { insertedIds } = await insertNewsItems(db, toInsert);
-        inserted += insertedIds.size;
-      }
-    } catch (err) {
-      // Same Failure Isolation spirit as ingestFundamentals' own chunk
-      // try/catch: a malformed chunk (e.g. a D1 constraint violation) loses
-      // only that chunk's articles, not the whole backfill's remaining work.
-      console.error("historical news backfill -- skipping one chunk of article inserts", { chunkStart: i, chunkSize: chunk.length, message: err.message });
+    const toInsert = await filterUnstoredItems(db, chunk);
+    if (toInsert.length > 0) {
+      const { insertedIds } = await insertNewsItems(db, toInsert);
+      inserted += insertedIds.size;
     }
     processed += chunk.length;
     await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * processed) / totalItems), done: processed, total: totalItems, detail: `Saved ${processed}/${totalItems} articles` });
