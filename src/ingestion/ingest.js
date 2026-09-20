@@ -382,9 +382,17 @@ export async function backfillHistoricalNews(config, db, { from, to, kv, onProgr
       inserted += insertedIds.size;
     }
     processed += chunk.length;
-    await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * processed) / totalItems), done: processed, total: totalItems, detail: `Saved ${processed}/${totalItems} articles` });
+    const capReached = inserted >= maxInserts && processed < totalItems;
+    // The reporter throttles unforced writes to one per ~1.5s (storage/jobs.js),
+    // and the batched save path finishes chunks far faster than that, so the
+    // last unforced tick is often a stale mid-run one. Force the last write of
+    // this call (all items processed, or stopping at the cap) so the job row's
+    // done/total match where the call really ended -- complete() only sets
+    // percent/phase, it never touches done/total (live: dashboard showed
+    // "400 / 733" at 100%).
+    await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * processed) / totalItems), done: processed, total: totalItems, detail: `Saved ${processed}/${totalItems} articles`, force: processed >= totalItems || capReached });
 
-    if (inserted >= maxInserts && processed < totalItems) {
+    if (capReached) {
       nextFrom = continuationFrom(chunk[chunk.length - 1].publishedAt, from);
       break;
     }

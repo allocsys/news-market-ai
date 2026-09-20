@@ -333,6 +333,8 @@ test("queue() splits a backfill bigger than one invocation's write cap into part
   });
   const midway = await store.getJob("backfill-split");
   assert.equal(midway.status, "running", "the job must NOT be marked complete after part 1");
+  assert.equal(midway.done, 500, "the end of a capped part is reported exactly, not as a stale throttled tick");
+  assert.equal(midway.total, 650);
   assert.deepEqual(midway.params, { from: "2025-09-01", to: "2025-09-30" });
 
   const second = new FakeMessage(BACKFILL.sent[0]);
@@ -365,6 +367,9 @@ test("queue() does not enqueue a continuation when the backfill fits in one invo
   const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-small");
   assert.equal(job.status, "complete");
   assert.equal(job.result.parts, 1);
+  // The last progress write is forced, so done/total match the finished job (a throttled stale tick used to leave e.g. 400/733 at 100%).
+  assert.equal(job.done, 163);
+  assert.equal(job.total, 163);
 });
 
 test("queue() fails a backfill that would need more than the part limit instead of re-enqueueing forever", async (t) => {
