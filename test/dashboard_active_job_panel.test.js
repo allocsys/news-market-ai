@@ -65,23 +65,30 @@ test("renderActiveJobPanel renders a 'Backfill in progress' panel with the polle
   const html = renderActiveJobPanel(job);
 
   assert.match(html, /<section id="active-job" data-job-id="backfill-123-abc">/);
-  assert.match(html, /<h2>Backfill in progress<\/h2>/);
+  assert.match(html, /<h2 id="run-status-title">Backfill in progress<\/h2>/);
   assert.match(html, /Backfilling historical news from 2024-01-01 to 2024-01-31\./);
   assert.match(html, /var pollUrl = "\/dashboard\/jobs\/backfill-123-abc";/);
   // A pollUrl is always set here (unlike renderRunAcceptedPage's no-jobId
   // fallback), so the progress bar markup is always present too.
   assert.match(html, /id="run-progress-bar"/);
+  // Completion UX (part 2): a hidden next-steps container and the poller's
+  // own label/backLink closure vars, ready to reveal a "Back to Backfill"
+  // link once the job leaves queued/running -- see status.js's showNextSteps.
+  assert.match(html, /id="run-next-steps" style="display:none/);
+  assert.match(html, /var label = "Backfill";/);
+  assert.match(html, /var backLink = "\/dashboard\/backfill";/);
 });
 
 test("renderActiveJobPanel renders a 'Backtest in progress' panel for a backtest job", () => {
   const job = { id: "backtest-456-def", type: "backtest", status: "queued", params: { tickers: ["AAPL"] } };
   const html = renderActiveJobPanel(job);
 
-  assert.match(html, /<h2>Backtest in progress<\/h2>/);
+  assert.match(html, /<h2 id="run-status-title">Backtest in progress<\/h2>/);
   assert.match(html, /Running a backtest for AAPL\./);
   // A backtest's job_progress row lives under its OWN id as run_id (SIM_DB),
   // never under 'live', so the poll URL must carry ?env=<jobId> or it 404s forever.
   assert.match(html, /var pollUrl = "\/dashboard\/jobs\/backtest-456-def\?env=backtest-456-def";/);
+  assert.match(html, /var backLink = "\/dashboard\/backtest";/);
 });
 
 test("renderActiveJobPanel HTML-escapes and URI-encodes the job id everywhere it appears", () => {

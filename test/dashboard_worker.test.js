@@ -22,6 +22,7 @@ import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
 import { renderShell } from "../src/dashboard/shell.js";
 import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
+import { RunStore } from "../src/storage/run_store.js";
 import { ENV_SECTIONS } from "../src/dashboard/helpers.js";
 
 class FakeNewsDb {
@@ -318,9 +319,13 @@ test("POST /backfill succeeds on a valid session cookie (scripted/non-form calle
   assert.deepEqual(jobs.sent[0], { type: "backfill", id: body.id, from: "2024-01-01", to: "2024-01-31" });
 });
 
-test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto BACKFILL), and renders the accepted HTML page immediately", async () => {
+test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto BACKFILL), and 303-redirects to /dashboard/backfill (Post/Redirect/Get -- part 1 of the dashboard backfill-completion UX fix) instead of rendering the accepted HTML directly", async () => {
   const jobs = new FakeQueue();
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), BACKFILL: jobs }) });
+  // A real (empty) LIVE_DB, not just DB+BACKFILL: backend's POST /backfill
+  // writes the 'queued' job_progress row via RunStore(env.LIVE_DB, "live")
+  // (best-effort -- see createJobReporter), and the follow-through check
+  // below needs that row to actually exist for GET /api/jobs/active to find.
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), LIVE_DB: createTestD1([STATE_DIR]), BACKFILL: jobs }) });
   const cookie = await loggedInCookie(env);
 
   const body = new URLSearchParams({ from: "2024-01-01", to: "2024-01-31" });
@@ -331,12 +336,9 @@ test("POST /backfill accepts a form-encoded body -- checks the session, forwards
   });
 
   const response = await worker.fetch(request, env);
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type"), /text\/html/);
-  const html = await response.text();
-  assert.match(html, /Backfill accepted/);
-  assert.match(html, /2024-01-01/);
-  assert.match(html, /2024-01-31/);
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("Location"), "/dashboard/backfill");
+  assert.equal(await response.text(), "", "a 303 has no body to accidentally re-show/re-submit");
 
   // The route only enqueues (plan.md Step 3) -- the real backfill now runs
   // in the `ingest` Worker's queue() consumer (Step 5 follow-up,
@@ -345,6 +347,19 @@ test("POST /backfill accepts a form-encoded body -- checks the session, forwards
   assert.equal(jobs.sent[0].type, "backfill");
   assert.equal(jobs.sent[0].from, "2024-01-01");
   assert.equal(jobs.sent[0].to, "2024-01-31");
+
+  // Following the redirect (a plain GET, as any browser/user agent does on a
+  // 303) lands on /dashboard/backfill and shows the just-queued job via the
+  // ordinary active-job panel wiring -- confirming the redirect target
+  // actually closes the "had to refresh or go back to Backfill" gap, not
+  // just that a redirect happens. Uses backend's real GET /api/jobs/active,
+  // same as the "prepends the active-job panel" tests below.
+  const followed = await worker.fetch(new Request(`https://dashboard.example${response.headers.get("Location")}`, { headers: { Cookie: cookie } }), env);
+  assert.equal(followed.status, 200);
+  const followedHtml = await followed.text();
+  assert.match(followedHtml, /id="active-job"/);
+  assert.match(followedHtml, /2024-01-01/);
+  assert.match(followedHtml, /2024-01-31/);
 });
 
 test("POST /backtest/run with a valid session cookie is forwarded to backend, which (M3) enqueues onto BACKTEST and returns an accepted ack", async () => {
@@ -439,6 +454,67 @@ test("GET /dashboard/snapshot never shows an active-job panel -- only backfill/b
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
   assert.doesNotMatch(html, /id="active-job"/);
+});
+
+// --------------------------------------------------------------------
+// "Last run" panel wiring (dashboard backfill-completion UX, part 3): GET
+// /dashboard/backfill also prepends how the most recently FINISHED backfill
+// job ended (backend's GET /api/jobs/latest?type=backfill via
+// dashboard-worker.js's lastFinishedBackfillJob, rendered by
+// backfill.js#renderLastRunPanel), so the page shows something once the
+// active-job panel above has aged out or the operator just navigates back.
+// --------------------------------------------------------------------
+
+async function liveDbWithFinishedBackfill(overrides = {}) {
+  const db = (await jobStateDb()).db;
+  const store = new RunStore(db, "live");
+  await store.insertQueuedJob({ id: "backfill-done-1", type: "backfill", params: { from: "2024-01-01", to: "2024-01-31" }, now: "2026-01-01T00:00:00.000Z" });
+  await store.markJobRunning({ id: "backfill-done-1", type: "backfill", now: "2026-01-01T00:00:01.000Z" });
+  if (overrides.status === "failed") {
+    await store.failJob({ id: "backfill-done-1", error: overrides.error ?? "boom", detail: overrides.detail ?? null, now: "2026-01-01T00:05:00.000Z" });
+  } else {
+    await store.completeJob({ id: "backfill-done-1", result: overrides.result ?? { inserted: 146, errorCount: 0, parts: 1 }, detail: overrides.detail ?? "Inserted 146 articles", now: "2026-01-01T00:05:00.000Z" });
+  }
+  return db;
+}
+
+test("GET /dashboard/backfill shows no Last-run panel when nothing has ever finished", async () => {
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
+  assert.doesNotMatch(html, /Last run/);
+});
+
+test("GET /dashboard/backfill shows the Last-run panel for a completed job, with its detail and range", async () => {
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: await liveDbWithFinishedBackfill() }) });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
+  assert.match(html, /Last run/);
+  assert.match(html, /Complete/);
+  assert.match(html, /2024-01-01 to 2024-01-31/);
+  assert.match(html, /Inserted 146 articles/);
+});
+
+test("GET /dashboard/backfill shows the Last-run panel for a failed job, with its error", async () => {
+  const env = loginConfiguredEnv({
+    BACKEND: makeBackend({ LIVE_DB: await liveDbWithFinishedBackfill({ status: "failed", error: "Too many API requests by single Worker invocation", detail: "Saved 325/733 articles" }) }),
+  });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
+  assert.match(html, /Last run/);
+  assert.match(html, /Failed/);
+  assert.match(html, /Saved 325\/733 articles/);
+  assert.match(html, /Too many API requests by single Worker invocation/);
+});
+
+test("GET /dashboard/backfill renders normally (no Last-run panel, no crash) when the /api/jobs/latest lookup itself fails -- best-effort", async () => {
+  const brokenBackend = { fetch: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }) };
+  const env = loginConfiguredEnv({ BACKEND: brokenBackend });
+  const cookie = await loggedInCookie(env);
+  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env);
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.doesNotMatch(html, /Last run/);
 });
 
 // --------------------------------------------------------------------

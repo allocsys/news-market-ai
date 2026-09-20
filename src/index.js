@@ -61,6 +61,7 @@ import {
   handleApiLlmCallRoute,
   handleApiJobRoute,
   handleApiActiveJobRoute,
+  handleApiLatestJobRoute,
 } from "./dashboard/api.js";
 
 /**
@@ -110,6 +111,9 @@ export default {
     // for a job submitted earlier. MUST stay above the /api/jobs/ prefix
     // match below, or "active" would be looked up as a job id.
     if (pathname === "/api/jobs/active") return handleApiActiveJobRoute(request, env, config);
+    // Most recent FINISHED job of a type, for pages that show how the last run
+    // ended. Same rule: above the prefix match, or "latest" would be a job id.
+    if (pathname === "/api/jobs/latest") return handleApiLatestJobRoute(request, env, config);
 
     // Live progress for one job (src/storage/jobs.js's job_progress table),
     // read by `dashboard` at /dashboard/jobs/:id (which polls this on the
