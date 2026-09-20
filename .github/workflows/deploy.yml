@@ -424,12 +424,13 @@ jobs:
             echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS --config wrangler.dashboard.toml
           fi
 
-  # `ingest` Worker (plan.md Step 5) -- own path-filtered job, own
-  # concurrency group (same reasoning as deploy-dashboard above: an
-  # unrelated push must never cancel this Worker's in-flight deploy, and
-  # vice versa). Depends on backend's own `deploy` job, not just `test`,
-  # since backend's deploy job is what provisions the news-market-ai-ingest
-  # and news-market-ai-analyze queues (+ DLQs) this Worker's
+  # `ingest` Worker (plan.md Step 5, extended by a Step 5 follow-up,
+  # 2026-09-20) -- own path-filtered job, own concurrency group (same
+  # reasoning as deploy-dashboard above: an unrelated push must never cancel
+  # this Worker's in-flight deploy, and vice versa). Depends on backend's
+  # own `deploy` job, not just `test`, since backend's deploy job is what
+  # provisions the news-market-ai-ingest, news-market-ai-analyze, and (as of
+  # the follow-up) news-market-ai-backfill queues (+ DLQs) this Worker's
   # wrangler.ingest.toml binds to (via the same ensure-queue composite
   # action, reused unmodified) -- matters most on a first-ever deploy of
   # both.
@@ -477,11 +478,11 @@ jobs:
         # deploy of everything else. Without it, finnhub.js's fetchLatest
         # logs a 401 VendorError per ticker and that source is skipped
         # (see pipeline.js's failure-isolation model) rather than anything
-        # crashing. This Worker is now the primary holder of this secret
-        # for LIVE ingestion (ingest_ticker/ingest_feeds) -- backend still
-        # separately holds its own copy too, for the backfill JOBS job
-        # only (see wrangler.toml's own comment on that known, deliberate
-        # exception).
+        # crashing. This Worker is now the ONLY holder of this secret,
+        # for live ingestion (ingest_ticker/ingest_feeds) AND backfill (the
+        # BACKFILL consumer, moved here from backend in the Step 5
+        # follow-up, 2026-09-20) -- `backend` no longer holds a copy at all
+        # (see wrangler.toml's own secrets comment).
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
