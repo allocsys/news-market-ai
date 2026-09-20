@@ -644,7 +644,7 @@ wired, a point-in-time positions store with stop-loss/take-profit/time-based
 exits, technical analyst on price bars, realized-return settlement feeding the
 reflection loop, a backfill entry point, the signal on/off backtest harness
 (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress job panel.
-CI and deploys are green across all four Workers.
+CI and deploys are green across all five Workers.
 
 Backtest/live isolation is built (three D1s, `backtest` Worker, `RunStore`;
 M1–M5 merged). The behaviors in item 2 below have not been observed live end to
