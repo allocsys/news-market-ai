@@ -172,7 +172,7 @@ test("checkOpenPositionExits closes a position whose stop_loss triggers against 
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-02", close: 95 }); // -5%, past stop_loss
   await seedBar(ctx.inputs, { ticker: "MSFT", date: "2026-01-02", close: 201 }); // unchanged, stays open
 
-  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-02T12:00:00Z" });
+  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-03T00:00:00Z" }); // the Jan 2 bar is visible from Jan 3 00:00Z (plan.md step C)
 
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   const stillOpen = await ctx.store.getOpenPositionsAsOf({ asOf: "2026-01-03T00:00:00Z" });
@@ -213,7 +213,7 @@ test("checkOpenPositionExits closes nothing and returns an empty array when no p
   await ctx.store.openPosition(openArgs("AAPL", 0.03, 100));
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-02", close: 101 });
 
-  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-02T12:00:00Z" });
+  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-03T00:00:00Z" }); // the Jan 2 bar is visible from Jan 3 00:00Z (plan.md step C)
   assert.deepEqual(closed, []);
 });
 
@@ -224,7 +224,7 @@ test("checkOpenPositionExits is safe to re-run: an already-closed position is no
   await ctx.store.openPosition(openArgs("AAPL", 0.03, 100));
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-02", close: 95 });
 
-  const firstRun = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-02T12:00:00Z" });
+  const firstRun = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-03T00:00:00Z" }); // the Jan 2 bar is visible from Jan 3 00:00Z (plan.md step C)
   assert.equal(firstRun.length, 1);
 
   const secondRun = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-03T12:00:00Z" });
@@ -243,7 +243,7 @@ test("checkOpenPositionExits only sees its own environment's positions (run_id i
   await other.openPosition(openArgs("AAPL", 0.03, 100)); // belongs to bt-1, not live
   await seedBar(live.inputs, { ticker: "AAPL", date: "2026-01-02", close: 95 });
 
-  const closed = await checkOpenPositionExits({}, config, live, { asOf: "2026-01-02T12:00:00Z" });
+  const closed = await checkOpenPositionExits({}, config, live, { asOf: "2026-01-03T00:00:00Z" }); // the Jan 2 bar is visible from Jan 3 00:00Z (plan.md step C)
   assert.deepEqual(closed, []);
   assert.equal((await other.getOpenPositionsAsOf({ asOf: "2026-01-03T00:00:00Z" })).length, 1);
 });

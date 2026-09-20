@@ -31,19 +31,22 @@
 // first.
 
 import { getPriceBarsAsOf } from "../storage/inputs_view.js";
+import { utcDateOf } from "../shared/price_availability.js";
 
 /**
  * One ticker's buy-and-hold return over [testStart, testEnd): entry at the
  * close of the first bar on or after testStart, exit at the close of the
- * last bar on or before testEnd. Returns null (never fabricates a number)
+ * last bar VISIBLE at testEnd (dated strictly before testEnd's UTC date, since
+ * a bar is not final until its day is over -- shared/price_availability.js).
+ * Returns null (never fabricates a number)
  * if there's no bar on or after testStart within the window -- same "don't
  * invent a return you can't compute" convention as
  * graph/settle.js#settlePositionOutcome.
  *
  * Point-in-time correctness: getPriceBarsAsOf(asOf: testEnd) is itself the
  * enforced cutoff (storage/inputs_view.js, Backtesting Integrity point 1) -- this
- * function only ever sees bars dated <= testEnd, so it cannot leak a price
- * from after the test window even by accident.
+ * function only ever sees bars dated before testEnd's UTC date, so it cannot
+ * leak a price from after the test window even by accident.
  *
  * `limit` is generous enough to cover the window (testDays + buffer) since
  * getPriceBarsAsOf returns the `limit` most recent bars <= asOf, most-
@@ -58,10 +61,15 @@ export async function computeBuyAndHoldReturn(inputs, { ticker, testStart, testE
   const bars = await getPriceBarsAsOf(inputs, { ticker, asOf: testEnd, limit: limit ?? Math.max(200, testDays + 50) });
 
   // bars is most-recent-first (DESC); the exit bar is simply the first
-  // element (latest date <= testEnd). The entry bar is the OLDEST bar that
-  // is still >= testStart -- i.e. the last element in ascending-within-
-  // window order, found by filtering then taking the min.
-  const inWindow = bars.filter((b) => b.date >= testStart);
+  // element (latest date before testEnd's UTC date). The entry bar is the OLDEST bar that
+  // is dated on or after testStart's UTC date -- i.e. the last element in
+  // ascending-within-window order, found by filtering then taking the min.
+  // The comparison is date to date (utcDateOf), NOT bar.date against the raw
+  // testStart string: walkForwardWindows yields ISO timestamps, and
+  // "2026-01-05" >= "2026-01-05T00:00:00.000Z" is false, which used to drop the
+  // bar dated on testStart's own day and enter one bar late.
+  const entryFromDate = utcDateOf(testStart);
+  const inWindow = bars.filter((b) => b.date >= entryFromDate);
   if (inWindow.length === 0) return null;
 
   const exitBar = inWindow[0]; // DESC order preserved by the filter

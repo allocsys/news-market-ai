@@ -1,9 +1,11 @@
 // price_bars_pointintime test (plan.md open item: yfinance price/volume
 // ingestion). Covers two things: market_data_validator.js#validatePriceBar's
 // sanity checks (pure function, no DB needed), and storage/inputs_view.js's
-// insertPriceBar/getPriceBarsAsOf point-in-time cutoff, against a minimal
-// in-memory fake of the `price_bars` table (same honest, narrow-fake
-// convention as the other *_pointintime tests in this directory).
+// insertPriceBar/getPriceBarsAsOf point-in-time cutoff, against a real sqlite
+// inputs DB (test/helpers/engine_ctx.js; since plan.md step C, so the tests run
+// the real SQL of the "a bar is visible from the UTC day after its date" rule
+// instead of a fake that could drift from it). The same-day-leak cases are in
+// test/price_bars_no_same_day_leak.test.js.
 //
 // Does NOT exercise ingestion/sources/yfinance.js's live HTTP call -- see
 // that file's own header for the unresolved cookie/crumb auth risk that
@@ -17,6 +19,7 @@ import { validatePriceBar } from "../src/ingestion/market_data_validator.js";
 import { insertPriceBar, getPriceBarsAsOf } from "../src/storage/inputs_view.js";
 import { VendorError, LookaheadViolationError } from "../src/shared/errors.js";
 import { fetchDailyBars } from "../src/ingestion/sources/yfinance.js";
+import { makeCtx } from "./helpers/engine_ctx.js";
 
 const VALID_BAR = { ticker: "AAPL", date: "2026-01-05", open: 100, high: 105, low: 99, close: 103, volume: 1000, source: "yfinance" };
 
@@ -76,48 +79,13 @@ test("validatePriceBar rejects a non-numeric field", () => {
   assert.throws(() => validatePriceBar(bar), VendorError);
 });
 
-class FakePriceBarsDb {
-  constructor() {
-    this.rows = new Map(); // `${ticker}|${date}` -> row
-  }
-
-  prepare(sql) {
-    const db = this;
-    return {
-      bind(...args) {
-        return {
-          async run() {
-            if (!/INSERT INTO price_bars/.test(sql)) {
-              throw new Error(`FakePriceBarsDb: unsupported run() query: ${sql}`);
-            }
-            const [ticker, date, open, high, low, close, volume, source, ingestedAt] = args;
-            db.rows.set(`${ticker}|${date}`, { ticker, date, open, high, low, close, volume, source, ingested_at: ingestedAt });
-          },
-          async all() {
-            if (!/FROM price_bars/.test(sql)) {
-              throw new Error(`FakePriceBarsDb: unsupported all() query: ${sql}`);
-            }
-            const [ticker, asOf, limit] = args;
-            const results = [...db.rows.values()]
-              .filter((r) => r.ticker === ticker && r.date <= asOf)
-              .sort((a, b) => (a.date < b.date ? 1 : -1))
-              .slice(0, limit)
-              .map(({ ticker, date, open, high, low, close, volume, source }) => ({ ticker, date, open, high, low, close, volume, source }));
-            return { results };
-          },
-        };
-      },
-    };
-  }
-}
-
 test("getPriceBarsAsOf throws LookaheadViolationError when asOf is omitted", async () => {
-  const db = new FakePriceBarsDb();
+  const db = makeCtx().inputs;
   await assert.rejects(() => getPriceBarsAsOf(db, { ticker: "AAPL" }), LookaheadViolationError);
 });
 
-test("getPriceBarsAsOf returns only bars dated at or before asOf, most recent first", async () => {
-  const db = new FakePriceBarsDb();
+test("getPriceBarsAsOf returns only bars dated before asOf's UTC date, most recent first", async () => {
+  const db = makeCtx().inputs;
   await insertPriceBar(db, { ...VALID_BAR, date: "2026-01-05" });
   await insertPriceBar(db, { ...VALID_BAR, date: "2026-01-06" });
   await insertPriceBar(db, { ...VALID_BAR, date: "2026-01-10" }); // future relative to asOf below
@@ -130,11 +98,11 @@ test("getPriceBarsAsOf returns only bars dated at or before asOf, most recent fi
 });
 
 test("insertPriceBar upserts on (ticker, date) rather than duplicating", async () => {
-  const db = new FakePriceBarsDb();
+  const db = makeCtx().inputs;
   await insertPriceBar(db, { ...VALID_BAR, close: 103 });
   await insertPriceBar(db, { ...VALID_BAR, close: 999 }); // re-ingest same trading day with a corrected close
 
-  const results = await getPriceBarsAsOf(db, { ticker: "AAPL", asOf: "2026-01-05" });
+  const results = await getPriceBarsAsOf(db, { ticker: "AAPL", asOf: "2026-01-06" }); // the Jan 5 bar is visible from Jan 6
   assert.equal(results.length, 1);
   assert.equal(results[0].close, 999); // overwritten, not duplicated
 });

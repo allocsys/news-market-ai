@@ -15,6 +15,7 @@
 // that used to sit beside them are replaced by RunStore (run_store.js).
 
 import { LookaheadViolationError } from "../shared/errors.js";
+import { assertNoPriceBarLookahead, priceBarCutoffDate } from "../shared/price_availability.js";
 
 /** Rows per D1 round trip in getNewsItemsInRange. A response-size bound only; the function pages until the range is exhausted. */
 export const NEWS_RANGE_PAGE_SIZE = 500;
@@ -336,28 +337,38 @@ export async function insertPriceBars(db, bars) {
 }
 
 /**
- * Point-in-time read: bars for `ticker` dated at or before `asOf`. Same
- * required-asOf, no-"give me everything" convention as getNewsAsOf and
- * getDecisionMemoryAsOf (Backtesting Integrity, point 1) -- a technical
- * analyst reading price history must not be able to see a bar from after
- * the simulated "now" any more than a news analyst can.
+ * Point-in-time read: the most recent bars for `ticker` that are VISIBLE at
+ * `asOf`, most recent first. Same required-asOf, no-"give me everything"
+ * convention as getNewsAsOf and getDecisionMemoryAsOf (Backtesting Integrity,
+ * point 1).
+ *
+ * Visible means dated STRICTLY BEFORE asOf's UTC calendar date: a daily bar
+ * holds the day's final OHLCV, which does not exist until the day is over, so
+ * the bar for day D appears at D+1 00:00Z, not at any time on D (the rule and
+ * its rationale live in shared/price_availability.js). Before step C this was
+ * `date <= asOf`, so a 09:35 decision on day D saw day D's close. The freshest
+ * price any caller can see is therefore the previous UTC day's close, live
+ * included. The rows returned are re-checked against the same rule
+ * (assertNoPriceBarLookahead) before they leave this function.
  */
 export async function getPriceBarsAsOf(db, { ticker, asOf, limit = 200 }) {
   if (!asOf) {
     throw new LookaheadViolationError("getPriceBarsAsOf requires an explicit asOf timestamp");
   }
+  const cutoffDate = priceBarCutoffDate(asOf);
 
   const { results } = await db
     .prepare(
       `SELECT ticker, date, open, high, low, close, volume, source
        FROM price_bars
-       WHERE ticker = ? AND date <= ?
+       WHERE ticker = ? AND date < ?
        ORDER BY date DESC
        LIMIT ?`
     )
-    .bind(ticker, asOf, limit)
+    .bind(ticker, cutoffDate, limit)
     .all();
 
+  assertNoPriceBarLookahead(results, asOf);
   return results;
 }
 
