@@ -462,10 +462,18 @@ export async function ingestFeedNews(config, db, kv) {
     }
   }
 
+  // UPDATE (2026-09-20): batched, same subrequest-cap fix and no-pre-filter
+  // reasoning as ingestTickerData above -- this runs once per cron tick
+  // alongside the per-ticker ingest_ticker messages, sharing the same kind
+  // of invocation-wide subrequest budget.
   const fresh = [];
-  for (const item of items) {
-    const { newTickers } = await insertNewsItem(db, item);
-    if (newTickers.length > 0) fresh.push({ item, tickers: newTickers });
+  for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
+    const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
+    const { newTickersByItemId } = await insertNewsItems(db, chunk);
+    for (const item of chunk) {
+      const newTickers = newTickersByItemId.get(item.id) ?? [];
+      if (newTickers.length > 0) fresh.push({ item, tickers: newTickers });
+    }
   }
   return { fetched: items.length, fresh };
 }
