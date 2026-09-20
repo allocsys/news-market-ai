@@ -67,20 +67,34 @@ function renderProgressPanel({ detail, pollUrl }) {
         <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">
           <span id="run-progress-pct">0%</span>
           <span id="run-progress-count"></span>
-        </div>`
+        </div>
+        <div id="run-next-steps" style="display:none;margin-top:0.75rem;font-size:0.8rem"></div>`
             : ""
         }
       </div>
     </div>`;
 }
 
-/** Client-side poller for `pollUrl`; drives the elements renderProgressPanel emits. */
-function renderProgressScript(pollUrl) {
+/**
+ * Client-side poller for `pollUrl`; drives the elements renderProgressPanel
+ * emits. `label` ("Backfill"/"Backtest") and `backLink`/`backLabel` (where
+ * "Back to X" should point once the job is done) let this same script
+ * update the shared #run-status-title heading and reveal the
+ * #run-next-steps link on completion/failure -- both callers
+ * (renderRunAcceptedPage, renderActiveJobPanel) know these statically at
+ * render time, so they're baked in here rather than re-derived client-side.
+ */
+function renderProgressScript({ pollUrl, label, backLink, backLabel }) {
   return `<script>
       (function () {
         var pollUrl = ${JSON.stringify(pollUrl)};
+        var label = ${JSON.stringify(label)};
+        var backLink = ${JSON.stringify(backLink)};
+        var backLabel = ${JSON.stringify(backLabel)};
         var dot = document.getElementById("run-status-dot");
         var phaseEl = document.getElementById("run-phase-detail");
+        var titleEl = document.getElementById("run-status-title");
+        var nextEl = document.getElementById("run-next-steps");
         var bar = document.getElementById("run-progress-bar");
         var pctEl = document.getElementById("run-progress-pct");
         var countEl = document.getElementById("run-progress-count");
@@ -93,6 +107,18 @@ function renderProgressScript(pollUrl) {
           dot.style.animation = "none";
           dot.style.boxShadow = "none";
           dot.style.background = color;
+        }
+
+        // Heading + "Back to <section>" link, shown once the job leaves
+        // 'queued'/'running' -- the operator no longer needs to stay on this
+        // panel, and (unlike the old copy) this is the only place that now
+        // claims anything about where to look next.
+        function showNextSteps(verb) {
+          if (titleEl) titleEl.textContent = label + " " + verb;
+          if (nextEl) {
+            nextEl.style.display = "block";
+            nextEl.innerHTML = '<a href="' + backLink + '" style="color:var(--color-info-text);">Back to ' + backLabel + "</a>";
+          }
         }
 
         // updated_at doubles as a liveness signal (job_progress table,
@@ -119,6 +145,7 @@ function renderProgressScript(pollUrl) {
             if (staleTimer) clearTimeout(staleTimer);
             markTerminal("var(--color-success-text)");
             if (phaseEl) phaseEl.textContent = job.detail || "Complete.";
+            showNextSteps("complete");
             return;
           }
           if (job.status === "failed") {
@@ -127,6 +154,7 @@ function renderProgressScript(pollUrl) {
             markTerminal("var(--color-danger-text)");
             if (bar) bar.style.background = "var(--color-danger-text)";
             if (phaseEl) phaseEl.textContent = "Failed: " + (job.error || "unknown error");
+            showNextSteps("failed");
             return;
           }
           if (phaseEl) phaseEl.textContent = job.detail || (job.phase ? job.phase + "..." : job.status + "...");
@@ -162,12 +190,12 @@ export function renderRunAcceptedPage({ title, detail, backLink, backLabel, jobI
   const pollUrl = jobId ? jobPollUrl(jobId, type) : null;
 
   return `<section id="run-accepted">
-    <h2>${escapeHtml(title)} accepted</h2>
+    <h2 id="run-status-title">${escapeHtml(title)} accepted</h2>
     ${renderProgressPanel({ detail, pollUrl })}
-    <p class="note">${pollUrl ? "Progress updates automatically below -- no need to refresh." : "This page does not wait for the run to finish, so nothing further will happen here."}</p>
-    <p class="note">Check back on <a href="${escapeHtml(backLink)}" style="color:var(--color-info-text);">${escapeHtml(backLabel)}</a> in a minute or two; results will appear there once the run completes.</p>
+    <p class="note">${pollUrl ? "Progress updates automatically above." : "This page does not wait for the run to finish, so nothing further will happen here."}</p>
+    <p class="note">You can also return to <a href="${escapeHtml(backLink)}" style="color:var(--color-info-text);">${escapeHtml(backLabel)}</a> at any time -- a live progress panel appears there too while this job is running${type !== "backtest" ? ", and the most recently finished run is always shown at the top of the page" : ""}.</p>
     ${PULSE_STYLE}
-    ${pollUrl ? renderProgressScript(pollUrl) : ""}
+    ${pollUrl ? renderProgressScript({ pollUrl, label: title, backLink, backLabel }) : ""}
   </section>`;
 }
 
@@ -196,11 +224,12 @@ export function renderActiveJobPanel(job) {
   if (!job || !job.id) return "";
   const pollUrl = jobPollUrl(job.id, job.type);
   const label = job.type === "backtest" ? "Backtest" : "Backfill";
+  const backLink = job.type === "backtest" ? "/dashboard/backtest" : "/dashboard/backfill";
 
   return `<section id="active-job" data-job-id="${escapeHtml(job.id)}">
-    <h2>${label} in progress</h2>
+    <h2 id="run-status-title">${label} in progress</h2>
     ${renderProgressPanel({ detail: describeJob(job), pollUrl })}
     ${PULSE_STYLE}
-    ${renderProgressScript(pollUrl)}
+    ${renderProgressScript({ pollUrl, label, backLink, backLabel: label })}
   </section>`;
 }
