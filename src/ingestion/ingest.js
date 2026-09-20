@@ -58,7 +58,7 @@ import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
 import { fetchDailyBars } from "../ingestion/sources/yfinance.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
-import { insertNewsItem, insertNewsItems, insertPriceBar, insertFundamentalFacts } from "../storage/inputs_view.js";
+import { insertNewsItems, insertPriceBar, insertFundamentalFacts } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
 
 // D1/subrequest budget for the batched news-item inserts below (backfill,
