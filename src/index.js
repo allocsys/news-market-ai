@@ -235,13 +235,28 @@ export default {
 
     return new Response("news-market-ai backend worker is running (private -- see wrangler.toml). Architecture in plan.md.", { status: 200 });
   },
-  // No `queue()` export: this Worker has no queue consumers left (Step 5
-  // follow-up, 2026-09-20). Its last one, JOBS's `backfill` handler, moved
-  // to the `ingest` Worker (src/ingest-worker.js) along with the queue
-  // itself (renamed BACKFILL) -- see that queue's own comment in
-  // wrangler.toml. This Worker still PRODUCES onto INGEST/LLM_JOBS/BACKTEST
-  // (scheduled() and the two POST routes above) and now BACKFILL too, but
-  // consumes none of them.
+  // TRANSITIONAL no-op queue() (added 2026-09-20, hours after the Step 5
+  // follow-up above removed the real one): Cloudflare rejects uploading a
+  // script version with no queue() export while the WORKER STILL HAS an
+  // active queue consumer trigger attached from its last successful deploy
+  // ("Queue handler is missing", code 11001) -- this Worker's last deploy
+  // still had the JOBS consumer live, and wrangler.toml no longer
+  // declaring that `[[queues.consumers]]` block isn't enough BY ITSELF to
+  // detach it in the same deploy that also drops the handler; the trigger
+  // removal and the handler removal can't both happen in one step. This
+  // handler only exists to get this one deploy accepted so wrangler's
+  // trigger reconciliation (driven by wrangler.toml, which has zero
+  // `[[queues.consumers]]` blocks) can actually detach JOBS. It does
+  // nothing but ack -- no message should ever reach it, since nothing
+  // produces onto JOBS anymore either (renamed BACKFILL, produced by this
+  // Worker, consumed by `ingest`). REMOVE in the very next deploy, once
+  // `cf_workers_get_worker news-market-ai` (or the dashboard) confirms no
+  // queue trigger remains on this script -- do not let this linger past
+  // that check.
+  async queue(batch) {
+    console.error("backend queue() invoked unexpectedly -- this Worker has no real consumer, see the transitional handler's own comment", { messageCount: batch.messages.length });
+    for (const message of batch.messages) message.ack();
+  },
 
   async scheduled(event, env) {
     const config = loadConfig(env);
