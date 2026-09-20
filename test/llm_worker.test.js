@@ -78,7 +78,7 @@ function batchOf(...messages) {
 // backtest (LLM_JOBS)
 // ---------------------------------------------------------------------------
 
-test("queue() REJECTS a backtest job loudly (M2): marks the job failed with an M3 pointer, runs nothing, then acks", async (t) => {
+test("queue() REJECTS a stray backtest job loudly: marks the job failed, pointing at the backtest Worker, runs nothing, then acks", async (t) => {
   // job_progress lives in LIVE_DB's state schema (M2b); there is no env.DB.
   const bindings = engineBindings();
   const env = { ...bindings };
@@ -105,7 +105,7 @@ test("queue() REJECTS a backtest job loudly (M2): marks the job failed with an M
   assert.equal(job.run_id, "live", "no SIM_DB here, so the rejection row lands under the live run");
   assert.equal(job.type, "backtest");
   assert.equal(job.status, "failed");
-  assert.match(job.error, /backtest Worker in M3/);
+  assert.match(job.error, /backtest Worker/);
   assert.equal((await new RunStore(bindings.LIVE_DB, "live").getJob("backtest-1")).status, "failed", "and is what GET /api/jobs/:id will read back");
 
   // Nothing ran: no engine state written to either binding.

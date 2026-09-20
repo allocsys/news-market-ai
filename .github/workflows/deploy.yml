@@ -499,7 +499,8 @@ jobs:
   # `llm` Worker (plan.md Step 6) -- own path-filtered job, own concurrency
   # group (same reasoning as deploy-dashboard/deploy-ingest above: an
   # unrelated push must never cancel this Worker's in-flight deploy, and vice
-  # versa), and the ONLY job that ever sees GEMINI_API_KEYS. Depends on
+  # versa), and one of two jobs that see GEMINI_API_KEYS (deploy-backtest is
+  # the other). Depends on
   # backend's own `deploy` job, not just `test`, since backend's deploy job
   # is what provisions the news-market-ai-analyze / news-market-ai-llm-jobs
   # queues (+ DLQs) this Worker's wrangler.llm.toml consumes from (via the
@@ -546,8 +547,8 @@ jobs:
         # unrelated to whether a key is set. `wrangler secret put` is
         # idempotent against a repeat run with the same value, same as
         # ai-campaign-builder's equivalent steps. Moved here from backend's
-        # deploy job (plan.md Step 6) -- this is now the ONLY job that
-        # touches GEMINI_API_KEYS.
+        # deploy job (plan.md Step 6) -- this and deploy-backtest are now the
+        # only jobs that touch GEMINI_API_KEYS.
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
