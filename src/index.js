@@ -160,6 +160,35 @@ export default {
       }
     }
 
+    // Operational entry point for ingestion/ingest.js#backfillHistoricalPriceBars
+    // (Next Steps step A, plan.md) -- writes INPUTS_DB, job row in LIVE_DB's
+    // job_progress under run_id 'live', SAME pattern as POST /backfill just
+    // above (own job id/type "backfill_prices", enqueued onto the same
+    // BACKFILL queue -- see ingest-worker.js's queue() for why this reuses
+    // that queue rather than provisioning a new one). `tickers` is optional
+    // (comma-separated; defaults to the whole watchlist, resolved inside
+    // backfillHistoricalPriceBars itself so the accepted-response echo below
+    // can show it either way).
+    if (pathname === "/backfill-prices" && request.method === "POST") {
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      if (!isPlausibleDateString(from) || !isPlausibleDateString(to)) {
+        return jsonResponse({ error: "from/to query params are required, as YYYY-MM-DD" }, { status: 400 });
+      }
+      const tickersParam = url.searchParams.get("tickers");
+      const tickers = tickersParam ? tickersParam.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+
+      const id = newJobId("backfill-prices");
+      await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill_prices", params: { from, to, tickers } }).queued();
+      try {
+        await env.BACKFILL.send({ type: "backfill_prices", id, from, to, tickers });
+        return jsonResponse({ accepted: true, id, from, to, tickers: tickers ?? config.watchlist.map((w) => w.ticker) });
+      } catch (err) {
+        console.error("backfill-prices enqueue failed", { id, from, to, message: err.message });
+        return jsonResponse({ error: "backfill-prices enqueue failed", message: err.message }, { status: 500 });
+      }
+    }
+
     // POST /backtest/run: RE-ENABLED (M3) -- enqueues onto BACKTEST for the
     // new `backtest` Worker (wrangler.backtest.toml) instead of running
     // inline or (pre-M2) via LLM_JOBS. Query-string only, same shape as the
