@@ -25,21 +25,24 @@
 // see gdelt.js's header for the live silent-scheduled-run-death incident
 // that made a timeout on every ingestion fetch (not just this one) a hard
 // requirement.
-// UPDATE (2026-09-2x, plan.md Next Steps step A -- backtest audit finding
+// UPDATE (2026-09-21, plan.md Next Steps step A -- backtest audit finding
 // 1, "no price history"): the 429s this file already isolates and cools
-// down per-ticker turned out to be SUSTAINED, not occasional -- Workers
-// Observability shows MSFT hitting `yfinance chart API returned 429` on
-// effectively every `*/15` tick since ingestion started (same "possible
-// shared/rate-limited egress IP" suspicion already documented for GDELT
-// elsewhere in this repo), which is the actual reason price_bars has zero
-// MSFT rows: it is not a code bug, every MSFT request this adapter has
-// made has been rate-limited. AAPL/TSLA got through often enough to have
-// 5 bars each. This is a real, currently-unresolved vendor-access risk,
-// not something a historical-range backfill call below can route around
-// -- a backfill attempt can and likely will hit the same 429s, just with
-// (at most) one request per ticker instead of one per cron tick, so the
-// per-ticker failure isolation and cross-invocation cooldown below apply
-// to it exactly as they do to the live path.
+// down per-ticker are SUSTAINED, and they hit EVERY ticker, not just MSFT.
+// Workers Observability for the `ingest` Worker (2026-09-20, 12:00-21:36
+// UTC) has yfinance error lines in every 36-minute bucket; the 15 lines
+// sampled from about 20:15-21:15 UTC show `yfinance chart API returned 429`
+// for AAPL, MSFT and TSLA on each attempt, with the alternate ticks being
+// cooldown skips (the cooldown below). price_bars therefore holds only 5
+// bars each for AAPL/TSLA (TSLA last written 2026-09-20 18:15 UTC) and none
+// for MSFT. Suspected cause (UNPROVEN): Yahoo rate-limits the shared
+// Cloudflare egress IPs, the same suspicion documented for GDELT elsewhere
+// in this repo. This is a real, currently-unresolved vendor-access risk that
+// a historical-range call cannot route around: it may 429 too. What it CAN
+// do is not be skipped by the cooldown -- see fetchHistoricalBars, which
+// ignores the cooldown (one request per ticker, operator-triggered) but
+// still records a fresh one when it gets a 429. If it 429s in practice, the
+// fallback is a different daily-bar source or seeding bars by hand (see
+// plan.md, "Historical price backfill").
 //
 // Every returned bar is run through market_data_validator.js#validatePriceBar
 // before being handed back, matching gdelt.js's validate-before-return
@@ -74,14 +77,18 @@ function timestampToDate(unixSeconds) {
  * recording a fresh cooldown itself on a 429) -- callers keep their own
  * per-ticker try/catch around this call, same isolation shape as before.
  */
-async function fetchTickerChart(config, ticker, extraParams, { kv, throttle } = {}) {
+async function fetchTickerChart(config, ticker, extraParams, { kv, throttle, ignoreCooldown = false } = {}) {
   // A prior call already got a 429 for this ticker and recorded a
   // cross-invocation cooldown (see below) -- skip the attempt entirely
   // rather than re-running a fetch (and, before this fix, a whole
   // exponential-backoff retry ladder) already known to be blocked. This
   // is what stops a sustained rate-limit from re-costing wall time on
   // every single 15-minute cron tick (see config.js#yfinanceCooldownSeconds).
-  if (await isVendorCoolingDown(kv, "yfinance", ticker)) {
+  // `ignoreCooldown` is set only by fetchHistoricalBars: an operator-triggered
+  // backfill is one request per ticker, and honouring a cooldown that a cron
+  // tick set minutes ago would make it fail without ever asking Yahoo. A 429
+  // it gets is still recorded as a cooldown below, so the live path backs off.
+  if (!ignoreCooldown && (await isVendorCoolingDown(kv, "yfinance", ticker))) {
     throw new VendorError("yfinance", `yfinance cooling down for ${ticker} after a recent 429 -- skipping until cooldown expires`, { status: 429, transient: false });
   }
 
@@ -227,14 +234,13 @@ export async function fetchDailyBars(config, { tickers = config.watchlist.map((w
  * no window-splitting/continuation to do. A caller backfilling a year of
  * daily bars for the 3-ticker watchlist costs 3 HTTP requests total.
  *
- * Same cooldown/throttle/retry/parse/validate path as fetchDailyBars (both
- * go through fetchTickerChart) -- including the fails-fast-on-429-then-
- * cross-invocation-cooldown behavior (see this file's header for how
- * sustained that 429 has been observed to be, MSFT especially): a backfill
- * call made while a ticker's cooldown is still active correctly skips it
- * rather than repeating a request already known to be blocked, and a 429
- * hit here records the same cooldown the live path would honor on its next
- * tick.
+ * Same throttle/retry/parse/validate path as fetchDailyBars (both go through
+ * fetchTickerChart), with ONE deliberate difference: this IGNORES the
+ * cross-invocation 429 cooldown (`ignoreCooldown: true`). See this file's
+ * header for how sustained the 429s are (every ticker): with the cooldown
+ * honoured, a backfill would be skipped on most invocations without ever
+ * reaching Yahoo. A 429 it does get fails fast (no in-process retry, same as
+ * the live path) and still records the cooldown, so the live path backs off.
  *
  * `period2` is pushed to 23:59:59 of `to` so `to`'s own trading day is
  * included -- UNVERIFIED against a real response (no live network egress
@@ -260,7 +266,7 @@ export async function fetchHistoricalBars(config, { tickers = config.watchlist.m
 
   for (const ticker of tickers) {
     try {
-      bars.push(...(await fetchTickerChart(config, ticker, { period1, period2 }, { kv, throttle })));
+      bars.push(...(await fetchTickerChart(config, ticker, { period1, period2 }, { kv, throttle, ignoreCooldown: true })));
     } catch (err) {
       if (err instanceof VendorError) {
         errors.push({ ticker, error: err });
