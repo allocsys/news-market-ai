@@ -65,7 +65,7 @@ signals. Needs a historical archive for backtesting and fine-tuning.
    `url`, `published_at` (exact public timestamp, not ingestion time), `ingested_at`,
    `tickers`, `title`, `body`, `raw` (original payload). Dedup on `id`/URL.
    Sources: Finnhub `/company-news` (primary; GDELT was replaced, see Known Gaps),
-   RSS, HTML scrape, yfinance (bars), SEC EDGAR (XBRL fundamentals).
+   RSS, HTML scrape, yfinance (bars; returns 429 from Workers, replacement pending: see "Price data sources"), SEC EDGAR (XBRL fundamentals).
 2. **Storage** — D1 (structured, indexed by ticker + published_at). R2 is an
    unused option for a raw archive if D1 is ever outgrown.
 3. **Analyst Team** — parallel News/Event, Sentiment (5-band + justification) and
@@ -215,7 +215,7 @@ run by the `backtest` Worker.
 **Free-plan budgets** (account is on Workers Free; limits from Cloudflare's docs,
 checked 2026-09-19). All are per account, not per DB, Worker or namespace, so
 three D1s and a second KV isolate state but add no quota.
-- D1: 5M rows read and 100K rows written per day across every DB in the account;
+- D1: 5M rows read and 100K rows written per day across every DB in the account (**the write cap was hit on 2026-09-20; see "Live incident: first price backfill failed"**);
   an indexed column counts as an extra row written. When exhausted, all queries
   error until 00:00 UTC, live's included. Storage: 500 MB per DB, 5 GB per
   account. Databases: 10 per account (other projects' DBs included).
@@ -461,6 +461,34 @@ has not been re-measured.
   CPU/subrequest errors on `ingest` during the 90-day run; whether the backfill
   path enqueues ANALYZE (Queues free cap is 10K ops/day) — unassessed.
 
+## Live incident: first price backfill failed; D1 write cap hit (2026-09-20)
+The owner ran `POST /backfill-prices` at ~22:03 UTC (job `backfill-prices-1789941826739-dvbcj3`, 2026-09-13..2026-09-20, watchlist AAPL/MSFT/TSLA) after PR #69 deployed (deploy #349 green, all Worker deploy jobs ran). The dashboard showed it stuck at `queued`. Findings, from `job_progress` (LIVE_DB) and Workers Observability (`ingest`, queue `news-market-ai-backfill`):
+- **It did not stall; it failed in ~1.5s.** The consumer picked it up immediately (8ms CPU). yfinance returned **429 for AAPL, MSFT and TSLA** on the single request each, so 0 bars were inserted; the worker logged `No price bars saved -- ...` and acked. The designed failure path (fail loudly, name tickers and reasons) worked. `fetchHistoricalBars` ignores the shared cooldown, so this is Yahoo rejecting Workers egress on the historical path too. Mechanism still unproven.
+- **Every `job_progress` write failed** (`start`, three `update`s, `fail`) with `D1_ERROR: Your account has exceeded D1's free tier daily row write limit ... (midnight UTC)`. The row therefore stayed `queued` with `started_at` null, and the dashboard's 2s poll of `/dashboard/jobs/<id>` never ends. Reads still worked.
+- **Likely cause of the cap (unproven, not measured):** the 90-day news backfill (10,025 articles, each also writing revisions, ticker links and index rows, all counted as rows written) plus several other backfill runs and the `*/15` cron against the 100K rows/day free cap.
+- **Impact:** all D1 writes fail until 00:00 UTC, so live ingest and ANALYZE writes were likely failing too (not checked). It would also have blocked `insertPriceBars` had Yahoo answered.
+- **Open:** wait for the reset or upgrade the Workers plan (undecided); the stuck-`queued` bug (Other remaining work #8).
+
+## Price data sources (research 2026-09-20/21; nothing built or tested from Workers)
+**Why:** Yahoo's unofficial chart API returned 429 on every call seen from Workers on 2026-09-20 (AAPL/TSLA do have 5 earlier bars, so it worked at some point), so it cannot be relied on as the bar source. Only published limits were checked; no provider has been called yet.
+
+| Provider (free plan) | Limits | Notes |
+|---|---|---|
+| **Tiingo** (recommended, unconfirmed by owner) | 50 req/hour, 1,000/day, 500 unique symbols/month | EOD endpoint (from memory: start/end dates, raw and adjusted prices; verify in docs). Separate Forex API: 140+ pairs incl. **gold, silver, platinum** (per its product page), OHLC only (no volume), 3+ years of history, free plan listed with the same request limits, internal-use licence. **Oil not listed.** |
+| Twelve Data | 8 credits/min, 800/day, 1 credit per symbol per `/time_series`, 5,000 rows/request, resets 00:00 UTC | Second choice. Supports start/end dates. Forex is on the free plan, but its Commodity market (XAU/USD gold spot, WTI, etc.) needs the Grow plan (about $29/month). |
+| Massive (ex-Polygon) | 5 calls/min, end-of-day, 2 years of history | Fine for 3-month windows but slow and limits older backtests. Free-plan forex/commodity coverage not checked. |
+| Alpha Vantage | 25 req/day, 5/min | Enough for 3 tickers, exhausted fast. Reportedly has commodity series (unverified). |
+| Finnhub | 60/min | A 2025 report says stock candles returned "no access" on the free plan (not re-verified): not usable for bars. |
+| Stooq | API key via on-site CAPTCHA since early 2026, quota unpublished | Skip. |
+
+**Owner requirement (2026-09-20/21):** add proper **gold and oil** tickers "so I can trade forex too", i.e. a watchlist beyond AAPL/MSFT/TSLA. **Decided (owner, 2026-09-20/21): oil via an ETF proxy is fine for now; forex is signals only for now** (no execution layer exists and none is planned yet). Still open before building:
+- **Gold:** spot via Tiingo's Forex API (untested with a free key) or a gold ETF such as GLD as a proxy on the stock endpoint (no extra code; a proxy, trades US hours only).
+- **Oil: DECIDED, use an oil ETF proxy on the stock endpoint for now** (e.g. USO or BNO; pick the exact fund when building, not researched). No free spot-oil source was confirmed (Tiingo's Forex page does not list oil; Twelve Data needs paid Grow; Alpha Vantage unverified). Revisit if spot oil is wanted later.
+- **Forex pairs (signals only):** Tiingo's Forex API is the candidate; OHLC only, so `price_bars.volume` would be null. Signals only means no order placement; positions in the store stay paper positions.
+- **Symbols:** `POST /backfill-prices` accepts Yahoo-style symbols (`/^[A-Z0-9^.=-]{1,12}$/`, e.g. `GC=F`, `EURUSD=X`); a provider needs its own symbol map.
+- **Raw vs adjusted prices:** pick one so new bars match the existing yfinance bars (AAPL/TSLA 2026-09-14..09-18).
+- **Wider design, not started:** how news maps to a commodity/FX ticker (Finnhub `/company-news` and entity resolution are per equity symbol); position and risk model for FX and commodities (units, leverage, pip values, shorting; sizing is deterministic in `risk_mgmt/`); 24h and weekend markets vs daily bars and the hold-days/exit logic; and Queues/D1 budgets as the watchlist grows (the Deployment table already says to re-check before growing it).
+
 ## Repo Structure
 ```
 src/index.js          # `backend` Worker (wrangler.toml) -- JSON API, /backfill
@@ -519,13 +547,13 @@ exits, technical analyst on price bars, realized-return settlement feeding the
 reflection loop, date-windowed historical backfill, the signal on/off backtest
 harness (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress
 job panel. Backtest/live isolation is built (M1–M5). CI and deploys are green
-across all five Workers (`main` = `8d8775b`, PR #68, before the step A PR).
+across all five Workers (`main` = `031825d`: PR #69, step A, squash-merged 2026-09-20 on top of PR #68 = `8d8775b`; deploy #349 green). Price bars still do not exist: the first live price backfill failed (see "Live incident: first price backfill failed").
 
 **Backtests are NOT yet trustworthy.** An audit (2026-09-20, in response to
 "is backtesting bug free?") answered **no**: results would currently be
 meaningless. Do not run a real backtest until steps A–E below are done.
 
-### Next steps: make backtests trustworthy (agreed 2026-09-20; step A code written, not yet run live; B-F not started)
+### Next steps: make backtests trustworthy (agreed 2026-09-20; step A merged as PR #69 but its first live run FAILED, so no price bars exist yet; A2 (new price source) is next; B-F not started)
 Working rules: each step is its own PR off `main` (direct GitHub-API edits on a
 feature branch; the CI `test` job is the real test; no local runner); merge
 only on the owner's explicit per-PR go-ahead, squash-merge. First thing next
@@ -606,8 +634,8 @@ incl. leakcheck) do NOT cover: the same-day bar leak, the 500-row caps,
 multi-ticker ordering, long-window queue limits.
 
 **Fix plan, in order:**
-- **A. Historical price-bar backfill.** **STATUS: code written and tests added, NOT yet
-  run live.** Built: `yfinance.js#fetchHistoricalBars` (`period1`/`period2`, one
+- **A. Historical price-bar backfill.** **STATUS: merged as PR #69 (`031825d`, CI green); first live run 2026-09-20 FAILED: yfinance 429 on every ticker, then the D1 write cap (see "Live incident: first price backfill failed"). The Risk noted below materialized.** Before the first run this read: code written and tests added, NOT yet
+  run live. Built: `yfinance.js#fetchHistoricalBars` (`period1`/`period2`, one
   request per ticker, ignores the shared 429 cooldown but records a fresh one),
   batched `insertPriceBars`, `ingest.js#backfillHistoricalPriceBars`, a
   `backfill_prices` branch on the `BACKFILL` consumer (nothing saved = failed job;
@@ -629,6 +657,7 @@ multi-ticker ordering, long-window queue limits.
   cooldown KV, Workers logs, or a direct call). Design the owner-facing trigger
   after checking how `POST /backfill` is wired in `src/index.js` and the ingest
   Worker.
+- **A2. Replace Yahoo as the price-bar source, then re-run the backfill (NEXT).** Recommended provider: Tiingo (owner has NOT confirmed; alternative Twelve Data); limits, gold/oil/forex coverage and open questions are in "Price data sources". Do not retry the Yahoo backfill. Blocked on: (a) an API key stored as a secret on the `ingest` Worker (the owner creates the key; never paste it in chat), and (b) the D1 daily write cap resetting at 00:00 UTC or a plan upgrade. Scope: a provider adapter behind the same `fetchHistoricalBars` contract so `backfillHistoricalPriceBars`, `insertPriceBars`, `POST /backfill-prices` and the dashboard form stay as merged; a watchlist-symbol to provider-symbol map; a distinct `source` value on stored bars; a fix so a failed terminal `job_progress` write cannot leave a job `queued` forever (see Other remaining work #8). First run small (3 tickers, ~1 month), then the full span.
 - **B. Remove the 500-row caps.** Keyset-paginate `getNewsItemsInRange` in
   `onSignalRunner` (or stream day by day); lift or paginate
   `getRealizedReturnsInRange`; add tests with >500 items.
@@ -662,7 +691,10 @@ multi-ticker ordering, long-window queue limits.
 5. **Optional:** the owner runs the remaining historical backfill in ~90-day
    slices up to ~1 year (no code needed).
 6. **Dashboard environment selector** (`?env=`), left over from M4.
-7. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the
+7. **D1 daily write cap** (hit 2026-09-20 ~22:03 UTC; see the incident section). Decide wait vs upgrading the Workers plan. After 00:00 UTC, check that the `*/15` ingest and ANALYZE recovered and whether anything from the blocked window needs re-running.
+8. **Job stuck `queued` when the terminal progress write fails.** Progress writes are best-effort by design, so a failed write is only a logged warning and the dashboard polls the row forever. Needs a dashboard-side stale/timeout state and/or a non-D1 fallback record of the terminal state (KV has its own 1K writes/day cap).
+9. **New instruments: gold, oil, forex** (owner request, 2026-09-20/21). Design and source questions are in "Price data sources". Nothing built.
+10. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the
    live dashboard Worker (config drift once observed; status unverified).
 
 ## Known Gaps / Backlog
@@ -680,8 +712,8 @@ multi-ticker ordering, long-window queue limits.
   HTML-scrape does tag-stripping only; Reuters/WSJ return bot-challenge 401s;
   pages with no published-time meta fall back to fetch time and are unsafe for
   point-in-time use.
-- **yfinance** is unofficial, daily bars only, and currently rate-limited (429) —
-  see Next steps, A. **EDGAR** gives only reported `us-gaap` tags (no non-GAAP),
+- **yfinance** is unofficial, daily bars only, and returned 429 on every call seen from Workers on 2026-09-20 (live cron and the historical backfill) —
+  see Next steps, A2. **EDGAR** gives only reported `us-gaap` tags (no non-GAAP),
   paced at 110ms. Ingestion pacing exists per adapter but there is no shared
   cross-vendor limiter, and `ingestPriceBars`/`ingestFundamentals` fetch the full
   watchlist with no delta fetching.
