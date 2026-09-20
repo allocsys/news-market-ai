@@ -470,7 +470,7 @@ The owner ran `POST /backfill-prices` at ~22:03 UTC (job `backfill-prices-178994
 - **Open:** wait for the reset or upgrade the Workers plan (undecided); the stuck-`queued` bug (Other remaining work #8).
 
 ## Price data sources (research 2026-09-20/21; nothing built or tested from Workers)
-**Why:** Yahoo's unofficial chart API returns 429 for every call from Workers, so it cannot be the bar source. Only published limits were checked; no provider has been called yet.
+**Why:** Yahoo's unofficial chart API returned 429 on every call seen from Workers on 2026-09-20 (AAPL/TSLA do have 5 earlier bars, so it worked at some point), so it cannot be relied on as the bar source. Only published limits were checked; no provider has been called yet.
 
 | Provider (free plan) | Limits | Notes |
 |---|---|---|
@@ -712,7 +712,7 @@ multi-ticker ordering, long-window queue limits.
   HTML-scrape does tag-stripping only; Reuters/WSJ return bot-challenge 401s;
   pages with no published-time meta fall back to fetch time and are unsafe for
   point-in-time use.
-- **yfinance** is unofficial, daily bars only, and returns 429 on every call from Workers (live cron and the historical backfill, 2026-09-20) —
+- **yfinance** is unofficial, daily bars only, and returned 429 on every call seen from Workers on 2026-09-20 (live cron and the historical backfill) —
   see Next steps, A2. **EDGAR** gives only reported `us-gaap` tags (no non-GAAP),
   paced at 110ms. Ingestion pacing exists per adapter but there is no shared
   cross-vendor limiter, and `ingestPriceBars`/`ingestFundamentals` fetch the full
