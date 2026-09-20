@@ -32,6 +32,38 @@
 
 import { loadConfig } from "./config.js";
 import { ingestTickerData, ingestFeedNews } from "./ingestion/ingest.js";
+import { sendInChunks } from "./ingestion/enqueue.js";
+
+/**
+ * Enqueues one ANALYZE message per (fresh item, ticker) pair onto `queue`, in
+ * chunks that respect Cloudflare Queues' sendBatch limits (see
+ * ingestion/enqueue.js), then logs the outcome.
+ *
+ * `fresh` is what ingestTickerData/ingestFeedNews return: only items that are
+ * new since the last tick, NOT everything the vendor's trailing window
+ * returned. A queue failure here is not retried: the items are already stored,
+ * so a re-run would see them as existing and enqueue nothing. It is logged
+ * loudly with a count and the affected `ticker:runId` labels instead, because
+ * this is the one place where stored-but-never-analyzed items can come from.
+ */
+async function enqueueAnalyze(queue, { jobName, context, fetched, fresh }) {
+  const messages = [];
+  for (const { item, tickers } of fresh) {
+    for (const ticker of tickers) {
+      messages.push({ body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt } });
+    }
+  }
+
+  const { sent, failures } = await sendInChunks(queue, messages);
+  console.log(`${jobName} job completed`, { ...context, fetched, freshItems: fresh.length, analyzeMessages: messages.length, enqueued: sent });
+  if (failures.length > 0) {
+    console.error(`${jobName} could not enqueue every ANALYZE message -- these items are stored but will not be analyzed`, {
+      ...context,
+      lost: messages.length - sent,
+      failures,
+    });
+  }
+}
 
 export default {
   async fetch() {
@@ -56,12 +88,8 @@ export default {
           // ingest_ticker message for this same ticker just tries again.
           const { ticker, asOf } = job;
           try {
-            const insertedNews = await ingestTickerData(config, env.INPUTS_DB, env.CACHE_KV, { ticker, asOf });
-            const analyzeMessages = insertedNews.map((item) => ({
-              body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt },
-            }));
-            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
-            console.log("ingest_ticker job completed", { ticker, newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
+            const { fetched, fresh } = await ingestTickerData(config, env.INPUTS_DB, env.CACHE_KV, { ticker, asOf });
+            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_ticker", context: { ticker }, fetched, fresh });
           } catch (err) {
             console.error("ingest_ticker job failed", { ticker, message: err.message });
           }
@@ -71,15 +99,8 @@ export default {
           // this enqueues one ANALYZE message per (item, ticker) pair,
           // same loop shape ingest_ticker's single-ticker case doesn't need.
           try {
-            const insertedNews = await ingestFeedNews(config, env.INPUTS_DB, env.CACHE_KV);
-            const analyzeMessages = [];
-            for (const item of insertedNews) {
-              for (const ticker of item.tickers) {
-                analyzeMessages.push({ body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt } });
-              }
-            }
-            if (analyzeMessages.length > 0) await env.ANALYZE.sendBatch(analyzeMessages);
-            console.log("ingest_feeds job completed", { newsItems: insertedNews.length, analyzeMessages: analyzeMessages.length });
+            const { fetched, fresh } = await ingestFeedNews(config, env.INPUTS_DB, env.CACHE_KV);
+            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_feeds", context: {}, fetched, fresh });
           } catch (err) {
             console.error("ingest_feeds job failed", { message: err.message });
           }

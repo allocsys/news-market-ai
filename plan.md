@@ -552,9 +552,32 @@ work on `main` directly.
   secrets were never deleted from `backend` after Step 2; `checkAuth` is a no-op
   only when they're unset, so every `/api/*` call returned 401. **Lesson:** a green
   deploy says nothing about live bindings. Compare each Worker's live bindings to
-  its wrangler file's "Secrets" comment, or add the smoke test below.
+  its wrangler file's "Secrets" comment.
 - **Config drift:** `wrangler.dashboard.toml` enables `[observability.logs]` but the
   live dashboard Worker had logs off. The toml is the intended state; re-enable.
+- **Live pipeline produced no analysis after the M4 cutover (found 2026-09-20,
+  fixed on `fix/ingest-enqueue-new-items-only`).** `LIVE_DB` was empty (no
+  decisions, positions, checkpoints or LLM calls) while `INPUTS_DB` held 427 news
+  items, and `llm` ran only `exit_check`. Cause: every `ingest_ticker` tick threw
+  `batch message count of 163 exceeds limit of 100 (10206)` from
+  `ANALYZE.sendBatch` (Cloudflare Queues caps a batch at 100 messages / 256 KB);
+  the handler caught it, logged it and acked, so nothing ever reached ANALYZE.
+  **Second trap, fixed together:** `ingestTickerData`/`ingestFeedNews` returned
+  every fetched item, not just new ones (Finnhub returns a trailing window and
+  `insertNewsItem` said nothing about conflicts), so chunking alone would have
+  re-enqueued ~160 items per ticker every 15 minutes. Now `insertNewsItem` returns
+  `{ inserted, newTickers }` (from D1 `meta.changes`), the ingest functions return
+  `{ fetched, fresh }` (an item is fresh for a ticker when its `news_items` row or
+  its `(item, ticker)` association is new), and `ingestion/enqueue.js#sendInChunks`
+  sends in chunks of at most 100 messages / 200 KB, continues past a failed chunk
+  and reports it. **Open consequences:** (1) the items ingested before the fix
+  are stored but were never analyzed and are no longer detected as new; analyzing
+  them is LLM spend and the owner's call. (2) A queue failure after the D1 write is
+  logged (count + `ticker:runId` labels) but not retried, since a re-run would see
+  those items as already stored. (3) The per-tick cost of re-running
+  `insertNewsItem` over the whole trailing window (3-4 D1 statements per item) is
+  unchanged; if it shows up in CPU or D1 numbers, pre-filter existing ids with one
+  batched `SELECT` per ticker.
 
 ## Repo Structure
 ```
@@ -622,16 +645,13 @@ four behaviors below have not been observed live end to end.
 1b. **Overlapping open positions per ticker** (live) — fixed by the atomic
    portfolio commit in M1 (live from M4); until then live can re-accumulate
    overlapping positions and reject non-AAPL trades.
-2. **Post-deploy smoke test** in `deploy.yml`: log in via `dashboard`, fetch one
-   `/api/*` route through the service binding, fail unless 200. Would have caught
-   the 401 incident.
-3. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
+2. **Live verification** of: a backtest surviving past the old 30s cutoff (Step 3),
    a real ANALYZE crash-and-retry (Step 4), ops/day against real Observability
    numbers (Step 4), and the full ingest → analyze → llm flow producing decisions.
-4. **Step 5's gap:** `backend` still holds `FINNHUB_API_KEY` for `backfill`.
-5. **Loose ends:** unreferenced `src/dashboard.js` shim; a stray unrelated Worker
+3. **Step 5's gap:** `backend` still holds `FINNHUB_API_KEY` for `backfill`.
+4. **Loose ends:** unreferenced `src/dashboard.js` shim; a stray unrelated Worker
    `restless-manager-6789` on the account; dashboard UI/UX not screenshot-reviewed.
-6. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
+5. Old stuck backtest row `backtest-1789756783629-bxavoi` is now `failed` in D1.
 
 **M1 defect found while starting M2 (2026-09-19), fixed in the first M2 PR:**
 `commitThesis`'s close-old statement did not exclude the row the same batch
