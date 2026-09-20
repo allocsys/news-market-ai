@@ -42,7 +42,7 @@
 // same safety-net split as backend's queue().
 
 import { loadConfig } from "./config.js";
-import { ingestTickerData, ingestFeedNews, backfillHistoricalNews } from "./ingestion/ingest.js";
+import { ingestTickerData, ingestFeedNews, backfillHistoricalNews, backfillHistoricalPriceBars } from "./ingestion/ingest.js";
 import { sendInChunks } from "./ingestion/enqueue.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
@@ -204,6 +204,33 @@ export default {
             }
           } catch (err) {
             console.error("backfill job failed", { id, from, to, message: err.message });
+            await reporter.fail(err.message);
+          }
+        } else if (job.type === "backfill_prices") {
+          // BACKFILL_PRICES (Next Steps step A, plan.md) -- rides the SAME
+          // BACKFILL queue/consumer as the news `backfill` branch above
+          // (same LIVE_DB job_progress target, same ack-and-log-on-
+          // business-logic-failure convention) rather than provisioning a
+          // new queue: backfillHistoricalPriceBars is a single-request-
+          // per-ticker, single-invocation job with none of the
+          // parts/continuation machinery the news backfill needs (see that
+          // function's own header), so it doesn't need a queue of its own
+          // either -- max_batch_size 1 here already gives it a whole
+          // invocation to itself. No `part`/`insertedSoFar`-style
+          // continuation fields: unlike `backfill`, this message type is
+          // never re-enqueued by this Worker.
+          const { id, from, to, tickers } = job;
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill_prices", params: { from, to, tickers } });
+          await reporter.start();
+          try {
+            const result = await backfillHistoricalPriceBars(config, env.INPUTS_DB, env.CACHE_KV, { tickers, from, to, onProgress: reporter.update });
+            console.log("backfill_prices job completed", { id, from, to, tickers: result.tickers, inserted: result.inserted, errorCount: result.errors.length, tickersWithNoBars: result.tickersWithNoBars });
+            await reporter.complete(
+              { inserted: result.inserted, errorCount: result.errors.length, tickers: result.tickers, tickersWithNoBars: result.tickersWithNoBars },
+              `Inserted ${result.inserted} price bar${result.inserted === 1 ? "" : "s"} across ${result.tickers} ticker${result.tickers === 1 ? "" : "s"}${result.errors.length ? `, ${result.errors.length} vendor error${result.errors.length === 1 ? "" : "s"}` : ""}`
+            );
+          } catch (err) {
+            console.error("backfill_prices job failed", { id, from, to, message: err.message });
             await reporter.fail(err.message);
           }
         } else {
