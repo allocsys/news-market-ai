@@ -227,7 +227,11 @@ test("queue() ingest_feeds fans ANALYZE messages out per (item, ticker) pair, si
 test("queue() processes a backfill job: runs the real backfill, then acks the message", async (t) => {
   const db = new FakeIngestDb();
   // M2: news writes go to INPUTS_DB; M2b: the job_progress row goes to LIVE_DB (run_id 'live').
-  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db });
+  // Single-ticker watchlist (unlike this file's other tests): backfillHistoricalNews
+  // fetches per watchlist ticker, and mockFinnhubJson() returns the SAME
+  // fixed article regardless of ticker, so a multi-ticker watchlist would
+  // fetch it twice and the assertions below expect exactly one stored item.
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL" });
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const message = new FakeMessage({ type: "backfill", id: "backfill-1", from: "2024-01-01", to: "2024-01-31" });
@@ -253,7 +257,7 @@ test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and s
       throw new Error("simulated D1 write failure");
     }
   }
-  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: new ThrowingDb() });
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: new ThrowingDb(), WATCHLIST_TICKERS: "AAPL" });
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
 
   const errorLogs = [];
@@ -273,7 +277,7 @@ test("queue() catches a backfill failure (e.g. a D1 write error), logs it, and s
 
 test("queue() still runs and acks a backfill when LIVE_DB (the progress store) is down -- progress is best-effort", async (t) => {
   const db = new FakeIngestDb();
-  const env = baseEnv({ LIVE_DB: new BrokenDb(), INPUTS_DB: db });
+  const env = baseEnv({ LIVE_DB: new BrokenDb(), INPUTS_DB: db, WATCHLIST_TICKERS: "AAPL" });
   t.mock.method(global, "fetch", async () => ({ ok: true, status: 200, json: async () => mockFinnhubJson() }));
   const warnings = [];
   t.mock.method(console, "warn", (...args) => warnings.push(args));
