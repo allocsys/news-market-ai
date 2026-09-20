@@ -117,7 +117,10 @@ export async function handleApiLlmCallRoute(request, env, config, id) {
   return jsonResponse({ ...call, resolvedEnv, envError });
 }
 
-const ACTIVE_JOB_TYPES = new Set(["backfill", "backtest"]);
+// `backfill_prices` is the historical price-bar backfill (POST /backfill-prices), a live-environment job like `backfill`.
+const ACTIVE_JOB_TYPES = new Set(["backfill", "backfill_prices", "backtest"]);
+// Finished-job lookups are backfill-only (a backtest's result is the backtest run itself, see handleApiLatestJobRoute).
+const LATEST_JOB_TYPES = new Set(["backfill", "backfill_prices"]);
 
 /**
  * GET /api/jobs/active?type=backfill|backtest&env=... -- `{ job }`, where `job`
@@ -134,7 +137,7 @@ export async function handleApiActiveJobRoute(request, env, config) {
   if (auth.redirect) return unauthorized();
   const searchParams = new URL(request.url).searchParams;
   const type = searchParams.get("type");
-  if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backtest" }, { status: 400 });
+  if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backfill_prices, backtest" }, { status: 400 });
   const { store } = await resolveEnv(env, parseEnvParam(searchParams));
   return jsonResponse({ job: await store.getActiveJob(type) });
 }
@@ -153,7 +156,7 @@ export async function handleApiLatestJobRoute(request, env, config) {
   if (auth.redirect) return unauthorized();
   const searchParams = new URL(request.url).searchParams;
   const type = searchParams.get("type");
-  if (type !== "backfill") return jsonResponse({ error: "type must be: backfill" }, { status: 400 });
+  if (!LATEST_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be: backfill or backfill_prices" }, { status: 400 });
   const { store } = await resolveEnv(env, parseEnvParam(searchParams));
   return jsonResponse({ job: await store.getLatestFinishedJob(type) });
 }
