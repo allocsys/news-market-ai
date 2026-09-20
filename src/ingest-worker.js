@@ -1,25 +1,36 @@
-// `ingest` Worker entry point (plan.md Step 5). Owns the INGEST queue's
-// consumer -- `ingest_ticker` / `ingest_feeds`, moved here verbatim from
-// `backend`'s queue() (src/index.js), which no longer has an INGEST
-// consumer binding at all (see wrangler.toml there) and therefore never
-// receives these message types anymore. `backend`'s scheduled() still
-// PRODUCES onto INGEST (unchanged) -- this Worker is the other end of that
-// same queue, just living in its own deployable unit now, same relationship
-// `dashboard` has to `backend` via its BACKEND service binding (Step 2),
-// just via a queue instead of a service binding here.
+// `ingest` Worker entry point (plan.md Step 5, extended in a Step 5
+// follow-up on 2026-09-20). Owns two queues' consumers now:
+//   - INGEST: `ingest_ticker` / `ingest_feeds`, moved here verbatim from
+//     `backend`'s queue() (src/index.js), which no longer has an INGEST
+//     consumer binding at all (see wrangler.toml there) and therefore
+//     never receives these message types anymore. `backend`'s scheduled()
+//     still PRODUCES onto INGEST (unchanged) -- this Worker is the other
+//     end of that same queue, just living in its own deployable unit now,
+//     same relationship `dashboard` has to `backend` via its BACKEND
+//     service binding (Step 2), just via a queue instead of a service
+//     binding here.
+//   - BACKFILL (added in the follow-up): `backfill`, moved here from
+//     `backend`'s old JOBS consumer for the same reason -- `backend`'s
+//     POST /backfill still PRODUCES the message (now onto BACKFILL,
+//     renamed from JOBS), this Worker is the only consumer.
 //
-// This Worker alone holds `FINNHUB_API_KEY` and touches the EDGAR CIK/
-// name-index KV cache (via ingestTickerData/ingestFeedNews's own calls into
-// ingestPriceBars/ingestFundamentals and each adapter's entity-resolution
-// wiring) -- no other Worker in this repo has a reason to hold a Finnhub
-// key or EDGAR User-Agent identity after this step. It binds D1 directly
-// (M2: the INPUTS_DB binding -- this Worker is the only read-write writer
-// of the inputs database besides backend's backfill; only `backend` runs
-// migrations) rather than going through a service binding,
-// since ingestTickerData/ingestFeedNews both write straight to D1
-// (insertNewsItem/insertPriceBar/insertFundamentalFacts) -- there's no
-// synchronous caller waiting on a response the way dashboard->backend's
-// service binding has one.
+// This Worker alone holds `FINNHUB_API_KEY` now, for BOTH live ingestion
+// AND backfill, and touches the EDGAR CIK/name-index KV cache (via
+// ingestTickerData/ingestFeedNews's own calls into ingestPriceBars/
+// ingestFundamentals and each adapter's entity-resolution wiring) -- no
+// other Worker in this repo has a reason to hold a Finnhub key or EDGAR
+// User-Agent identity anymore; `backend` gave up its own copy in the same
+// follow-up that added the BACKFILL consumer here. It binds D1 directly
+// (M2: the INPUTS_DB binding -- this Worker is now the only writer of the
+// inputs database, live ingestion and backfill alike; only `backend` runs
+// migrations) rather than going through a service binding, since
+// ingestTickerData/ingestFeedNews/backfillHistoricalNews all write straight
+// to D1 (insertNewsItem/insertPriceBar/insertFundamentalFacts) -- there's
+// no synchronous caller waiting on a response the way dashboard->backend's
+// service binding has one. It also binds LIVE_DB (rw, added in the
+// follow-up) -- narrowly, for job_progress reporting during backfill only;
+// see wrangler.ingest.toml's own comment on why that's a wider grant than
+// the ingest_ticker/ingest_feeds code paths need.
 //
 // Same ack-and-log-on-business-logic-failure convention as every other
 // non-`analyze` message type in `backend`'s queue() (see that file's own
