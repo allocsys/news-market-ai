@@ -363,25 +363,28 @@ test("backfillHistoricalNews requires an explicit {from, to} range", async () =>
   await assert.rejects(() => backfillHistoricalNews(config, db, {}), /requires an explicit \{from, to\}/);
 });
 
-test("backfillHistoricalNews fetches finnhub for the given range and persists every item via insertNewsItem", async (t) => {
+test("backfillHistoricalNews fetches finnhub for the given range window by window and persists every item via insertNewsItem", async (t) => {
   const config = { watchlist: [{ ticker: "AAPL" }], finnhubApiBase: "https://fake.test/finnhub", finnhubApiKey: "test-key" };
 
-  let capturedUrl;
+  const urls = [];
   t.mock.method(global, "fetch", async (url) => {
-    capturedUrl = String(url);
+    urls.push(String(url));
     return { ok: true, status: 200, json: async () => mockFinnhubJson() };
   });
 
   const db = new FakeNewsDb();
   const result = await backfillHistoricalNews(config, db, { from: "2024-01-01", to: "2024-01-31" });
 
+  // The mock returns the same article for every window: stored once, and the later windows' copies are dropped by the already-stored pre-filter, so it counts as one insert.
   assert.equal(result.inserted, 1);
   assert.equal(result.errors.length, 0);
   assert.equal(db.newsItems.length, 1);
   assert.equal(db.newsItems[0].source, "finnhub");
   assert.ok(db.tickers.some((t2) => t2.ticker === "AAPL"));
-  assert.ok(capturedUrl.includes("from=2024-01-01"));
-  assert.ok(capturedUrl.includes("to=2024-01-31"));
+  // 31 days in the default 5-day windows (this bare config sets no window size): the requests together span exactly the requested range.
+  assert.equal(urls.length, 7);
+  assert.ok(urls[0].includes("from=2024-01-01"));
+  assert.ok(urls[urls.length - 1].includes("to=2024-01-31"));
 });
 
 test("backfillHistoricalNews logs and skips a ticker's VendorError without throwing, same isolation as collectNewsItems", async (t) => {
@@ -399,7 +402,8 @@ test("backfillHistoricalNews logs and skips a ticker's VendorError without throw
   t.mock.method(console, "error", (...args) => errorLogs.push(args));
 
   const db = new FakeNewsDb();
-  const result = await backfillHistoricalNews(config, db, { from: "2024-01-01", to: "2024-01-31" });
+  // Five days = one window, so AAPL's failed request is exactly one error (over a longer range it would fail once per window).
+  const result = await backfillHistoricalNews(config, db, { from: "2024-01-01", to: "2024-01-05" });
 
   assert.equal(result.inserted, 1); // only MSFT's item persisted
   assert.equal(result.errors.length, 1);

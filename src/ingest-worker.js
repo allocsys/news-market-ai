@@ -49,13 +49,24 @@ import { RunStore } from "./storage/run_store.js";
 
 // Backfill self-continuation (see wrangler.ingest.toml's BACKFILL producer
 // binding). One invocation writes at most about this many NET-NEW articles
-// (checked per 100-item chunk, so it can overshoot by up to one chunk), then
-// re-enqueues a follow-up message for the rest. Deliberately conservative and
-// NOT yet measured against real D1/CPU limits -- the 2026-09-20 incident died
-// at ~325 articles on the old unbatched path, the batched path costs ~2
-// subrequests per 100 articles, so this leaves wide headroom; raise it once a
-// real run shows how much one invocation can take.
+// (checked per date window -- see backfillHistoricalNews -- so it can overshoot
+// by up to one window: roughly watchlist size x ~35 articles/ticker/day x the
+// window's days), then re-enqueues a follow-up message for the rest.
+// Deliberately conservative and NOT yet measured against real D1/CPU limits --
+// the 2026-09-20 incident died at ~325 articles on the old unbatched path, the
+// batched path costs ~2 subrequests per 100 articles, so this leaves wide
+// headroom; raise it once a real run shows how much one invocation can take.
 export const MAX_ITEMS_PER_BACKFILL_INVOCATION = 500;
+
+// Cap on Finnhub requests (external subrequests) per backfill invocation,
+// checked before each date window starts. maxInserts alone can't bound a rerun
+// over an already-stored range (it inserts nothing), and each window costs one
+// request per ticker plus one per split. 40 is a guess kept under 50, the
+// Workers Free plan's external-subrequest limit, in case that is the plan this
+// runs on (unchecked -- the 1000-subrequest figure in the incident above
+// suggests a paid plan); at 3 tickers and 5-day windows it is 13 windows, ~65
+// days, per invocation. Raise it once the plan's real limit is known.
+export const MAX_FINNHUB_REQUESTS_PER_BACKFILL_INVOCATION = 40;
 
 // Hard stop on a continuation chain, so a bug or a pathological range can't
 // re-enqueue itself forever. Hitting it fails the job (with the count saved so
@@ -149,7 +160,10 @@ export default {
           // A first message (from backend's POST /backfill) has none of the
           // continuation fields, so the defaults make it part 1 with zero
           // carried totals.
-          const { id, from, to, originalFrom = from, part = 1, insertedSoFar = 0, errorCountSoFar = 0 } = job;
+          // `truncatedSoFar` counts ticker-days Finnhub capped even at one
+          // day (see finnhub.js#createWindowedFetcher); optional, so a
+          // message without it just starts from 0.
+          const { id, from, to, originalFrom = from, part = 1, insertedSoFar = 0, errorCountSoFar = 0, truncatedSoFar = 0 } = job;
           const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from: originalFrom, to } });
           await reporter.start();
           try {
@@ -157,13 +171,17 @@ export default {
               from,
               to,
               kv: env.CACHE_KV,
+              originalFrom,
               maxInserts: MAX_ITEMS_PER_BACKFILL_INVOCATION,
-              // The progress bar restarts each part; label the part so that's
-              // not mistaken for a stall.
+              maxRequests: MAX_FINNHUB_REQUESTS_PER_BACKFILL_INVOCATION,
+              // Progress counts days of the whole original range, so it keeps
+              // moving forward across parts; the prefix says which part is
+              // running.
               onProgress: part > 1 ? (p) => reporter.update({ ...p, detail: p.detail ? `Part ${part}: ${p.detail}` : p.detail }) : reporter.update,
             });
             const inserted = insertedSoFar + result.inserted;
             const errorCount = errorCountSoFar + result.errors.length;
+            const truncated = truncatedSoFar + result.truncated.length;
             if (result.nextFrom) {
               // More left than one invocation should write: hand the rest to a
               // follow-up message. A send failure lands in the catch below and
@@ -175,13 +193,13 @@ export default {
               if (part >= MAX_BACKFILL_PARTS) {
                 throw new Error(`backfill needed more than ${MAX_BACKFILL_PARTS} parts -- stopped after ${inserted} articles saved; narrow the range and re-run`);
               }
-              await env.BACKFILL.send({ type: "backfill", id, from: result.nextFrom, to, originalFrom, part: part + 1, insertedSoFar: inserted, errorCountSoFar: errorCount });
-              console.log("backfill part completed, continuation enqueued", { id, part, nextFrom: result.nextFrom, inserted, errorCount });
+              await env.BACKFILL.send({ type: "backfill", id, from: result.nextFrom, to, originalFrom, part: part + 1, insertedSoFar: inserted, errorCountSoFar: errorCount, truncatedSoFar: truncated });
+              console.log("backfill part completed, continuation enqueued", { id, part, nextFrom: result.nextFrom, inserted, errorCount, truncated });
             } else {
-              console.log("backfill job completed", { id, from: originalFrom, to, parts: part, inserted, errorCount });
+              console.log("backfill job completed", { id, from: originalFrom, to, parts: part, inserted, errorCount, truncated });
               await reporter.complete(
-                { inserted, errorCount, parts: part },
-                `Inserted ${inserted} article${inserted === 1 ? "" : "s"}${errorCount ? `, ${errorCount} vendor error${errorCount === 1 ? "" : "s"}` : ""}`
+                { inserted, errorCount, truncated, parts: part },
+                `Inserted ${inserted} article${inserted === 1 ? "" : "s"}${errorCount ? `, ${errorCount} vendor error${errorCount === 1 ? "" : "s"}` : ""}${truncated ? `, ${truncated} ticker-day${truncated === 1 ? "" : "s"} hit Finnhub's per-request cap (articles probably missing)` : ""}`
               );
             }
           } catch (err) {

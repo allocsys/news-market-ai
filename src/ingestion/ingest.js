@@ -46,7 +46,8 @@
 // log line. A non-VendorError (an actual bug, not a vendor failure) still
 // propagates immediately, same as before.
 
-import { fetchLatest as fetchFinnhubLatest } from "../ingestion/sources/finnhub.js";
+import { fetchLatest as fetchFinnhubLatest, createWindowedFetcher } from "../ingestion/sources/finnhub.js";
+import { toDayString, addDays, daysBetween, buildWindows } from "./date_windows.js";
 import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 // gdelt.js is intentionally NOT imported here anymore (2026-09-18) -- see
 // plan.md's GDELT correction/replacement note. The file and its test
@@ -74,6 +75,11 @@ import { VendorError } from "../shared/errors.js";
 // backfill-1789920460728-4lahlf, 2026-09-20).
 const NEWS_ITEM_INSERT_CHUNK_SIZE = 100;
 
+// Window size backfillHistoricalNews falls back to when the config carries no
+// usable finnhubBackfillWindowDays (loadConfig always sets it; this is for the
+// bare config objects tests and one-off scripts pass). Same value as config.js.
+const DEFAULT_BACKFILL_WINDOW_DAYS = 5;
+
 /**
  * Pre-filters `items` down to ones NOT already in news_items, via one
  * batched `SELECT id ... WHERE id IN (...)` per call (the caller is
@@ -99,25 +105,30 @@ async function filterUnstoredItems(db, items) {
 }
 
 /**
- * Where a continuation of a capped backfill should re-start its fetch: the UTC
- * day BEFORE the last processed item's day, never earlier than the original
- * `from`. Finnhub's /company-news only takes YYYY-MM-DD (see finnhub.js), so a
- * cursor can't be finer than a day, and which timezone Finnhub reads those
- * dates in is undocumented -- stepping back one day means an item just after
- * the last processed one can't fall outside the next fetch on a timezone
- * boundary. Re-scanned items are already stored, so the pre-filter drops them
- * for the price of one SELECT per chunk (no writes).
+ * Collapses items that share an id into one whose `tickers` is the union. The
+ * same article comes back from several tickers' /company-news queries (each
+ * carrying its own hint), and its id is derived from url + publishedAt only. A
+ * backfill window fetches every ticker before saving, so merging here keeps
+ * every ticker association: left as separate entries, a duplicate that landed
+ * in a later 100-item chunk than its twin would be dropped whole by the
+ * already-stored pre-filter, and its ticker never written.
  */
-function continuationFrom(lastPublishedAt, from) {
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const fromDay = new Date(from).toISOString().slice(0, 10);
-  const steppedBack = new Date(new Date(lastPublishedAt).getTime() - DAY_MS).toISOString().slice(0, 10);
-  return steppedBack > fromDay ? steppedBack : fromDay;
+function mergeDuplicateItems(items) {
+  const byId = new Map();
+  for (const item of items) {
+    const existing = byId.get(item.id);
+    if (!existing) {
+      byId.set(item.id, item);
+    } else if (item.tickers.some((ticker) => !existing.tickers.includes(ticker))) {
+      byId.set(item.id, { ...existing, tickers: [...new Set([...existing.tickers, ...item.tickers])] });
+    }
+  }
+  return [...byId.values()];
 }
 
-/** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. */
-function logSkippedSource(stage, source, err) {
-  console.error(`${stage} vendor failure -- skipping source`, { source, vendor: err.vendor, transient: err.transient, message: err.message });
+/** Logs a VendorError with full vendor/transient detail, one line per skipped source (see header's Failure Isolation note). Non-VendorErrors are not this function's job -- callers still let those propagate. `context` (optional) adds fields to the log line, e.g. the ticker and window of a backfill request. */
+function logSkippedSource(stage, source, err, context = {}) {
+  console.error(`${stage} vendor failure -- skipping source`, { source, vendor: err.vendor, transient: err.transient, message: err.message, ...context });
 }
 
 /**
@@ -278,7 +289,7 @@ export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
  * wired (see graph/settle.js): every ingestion adapter was "what's new
  * now" only, with finnhub.js hardcoding a trailing lookback window even
  * though Finnhub's /company-news endpoint accepts an arbitrary from/to
- * range. This just calls that range through and persists whatever comes
+ * range. This walks that range in date windows (see WINDOWED FETCH below) and persists whatever comes
  * back via storage/inputs_view.js#insertNewsItem -- the exact same point-in-time
  * storage path live ingestion uses, so a backfilled article is
  * indistinguishable from a live-ingested one to any asOf-gated read
@@ -300,105 +311,156 @@ export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
  * again. Intended for a one-off backfill script/CLI, not the live cron
  * path (collectNewsItems above is the whole-watchlist sweep, unchanged).
  */
-// `maxInserts` (optional, default unlimited -- unchanged behavior for callers
-// that don't pass it) caps how many NET-NEW articles one call writes. Once a
-// chunk pushes `inserted` to/over it and items remain, the loop stops and the
-// result carries `nextFrom` (a YYYY-MM-DD the caller re-enqueues a follow-up
-// backfill from); `nextFrom` is null when the whole fetched set was processed.
-// Progress is guaranteed: stopping requires `inserted >= maxInserts`, so every
-// capped call stored at least one new article, and the next call's pre-filter
-// skips everything already stored -- including inside a single day with more
-// articles than the cap, which a day-level cursor alone could never split.
-export async function backfillHistoricalNews(config, db, { from, to, kv, onProgress, maxInserts = Infinity } = {}) {
+// WINDOWED FETCH (2026-09-20 fix). Finnhub's /company-news returns only the
+// newest ~245 articles (INFERRED from stored data, not documented by Finnhub)
+// per request however wide the range, so the old one-request-per-ticker fetch
+// for the whole range could never reach past about a week: live, 30-day and
+// 90-day backfills both reported "Inserted 0 articles" because the ~245 newest
+// per ticker were already stored. The range is now walked in consecutive,
+// non-overlapping windows of config.finnhubBackfillWindowDays (default 5)
+// days. For each window every watchlist ticker is fetched
+// (sources/finnhub.js#createWindowedFetcher, which splits any window whose
+// response looks capped), then that window's articles are pre-filtered and
+// saved before the next window starts.
+//
+// UNVERIFIED ASSUMPTION: windows are inclusive at both ends, which assumes
+// Finnhub treats `to` as inclusive. Stored data supports it (to=<today>
+// requests have produced today's articles) but it is not confirmed. After a
+// real run, query the inputs DB for weekday days with no finnhub articles for
+// any ticker; a gap on the first day of each window (or the last) would mean
+// the assumption is wrong and windows need a one-day overlap.
+//
+// PER-CALL BOUNDS, both checked only at window boundaries and both optional
+// (default unlimited -- unchanged for callers that don't pass them):
+//   - `maxInserts` caps NET-NEW articles written. Once `inserted` reaches it
+//     and windows remain, the call stops; it can overshoot by up to one
+//     window's worth of articles.
+//   - `maxRequests` caps Finnhub requests (external subrequests). A window is
+//     only started if requests so far plus one per ticker fit under it, so a
+//     rerun over an already-stored range (which inserts nothing and would
+//     never trip `maxInserts`) still stops. Splitting a capped window can
+//     push a window slightly past it.
+// The first window of a call always runs, so every call makes progress and a
+// chain of continuations always terminates. When the call stops early the
+// result carries `nextFrom`, the first day of the next unprocessed window (a
+// YYYY-MM-DD the caller re-enqueues a follow-up backfill from); it is null when
+// the whole range was processed. Windows are aligned from `from`, so a
+// follow-up starting at `nextFrom` continues the same window grid.
+//
+// PROGRESS: `originalFrom` (default `from`) is the start of the range the
+// operator asked for. onProgress reports done/total as DAYS of that whole
+// range covered so far (percent = 5 + 95 * done / total), so it only ever moves
+// forward across a chain of continuation parts. The progress writer is
+// throttled (storage/jobs.js), so the write that ends each window is forced:
+// the last write of a call then always matches where the call really ended --
+// complete() only sets percent/phase, it never touches done/total.
+// `onProgress` must never affect the backfill's own outcome, so it is only
+// ever awaited, never inspected.
+export async function backfillHistoricalNews(config, db, { from, to, originalFrom, kv, onProgress, maxInserts = Infinity, maxRequests = Infinity } = {}) {
   if (!from || !to) {
     throw new Error("backfillHistoricalNews requires an explicit {from, to} range -- use collectNewsItems for the live trailing-window path instead");
   }
 
-  // `onProgress` (optional, the queue consumer's live-progress reporter --
-  // see src/storage/jobs.js) is told about two phases, mapped onto 0-100 here
-  // so the dashboard just draws it: fetching = 5-50 (one step per ticker),
-  // saving = 50-100 (one step per article). It must never affect the
-  // backfill's own outcome, so it is only ever awaited, never inspected.
-  const tickerCount = config.watchlist?.length ?? 0;
-  await onProgress?.({ phase: "fetching", percent: 5, done: 0, total: tickerCount, detail: `Fetching Finnhub news for ${tickerCount} ticker${tickerCount === 1 ? "" : "s"}`, force: true });
+  const fromDay = toDayString(from);
+  const toDay = toDayString(to);
+  const rangeStart = originalFrom ? toDayString(originalFrom) : fromDay;
+  const configuredWindowDays = Number(config.finnhubBackfillWindowDays);
+  const windowDays = Number.isFinite(configuredWindowDays) && configuredWindowDays >= 1 ? Math.floor(configuredWindowDays) : DEFAULT_BACKFILL_WINDOW_DAYS;
+  const windows = buildWindows(fromDay, toDay, windowDays);
+  const tickers = config.watchlist ?? [];
 
-  const { items, errors } = await fetchFinnhubLatest(config, { from, to }, {
-    kv,
-    onTickerDone: ({ ticker, index, total }) =>
-      onProgress?.({ phase: "fetching", percent: 5 + Math.round((45 * (index + 1)) / total), done: index + 1, total, detail: `Fetched ${ticker} (${index + 1}/${total})` }),
+  const totalDays = Math.max(0, daysBetween(rangeStart, toDay) + 1);
+  const clampDays = (days) => Math.min(totalDays, Math.max(0, days));
+  const percentFor = (days) => (totalDays > 0 ? 5 + Math.round((95 * days) / totalDays) : 100);
+  let daysDone = clampDays(daysBetween(rangeStart, fromDay));
+
+  await onProgress?.({
+    phase: "fetching",
+    percent: percentFor(daysDone),
+    done: daysDone,
+    total: totalDays,
+    detail: `Fetching Finnhub news for ${tickers.length} ticker${tickers.length === 1 ? "" : "s"} in ${windows.length} window${windows.length === 1 ? "" : "s"} of up to ${windowDays} days`,
+    force: true,
   });
-  for (const { error } of errors) {
-    logSkippedSource("historical news backfill", "finnhub", error);
-  }
 
-  // Chronological (ties broken by id) so "everything up to the last processed
-  // item is done" is true -- fetchLatest returns items ticker by ticker, not
-  // in date order, and a continuation cursor is only meaningful over a sorted
-  // list.
-  items.sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : a.publishedAt > b.publishedAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const fetcher = await createWindowedFetcher(config, { kv });
 
-  const totalItems = items.length;
-  await onProgress?.({ phase: "saving", percent: 50, done: 0, total: totalItems, detail: totalItems > 0 ? `Saving ${totalItems} article${totalItems === 1 ? "" : "s"}` : "No articles returned for this range", force: true });
-
-  // UPDATE (2026-09-20): chunked plus pre-filtered plus batched, replacing
-  // the old one-insertNewsItem-call-per-article loop. That loop did 2-3
-  // unbatched D1 .run()s per article -- 733 articles times roughly 3
-  // statements blew Cloudflare's per-invocation subrequest cap partway
-  // through a real backfill run (live incident: job
-  // backfill-1789920460728-4lahlf, crashed mid-saving at 325/733 on 'Too
-  // many API requests by single Worker invocation' -- see
+  // Saving is chunked plus pre-filtered plus batched (2026-09-20): the old
+  // one-insertNewsItem-call-per-article loop did 2-3 unbatched D1 .run()s per
+  // article, and 733 articles blew Cloudflare's per-invocation subrequest cap
+  // partway through a real run (live incident: job
+  // backfill-1789920460728-4lahlf, crashed mid-saving at 325/733 on 'Too many
+  // API requests by single Worker invocation' -- see
   // NEWS_ITEM_INSERT_CHUNK_SIZE's own comment). filterUnstoredItems first,
   // then insertNewsItems as one db.batch() per chunk, mirrors
-  // ingestFundamentals' own fix for the identical fundamentals-side
-  // failure. `inserted` now means net-new articles (insertedIds.size), not
-  // articles processed -- a real improvement, not just a rename: filtering
-  // already-stored ids first means a retried/overlapping backfill can now
-  // report zero inserted accurately instead of re-claiming credit for
-  // articles a previous run already saved. `processed` keeps the old
-  // how-far-through-the-fetched-set-are-we meaning for progress-percent
-  // math, since that needs to advance even through chunks that turn out to
-  // be all duplicates.
+  // ingestFundamentals' own fix for the identical fundamentals-side failure.
+  // `inserted` means net-new articles (insertedIds.size), not articles
+  // processed, so a retried or overlapping backfill reports zero accurately
+  // instead of re-claiming credit for articles a previous run already saved.
+  // KNOWN LIMIT: the pre-filter skips an article whose id is already stored
+  // even when it is now being fetched under a ticker it has no association
+  // for (the live ingest path does add those, this one does not).
   // UNLIKE ingestFundamentals' own chunk loop, a chunk's write failure here
-  // is NOT caught-and-skipped -- it propagates, same as the old unbatched
-  // per-article loop did (which had no try/catch at all). This is
-  // deliberate, not an oversight: the caller (ingest-worker.js's `backfill`
-  // branch) wraps the whole call in its own try/catch and reports the job
-  // `failed` via the progress reporter on any error (see that Worker's own
-  // comment: "retrying a call that already spent real Finnhub quota on
-  // failure would just spend it again") -- a D1 write error here means the
-  // job's core deliverable (saved articles) is broken, which should surface
-  // as a failed job for the operator to see, not a silently-degraded
-  // partial save. Fundamentals are a strict enhancement to the pipeline
-  // (see ingestFundamentals' own header); a backfill's whole point IS
-  // saving articles, so the two warrant different failure-isolation scopes.
-  let processed = 0;
+  // is NOT caught-and-skipped -- it propagates. This is deliberate, not an
+  // oversight: the caller (ingest-worker.js's `backfill` branch) wraps the
+  // whole call in its own try/catch and reports the job `failed` via the
+  // progress reporter on any error (see that Worker's own comment: "retrying
+  // a call that already spent real Finnhub quota on failure would just spend
+  // it again") -- a D1 write error here means the job's core deliverable
+  // (saved articles) is broken, which should surface as a failed job for the
+  // operator to see, not a silently-degraded partial save. Fundamentals are a
+  // strict enhancement to the pipeline (see ingestFundamentals' own header); a
+  // backfill's whole point IS saving articles, so the two warrant different
+  // failure-isolation scopes.
   let inserted = 0;
+  let processed = 0;
+  let windowsDone = 0;
   let nextFrom = null;
-  for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
-    const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
-    const toInsert = await filterUnstoredItems(db, chunk);
-    if (toInsert.length > 0) {
-      const { insertedIds } = await insertNewsItems(db, toInsert);
-      inserted += insertedIds.size;
-    }
-    processed += chunk.length;
-    const capReached = inserted >= maxInserts && processed < totalItems;
-    // The reporter throttles unforced writes to one per ~1.5s (storage/jobs.js),
-    // and the batched save path finishes chunks far faster than that, so the
-    // last unforced tick is often a stale mid-run one. Force the last write of
-    // this call (all items processed, or stopping at the cap) so the job row's
-    // done/total match where the call really ended -- complete() only sets
-    // percent/phase, it never touches done/total (live: dashboard showed
-    // "400 / 733" at 100%).
-    await onProgress?.({ phase: "saving", percent: 50 + Math.round((50 * processed) / totalItems), done: processed, total: totalItems, detail: `Saved ${processed}/${totalItems} articles`, force: processed >= totalItems || capReached });
+  const errors = [];
+  const truncated = [];
 
-    if (capReached) {
-      nextFrom = continuationFrom(chunk[chunk.length - 1].publishedAt, from);
+  for (const [windowIndex, win] of windows.entries()) {
+    if (windowIndex > 0 && (inserted >= maxInserts || fetcher.requestCount() + tickers.length > maxRequests)) {
+      nextFrom = win.from;
       break;
     }
+
+    const fetched = [];
+    for (const [tickerIndex, { ticker }] of tickers.entries()) {
+      const result = await fetcher.fetchWindow(ticker, win);
+      fetched.push(...result.items);
+      errors.push(...result.errors);
+      truncated.push(...result.truncated);
+      for (const { error, window } of result.errors) {
+        logSkippedSource("historical news backfill", "finnhub", error, { ticker, window });
+      }
+      await onProgress?.({ phase: "fetching", percent: percentFor(daysDone), done: daysDone, total: totalDays, detail: `Window ${win.from}..${win.to}: fetched ${ticker} (${tickerIndex + 1}/${tickers.length})` });
+    }
+
+    // Chronological (ties broken by id), one entry per article id.
+    const items = mergeDuplicateItems(fetched);
+    items.sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : a.publishedAt > b.publishedAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+    await onProgress?.({ phase: "saving", percent: percentFor(daysDone), done: daysDone, total: totalDays, detail: items.length > 0 ? `Window ${win.from}..${win.to}: saving ${items.length} article${items.length === 1 ? "" : "s"}` : `Window ${win.from}..${win.to}: no articles` });
+
+    let windowInserted = 0;
+    for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
+      const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
+      const toInsert = await filterUnstoredItems(db, chunk);
+      if (toInsert.length > 0) {
+        const { insertedIds } = await insertNewsItems(db, toInsert);
+        windowInserted += insertedIds.size;
+      }
+    }
+
+    inserted += windowInserted;
+    processed += items.length;
+    windowsDone++;
+    daysDone = clampDays(daysBetween(rangeStart, addDays(win.to, 1)));
+    await onProgress?.({ phase: "saving", percent: percentFor(daysDone), done: daysDone, total: totalDays, detail: `Window ${win.from}..${win.to} done (${daysDone}/${totalDays} days): ${items.length} fetched, ${windowInserted} new`, force: true });
   }
 
-  return { inserted, processed, errors, nextFrom };
+  return { inserted, processed, errors, truncated, nextFrom, windows: windowsDone, requests: fetcher.requestCount() };
 }
 
 /**
