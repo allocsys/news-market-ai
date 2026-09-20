@@ -493,6 +493,23 @@ jobs:
             exit 0
           fi
           echo "$FINNHUB_API_KEY" | npx wrangler secret put FINNHUB_API_KEY --config wrangler.ingest.toml
+      - name: Set TIINGO_API_KEY on the ingest Worker
+        # Same idempotent, non-blocking shape as the FINNHUB_API_KEY step above.
+        # Tiingo is the historical price backfill's source (plan.md Next Steps
+        # step A2): with the key set, config.js switches the backfill to Tiingo
+        # by itself (PRICE_BACKFILL_SOURCE unset). Without it the ingest Worker
+        # deploys fine and the price backfill keeps asking Yahoo, which answers
+        # 429 from Workers. Only this Worker ever holds the key.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+        run: |
+          if [ -z "$TIINGO_API_KEY" ]; then
+            echo "TIINGO_API_KEY repo secret not set -- skipping. The ingest Worker is deployed but the historical price backfill keeps using Yahoo (429 from Workers) until this is configured."
+            exit 0
+          fi
+          echo "$TIINGO_API_KEY" | npx wrangler secret put TIINGO_API_KEY --config wrangler.ingest.toml
 
   # `llm` Worker (plan.md Step 6) -- own path-filtered job, own concurrency
   # group (same reasoning as deploy-dashboard/deploy-ingest above: an
