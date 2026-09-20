@@ -62,7 +62,7 @@ export function backfillTriggerForm() {
   </form>`;
 }
 
-/** Form for the historical price-bar backfill: a range (default: the last year), whole watchlist. GET to the confirm page, like the news form. */
+/** Form for the historical price-bar backfill: a range (default: the last year) and an optional comma-separated ticker list (blank = the whole watchlist). GET to the confirm page, like the news form. */
 export function priceBackfillTriggerForm() {
   const today = new Date().toISOString().slice(0, 10);
   const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
@@ -75,6 +75,10 @@ export function priceBackfillTriggerForm() {
     <div class="filter-group">
       <span class="filter-label">To</span>
       <input class="filter-form ${DATE_INPUT_STYLE}" id="priceBackfillTo" type="date" name="to" value="${today}">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Tickers (optional)</span>
+      <input class="filter-form" type="text" name="tickers" placeholder="blank = watchlist, e.g. XAUUSD,USO">
     </div>
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
@@ -98,7 +102,7 @@ export function renderBackfillView({ lastRun, lastPriceRun } = {}) {
     </div>
 
     <h2 style="margin-top:2rem">Historical price bars</h2>
-    <p class="note">Triggers <code>POST /backfill-prices</code> -- one Yahoo Finance daily-bars request per watchlist ticker for the chosen range, saved the same way live ingestion saves bars. Backtests need this: with no price history a backtest can't open positions outside the last few days. Yahoo has been answering 429 to every ticker from Cloudflare Workers, so this can fail; a failed job says which tickers and why.</p>
+    <p class="note">Triggers <code>POST /backfill-prices</code> -- one daily-bars request per ticker for the chosen range (the whole watchlist unless you list tickers), saved the same way live ingestion saves bars. Bars come from Tiingo once a Tiingo key is configured on the ingest Worker, otherwise from Yahoo Finance, which has been answering 429 to every ticker from Cloudflare Workers. Spot gold is <code>XAUUSD</code> (Tiingo's forex data: no volume). Backtests need this: with no price history a backtest can't open positions outside the last few days. A failed job says which tickers and why.</p>
 
     ${renderLastRunPanel(lastPriceRun, { title: "Last price backfill" })}
 
@@ -111,16 +115,18 @@ export function renderBackfillView({ lastRun, lastPriceRun } = {}) {
   </section>`;
 }
 
-export function renderPriceBackfillConfirmPage({ from, to }) {
+export function renderPriceBackfillConfirmPage({ from, to, tickers }) {
+  const tickersList = String(tickers ?? "").trim();
   return `<section id="price-backfill-confirm">
     <h2>Confirm historical price backfill</h2>
-    <p class="note">You are about to backfill daily price bars for the whole watchlist with the following range:</p>
+    <p class="note">You are about to backfill daily price bars for ${tickersList ? escapeHtml(tickersList) : "the whole watchlist"} with the following range:</p>
     <div class="llm-answer-body" style="max-width:none; margin-bottom: 1.5rem;">
       <div class="llm-block"><span class="llm-agent">From</span> <span class="num">${escapeHtml(from)}</span></div>
       <div class="llm-block"><span class="llm-agent">To</span> <span class="num">${escapeHtml(to)}</span></div>
     </div>
-    <p class="note">This makes one request per watchlist ticker to Yahoo Finance's unofficial chart API. It ignores the live ingest's 429 cooldown; if Yahoo answers 429 the job fails and names the tickers. No paid quota is used.</p>
+    <p class="note">This makes one request per ticker to the configured price source: Tiingo when a Tiingo key is set (free plan: 50 requests an hour, 1,000 a day), otherwise Yahoo Finance's unofficial chart API. A ticker that fails is named in the job result; if nothing at all is saved the job fails.</p>
     <form method="post" action="/backfill-prices" class="filter-bar">
+      ${tickersList ? `<input type="hidden" name="tickers" value="${escapeHtml(tickersList)}">` : ""}
       <input type="hidden" name="from" value="${escapeHtml(from)}">
       <input type="hidden" name="to" value="${escapeHtml(to)}">
       <div class="filter-group">
