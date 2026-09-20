@@ -19,6 +19,7 @@ import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR } from "./helpers/engine_ctx.js";
 import { BrokenDb } from "./helpers/broken_db.js";
 import { RunStore } from "../src/storage/run_store.js";
+import { addDays } from "../src/ingestion/date_windows.js";
 
 class FakeMessage {
   constructor(body) {
@@ -83,6 +84,31 @@ function mockVendors(t, articles) {
   });
 }
 
+/**
+ * Finnhub as a backfill sees it: `perDay` distinct articles per calendar day, filtered to the request's own ?from=&to= (both inclusive), then cut to the newest `cap` -- the per-request cap a backfill has to work around (~245, inferred from real data). Unlike mockVendors it honours the date range, which windowing depends on. Every other vendor call gets an empty object.
+ */
+function mockFinnhubByRange(t, { perDay, cap = 245 } = {}) {
+  t.mock.method(global, "fetch", async (url) => {
+    const u = new URL(String(url));
+    if (!u.hostname.includes("finnhub")) return { ok: true, status: 200, json: async () => ({}) };
+    const from = u.searchParams.get("from");
+    const to = u.searchParams.get("to");
+    const articles = [];
+    for (let day = from; day <= to; day = addDays(day, 1)) {
+      for (let i = 0; i < perDay; i++) {
+        articles.push({
+          url: `https://finnhub.example.com/story-${day}-${i}`,
+          datetime: Date.parse(`${day}T12:00:00Z`) / 1000 + i,
+          headline: `Story ${day} ${i} about Acme`,
+          summary: "A brief summary.",
+        });
+      }
+    }
+    articles.sort((a, b) => b.datetime - a.datetime); // newest first, so the cap drops the OLDEST
+    return { ok: true, status: 200, json: async () => articles.slice(0, cap) };
+  });
+}
+
 /** Minimal in-memory fake covering news_items/news_item_tickers (insertNewsItem), price_bars (insertPriceBar), and fundamental_facts (insertFundamentalFacts, via db.batch) -- enough for ingestTickerData/ingestFeedNews to run without throwing, not a general D1 emulator (same convention as test/ingestion_wiring.test.js's FakeDb). */
 class FakeIngestDb {
   constructor() {
@@ -138,6 +164,7 @@ function baseEnv(overrides = {}) {
     WATCHLIST_TICKERS: "AAPL,MSFT",
     FINNHUB_API_KEY: "test-key",
     ENTITY_RESOLUTION_USE_NAME_INDEX: "false", // keep these tests scoped to fan-out wiring, not entity resolution's own SEC-lookup path (covered separately)
+    FINNHUB_MIN_REQUEST_INTERVAL_MS: "1", // 0 would fall back to the 1100ms default; a backfill makes one request per window, so don't sleep between them
     ANALYZE: new FakeQueueBinding(),
     ...overrides,
   };
@@ -309,8 +336,8 @@ test("queue() splits a backfill bigger than one invocation's write cap into part
   const db = new FakeIngestDb();
   const BACKFILL = new FakeQueueBinding();
   const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
-  // 650 articles, all on 2025-09-15 UTC: more than the 500 cap, and a single day, so this also covers the in-day overflow a day-level cursor alone can't split.
-  mockVendors(t, () => finnhubArticles(650));
+  // 30 days x 40 articles = 1200, in six 5-day windows of 200 (under the split threshold). The 500 cap is checked at window boundaries, so part 1 stops after the third window, at 600.
+  mockFinnhubByRange(t, { perDay: 40 });
   t.mock.method(console, "log", () => {});
   const store = new RunStore(env.LIVE_DB, "live");
 
@@ -319,67 +346,70 @@ test("queue() splits a backfill bigger than one invocation's write cap into part
 
   assert.equal(first.acked, true);
   assert.equal(first.retried, false);
-  assert.equal(db.newsItems.length, 500, "part 1 stops at the cap");
+  assert.equal(db.newsItems.length, 600, "part 1 stops at the first window boundary at or over the cap");
   assert.equal(BACKFILL.sent.length, 1, "and enqueues exactly one continuation");
   assert.deepEqual(BACKFILL.sent[0], {
     type: "backfill",
     id: "backfill-split",
-    from: "2025-09-14", // one day before the last processed item's day (Finnhub's date timezone is undocumented)
+    from: "2025-09-16", // the first day of the next unprocessed window -- no step back
     to: "2025-09-30",
     originalFrom: "2025-09-01",
     part: 2,
-    insertedSoFar: 500,
+    insertedSoFar: 600,
     errorCountSoFar: 0,
+    truncatedSoFar: 0,
   });
   const midway = await store.getJob("backfill-split");
   assert.equal(midway.status, "running", "the job must NOT be marked complete after part 1");
-  assert.equal(midway.done, 500, "the end of a capped part is reported exactly, not as a stale throttled tick");
-  assert.equal(midway.total, 650);
+  assert.equal(midway.done, 15, "progress is days of the ORIGINAL range covered; the end of a part is reported exactly, not as a stale throttled tick");
+  assert.equal(midway.total, 30);
   assert.deepEqual(midway.params, { from: "2025-09-01", to: "2025-09-30" });
 
   const second = new FakeMessage(BACKFILL.sent[0]);
   await worker.queue(batchOf(second), env);
 
   assert.equal(second.acked, true);
-  assert.equal(db.newsItems.length, 650, "part 2 saves only what part 1 left");
+  assert.equal(db.newsItems.length, 1200, "part 2 saves only what part 1 left");
   assert.equal(BACKFILL.sent.length, 1, "no third part");
   const job = await store.getJob("backfill-split");
   assert.equal(job.status, "complete");
   assert.equal(job.percent, 100);
-  assert.equal(job.result.inserted, 650, "carries part 1's 500 into the final total");
+  assert.equal(job.done, 30, "progress kept moving forward from part 1's 15 instead of restarting");
+  assert.equal(job.total, 30);
+  assert.equal(job.result.inserted, 1200, "carries part 1's 600 into the final total");
   assert.equal(job.result.parts, 2);
   assert.deepEqual(job.params, { from: "2025-09-01", to: "2025-09-30" }, "params keep the range the operator asked for, not the cursor");
-  assert.match(job.detail, /Inserted 650 articles/);
+  assert.match(job.detail, /Inserted 1200 articles/);
 });
 
 test("queue() does not enqueue a continuation when the backfill fits in one invocation", async (t) => {
   const db = new FakeIngestDb();
   const BACKFILL = new FakeQueueBinding();
   const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
-  mockVendors(t, () => finnhubArticles(163));
+  mockFinnhubByRange(t, { perDay: 5 }); // 30 days x 5 = 150 articles, six windows, well under the 500 cap
   t.mock.method(console, "log", () => {});
 
   const message = new FakeMessage({ type: "backfill", id: "backfill-small", from: "2025-09-01", to: "2025-09-30" });
   await worker.queue(batchOf(message), env);
 
-  assert.equal(db.newsItems.length, 163);
+  assert.equal(db.newsItems.length, 150);
   assert.equal(BACKFILL.sent.length, 0);
   const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-small");
   assert.equal(job.status, "complete");
   assert.equal(job.result.parts, 1);
-  // The last progress write is forced, so done/total match the finished job (a throttled stale tick used to leave e.g. 400/733 at 100%).
-  assert.equal(job.done, 163);
-  assert.equal(job.total, 163);
+  // The write that ends each window is forced, so done/total match the finished job (a throttled stale tick used to leave e.g. 400/733 at 100%). They are days of the range now, not articles.
+  assert.equal(job.done, 30);
+  assert.equal(job.total, 30);
 });
 
 test("queue() fails a backfill that would need more than the part limit instead of re-enqueueing forever", async (t) => {
   const db = new FakeIngestDb();
   const BACKFILL = new FakeQueueBinding();
   const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
-  mockVendors(t, () => finnhubArticles(650));
+  mockFinnhubByRange(t, { perDay: 40 }); // 600 articles before the third window boundary, so this part wants a continuation
   t.mock.method(console, "error", () => {});
 
-  const message = new FakeMessage({ type: "backfill", id: "backfill-loop", from: "2025-09-14", to: "2025-09-30", originalFrom: "2025-09-01", part: 50, insertedSoFar: 20000, errorCountSoFar: 0 });
+  const message = new FakeMessage({ type: "backfill", id: "backfill-loop", from: "2025-09-01", to: "2025-09-30", originalFrom: "2025-09-01", part: 50, insertedSoFar: 20000, errorCountSoFar: 0 });
   await worker.queue(batchOf(message), env);
 
   assert.equal(message.acked, true);
@@ -393,7 +423,7 @@ test("queue() reports the job failed (not stuck running) when the continuation m
   const db = new FakeIngestDb();
   const BACKFILL = { async send() { throw new Error("simulated queue outage"); } };
   const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
-  mockVendors(t, () => finnhubArticles(650));
+  mockFinnhubByRange(t, { perDay: 40 }); // enough articles that part 1 wants a continuation
   t.mock.method(console, "error", () => {});
 
   const message = new FakeMessage({ type: "backfill", id: "backfill-nosend", from: "2025-09-01", to: "2025-09-30" });
@@ -403,6 +433,45 @@ test("queue() reports the job failed (not stuck running) when the continuation m
   const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-nosend");
   assert.equal(job.status, "failed");
   assert.match(job.error, /simulated queue outage/);
+});
+
+test("queue() backfills a range holding more articles than one Finnhub request can return (the 'Inserted 0 articles' bug)", async (t) => {
+  const db = new FakeIngestDb();
+  const BACKFILL = new FakeQueueBinding();
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL, WATCHLIST_TICKERS: "AAPL" });
+  // 12 days x 30 = 360, over the 245-per-request cap: asked for in one request, the oldest 115 would never arrive.
+  mockFinnhubByRange(t, { perDay: 30 });
+  t.mock.method(console, "log", () => {});
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-cap", from: "2025-09-01", to: "2025-09-12" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(db.newsItems.length, 360);
+  assert.equal(BACKFILL.sent.length, 0);
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-cap");
+  assert.equal(job.status, "complete");
+  assert.equal(job.result.inserted, 360);
+  assert.equal(job.result.truncated, 0);
+  assert.equal(job.done, 12);
+  assert.equal(job.total, 12);
+});
+
+test("queue() reports a day that is still at Finnhub's cap in the finished job, instead of completing as if nothing were missing", async (t) => {
+  const db = new FakeIngestDb();
+  const env = baseEnv({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: db, BACKFILL: new FakeQueueBinding(), WATCHLIST_TICKERS: "AAPL" });
+  mockFinnhubByRange(t, { perDay: 300 }); // one day, 300 articles, only 245 come back
+  t.mock.method(console, "log", () => {});
+  t.mock.method(console, "warn", () => {});
+
+  const message = new FakeMessage({ type: "backfill", id: "backfill-truncated", from: "2025-09-01", to: "2025-09-01" });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(db.newsItems.length, 245);
+  const job = await new RunStore(env.LIVE_DB, "live").getJob("backfill-truncated");
+  assert.equal(job.status, "complete");
+  assert.equal(job.result.truncated, 1);
+  assert.match(job.detail, /Inserted 245 articles/);
+  assert.match(job.detail, /1 ticker-day hit Finnhub's per-request cap/);
 });
 
 // ---------------------------------------------------------------------------
