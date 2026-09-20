@@ -179,7 +179,7 @@ second D1" note.
 **Three D1 databases**
 | DB | Holds | Written by |
 |---|---|---|
-| `inputs` | `news_items`, `news_item_revisions`, `news_item_tickers`, `price_bars`, `fundamental_facts`: shared, append-only, point-in-time through the existing `asOf` filters | `ingest` only (`backend` too until `backfill` moves, the Step 5 gap) |
+| `inputs` | `news_items`, `news_item_revisions`, `news_item_tickers`, `price_bars`, `fundamental_facts`: shared, append-only, point-in-time through the existing `asOf` filters | `ingest` only (the Step 5 gap -- `backend` also holding `inputs` write access for `backfill` -- closed 2026-09-20) |
 | `live` | run state with `run_id = 'live'`: `positions`, `trade_decisions`, `decision_memory`, `pipeline_checkpoints`, `llm_calls`, `job_progress` | `llm` (live) |
 | `sim` | the same tables with `run_id` = backtest id, plus `backtest_runs` (registry) | `backtest` |
 
@@ -195,7 +195,9 @@ second D1" note.
   a separate `InputsView(db)` (`asOf` required, as today).
 
 **Workers and bindings**
-- `ingest`: `inputs` read/write. Enqueues ANALYZE.
+- `ingest`: `inputs` read/write. Enqueues ANALYZE. Since the Step 5 follow-up
+  (2026-09-20) also consumes `BACKFILL` and narrowly binds `live` (rw,
+  `job_progress` reporting only -- see that follow-up's own note).
 - `llm` (live only): `live` read/write, `inputs` read-only. Consumes `ANALYZE`
   and `exit_check`.
 - `backtest` (new: `wrangler.backtest.toml`, own `BACKTEST` queue + DLQ): `sim`
