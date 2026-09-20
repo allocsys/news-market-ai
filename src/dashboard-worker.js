@@ -424,6 +424,37 @@ export default {
       });
     }
 
+    // JSON-only for now (no dashboard form yet -- see plan.md Next Steps
+    // step A; POST directly with the same session cookie /backfill uses,
+    // e.g. via a scripted call after logging in through the browser). Same
+    // handleTriggerRoute shape as /backfill and /backtest/run: session
+    // check here, forward to backend's POST /backfill-prices, which trusts
+    // any caller reaching it the same way (only this Worker can, via the
+    // service binding).
+    if (pathname === "/backfill-prices" && request.method === "POST") {
+      return handleTriggerRoute(request, env, config, {
+        backendPath: "/backfill-prices",
+        buildQuery: (searchParams, fromForm) => {
+          const from = searchParams.get("from") ?? fromForm("from");
+          const to = searchParams.get("to") ?? fromForm("to");
+          const tickers = searchParams.get("tickers") ?? fromForm("tickers");
+          if (!isPlausibleDateString(from) || !isPlausibleDateString(to)) {
+            return { error: "from/to query params are required, as YYYY-MM-DD" };
+          }
+          const params = { from, to };
+          if (tickers) params.tickers = tickers;
+          return { params, activeSection: "backfill" };
+        },
+        formSubmitAccepted: ({ from, to }, body) => ({
+          title: "Price backfill",
+          detail: `Backfilling historical price bars from ${from} to ${to}.`,
+          backLink: "/dashboard/backfill",
+          backLabel: "Backfill",
+          jobId: body.id,
+        }),
+      });
+    }
+
     if (pathname === "/backtest/run" && request.method === "POST") {
       return handleTriggerRoute(request, env, config, {
         backendPath: "/backtest/run",
