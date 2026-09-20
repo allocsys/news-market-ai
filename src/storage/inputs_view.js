@@ -16,6 +16,9 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 
+/** Rows per D1 round trip in getNewsItemsInRange. A response-size bound only; the function pages until the range is exhausted. */
+export const NEWS_RANGE_PAGE_SIZE = 500;
+
 /** Rows a write statement changed, per D1's `meta.changes` (0 for an `ON CONFLICT DO NOTHING` that hit a conflict). */
 function rowsChanged(result) {
   return result?.meta?.changes ?? 0;
@@ -228,8 +231,6 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
  * (published_at, news_item_id), a total order, so a page boundary that lands
  * inside a run of identical timestamps neither skips nor repeats a row.
  */
-export const NEWS_RANGE_PAGE_SIZE = 500;
-
 export async function getNewsItemsInRange(db, { ticker, from, to, pageSize = NEWS_RANGE_PAGE_SIZE }) {
   if (!from || !to) {
     throw new LookaheadViolationError("getNewsItemsInRange requires an explicit {from, to} range");
