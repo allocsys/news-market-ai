@@ -116,12 +116,8 @@ EDGAR_CIK_MAP = "AAPL|0000320193,MSFT|0000789019,TSLA|0001318605"
 # Secrets -- set via `wrangler secret put FINNHUB_API_KEY --config wrangler.ingest.toml`,
 # never committed:
 #   FINNHUB_API_KEY -- moved here from backend's wrangler.toml (Step 5).
-#   This Worker is now the only one that calls Finnhub for LIVE ingestion
-#   (ingest_ticker/ingest_feeds). NOTE (known, deliberate gap -- see
-#   plan.md's Step 5 section): `backend` STILL separately holds its own
-#   FINNHUB_API_KEY, because POST /backfill's JOBS-queue `backfill` job
-#   (src/index.js's queue(), plan.md Step 3) also calls Finnhub directly
-#   (graph/pipeline.js#backfillHistoricalNews) and JOBS has no consumer
-#   here to move that job to without a larger redesign (a queue can only
-#   have one consumer Worker) -- out of scope for this step, flagged for a
-#   future cleanup rather than silently left unmentioned.
+#   This Worker is now the ONLY one that calls Finnhub, for BOTH live
+#   ingestion (ingest_ticker/ingest_feeds) AND backfill (the BACKFILL
+#   consumer above, added in the Step 5 follow-up 2026-09-20 that closed
+#   the gap this note used to describe -- `backend` no longer holds a
+#   Finnhub key at all, see wrangler.toml's own secrets comment).
