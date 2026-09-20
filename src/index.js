@@ -55,7 +55,6 @@
 // already spent real quota once.
 
 import { loadConfig } from "./config.js";
-import { backfillHistoricalNews } from "./ingestion/ingest.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
 import { SimClock } from "./backtest/simClock.js";
@@ -157,7 +156,7 @@ export default {
       // progress-write hiccup here can never block the real enqueue below.
       await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } }).queued();
       try {
-        await env.JOBS.send({ type: "backfill", id, from, to });
+        await env.BACKFILL.send({ type: "backfill", id, from, to });
         return jsonResponse({ accepted: true, id, from, to });
       } catch (err) {
         console.error("backfill enqueue failed", { id, from, to, message: err.message });
