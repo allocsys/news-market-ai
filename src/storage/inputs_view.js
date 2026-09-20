@@ -219,11 +219,48 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
  * it first appeared -- trivial today since insertNewsItem only ever writes
  * revision 1 (see that function's own comment), but this stays correct
  * the day a real revision-2 writer exists.
+ *
+ * NO ROW CAP (plan.md Next steps, step B): this used to take `limit = 500`, and
+ * the only caller passed none, so a backtest silently processed just the first
+ * 500 items per ticker per window. It now returns EVERY item in the range,
+ * oldest first, by keyset-paging through D1 `pageSize` rows at a time.
+ * `pageSize` only bounds one D1 response; it is not a cap. Order is
+ * (published_at, news_item_id), a total order, so a page boundary that lands
+ * inside a run of identical timestamps neither skips nor repeats a row.
  */
-export async function getNewsItemsInRange(db, { ticker, from, to, limit = 500 }) {
+export const NEWS_RANGE_PAGE_SIZE = 500;
+
+export async function getNewsItemsInRange(db, { ticker, from, to, pageSize = NEWS_RANGE_PAGE_SIZE }) {
   if (!from || !to) {
     throw new LookaheadViolationError("getNewsItemsInRange requires an explicit {from, to} range");
   }
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    throw new Error(`getNewsItemsInRange: pageSize must be a positive integer, got ${pageSize}`);
+  }
+
+  const items = [];
+  let cursor = null;
+  for (;;) {
+    const page = await getNewsItemsPage(db, { ticker, from, to, cursor, pageSize });
+    for (const row of page) items.push(row);
+    if (page.length < pageSize) return items;
+    const last = page[page.length - 1];
+    cursor = { publishedAt: last.published_at, id: last.id };
+  }
+}
+
+/**
+ * One keyset page of getNewsItemsInRange: up to `pageSize` rows strictly after
+ * `cursor` ({publishedAt, id} of the previous page's last row) in
+ * (published_at, news_item_id) order, or from the start of the range when
+ * `cursor` is null. With a cursor the lower bound moves up to the cursor's
+ * timestamp, so each page scans only the not-yet-read part of the range.
+ */
+async function getNewsItemsPage(db, { ticker, from, to, cursor, pageSize }) {
+  const cursorClause = cursor ? `AND (r.published_at > ? OR (r.published_at = ? AND r.news_item_id > ?))` : "";
+  const binds = cursor
+    ? [ticker, cursor.publishedAt, to, cursor.publishedAt, cursor.publishedAt, cursor.id, pageSize]
+    : [ticker, from, to, pageSize];
 
   const { results } = await db
     .prepare(
@@ -232,14 +269,15 @@ export async function getNewsItemsInRange(db, { ticker, from, to, limit = 500 })
        JOIN news_item_tickers t ON t.news_item_id = r.news_item_id
        WHERE t.ticker = ?
          AND r.published_at >= ? AND r.published_at < ?
+         ${cursorClause}
          AND r.revision = (
            SELECT MAX(r2.revision) FROM news_item_revisions r2
            WHERE r2.news_item_id = r.news_item_id AND r2.published_at <= r.published_at
          )
-       ORDER BY r.published_at ASC
+       ORDER BY r.published_at ASC, r.news_item_id ASC
        LIMIT ?`
     )
-    .bind(ticker, from, to, limit)
+    .bind(...binds)
     .all();
 
   return results;
