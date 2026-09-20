@@ -404,10 +404,10 @@ export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
   const fresh = [];
   for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
     const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
-    const { insertedIds, newTickersByItemId } = await insertNewsItems(db, chunk);
-    for (const item of chunk) {
-      const newTickers = newTickersByItemId.get(item.id) ?? [];
-      if (insertedIds.has(item.id) || newTickers.includes(ticker)) fresh.push({ item, tickers: [ticker] });
+    const { insertedIds, newTickersPerItem } = await insertNewsItems(db, chunk);
+    for (let j = 0; j < chunk.length; j++) {
+      const item = chunk[j];
+      if (insertedIds.has(item.id) || newTickersPerItem[j].includes(ticker)) fresh.push({ item, tickers: [ticker] });
     }
   }
 
@@ -475,10 +475,9 @@ export async function ingestFeedNews(config, db, kv) {
   const fresh = [];
   for (let i = 0; i < items.length; i += NEWS_ITEM_INSERT_CHUNK_SIZE) {
     const chunk = items.slice(i, i + NEWS_ITEM_INSERT_CHUNK_SIZE);
-    const { newTickersByItemId } = await insertNewsItems(db, chunk);
-    for (const item of chunk) {
-      const newTickers = newTickersByItemId.get(item.id) ?? [];
-      if (newTickers.length > 0) fresh.push({ item, tickers: newTickers });
+    const { newTickersPerItem } = await insertNewsItems(db, chunk);
+    for (let j = 0; j < chunk.length; j++) {
+      if (newTickersPerItem[j].length > 0) fresh.push({ item: chunk[j], tickers: newTickersPerItem[j] });
     }
   }
   return { fetched: items.length, fresh };
