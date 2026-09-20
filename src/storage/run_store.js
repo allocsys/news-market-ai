@@ -774,6 +774,28 @@ export class RunStore {
     return row ? jobFromRow(row) : null;
   }
 
+  /**
+   * The most recently FINISHED job ('complete' or 'failed') of `type` in this
+   * run, by finished_at, or null if none has finished. The counterpart to
+   * getActiveJob: that one answers "what is running right now" (and ages out
+   * orphans), this one answers "how did the last run end" so a page can show a
+   * result after the progress bar is gone. In-flight rows are excluded on
+   * purpose -- the active-job panel already covers those, and a row orphaned by
+   * an isolate kill would otherwise show as a phantom "running" last run forever.
+   * Same camelCased, JSON-parsed shape as getJob.
+   */
+  async getLatestFinishedJob(type) {
+    const row = await this.db
+      .prepare(
+        `SELECT ${JOB_COLUMNS} FROM job_progress
+         WHERE run_id = ? AND type = ? AND status IN ('complete', 'failed')
+         ORDER BY finished_at DESC, created_at DESC LIMIT 1`
+      )
+      .bind(this.runId, type)
+      .first();
+    return row ? jobFromRow(row) : null;
+  }
+
   // -------------------------------------------------------------------
   // Cleanup -- plan.md "Cleanup = delete-by-run in `sim`, chunked, run by
   // the `backtest` Worker." `deleteRun` refuses 'live' unconditionally --
