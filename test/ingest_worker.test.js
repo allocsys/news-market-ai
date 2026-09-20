@@ -116,6 +116,15 @@ class FakeIngestDb {
             else throw new Error(`FakeIngestDb: unsupported run() query: ${sql}`);
           },
           async all() {
+            // UPDATE (2026-09-20): backfillHistoricalNews now pre-filters
+            // already-stored ids via SELECT id FROM news_items WHERE id IN
+            // (...) before inserting each chunk (see ingestion/ingest.js's
+            // filterUnstoredItems) -- everything else here is still
+            // genuinely unsupported.
+            if (/^\s*SELECT id FROM news_items/.test(sql)) {
+              const results = args.filter((id) => db.newsItems.some((n) => n.id === id)).map((id) => ({ id }));
+              return { results };
+            }
             throw new Error(`FakeIngestDb: unsupported all() query: ${sql}`);
           },
         };
