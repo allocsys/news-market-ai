@@ -372,7 +372,7 @@ export default {
         return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
       }
       if (pathname === "/dashboard/backfill-prices/confirm") {
-        const bodyHtml = renderPriceBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to") });
+        const bodyHtml = renderPriceBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to"), tickers: url.searchParams.get("tickers") });
         return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
       }
       if (pathname === "/dashboard/backtest/confirm") {
