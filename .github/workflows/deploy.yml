@@ -268,17 +268,26 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Ensure JOBS queue exists (plan.md Step 3)
+      - name: Ensure BACKFILL queue exists (plan.md Step 3, renamed from JOBS in a Step 5 follow-up)
+        # Renamed from news-market-ai-jobs when its consumer moved from
+        # `backend` to the `ingest` Worker (2026-09-20) -- see wrangler.toml's
+        # own comment on this queue and wrangler.ingest.toml's new consumer
+        # block. The old JOBS queue (+ its DLQ) has no producer or consumer
+        # left as of this change; ensure-queue only creates, never deletes,
+        # so those two now-unused queue resources are left provisioned on
+        # Cloudflare until the owner deletes them by hand (same
+        # owner-deletes-cloud-resources-themselves precedent as the retired
+        # pre-split D1 database, plan.md M5).
         uses: ./.github/actions/ensure-queue
         with:
-          queue-name: news-market-ai-jobs
+          queue-name: news-market-ai-backfill
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Ensure JOBS dead-letter queue exists (plan.md Step 3)
+      - name: Ensure BACKFILL dead-letter queue exists (plan.md Step 3)
         uses: ./.github/actions/ensure-queue
         with:
-          queue-name: news-market-ai-jobs-dlq
+          queue-name: news-market-ai-backfill-dlq
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
