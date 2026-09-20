@@ -134,3 +134,9 @@ EDGAR_CIK_MAP = "AAPL|0000320193,MSFT|0000789019,TSLA|0001318605"
 #   consumer above, added in the Step 5 follow-up 2026-09-20 that closed
 #   the gap this note used to describe -- `backend` no longer holds a
 #   Finnhub key at all, see wrangler.toml's own secrets comment).
+#   TIINGO_API_KEY -- the historical price backfill's source (plan.md Next
+#   Steps step A2; src/ingestion/sources/tiingo.js). Optional: pushed by the
+#   deploy-ingest job when the TIINGO_API_KEY repo secret exists. With it set,
+#   src/config.js#priceBackfillSource defaults to "tiingo"; without it the
+#   backfill still asks Yahoo, which answers 429 from Workers. Only this Worker
+#   holds it.

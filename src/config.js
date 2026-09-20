@@ -210,6 +210,21 @@ export function loadConfig(env) {
     // 900s (15 min, one cron cycle) is a starting point, not tuned against how
     // long the underlying block actually lasts.
     yfinanceCooldownSeconds: Number(env.YFINANCE_COOLDOWN_SECONDS) || 900,
+    // Tiingo (ingestion/sources/tiingo.js) -- the historical price backfill's
+    // source since plan.md Next Steps step A2, after Yahoo returned 429 for
+    // every ticker from Workers. No default key on purpose (same convention as
+    // finnhubApiKey); it is a secret on the `ingest` Worker only. The free plan
+    // is published at 50 requests/hour and 1,000/day, one request per ticker per
+    // backfill, so pacing is off by default (0 = a true no-op).
+    tiingoApiKey: env.TIINGO_API_KEY || "",
+    tiingoApiBase: env.TIINGO_API_BASE || "https://api.tiingo.com",
+    tiingoMinRequestIntervalMs: Number(env.TIINGO_MIN_REQUEST_INTERVAL_MS) || 0,
+    // Which vendor ingestion/ingest.js#backfillHistoricalPriceBars asks:
+    // "tiingo" or "yfinance". Unset means Tiingo once a Tiingo key exists,
+    // otherwise Yahoo (the original behaviour), so adding the secret is the
+    // only step needed to switch. Only the historical backfill uses this; the
+    // */15 cron's live bars (ingestPriceBars) still come from yfinance.
+    priceBackfillSource: env.PRICE_BACKFILL_SOURCE || (env.TIINGO_API_KEY ? "tiingo" : "yfinance"),
     // RSS feeds (ingestion/sources/rss.js) and standalone article pages to
     // scrape (ingestion/sources/html_scrape.js) -- "TICKER|url" pairs, or a
     // bare url when the source isn't ticker-scoped (see parseTickerUrlList
