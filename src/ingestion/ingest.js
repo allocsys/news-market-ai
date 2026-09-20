@@ -505,7 +505,9 @@ const PRICE_BAR_INSERT_CHUNK_SIZE = 200;
  * `ingest` Worker turns them into the job's detail or, when nothing at all
  * was saved, a failed job (ingest-worker.js's `backfill_prices` branch).
  * `inserted` counts bars WRITTEN (upserts), not net-new rows: rerunning a
- * range that is already stored reports the same number again. `from`/`to` are required, same explicit-range-only convention
+ * range that is already stored reports the same number again.
+ *
+ * `from`/`to` are required, same explicit-range-only convention
  * as backfillHistoricalNews (no silent trailing-window default).
  */
 export async function backfillHistoricalPriceBars(config, db, kv, { tickers, from, to, onProgress } = {}) {
