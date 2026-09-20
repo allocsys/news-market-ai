@@ -22,9 +22,8 @@ workers_dev = false
 # DELIBERATELY NO [[d1_databases]] BLOCK FOR LIVE_DB, AND NONE FOR THE OLD
 # `news_market_ai` DB EITHER. This is the one config-level enforcement
 # plan.md calls out by name ("CI fails if wrangler.backtest.toml binds the
-# live DB") -- a CI check asserting this file has no LIVE_DB binding is
-# still to be added (M3, see plan.md's CI checks item); until that check
-# exists, this comment and code review are the only guard. D1 bindings
+# live DB") -- test/ci_env_isolation.test.js asserts this file has no
+# LIVE_DB binding, so a PR that adds one fails CI, not just code review. D1 bindings
 # can't be made read-only by Cloudflare, so keeping LIVE_DB out of this file
 # entirely is what makes "a backtest cannot touch live state" true at the
 # infrastructure level, not just by convention in application code.
