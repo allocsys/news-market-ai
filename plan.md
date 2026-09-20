@@ -545,12 +545,33 @@ work on `main` directly.
   `INGEST` and the exit-check queue; ANALYZE is the one consumer that retries
   (checkpoint-resumable, `openPosition` id-idempotent).
 - **Step 5 — `ingest` Worker (PR #31).** `INGEST` consumer moved out. **Gap
-  closed in a follow-up (2026-09-20):** `backend` used to still hold
+  closed in a follow-up (2026-09-20, PR #61):** `backend` used to still hold
   `FINNHUB_API_KEY` because `backfill` called Finnhub and `JOBS` allowed one
   consumer. Fixed by renaming `JOBS` to `BACKFILL` and moving its consumer to
   `ingest` (which also gained a narrow `LIVE_DB` binding, rw, for
   `job_progress` reporting only) -- `backend` now holds no vendor key at all
   and has no `queue()` export.
+  **Deploy incident, same day (PR #62):** the first deploy of that change
+  failed -- `wrangler deploy` on `backend` returned "Queue handler is
+  missing" (code 11001). Cloudflare refuses a script upload with no
+  `queue()` export while the Worker still has an active queue consumer
+  trigger attached from its LAST SUCCESSFUL deploy; `backend`'s last one
+  still had the JOBS consumer live, and wrangler.toml no longer declaring
+  that `[[queues.consumers]]` block isn't enough by itself in the same
+  deploy that also drops the handler -- the trigger detach and the handler
+  removal can't both happen in one step. Production was never at risk (a
+  failed deploy doesn't replace the running Worker), but it did mean
+  `deploy-ingest`/`deploy-llm`/`deploy-backtest`/`deploy-dashboard` -- all
+  downstream of `deploy` -- were skipped too, so nothing from this follow-up
+  (or the unrelated M5-cleanup PR #60 immediately before it) went live for
+  about 40 minutes. Fixed by restoring a TRANSITIONAL no-op `queue()` on
+  `backend` for exactly one deploy (PR #62, acks anything, logs if ever
+  actually invoked) so the upload was accepted and wrangler's trigger
+  reconciliation (driven by wrangler.toml, already consumer-block-free)
+  could detach JOBS as part of that same deploy. Confirmed detached
+  (deploy went through clean, an hour of Workers Observability on `backend`
+  showed zero queue-eventType invocations) and the transitional handler
+  removed again in a same-day follow-up (PR #63).
 - **Step 6 — `llm` Worker (PR #32).** Wider than "move ANALYZE": `backtest` and
   `exit_check` also call Gemini, so they moved to a new `LLM_JOBS` queue. Fixed a
   latent bug where `ensure-*` actions hard-coded `wrangler.toml` and
