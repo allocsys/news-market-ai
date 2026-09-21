@@ -541,7 +541,7 @@ graph/               # orchestration
   exit_check.js         # stop-loss / take-profit / time-based exits
 backtest/            # point-in-time harness, walk-forward, signal on/off comparison
                       # (runBacktest.js, signalCompare.js, onSignalRunner.js,
-                      # noSignalBaseline.js, metrics.js, simClock.js, cleanup.js)
+                      # equity.js, priceGrid.js, metrics.js, simClock.js, cleanup.js)
 dashboard/           # operational dashboard
 migrations/          # inputs/, state/, sim/ -- the three environment schemas
 config/
@@ -556,13 +556,13 @@ exits, technical analyst on price bars, realized-return settlement feeding the
 reflection loop, date-windowed historical backfill, the signal on/off backtest
 harness (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress
 job panel. Backtest/live isolation is built (M1–M5). CI and deploys are green
-across all five Workers (step A = PR #69 `031825d`, deploy #349 green; step A2 = PR #71 `bff216a`; plan.md update = PR #70 `d25b6c0`; step B = PR #72 `617aec4`; all squash-merged 2026-09-21 or the night before; step C in review). Price bars still do not exist: the first live price backfill failed on Yahoo (see "Live incident: first price backfill failed") and the Tiingo replacement (A2) has not been run yet because the owner has not added `TIINGO_API_KEY`.
+across all five Workers (step A = PR #69 `031825d`, deploy #349 green; step A2 = PR #71 `bff216a`; plan.md update = PR #70 `d25b6c0`; step B = PR #72 `617aec4`; step C = PR #73 `92fcfc2`; all squash-merged 2026-09-21 or the night before; step D in review). Price bars still do not exist: the first live price backfill failed on Yahoo (see "Live incident: first price backfill failed") and the Tiingo replacement (A2) has not been run yet because the owner has not added `TIINGO_API_KEY`.
 
 **Backtests are NOT yet trustworthy.** An audit (2026-09-20, in response to
 "is backtesting bug free?") answered **no**: results would currently be
 meaningless. Do not run a real backtest until steps A–E below are done.
 
-### Next steps: make backtests trustworthy (agreed 2026-09-20; A merged as PR #69, its first live run FAILED on Yahoo; A2 (Tiingo source) merged as PR #71 but not run live, so no price bars exist yet; B merged as PR #72; C in review; D-F not started)
+### Next steps: make backtests trustworthy (agreed 2026-09-20; A merged as PR #69, its first live run FAILED on Yahoo; A2 (Tiingo source) merged as PR #71 but not run live, so no price bars exist yet; B merged as PR #72; C merged as PR #73; D in review; E-F not started)
 Working rules: each step is its own PR off `main` (direct GitHub-API edits on a
 feature branch; the CI `test` job is the real test; no local runner); merge
 only on the owner's explicit per-PR go-ahead, squash-merge. First thing next
@@ -573,7 +573,9 @@ session: re-verify repo/CI state from real commits, not from notes.
 invocation, no continuation) → `backtest/runBacktest.js#runManualBacktest` →
 `compareSignalOnOffByWindow` (`signalCompare.js`), on-side
 `onSignalRunner.js#makeOnSignalReturns`, off-side
-`noSignalBaseline.js#makeBuyAndHoldOffReturns`. On side, per ticker
+`noSignalBaseline.js#makeBuyAndHoldOffReturns` (both REPLACED by step D: the run
+now walks with `walkOnSignalWindow` and scores both sides with `equity.js`; this
+paragraph and findings 1-5 describe the audited pre-fix state). On side, per ticker
 (sequentially, whole window each), per UTC day from `testStart` through
 `testEnd + graceDays` (default `maxPositionHoldDays` = 10, clamped to now by
 `SimClock`): `graph/pipeline.js#runPipelineForTicker` per news item
@@ -608,7 +610,7 @@ invocation, no continuation) → `backtest/runBacktest.js#runManualBacktest` →
    visible at any time on day D, including the midnight exit-check and a 09:35
    article. The pipeline's entry price is that same bar's close, and the
    technical analyst sees it too.
-4. **Metrics are not portfolio returns.** The baseline yields ONE return per
+4. **Metrics are not portfolio returns (FIXED by step D; the text below is the pre-fix state).** The baseline yields ONE return per
    ticker per window; the on side yields one per closed trade; both go through
    `metrics.js#summarizeReturns`, which compounds the array as if sequential,
    ignores `position_size_pct` and concurrency, and annualizes Sharpe with
@@ -686,16 +688,49 @@ multi-ticker ordering, long-window queue limits.
   had the leak baked in were fixed (exit_logic, baseline, price_bars_pointintime;
   the last two now run on real sqlite instead of hand-written fakes). Original
   spec: compare on the date part with strict `<` for an intraday `asOf`.
-- **D. Metrics.** Position-weighted daily equity curve for BOTH on and off, same
-  horizon and universe; fix Sharpe periods; baseline returns null if the entry
-  bar is too far after `testStart`. (The baseline's late-entry bug found while
-  doing C is FIXED in the step-C PR: it compared `b.date >= testStart`, a string
-  compare of `YYYY-MM-DD` against an ISO timestamp, false for the bar dated on
-  testStart's own day; it now compares date to date via `utcDateOf`.)
+- **D. Metrics.** **STATUS: done in the step-D PR (in review).** Both sides are
+  now DAILY PORTFOLIO EQUITY CURVES over the same dates and the same tickers
+  (`backtest/equity.js`, pure; `backtest/priceGrid.js`, the reads). **Off** =
+  equal-weight buy-and-hold of the requested tickers, fully invested, never
+  rebalanced, bought at the prior close of the first day. **On** = the positions
+  the pipeline opened, each sized at its `position_size_pct` of the equity when it
+  opened (so a later position is sized off the equity earlier ones grew to), the
+  rest in cash at 0%; long = `allocation * price/entry`, short = `allocation *
+  (2 - price/entry)`; a position is active on grid date `g` iff `openDate <= g <
+  closeDate` (UTC dates; the prior-close rule of step C makes that exact); a
+  position still open at the end is marked to market, never dropped. Positions it
+  cannot replay (no entry price/direction/size, ticker outside the universe) are
+  counted in `portfolio.on.positionsIgnored`, not guessed at. Windows are slices
+  of the one continuous curve (positions carry across windows; the pooled result
+  is the whole-span curve). `metrics.js` is unchanged but now sees daily returns,
+  so Sharpe's sqrt(252) is right; **`winRate` is now the share of up DAYS, not of
+  winning trades** (dashboard label "Up days"). New reads:
+  `inputs_view.js#getPriceBarsInRange`, `RunStore#getPositionsInRange` (both
+  bounds required, deliberately not asOf-gated, scoring only). The old
+  `noSignalBaseline.js` and its tests are deleted (its late-entry fix lives on as
+  a `priceGrid` test). **The price-coverage preflight (part of E) is done here:**
+  before any LLM call `runManualBacktest` requires every requested ticker to have
+  price bars inside the span, one within 5 days of the start (the last bar before
+  it, else the first inside it), data reaching within 5 days of the end, and no
+  hole longer than 5 days between bars (weekends/holidays pass, gaps are
+  forward-filled); otherwise the run FAILS naming each ticker and reason ("no
+  LLM calls were made"). It never runs on a silently smaller universe. Also: a
+  backwards range or one too short for any walk-forward window now fails instead
+  of "completing" empty, and the progress total sums every window's walk
+  (it was sized from the whole range, wrong for more than one window). Result
+  gains `portfolio` (`method: "daily-equity-curve-v1"`, dates, tickers,
+  exposure, per-day on/off returns). Tests: `test/backtest_equity.test.js`
+  (hand-computed), `test/backtest_scoring_reads.test.js`, new cases in
+  `test/backtest_run.test.js`, `test/dashboard_backtest_result.test.js`.
+  Not done: a per-trade view (trade count/win rate) alongside the curve;
+  the "off" side has no cash/transaction-cost model and neither side models
+  costs or slippage. Original spec: Position-weighted daily equity curve for BOTH
+  on and off, same horizon and universe; fix Sharpe periods; baseline returns null
+  if the entry bar is too far after `testStart` (now: the ticker is refused).
 - **E. Walk and preflight.** Day-major multi-ticker walk; as-of predicates in
-  `commitThesis` for backtest runs; a preflight price-coverage check in
-  `runManualBacktest` that fails fast BEFORE any LLM call; validate
-  `testStart < testEnd`.
+  `commitThesis` for backtest runs; validate `testStart < testEnd` at
+  `POST /backtest/run` too (the engine now refuses it, step D). The price-coverage
+  preflight that used to be here is done (step D).
 - **F. Small first backtest.** 1 ticker, 2–3 weeks, before any long run. Ask the
   owner whether to set `BACKTEST_MAX_LLM_CALLS` for that run (standing decision
   is uncapped, but the wasted-call risk in finding 1 was found), and measure queue

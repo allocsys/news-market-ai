@@ -27,7 +27,8 @@ import { LookaheadViolationError } from "./errors.js";
  * `Z` or an explicit offset) or a bare date. Use this, never a raw string
  * compare, to line a bar's `date` up against a timestamp: `"2026-01-05" >=
  * "2026-01-05T00:00:00.000Z"` is FALSE (the shorter string sorts first), which
- * is how noSignalBaseline.js used to skip the bar on testStart's own day. Anything
+ * is how the old buy-and-hold baseline (noSignalBaseline.js, since replaced by
+ * backtest/equity.js) skipped the bar on testStart's own day. Anything
  * that does not parse throws LookaheadViolationError: a date that cannot be
  * computed must never quietly become "no cutoff".
  */

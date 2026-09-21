@@ -432,6 +432,41 @@ export class RunStore {
     return results.map((r) => r.realized_return);
   }
 
+  /**
+   * Backtest-result read, deliberately not asOf-gated (same carve-out as
+   * getRealizedReturnsInRange): every position of this run that was open at any
+   * point in [from, to) -- opened before `to` and not closed before `from` --
+   * with what the equity-curve scorer (backtest/equity.js) needs to replay it.
+   * Still-open positions come back with closedAt null.
+   */
+  async getPositionsInRange({ from, to }) {
+    if (!from || !to) {
+      throw new LookaheadViolationError("getPositionsInRange requires an explicit {from, to} range");
+    }
+
+    const { results } = await this.db
+      .prepare(
+        `SELECT id, ticker, direction, position_size_pct, entry_price, exit_price, close_reason, opened_at, closed_at
+         FROM positions
+         WHERE run_id = ? AND opened_at < ? AND (closed_at IS NULL OR closed_at >= ?)
+         ORDER BY opened_at ASC, id ASC`
+      )
+      .bind(this.runId, to, from)
+      .all();
+
+    return results.map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      direction: r.direction,
+      positionSizePct: r.position_size_pct,
+      entryPrice: r.entry_price,
+      exitPrice: r.exit_price,
+      closeReason: r.close_reason,
+      openedAt: r.opened_at,
+      closedAt: r.closed_at,
+    }));
+  }
+
   // -------------------------------------------------------------------
   // Pipeline checkpoints -- `pipelineRunId` here is the OLD `runId`
   // concept (one per-ticker pipeline execution), renamed to avoid

@@ -2,15 +2,18 @@
 // before trusting it"). signalCompare.js#compareSignalOnOffByWindow already
 // has the walk-forward + metrics-comparison machinery and takes
 // getOnReturns/getOffReturns as caller-supplied callbacks without supplying
-// either itself (see that file's header). noSignalBaseline.js supplies the
-// "off" side (naive buy-and-hold, zero LLM calls). This file supplies the
-// "on" side: actually running the real LLM-backed pipeline
+// either itself (see that file's header). This file supplies the "on" side:
+// actually running the real LLM-backed pipeline
 // (graph/pipeline.js#runPipelineForTicker) over backfilled historical news
-// (ingestion/ingest.js#backfillHistoricalNews) and turning the positions it
-// opens into the realized returns getOnReturns(window) must produce.
+// (ingestion/ingest.js#backfillHistoricalNews), leaving the positions it opens
+// in the run's store. SCORING (since plan.md step D) is not done here:
+// runBacktest.js replays those positions into a daily equity curve
+// (equity.js) and compares it with the equal-weight buy-and-hold curve, so it
+// uses the walk* functions below; the older runOnSignal*/makeOnSignalReturns
+// (per-position realized returns) remain for callers that want that series.
 //
-// COST / LIVE-TRAFFIC WARNING: unlike noSignalBaseline.js, calling the
-// functions this file exports for real spends real Gemini quota (multiple
+// COST / LIVE-TRAFFIC WARNING: unlike the buy-and-hold baseline (zero LLM
+// calls), calling the functions this file exports for real spends real Gemini quota (multiple
 // LLM calls per news item via runPipelineForTicker: analyst team, bull/bear
 // debate, judge, trader, plus one more per position close via
 // graph/settle.js#settlePositionOutcome's reflection call) and, if paired
@@ -55,11 +58,9 @@
 // whose resolved_at (== closedAt) falls in [testStart, testEnd + graceDays),
 // regardless of when the underlying position was opened -- so a position
 // opened from a news item just before testStart that happens to close
-// during this window IS counted. This mirrors noSignalBaseline.js's own
-// testStart-to-testEnd entry/exit convention (not perfectly attribution-
-// clean toward either window, but consistent between "on" and "off" so
-// compareSignalOnOff stays an apples-to-apples comparison, not skewed by a
-// boundary-effect difference between the two sides).
+// during this window IS counted. (Only runOnSignalReturns reads this; the
+// equity-curve scoring in runBacktest.js is by calendar day over the span,
+// see equity.js, and is not affected by which window a trade closed in.)
 
 import { getNewsItemsInRange } from "../storage/inputs_view.js";
 import { runPipelineForTicker } from "../graph/pipeline.js";
@@ -122,8 +123,7 @@ function groupItemsByDay(items) {
  * Runs the real pipeline for ONE ticker across one test window (plus grace
  * period), returning the realized returns that resulted -- exactly the
  * "array of per-position returns for this window" shape
- * compareSignalOnOffByWindow's getOnReturns(window) needs, same contract as
- * noSignalBaseline.js#computeBuyAndHoldReturns.
+ * compareSignalOnOffByWindow's getOnReturns(window) takes.
  *
  * `runIdPrefix` disambiguates checkpoint rows (graph/checkpointer.js keys
  * on (runId, ticker)) across repeated backtest runs over the SAME
@@ -136,6 +136,17 @@ function groupItemsByDay(items) {
  * construction (walkForwardWindows never repeats a testStart).
  */
 export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock }) {
+  const walkEnd = await walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock });
+  return ctx.store.getRealizedReturnsInRange({ ticker, from: testStart, to: walkEnd });
+}
+
+/**
+ * The walk itself, with no return series: replays one ticker's window (news
+ * items, then the day's exit checks) so its positions land in the run's store,
+ * and returns the walk's end (testEnd + grace, clamped). runBacktest.js scores
+ * the run from those positions (equity.js), not from realized returns.
+ */
+export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock }) {
   const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
   const prefix = runIdPrefix ?? testStart;
 
@@ -164,13 +175,23 @@ export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart
     await onStep?.({ ticker, dayIso, done: true });
   }
 
-  return ctx.store.getRealizedReturnsInRange({ ticker, from: testStart, to: walkEnd });
+  return walkEnd;
+}
+
+/**
+ * Walks every ticker through one test window (sequential per ticker, for the
+ * reason runOnSignalReturns gives below), leaving the resulting positions in the
+ * run's store. No return value: see walkOnSignalForTicker.
+ */
+export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock }) {
+  for (const ticker of tickers) {
+    await walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}`, onStep, clock });
+  }
 }
 
 /**
  * Multi-ticker sibling -- pools every ticker's realized returns for one
- * test window into a single array, same "pool across the universe" shape
- * as noSignalBaseline.js#computeBuyAndHoldReturns. Sequential per ticker
+ * test window into a single array. Sequential per ticker
  * (not Promise.all) deliberately: runPipelineForTicker's own portfolio
  * stage reads cross-ticker open-position exposure
  * (store.getOpenPositionsRiskPctAsOf), so concurrent tickers racing through the
@@ -191,12 +212,8 @@ export async function runOnSignalReturns(env, config, ctx, { tickers, testStart,
 /**
  * Binds env/config/ctx({inputs, store})/tickers, returning a function with exactly
  * signalCompare.js#compareSignalOnOffByWindow's getOnReturns(window)
- * signature -- mirrors noSignalBaseline.js#makeBuyAndHoldOffReturns exactly,
- * so a real end-to-end run is just:
- *
- *   const getOnReturns = makeOnSignalReturns(env, config, ctx, { tickers });
- *   const getOffReturns = makeBuyAndHoldOffReturns(ctx.inputs, { tickers });
- *   await compareSignalOnOffByWindow({ ..., getOnReturns, getOffReturns });
+ * signature (per-position realized returns; runBacktest.js scores by equity
+ * curve instead, see the header).
  *
  * See this file's header for the real cost this incurs once actually
  * invoked -- do not wire this into any automated/scheduled path without an
