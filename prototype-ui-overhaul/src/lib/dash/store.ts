@@ -1,12 +1,12 @@
 "use client";
 
 import { create } from "zustand";
-import type { ViewId, User, AuditEntry } from "./types";
+import type { ViewId } from "./types";
 
 interface DashState {
   // auth
-  currentUser: User | null;
-  login: (user: User) => void;
+  currentUser: string | null;
+  login: (username: string) => void;
   logout: () => void;
 
   // navigation
@@ -33,10 +33,6 @@ interface DashState {
   lastRefreshedAt: number;
   markRefreshed: () => void;
 
-  // audit log (for multi-user auth feature)
-  audit: AuditEntry[];
-  appendAudit: (entry: Omit<AuditEntry, "id" | "at" | "userId" | "username">) => void;
-
   // mobile more sheet
   moreSheetOpen: boolean;
   setMoreSheetOpen: (b: boolean) => void;
@@ -46,9 +42,9 @@ interface DashState {
   setSearchOpen: (b: boolean) => void;
 }
 
-export const useDash = create<DashState>((set, get) => ({
+export const useDash = create<DashState>((set) => ({
   currentUser: null,
-  login: (user) => set({ currentUser: user }),
+  login: (username) => set({ currentUser: username }),
   logout: () => set({ currentUser: null, activeView: "overview" }),
 
   activeView: "overview",
@@ -70,24 +66,6 @@ export const useDash = create<DashState>((set, get) => ({
   setRefreshInterval: (ms) => set({ refreshIntervalMs: ms }),
   lastRefreshedAt: Date.now(),
   markRefreshed: () => set({ lastRefreshedAt: Date.now() }),
-
-  audit: [],
-  appendAudit: (entry) => {
-    const u = get().currentUser;
-    if (!u) return;
-    set((s) => ({
-      audit: [
-        {
-          id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          at: new Date().toISOString(),
-          userId: u.id,
-          username: u.username,
-          ...entry,
-        },
-        ...s.audit,
-      ].slice(0, 200),
-    }));
-  },
 
   moreSheetOpen: false,
   setMoreSheetOpen: (b) => set({ moreSheetOpen: b }),

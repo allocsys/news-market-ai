@@ -1,6 +1,5 @@
 import type {
   ActivityDay,
-  AuditEntry,
   BacktestRun,
   BacktestTrade,
   Decision,
@@ -13,7 +12,7 @@ import type {
   PipelineStage,
   Position,
   Ticker,
-  User,
+  ViewId,
 } from "./types";
 
 const now = Date.now();
@@ -35,99 +34,7 @@ function sparkline(seed: number, n = 30, drift = 0.0006, vol = 0.012): number[] 
   return out;
 }
 
-// === Users (multi-user auth feature) ===
-export const USERS: User[] = [
-  {
-    id: "u-1",
-    username: "alex",
-    displayName: "Alex Nguyen",
-    role: "admin",
-    initials: "AN",
-    hue: "blue",
-    lastActive: hoursAgo(0.1),
-    twoFactor: true,
-  },
-  {
-    id: "u-2",
-    username: "priya",
-    displayName: "Priya Shah",
-    role: "operator",
-    initials: "PS",
-    hue: "emerald",
-    lastActive: hoursAgo(2.4),
-    twoFactor: true,
-  },
-  {
-    id: "u-3",
-    username: "marcus",
-    displayName: "Marcus Lindqvist",
-    role: "operator",
-    initials: "ML",
-    hue: "amber",
-    lastActive: hoursAgo(28),
-    twoFactor: false,
-  },
-  {
-    id: "u-4",
-    username: "rin",
-    displayName: "Rin Tanaka",
-    role: "viewer",
-    initials: "RT",
-    hue: "purple",
-    lastActive: daysAgo(3),
-    twoFactor: false,
-  },
-];
-
-export const INITIAL_AUDIT: AuditEntry[] = [
-  {
-    id: "audit-1",
-    userId: "u-2",
-    username: "priya",
-    action: "Triggered news backfill",
-    target: "2026-09-14 → 2026-09-21 (7d, AAPL MSFT NVDA)",
-    at: hoursAgo(0.4),
-    ip: "10.0.4.22",
-  },
-  {
-    id: "audit-2",
-    userId: "u-2",
-    username: "priya",
-    action: "Triggered backtest run",
-    target: "backtest-1784215 (AAPL MSFT NVDA, 90d window)",
-    at: hoursAgo(2.1),
-    ip: "10.0.4.22",
-  },
-  {
-    id: "audit-3",
-    userId: "u-1",
-    username: "alex",
-    action: "Updated user role",
-    target: "rin → viewer",
-    at: hoursAgo(5.7),
-    ip: "10.0.4.10",
-  },
-  {
-    id: "audit-4",
-    userId: "u-1",
-    username: "alex",
-    action: "Triggered price backfill",
-    target: "AAPL TSLA (14d)",
-    at: hoursAgo(9.2),
-    ip: "10.0.4.10",
-  },
-  {
-    id: "audit-5",
-    userId: "u-3",
-    username: "marcus",
-    action: "Login",
-    target: "session created",
-    at: hoursAgo(28),
-    ip: "10.0.4.31",
-  },
-];
-
-// === Navigation config (11 sections + new Overview as landing) ===
+// === Navigation config (11 sections incl. Overview) ===
 export const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", icon: "LayoutDashboard", group: "monitor", mobileNav: true },
   { id: "snapshot", label: "Snapshot", icon: "Wallet", group: "monitor", mobileNav: true },
@@ -140,7 +47,6 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "backfill", label: "Backfill", icon: "DatabaseBackup", group: "ops" },
   { id: "backtest", label: "Backtest", icon: "FlaskConical", group: "ops" },
   { id: "health", label: "Health", icon: "HeartPulse", group: "system", mobileNav: true },
-  { id: "settings", label: "Settings", icon: "Settings", group: "system" },
 ];
 
 export const MOBILE_NAV_IDS: ViewId[] = NAV_ITEMS.filter((n) => n.mobileNav).map((n) => n.id);
@@ -447,7 +353,7 @@ export const JOBS: JobProgress[] = [
     total: 8,
     startedAt: hoursAgo(0.4),
     updatedAt: hoursAgo(0.05),
-    triggeredBy: "priya",
+    triggeredBy: "admin",
   },
   {
     id: "job-2",
@@ -458,7 +364,7 @@ export const JOBS: JobProgress[] = [
     total: 7,
     startedAt: hoursAgo(0.6),
     updatedAt: hoursAgo(0.5),
-    triggeredBy: "priya",
+    triggeredBy: "admin",
   },
 ];
 

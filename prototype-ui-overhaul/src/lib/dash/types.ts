@@ -11,8 +11,7 @@ export type ViewId =
   | "pipeline"
   | "llm"
   | "backfill"
-  | "backtest"
-  | "settings";
+  | "backtest";
 
 export type DecisionStatus = "approved" | "rejected";
 export type Direction = "long" | "short";
@@ -21,28 +20,6 @@ export type ExitReason = "target" | "stop" | "signal_off" | "timeout" | "manual"
 export type LlmCallStatus = "ok" | "error";
 export type LlmSource = "pipeline" | "backtest" | "exit_check";
 export type JobStatus = "running" | "complete" | "failed" | "stale";
-export type UserRole = "admin" | "operator" | "viewer";
-
-export interface User {
-  id: string;
-  username: string;
-  displayName: string;
-  role: UserRole;
-  initials: string;
-  hue: string; // tailwind color class fragment e.g. "blue", "emerald"
-  lastActive: string;
-  twoFactor: boolean;
-}
-
-export interface AuditEntry {
-  id: string;
-  userId: string;
-  username: string;
-  action: string;
-  target: string;
-  at: string; // ISO
-  ip: string;
-}
 
 export interface Ticker {
   symbol: string;
