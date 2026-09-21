@@ -8,6 +8,7 @@ import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.j
 import { getRecentBacktestRuns, getBacktestRun, getActiveBacktestRunId } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
 import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
+import { computeRealizedReturn } from "../shared/returns.js";
 
 /**
  * Read-only RunStore over LIVE_DB (run_id 'live'): every state-schema panel
@@ -201,6 +202,34 @@ export async function getBacktestRunsData(env) {
   // The registry lives on SIM_DB (M3); the dashboard API never writes, so the handle is read-only.
   const backtestRunsResult = await safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 10 }));
   return { backtestRuns: backtestRunsResult.data ?? [], error: backtestRunsResult.error };
+}
+
+/**
+ * One backtest run for the trade-timeline page (GET /api/backtest-runs/:id): the
+ * registry row (params, status, result -- whose `portfolio.series` is the daily
+ * equity data the chart draws) plus every position of that run with the
+ * decision that opened it and its realized return.
+ *
+ * `run` is null both when the id is unknown AND when the registry lookup threw;
+ * `error` tells them apart (null = simply not found), so the route can answer
+ * 404 vs 500. A failing positions query does NOT null the run: the summary and
+ * equity curve still render, with `positionsError` shown in the table's place.
+ * `id` must already be BACKTEST_ID_RE-shaped (the route checks) -- this never
+ * falls back to 'live' the way resolveEnv does, because "show me live instead"
+ * would be a wrong answer for a page that is about one specific run.
+ *
+ * `realizedReturn` is computed here (shared/returns.js, the same function
+ * graph/settle.js records reflections with) and is null for a position that is
+ * still open or has no exit price -- never a guess.
+ */
+export async function getBacktestRunDetailData(env, id, { positionsLimit = 500 } = {}) {
+  const db = readOnly(env.SIM_DB);
+  const { data: run, error } = await safe(() => getBacktestRun(db, id));
+  if (error || !run) return { run: null, positions: [], positionsError: null, truncated: false, error: error ?? null };
+
+  const positionsResult = await safe(() => new RunStore(db, id).listPositionsWithDecisions({ limit: positionsLimit }));
+  const positions = (positionsResult.data?.positions ?? []).map((p) => ({ ...p, realizedReturn: computeRealizedReturn(p) }));
+  return { run, positions, positionsError: positionsResult.error, truncated: positionsResult.data?.truncated ?? false, error: null };
 }
 
 /** LLM-call log page: newest-first list (previews only) under the page's filters. `params` is helpers.js#parseLlmParams's output. */
