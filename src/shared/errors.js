@@ -7,14 +7,21 @@
  * `transient: true` means a retry/resume is plausibly worth it (rate limit,
  * timeout, overload); `transient: false` (default) means it's a real
  * failure (bad key, malformed request, 4xx that isn't a rate limit).
+ *
+ * `retryAfterSeconds` (optional, transient failures only) is a hint of how
+ * long a caller that wants to PAUSE instead of failing should wait before the
+ * vendor is worth calling again -- set by llm/gemini/client.js when its whole
+ * model cascade is exhausted, read by the backtest walk's pause-on-outage
+ * path (backtest/onSignalRunner.js). Absent (not just undefined) when unknown.
  */
 export class VendorError extends Error {
-  constructor(vendor, message, { status, transient = false } = {}) {
+  constructor(vendor, message, { status, transient = false, retryAfterSeconds } = {}) {
     super(message);
     this.name = "VendorError";
     this.vendor = vendor;
     this.status = status;
     this.transient = transient;
+    if (retryAfterSeconds != null) this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
