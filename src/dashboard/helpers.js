@@ -670,3 +670,200 @@ export function gaugeChart(value, { valueLabel, label, title, subtitle = null, a
     </svg>
   </div>`;
 }
+
+// ---------------------------------------------------------------------------
+// Backtest trade timeline (/dashboard/backtest/:id) -- pure SVG, no chart library.
+// The data is result.portfolio.series (runBacktest.js SCORE step): `dates` plus
+// FRACTIONAL DAILY RETURNS `on` (the positions the pipeline opened) and `off`
+// (equal-weight buy & hold). They are returns, not equity, so the chart
+// compounds them; positions come from RunStore#listPositionsWithDecisions
+// (data.js#getBacktestRunDetailData adds each one's `realizedReturn`).
+// ---------------------------------------------------------------------------
+
+/** Compounds fractional daily returns into cumulative returns: [0.01, 0.02] -> [0.01, 0.0302]. A non-finite entry counts as a flat day rather than poisoning every later point with NaN. */
+export function cumulativeReturns(returns) {
+  let equity = 1;
+  return returns.map((r) => {
+    equity *= 1 + (Number.isFinite(r) ? r : 0);
+    return equity - 1;
+  });
+}
+
+/** "+1.2%" / "-0.4%" / "0.0%" for a fraction (0.012 -> "+1.2%"); an em dash when there is no number. */
+export function signedPct(fraction, digits = 1) {
+  if (fraction == null || !Number.isFinite(fraction)) return "\u2014";
+  const text = (fraction * 100).toFixed(digits);
+  return Number(text) > 0 ? `+${text}%` : `${text}%`;
+}
+
+/** Marker/cell color for a realized return: green profit, red loss, muted for still-open, unknown or exactly flat. */
+export function outcomeColor(realizedReturn) {
+  if (realizedReturn == null || !Number.isFinite(realizedReturn) || realizedReturn === 0) return "var(--text-muted)";
+  return realizedReturn > 0 ? "var(--color-success-text)" : "var(--color-danger-text)";
+}
+
+/**
+ * Headline numbers for the page: how many positions opened, how they ended, and
+ * where the two equity curves finished. `wins`/`losses` count only positions
+ * with a computable realized return (a still-open or price-less one is neither).
+ */
+export function tradeTimelineSummary(series, positions) {
+  const valid = Array.isArray(series?.dates) && series.dates.length > 0 && Array.isArray(series.on) && Array.isArray(series.off) && series.on.length === series.dates.length && series.off.length === series.dates.length;
+  const on = valid ? cumulativeReturns(series.on) : [];
+  const off = valid ? cumulativeReturns(series.off) : [];
+  const decided = positions.filter((p) => p.realizedReturn != null && Number.isFinite(p.realizedReturn));
+  const wins = decided.filter((p) => p.realizedReturn > 0).length;
+  const losses = decided.filter((p) => p.realizedReturn < 0).length;
+  return {
+    opened: positions.length,
+    closed: positions.filter((p) => p.closedAt).length,
+    stillOpen: positions.filter((p) => !p.closedAt).length,
+    wins,
+    losses,
+    winRate: decided.length > 0 ? wins / decided.length : null,
+    onReturn: on.length > 0 ? on[on.length - 1] : null,
+    offReturn: off.length > 0 ? off[off.length - 1] : null,
+    from: valid ? series.dates[0] : null,
+    to: valid ? series.dates[series.dates.length - 1] : null,
+  };
+}
+
+/** The news that triggered a position, as the news-event analyst summarized it ("earnings -- Apple beat ..."), or null when the decision recorded none. */
+export function newsBasis(decision) {
+  const opinion = (decision?.opinions ?? []).find((o) => o?.agent === "news_event");
+  if (!opinion) return null;
+  const text = `${opinion.eventType ? `${opinion.eventType} \u2014 ` : ""}${opinion.summary ?? ""}`.trim();
+  return text || null;
+}
+
+// Smallest "nice" (1/2/2.5/5 x 10^k) gridline step giving at most `maxTicks` lines over `range`.
+function niceStep(range, maxTicks = 5) {
+  for (let exp = -4; exp <= 2; exp++) {
+    for (const m of [1, 2, 2.5, 5]) {
+      const step = m * 10 ** exp;
+      if (range / step <= maxTicks) return step;
+    }
+  }
+  return range;
+}
+
+// Fewest decimals (0..3) that print x exactly: 5 -> 0, 0.5 -> 1, 0.25 -> 2.
+function decimalsFor(x) {
+  for (let d = 0; d <= 3; d++) if (Math.abs(Number(x.toFixed(d)) - x) < 1e-9) return d;
+  return 3;
+}
+
+/**
+ * Equity-curve chart for one backtest run: cumulative return of signal ON (solid)
+ * vs signal OFF buy & hold (dashed) over the test window, with one marker per
+ * position at the day it opened, sitting on the ON line. Marker color = how that
+ * position ended (green profit, red loss, grey open/unknown/flat); shape = side
+ * (triangle up long, down short). Several positions opening the same day are
+ * spread sideways so none hides another.
+ *
+ * `series` is result.portfolio.series (or undefined for a run saved before the
+ * daily-equity scoring, which has no curve -- answered with a message, not a
+ * blank box). `positions` need `openedAt`, `direction`, `ticker`, `realizedReturn`,
+ * `closedAt`.
+ */
+export function tradeTimelineChart(series, positions = []) {
+  if (!series) return `<p class="empty">This run was saved before daily equity curves were recorded, so there is no curve to draw.</p>`;
+  const { dates, on: onReturns, off: offReturns } = series;
+  const n = Array.isArray(dates) ? dates.length : 0;
+  if (!Array.isArray(onReturns) || !Array.isArray(offReturns) || onReturns.length !== n || offReturns.length !== n) {
+    return `<p class="empty">This run's equity data is malformed, so the curve can't be drawn.</p>`;
+  }
+  if (n < 2) return `<p class="empty">Fewer than two trading days were scored, so there is no curve to draw.</p>`;
+
+  const width = 640;
+  const height = 260;
+  const padLeft = 46;
+  const padRight = 14;
+  const padTop = 14;
+  const padBottom = 28;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+
+  const on = cumulativeReturns(onReturns);
+  const off = cumulativeReturns(offReturns);
+  let lo = Math.min(0, ...on, ...off);
+  let hi = Math.max(0, ...on, ...off);
+  if (hi - lo < 1e-9) hi = lo + 0.01; // dead-flat run: give the axis some height
+  const margin = (hi - lo) * 0.08;
+  lo -= margin;
+  hi += margin;
+
+  const xAt = (i) => padLeft + (plotW * i) / (n - 1);
+  const yAt = (v) => padTop + plotH * (1 - (v - lo) / (hi - lo));
+
+  const step = niceStep(hi - lo);
+  const digits = decimalsFor(step * 100);
+  const gridlines = [];
+  for (let k = Math.ceil(lo / step); k <= Math.floor(hi / step); k++) {
+    const value = k * step;
+    const y = yAt(value).toFixed(1);
+    const zero = k === 0;
+    gridlines.push(
+      `<line x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}" class="chart-gridline"${zero ? ' stroke="var(--border-strong)" stroke-dasharray="none"' : ""} />
+        <text x="${padLeft - 6}" y="${(Number(y) + 3).toFixed(1)}" class="chart-axis-label" text-anchor="end">${escapeHtml(signedPct(value, digits))}</text>`
+    );
+  }
+
+  const labelStride = Math.ceil(n / 8);
+  const xLabels = dates
+    .map((d, i) => (i % labelStride === 0 ? `<text x="${xAt(i).toFixed(1)}" y="${height - 8}" class="chart-axis-label" text-anchor="middle">${escapeHtml(String(d).slice(5))}</text>` : ""))
+    .join("");
+
+  const linePath = (values) => values.map((v, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`).join(" ");
+  const lines = `<path d="${linePath(off)}" fill="none" stroke="var(--text-subtle)" stroke-width="1.75" stroke-dasharray="5 4" stroke-linejoin="round" />
+    <path d="${linePath(on)}" fill="none" stroke="var(--accent-bright)" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round" />`;
+
+  // A position opened on day D belongs on the first scored date >= D (a weekend
+  // open lands on Monday); one outside the scored span clamps to its nearest end.
+  const dayList = dates.map(String);
+  const indexFor = (openedAt) => {
+    const day = String(openedAt).slice(0, 10);
+    const i = dayList.findIndex((d) => d >= day);
+    return i === -1 ? n - 1 : i;
+  };
+  const placeable = positions.filter((p) => typeof p.openedAt === "string" && p.openedAt.length >= 10);
+  const perIndex = new Map();
+  for (const p of placeable) perIndex.set(indexFor(p.openedAt), (perIndex.get(indexFor(p.openedAt)) ?? 0) + 1);
+  const placed = new Map();
+
+  const markers = placeable
+    .map((p) => {
+      const i = indexFor(p.openedAt);
+      const slot = placed.get(i) ?? 0;
+      placed.set(i, slot + 1);
+      const spread = (slot - (perIndex.get(i) - 1) / 2) * 9;
+      const x = Math.min(width - padRight, Math.max(padLeft, xAt(i) + spread));
+      const y = yAt(on[i]);
+      const fill = outcomeColor(p.realizedReturn);
+      const outcome = p.realizedReturn != null ? signedPct(p.realizedReturn) : p.closedAt ? "closed, return unknown" : "still open";
+      const tip = `<title>${escapeHtml(p.ticker)} ${escapeHtml(p.direction ?? "?")} opened ${escapeHtml(p.openedAt.slice(0, 10))} \u2014 ${escapeHtml(outcome)}</title>`;
+      const common = `fill="${fill}" stroke="var(--bg-base)" stroke-width="1.25"`;
+      if (p.direction === "long") return `<polygon points="${x.toFixed(1)},${(y - 6).toFixed(1)} ${(x - 5).toFixed(1)},${(y + 4).toFixed(1)} ${(x + 5).toFixed(1)},${(y + 4).toFixed(1)}" ${common}>${tip}</polygon>`;
+      if (p.direction === "short") return `<polygon points="${x.toFixed(1)},${(y + 6).toFixed(1)} ${(x - 5).toFixed(1)},${(y - 4).toFixed(1)} ${(x + 5).toFixed(1)},${(y - 4).toFixed(1)}" ${common}>${tip}</polygon>`;
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" ${common}>${tip}</circle>`;
+    })
+    .join("\n    ");
+
+  const swatch = (color) => `<span class="legend-swatch" style="background:${color}"></span>`;
+  const legend = [
+    `<span class="legend-item">${swatch("var(--accent-bright)")}Signal ON (${escapeHtml(signedPct(on[n - 1]))})</span>`,
+    `<span class="legend-item">${swatch("var(--text-subtle)")}Signal OFF, buy &amp; hold (${escapeHtml(signedPct(off[n - 1]))})</span>`,
+    `<span class="legend-item">\u25b2 long \u00b7 \u25bc short, at the day it opened</span>`,
+    `<span class="legend-item">${swatch("var(--color-success-text)")}profit</span>`,
+    `<span class="legend-item">${swatch("var(--color-danger-text)")}loss</span>`,
+    `<span class="legend-item">${swatch("var(--text-muted)")}open / flat / unknown</span>`,
+  ].join("");
+
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" class="chart" role="img" aria-label="Cumulative return of signal ON versus signal OFF over ${n} trading days, with ${placeable.length} position${placeable.length === 1 ? "" : "s"} marked where they opened">
+    ${gridlines.join("\n    ")}
+    ${xLabels}
+    ${lines}
+    ${markers}
+  </svg>
+  <div class="chart-legend">${legend}</div>`;
+}
