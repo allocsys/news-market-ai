@@ -475,8 +475,8 @@ export default {
     // a scripted POST with the same session cookie works too. Same
     // handleTriggerRoute shape as /backfill and /backtest/run: session
     // check here, forward to backend's POST /backfill-prices, which trusts
-    // any caller reaching it the same way (only this Worker can,
-    // via the service binding).
+    // any caller reaching it the same way (only this Worker can, via the
+    // service binding).
     if (pathname === "/backfill-prices" && request.method === "POST") {
       return handleTriggerRoute(request, env, config, {
         backendPath: "/backfill-prices",

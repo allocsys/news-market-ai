@@ -61,7 +61,12 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
 
   let chartBody;
   if (run.status === "failed") chartBody = `<p class="empty">${escapeHtml(run.error ?? "failed with no recorded error message")}</p>`;
-  else if (run.status !== "complete") chartBody = activeJob ? renderJobProgressPanel(activeJob) : `<p class="empty">Still running -- the equity curve is drawn once scoring finishes. Positions opened so far are listed below; reload to update.</p>`;
+  else if (run.status !== "complete") {
+    // renderJobProgressPanel returns "" for a job with no id, so fall back to
+    // the static text on that too -- not just when there is no job at all --
+    // rather than leaving the chart area blank.
+    chartBody = (activeJob && renderJobProgressPanel(activeJob)) || `<p class="empty">Still running -- the equity curve is drawn once scoring finishes. Positions opened so far are listed below; reload to update.</p>`;
+  }
   else chartBody = tradeTimelineChart(series, positions);
 
   const stats = run.status === "complete"
