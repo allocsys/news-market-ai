@@ -287,7 +287,11 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
           // failure, not something to blame on a ticker-day that hasn't begun.
           let dayItems;
           try {
-            dayItems = await getDayNewsItems(ctx, { ticker, dayIso, testStart, testEnd });
+            // A fixed cost of reaching the first item (re-paid on every resume),
+            // so it is counted but never refused: refusing it could leave a
+            // small budget stuck before any item, making no progress at all.
+            const read = () => getDayNewsItems(ctx, { ticker, dayIso, testStart, testEnd });
+            dayItems = budget ? await budget.unenforced(read) : await read();
           } catch (err) {
             // Not a pipeline failure: keep runBacktest.js from blaming the
             // previous ticker-day (whose items all finished) for a read error.

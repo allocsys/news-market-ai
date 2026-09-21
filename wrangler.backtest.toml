@@ -126,7 +126,9 @@ LLM_LOG_ENABLED = "false"
 # 40 is STRICT because it is unverified whether D1/KV fall in the separate
 # 1000 bucket -- strict costs throughput (~1 item/part), not correctness. Raise
 # TOTAL (e.g. 90) only after the per-part "backtest part finished" log shows
-# D1/KV calls do NOT count toward the 50. "0" disables the budget entirely
+# D1/KV calls do NOT count toward the 50. Keep TOTAL >= 10: below that a part
+# cannot persist even one pipeline stage and the run stalls until
+# BACKTEST_MAX_PARTS fails it. "0" disables the budget entirely
 # (no parts, no continuation -- the pre-budget single-invocation behavior).
 BACKTEST_MAX_EXTERNAL_SUBREQUESTS = "40"
 BACKTEST_MAX_TOTAL_SUBREQUESTS = "40"
