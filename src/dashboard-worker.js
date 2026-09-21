@@ -30,8 +30,9 @@ import { renderLlmView, renderLlmCallView } from "./dashboard/views/llm.js";
 import { renderMoreView } from "./dashboard/views/more.js";
 import { renderBackfillView, renderBackfillConfirmPage, renderPriceBackfillConfirmPage } from "./dashboard/views/backfill.js";
 import { renderBacktestView, renderBacktestConfirmPage } from "./dashboard/views/backtest.js";
+import { renderBacktestDetailView } from "./dashboard/views/backtest_detail.js";
 import { renderEnvSelector } from "./dashboard/views/env_selector.js";
-import { parseDashboardParams, parseLlmParams, parseEnvParam, envSuffix, errorState, ENV_SECTIONS } from "./dashboard/helpers.js";
+import { parseDashboardParams, parseLlmParams, parseEnvParam, envSuffix, errorState, ENV_SECTIONS, BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
 
 /** Same "no partial config" gate backend used to run itself (src/index.js,
@@ -257,6 +258,26 @@ async function renderLlmCall(request, env, config, id) {
   }
 }
 
+/** GET /dashboard/backtest/:id -- one run's trade timeline (backend's /api/backtest-runs/:id). Unknown or malformed ids render the view's own "not found" state with a 404, like renderLlmCall. */
+async function renderBacktestDetail(request, env, config, id) {
+  const auth = await requireSession(request, config);
+  if (auth.redirect === "__disabled__") return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
+  if (auth.redirect) return redirect(auth.redirect);
+
+  const shell = (bodyHtml, status = 200) =>
+    htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }), { status });
+
+  if (!BACKTEST_ID_RE.test(id)) return shell(renderBacktestDetailView({ run: null }), 404);
+  try {
+    const detail = await fetchBackendJson(env, `/api/backtest-runs/${encodeURIComponent(id)}`);
+    return shell(renderBacktestDetailView(detail));
+  } catch (err) {
+    if (err.status === 404) return shell(renderBacktestDetailView({ run: null }), 404);
+    console.error("dashboard backtest detail backend fetch failed", { id, message: err.message });
+    return shell(renderBacktestDetailView({ error: err.message }), 500);
+  }
+}
+
 /** Shared POST /backfill and POST /backtest/run handler shape: check the
  * session here (this Worker is the only one that can), then forward to
  * backend, which now trusts any caller reaching it (only this Worker can,
@@ -386,6 +407,9 @@ export default {
       }
       return htmlResponse(renderShell({ activeSection: "more", sessionUsername: auth.sessionUsername, bodyHtml: renderMoreView() }));
     }
+
+    // AFTER the pure-UI block above, which returns for /dashboard/backtest/confirm -- this prefix match must never see it.
+    if (pathname.startsWith("/dashboard/backtest/")) return renderBacktestDetail(request, env, config, pathname.slice("/dashboard/backtest/".length));
 
     if (pathname === "/login" && request.method === "GET") {
       if (!isDashboardAuthConfigured(config)) return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });

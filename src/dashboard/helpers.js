@@ -271,8 +271,9 @@ export function backtestRunsList(runs) {
         : r.status === "failed"
           ? `<p class="empty">${escapeHtml(r.error ?? "failed with no recorded error message")}</p>`
           : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
+      const timelineLink = r.status === "complete" ? `<p class="note"><a href="/dashboard/backtest/${escapeHtml(encodeURIComponent(r.id))}">View trade timeline &rarr;</a></p>` : "";
       const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery(parseLlmParams(null), { llmJob: r.id })}">View every LLM call this run made &rarr;</a></p>`;
-      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${llmLink}${body}</div></details>`;
+      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${timelineLink}${llmLink}${body}</div></details>`;
     })
     .join("\n");
 }
