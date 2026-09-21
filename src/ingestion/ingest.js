@@ -58,7 +58,7 @@ import { fetchLatest as fetchRssLatest } from "../ingestion/sources/rss.js";
 // if GDELT is ever reinstated as a source.
 import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scrape.js";
 import { fetchDailyBars, fetchHistoricalBars } from "../ingestion/sources/yfinance.js";
-import { fetchHistoricalBars as fetchTiingoHistoricalBars } from "../ingestion/sources/tiingo.js";
+import { fetchDailyBars as fetchTiingoDailyBars, fetchHistoricalBars as fetchTiingoHistoricalBars } from "../ingestion/sources/tiingo.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
 import { insertNewsItems, insertPriceBar, insertPriceBars, insertFundamentalFacts } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
@@ -197,17 +197,39 @@ export async function collectNewsItems(config, kv) {
  * (including yfinance's documented cookie/crumb risk, see that adapter's
  * header) is logged and swallowed -- price data is a strict enhancement to
  * the pipeline, not a hard dependency (runPipelineForTicker already
- * tolerates an empty getPriceBarsAsOf result), so one bad yfinance request
+ * tolerates an empty getPriceBarsAsOf result), so one bad vendor request
  * should not block news ingestion or the pipeline run. `kv` (typically
  * env.CACHE_KV, same as ingestFundamentals below) is passed through to
- * fetchDailyBars for its cross-invocation 429 cooldown -- omitting it still
- * works, it just means every invocation retries every ticker regardless of
- * a recent 429 (fails open, same convention as edgar_cik_lookup.js).
+ * yfinance's fetchDailyBars for its cross-invocation 429 cooldown -- omitting
+ * it still works, it just means every invocation retries every ticker
+ * regardless of a recent 429 (fails open, same convention as
+ * edgar_cik_lookup.js). Tiingo has no such cooldown cache yet, so `kv` is
+ * accepted-and-ignored on that path (see tiingo.js#fetchDailyBars).
+ *
+ * Vendor is config.priceLiveSource (see resolvePriceLiveSource below and
+ * config.js's own comment) -- "tiingo" once TIINGO_API_KEY exists, "yfinance"
+ * otherwise, same defaulting as the historical backfill's priceBackfillSource.
+ * A missing-key VendorError from Tiingo's fetchDailyBars (thrown upfront,
+ * before any request -- see that function's header) is caught here and
+ * treated the same as any per-ticker vendor failure: logged and swallowed,
+ * not rethrown, so a misconfigured Tiingo key degrades to "no live bars this
+ * tick" rather than blocking ingestFundamentals from running for this ticker.
  */
 export async function ingestPriceBars(config, db, kv, { tickers } = {}) {
-  const { bars, errors } = await fetchDailyBars(config, tickers ? { tickers } : {}, { kv });
+  const priceSource = resolvePriceLiveSource(config);
+  let bars = [];
+  let errors = [];
+  try {
+    ({ bars, errors } = await priceSource.fetchBars(config, tickers ? { tickers } : {}, { kv }));
+  } catch (err) {
+    if (err instanceof VendorError) {
+      errors = [{ error: err }];
+    } else {
+      throw err;
+    }
+  }
   for (const { error } of errors) {
-    logSkippedSource("price bar ingestion", "yfinance", error);
+    logSkippedSource("price bar ingestion", priceSource.name, error);
   }
 
   for (const bar of bars) {
@@ -485,6 +507,17 @@ function resolvePriceBackfillSource(config) {
   if (source === "tiingo") return { name: "tiingo", fetchBars: fetchTiingoHistoricalBars };
   if (source === "yfinance") return { name: "yfinance", fetchBars: fetchHistoricalBars };
   throw new Error(`unknown PRICE_BACKFILL_SOURCE "${source}" (expected "tiingo" or "yfinance")`);
+}
+
+// Same idea as resolvePriceBackfillSource, for the LIVE trailing-window path
+// (config.priceLiveSource, see config.js and ingestPriceBars' own header for
+// why this exists -- the sustained yfinance 429). A bare config object with
+// no value (tests, one-off scripts) keeps the original yfinance behaviour.
+function resolvePriceLiveSource(config) {
+  const source = config.priceLiveSource ?? "yfinance";
+  if (source === "tiingo") return { name: "tiingo", fetchBars: fetchTiingoDailyBars };
+  if (source === "yfinance") return { name: "yfinance", fetchBars: fetchDailyBars };
+  throw new Error(`unknown PRICE_LIVE_SOURCE "${source}" (expected "tiingo" or "yfinance")`);
 }
 
 /**
