@@ -16,7 +16,7 @@
 // convention this codebase already uses (and tests) for every other JSON
 // response in src/index.js, rather than introducing a second, unproven one.
 import { checkAuth } from "./routes.js";
-import { parseDashboardParams, parseLlmParams, parseEnvParam } from "./helpers.js";
+import { parseDashboardParams, parseLlmParams, parseEnvParam, BACKTEST_ID_RE } from "./helpers.js";
 import {
   getSnapshotData,
   getActivityData,
@@ -26,6 +26,7 @@ import {
   getPositionsData,
   getPipelineData,
   getBacktestRunsData,
+  getBacktestRunDetailData,
   getLlmCallsData,
   getLlmCallData,
   resolveEnv,
@@ -92,6 +93,24 @@ export async function handleApiBacktestRunsRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
   return jsonResponse(await getBacktestRunsData(env));
+}
+
+/**
+ * GET /api/backtest-runs/:id -- one backtest run for the trade-timeline page:
+ * `{ run, positions, positionsError, truncated, error }` (data.js#getBacktestRunDetailData).
+ * 400 for a malformed id, 404 for an id that isn't in the registry, 500 if the
+ * registry read itself failed -- so "no such run" and "D1 hiccup" stay distinct.
+ * A failing positions query is NOT an error status: it rides along as
+ * `positionsError` so the run's summary and chart still load.
+ */
+export async function handleApiBacktestRunRoute(request, env, config, id) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  if (!BACKTEST_ID_RE.test(id)) return jsonResponse({ error: "backtest run id is malformed" }, { status: 400 });
+  const detail = await getBacktestRunDetailData(env, id);
+  if (detail.error) return jsonResponse({ error: detail.error }, { status: 500 });
+  if (!detail.run) return jsonResponse({ error: "backtest run not found" }, { status: 404 });
+  return jsonResponse(detail);
 }
 
 /** GET /api/llm-calls -- `{ calls, nextBeforeId, error }`, newest first, previews only. Filters: llmSource, llmStatus, llmTicker, llmJob, llmRun, llmLimit, llmBefore (helpers.js#parseLlmParams). */

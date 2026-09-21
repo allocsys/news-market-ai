@@ -587,6 +587,70 @@ export class RunStore {
     }));
   }
 
+  /**
+   * Every position of this environment, OLDEST first, each with the trade
+   * decision that opened it (LEFT JOIN on (run_id, id): commitThesis writes the
+   * position and its trade_decisions row under the same `${ticker}|${asOf}` id).
+   * Feeds the backtest trade-timeline page: markers on the equity chart plus a
+   * per-position "why" (analyst opinions, bull/bear debate, trader rationale).
+   * `decision` is null for a position with no decision row (opened through the
+   * low-level openPosition), which the page shows as "not recorded".
+   *
+   * Never silently truncates: it fetches limit+1 rows and reports `truncated`
+   * when the run has more than `limit` positions, so the page can say so.
+   * Not asOf-gated -- same dashboard-read carve-out as the rest of this section.
+   */
+  async listPositionsWithDecisions({ limit = 500 } = {}) {
+    const { results } = await this.db
+      .prepare(
+        `SELECT p.id, p.ticker, p.trade_thesis_id, p.position_size_pct, p.direction, p.entry_price, p.exit_price,
+                p.stop_loss_pct, p.take_profit_pct, p.opened_at, p.closed_at, p.close_reason,
+                d.as_of AS d_as_of, d.status AS d_status, d.thesis AS d_thesis, d.risk_decision AS d_risk_decision,
+                d.portfolio_decision AS d_portfolio_decision, d.opinions AS d_opinions, d.debate AS d_debate
+         FROM positions p
+         LEFT JOIN trade_decisions d ON d.run_id = p.run_id AND d.id = p.id
+         WHERE p.run_id = ?
+         ORDER BY p.opened_at ASC, p.id ASC
+         LIMIT ?`
+      )
+      .bind(this.runId, limit + 1)
+      .all();
+
+    const truncated = results.length > limit;
+    const page = truncated ? results.slice(0, limit) : results;
+    const parse = (raw) => (raw ? JSON.parse(raw) : null);
+
+    return {
+      truncated,
+      positions: page.map((r) => ({
+        id: r.id,
+        ticker: r.ticker,
+        tradeThesisId: r.trade_thesis_id,
+        positionSizePct: r.position_size_pct,
+        direction: r.direction,
+        entryPrice: r.entry_price,
+        exitPrice: r.exit_price,
+        stopLossPct: r.stop_loss_pct,
+        takeProfitPct: r.take_profit_pct,
+        openedAt: r.opened_at,
+        closedAt: r.closed_at,
+        closeReason: r.close_reason,
+        decision:
+          r.d_status == null
+            ? null
+            : {
+                asOf: r.d_as_of,
+                status: r.d_status,
+                thesis: parse(r.d_thesis),
+                riskDecision: parse(r.d_risk_decision),
+                portfolioDecision: parse(r.d_portfolio_decision),
+                opinions: parse(r.d_opinions),
+                debate: parse(r.d_debate),
+              },
+      })),
+    };
+  }
+
   /** Most recent trade_decisions rows, newest first. `status`, if given, filters to that exact status ("approved"/"rejected"/...). */
   async listRecentTradeDecisions({ limit = 20, status } = {}) {
     const cols = `id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate`;

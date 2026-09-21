@@ -23,21 +23,8 @@
 // reflection got recorded.
 
 import { closeTheLoop } from "./reflection.js";
+import { computeRealizedReturn } from "../shared/returns.js";
 import { LlmBudgetExceededError, SubrequestBudgetExhaustedError } from "../shared/errors.js";
-
-/**
- * Direction-aware realized return, same sign convention as
- * agents/risk_mgmt/exit.js#evaluateExit's changePct. Returns null (never a
- * fabricated number) when entryPrice/exitPrice is missing or direction
- * isn't 'long'/'short' -- e.g. a time_based exit fired with no price_bars
- * data for that ticker (see exit_check.js's header).
- */
-function computeRealizedReturn({ direction, entryPrice, exitPrice }) {
-  if (entryPrice == null || exitPrice == null) return null;
-  if (direction === "long") return (exitPrice - entryPrice) / entryPrice;
-  if (direction === "short") return (entryPrice - exitPrice) / entryPrice;
-  return null;
-}
 
 /**
  * Called right after a position closes. `position` is the shape RunStore's
