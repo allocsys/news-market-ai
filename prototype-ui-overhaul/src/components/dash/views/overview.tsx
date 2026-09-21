@@ -17,18 +17,10 @@ import {
   Gauge, Brain, FlaskConical, ListChecks, TrendingUp, TrendingDown,
 } from "lucide-react";
 
-const HUES: Record<string, string> = {
-  blue: "linear-gradient(135deg,#3b82f6,#2563eb)",
-  emerald: "linear-gradient(135deg,#10b981,#059669)",
-  amber: "linear-gradient(135deg,#f59e0b,#d97706)",
-  purple: "linear-gradient(135deg,#a855f7,#9333ea)",
-};
-
 export function OverviewView() {
   const setView = useDash((s) => s.setView);
   const setTickerFilter = useDash((s) => s.setTickerFilter);
   const setSearchOpen = useDash((s) => s.setSearchOpen);
-  const currentUser = useDash((s) => s.currentUser);
   const tickerFilter = useDash((s) => s.tickerFilter);
 
   // Filter by ticker if set
@@ -350,7 +342,7 @@ export function OverviewView() {
         <QuickLink icon={<Activity className="size-4" />} label="Activity" hint="Decisions per day" onClick={() => setView("activity")} />
         <QuickLink icon={<Brain className="size-4" />} label="LLM calls" hint="42 calls · audit trail" onClick={() => setView("llm")} />
         <QuickLink icon={<FlaskConical className="size-4" />} label="Backtest" hint="3 runs · 1 running" onClick={() => setView("backtest")} />
-        <QuickLink icon={<Gauge className="size-4" />} label="Settings" hint={currentUser ? `Signed in as ${currentUser.displayName.split(" ")[0]}` : "Audit log"} onClick={() => setView("settings")} />
+        <QuickLink icon={<Gauge className="size-4" />} label="Health" hint="Ingestion freshness" onClick={() => setView("health")} />
       </div>
     </div>
   );
