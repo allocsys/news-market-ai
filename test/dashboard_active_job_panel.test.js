@@ -8,7 +8,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describeJob, renderActiveJobPanel } from "../src/dashboard/views/status.js";
+import vm from "node:vm";
+import { describeJob, renderActiveJobPanel, renderJobProgressPanel, renderRunAcceptedPage } from "../src/dashboard/views/status.js";
 
 // --------------------------------------------------------------------
 // describeJob
@@ -106,3 +107,115 @@ test("renderActiveJobPanel includes the shared pulse keyframes style once", () =
   const matches = html.match(/@keyframes runPulse/g) || [];
   assert.equal(matches.length, 1);
 });
+
+// --------------------------------------------------------------------
+// renderJobProgressPanel -- the variant embedded in the single-run backtest
+// detail page (/dashboard/backtest/:id). Same panel + poller as
+// renderActiveJobPanel, minus the heading/section wrapper, and it reloads
+// the page on a terminal status instead of showing a "Back to X" link.
+// --------------------------------------------------------------------
+
+const BACKTEST_JOB = { id: "backtest-1-abc", type: "backtest", status: "running", params: { tickers: ["AAPL", "MSFT"], testStart: "2026-09-14", testEnd: "2026-09-21" } };
+
+/** Extracts the inline poller <script> body from rendered markup. */
+function scriptOf(html) {
+  return html.match(/<script>([\s\S]*)<\/script>/)[1];
+}
+
+/**
+ * Runs a rendered poller script against a stubbed DOM/fetch/timer, feeding it
+ * `responses` one per poll (the last repeats), and returns what it did. Timers
+ * are captured and fired in order rather than waited on.
+ */
+async function runPoller(html, responses) {
+  const els = {};
+  const getEl = (id) => (els[id] ??= { style: {}, textContent: "", innerHTML: "" });
+  const timers = [];
+  let reloads = 0;
+  let polled = 0;
+  const urls = [];
+  const ctx = {
+    document: { getElementById: getEl },
+    fetch: (url) => {
+      urls.push(url);
+      return Promise.resolve({ ok: true, json: async () => responses[Math.min(polled++, responses.length - 1)] });
+    },
+    setTimeout: (fn, ms) => timers.push({ fn, ms }),
+    clearTimeout() {},
+    window: { location: { reload: () => { reloads += 1; } } },
+  };
+  vm.runInNewContext(scriptOf(html), ctx);
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+  await settle();
+  const delays = [];
+  for (let i = 0; i < 20 && timers.length; i++) {
+    const { fn, ms } = timers.shift();
+    delays.push(ms);
+    fn();
+    await settle();
+  }
+  return { reloads, delays, urls, phase: els["run-phase-detail"]?.textContent, nextStepsShown: els["run-next-steps"]?.style?.display === "block" };
+}
+
+const RUNNING_THEN = (status) => [
+  { status: "running", percent: 40, done: 4, total: 10, detail: "walking" },
+  { status, percent: 100, done: 10, total: 10, detail: "Backtest complete", error: "boom" },
+];
+
+test("renderJobProgressPanel renders nothing for a null/undefined job or a job with no id", () => {
+  assert.equal(renderJobProgressPanel(null), "");
+  assert.equal(renderJobProgressPanel(undefined), "");
+  assert.equal(renderJobProgressPanel({ type: "backtest" }), "");
+});
+
+test("renderJobProgressPanel draws the bar with no heading/section wrapper and describes the job", () => {
+  const html = renderJobProgressPanel(BACKTEST_JOB);
+  assert.match(html, /id="run-progress-bar"/);
+  assert.match(html, /Running a backtest for AAPL, MSFT from 2026-09-14 to 2026-09-21\./);
+  assert.doesNotMatch(html, /<h2/, "no heading -- it sits inside the detail page's own panel");
+  assert.doesNotMatch(html, /id="active-job"/, "no section wrapper");
+  assert.doesNotMatch(html, /id="run-status-title"/);
+});
+
+test("renderJobProgressPanel polls with the run's own env, and defaults a missing type to backtest", () => {
+  const withType = renderJobProgressPanel(BACKTEST_JOB);
+  assert.ok(withType.includes('var pollUrl = "/dashboard/jobs/backtest-1-abc?env=backtest-1-abc";'));
+  const noType = renderJobProgressPanel({ id: "backtest-1-abc" });
+  assert.ok(noType.includes("?env=backtest-1-abc"), "a job row with no type still polls the run's SIM_DB env");
+});
+
+test("renderJobProgressPanel's script sets reloadOnComplete; the pre-existing callers' scripts do not", () => {
+  assert.match(renderJobProgressPanel(BACKTEST_JOB), /var reloadOnComplete = true;/);
+  assert.match(renderActiveJobPanel(BACKTEST_JOB), /var reloadOnComplete = false;/);
+  const accepted = renderRunAcceptedPage({ title: "Backtest", detail: "d", backLink: "/dashboard/backtest", backLabel: "Backtest", jobId: "backtest-1-abc", type: "backtest" });
+  assert.match(accepted, /var reloadOnComplete = false;/);
+});
+
+test("renderJobProgressPanel's poller reloads the page once, ~800ms after the job completes, without a 'Back to' link", async () => {
+  const out = await runPoller(renderJobProgressPanel(BACKTEST_JOB), RUNNING_THEN("complete"));
+  assert.equal(out.reloads, 1);
+  assert.ok(out.delays.includes(800), "the reload is deferred so the final status text is visible first");
+  assert.equal(out.phase, "Backtest complete");
+  assert.equal(out.nextStepsShown, false);
+  assert.deepEqual([...new Set(out.urls)], ["/dashboard/jobs/backtest-1-abc?env=backtest-1-abc"]);
+});
+
+test("renderJobProgressPanel's poller also reloads on failure, after showing the error", async () => {
+  const out = await runPoller(renderJobProgressPanel(BACKTEST_JOB), RUNNING_THEN("failed"));
+  assert.equal(out.reloads, 1);
+  assert.equal(out.phase, "Failed: boom");
+  assert.equal(out.nextStepsShown, false);
+});
+
+test("renderJobProgressPanel's poller does not reload while the job is still running", async () => {
+  const out = await runPoller(renderJobProgressPanel(BACKTEST_JOB), [{ status: "running", percent: 10, done: 1, total: 10 }]);
+  assert.equal(out.reloads, 0);
+});
+
+test("renderActiveJobPanel's poller is unchanged: shows the 'Back to' link on completion and never reloads", async () => {
+  const out = await runPoller(renderActiveJobPanel(BACKTEST_JOB), RUNNING_THEN("complete"));
+  assert.equal(out.reloads, 0);
+  assert.equal(out.nextStepsShown, true);
+  assert.ok(!out.delays.includes(800));
+});
+
