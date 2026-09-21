@@ -5,7 +5,7 @@
 // is exactly one place each section's D1 reads happen, not two copies that
 // could drift.
 import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.js";
-import { getRecentBacktestRuns, getBacktestRun } from "../storage/sim_registry.js";
+import { getRecentBacktestRuns, getBacktestRun, getActiveBacktestRunId } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
 import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
 
@@ -58,6 +58,28 @@ export async function resolveEnv(env, envParam) {
     anchor: run.finishedAt || run.startedAt,
     envError: null,
   };
+}
+
+/**
+ * The newest in-flight job of `type` for GET /api/jobs/active, or null.
+ *
+ * backfill / backfill_prices jobs live under run_id 'live', so resolveEnv's
+ * store answers directly. A BACKTEST job lives under its OWN run_id in SIM_DB
+ * (M3) -- so with no specific `?env=<backtest id>` (the case after a form
+ * submit: the 303 lands on /dashboard/backtest with no env), asking the live
+ * store, as this used to, could never find one and the page showed no progress
+ * bar. Instead find the newest active backtest run id across SIM_DB and read
+ * that run's job row. An explicit backtest `?env=` keeps its old meaning (that
+ * run's own job), and 'live' with type=backtest means "any backtest".
+ */
+export async function getActiveJob(env, type, envParam) {
+  if (type === "backtest" && (!envParam || envParam === "live")) {
+    const db = readOnly(env.SIM_DB);
+    const runId = await getActiveBacktestRunId(db);
+    return runId ? new RunStore(db, runId).getActiveJob("backtest") : null;
+  }
+  const { store } = await resolveEnv(env, envParam);
+  return store.getActiveJob(type);
 }
 
 /**
