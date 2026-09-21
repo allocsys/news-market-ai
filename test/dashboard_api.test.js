@@ -161,7 +161,8 @@ test("GET /api/positions with zero open positions reports 0% total exposure, not
 
 // --------------------------------------------------------------------
 // GET /api/jobs/active -- lets the backfill/backtest pages show progress
-// for a job submitted earlier (RunStore#getActiveJob over LIVE_DB's job_progress, run_id 'live'), rather
+// for a job submitted earlier (backfill: RunStore#getActiveJob over LIVE_DB's job_progress, run_id 'live';
+// backtest: the newest in-flight run across SIM_DB, each under its own run_id), rather
 // than only the by-id lookup GET /api/jobs/:id supports.
 // --------------------------------------------------------------------
 
@@ -215,18 +216,76 @@ test("GET /api/jobs/active?type=backfill returns { job: null } (200, not 404) wh
   assert.deepEqual(body, { job: null });
 });
 
-test("GET /api/jobs/active?type=backtest returns the newest in-flight job, camelCased and JSON-parsed, when the store has one", async () => {
-  const { db, updatedAt } = await jobStateDb([ACTIVE_BACKTEST, { id: "backfill-1-abc", type: "backfill" }]);
-  const env = loginConfiguredEnv({ LIVE_DB: db });
+/** A SIM_DB (state + sim schemas) holding in-flight job_progress rows, each under ITS OWN run_id (= the job id), exactly how POST /backtest/run writes them. */
+async function simDbWithBacktestJobs(jobs) {
+  const db = createTestD1([STATE_DIR, SIM_DIR]);
+  for (const { id, status = "running", percent = 0, params = null, now = new Date().toISOString() } of jobs) {
+    const store = new RunStore(db, id);
+    await store.insertQueuedJob({ id, type: "backtest", params, now });
+    if (status !== "queued") await store.markJobRunning({ id, type: "backtest", now });
+    if (percent) await store.updateJobProgress({ id, phase: "simulating", percent, done: 3, total: 10, detail: "Simulating", now });
+    if (status === "failed") await store.failJob({ id, error: "boom", now });
+    if (status === "complete") await store.completeJob({ id, result: {}, detail: "done", now });
+  }
+  return db;
+}
+
+test("GET /api/jobs/active?type=backtest finds the in-flight backtest under ITS OWN run_id in SIM_DB, with no ?env= (the state right after the form's 303 redirect)", async () => {
+  const simDb = await simDbWithBacktestJobs([{ id: ACTIVE_BACKTEST.id, percent: 42, params: ACTIVE_BACKTEST.params }]);
+  const env = loginConfiguredEnv({ SIM_DB: simDb });
   const cookie = await loggedInCookie(env);
   const response = await apiFetch("/api/jobs/active?type=backtest", env, { cookie });
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.job.id, "backtest-1789783849291-cx0mfj");
-  assert.equal(body.job.type, "backtest", "the route asks for THIS type, not any type");
+  assert.equal(body.job.id, ACTIVE_BACKTEST.id);
+  assert.equal(body.job.type, "backtest");
   assert.equal(body.job.percent, 42);
-  assert.deepEqual(body.job.params, { tickers: ["AAPL"], testStart: "2024-01-01", testEnd: "2024-03-31" });
-  assert.equal(body.job.updatedAt, updatedAt);
+  assert.deepEqual(body.job.params, ACTIVE_BACKTEST.params);
+});
+
+test("GET /api/jobs/active?type=backtest picks the NEWEST in-flight backtest and ignores finished ones", async () => {
+  const simDb = await simDbWithBacktestJobs([
+    { id: "backtest-1-old", status: "running", now: new Date(Date.now() - 60_000).toISOString() },
+    { id: "backtest-2-done", status: "complete", now: new Date(Date.now() - 30_000).toISOString() },
+    { id: "backtest-3-new", status: "queued", now: new Date().toISOString() },
+    { id: "backtest-4-failed", status: "failed", now: new Date(Date.now() + 1000).toISOString() },
+  ]);
+  const env = loginConfiguredEnv({ SIM_DB: simDb });
+  const cookie = await loggedInCookie(env);
+  const body = await (await apiFetch("/api/jobs/active?type=backtest", env, { cookie })).json();
+  assert.equal(body.job.id, "backtest-3-new");
+});
+
+test("GET /api/jobs/active?type=backtest ignores an orphaned backtest idle past the 15-minute cutoff (a killed consumer never writes 'failed')", async () => {
+  const simDb = await simDbWithBacktestJobs([{ id: "backtest-1-orphan", now: new Date(Date.now() - 20 * 60_000).toISOString() }]);
+  const env = loginConfiguredEnv({ SIM_DB: simDb });
+  const cookie = await loggedInCookie(env);
+  const body = await (await apiFetch("/api/jobs/active?type=backtest", env, { cookie })).json();
+  assert.deepEqual(body, { job: null });
+});
+
+test("GET /api/jobs/active?type=backtest returns { job: null } when no backtest has ever run", async () => {
+  const env = loginConfiguredEnv();
+  const cookie = await loggedInCookie(env);
+  const body = await (await apiFetch("/api/jobs/active?type=backtest", env, { cookie })).json();
+  assert.deepEqual(body, { job: null });
+});
+
+test("GET /api/jobs/active?type=backtest does NOT report a backtest-typed row that sits under run_id 'live' (the old, wrong place)", async () => {
+  const { db } = await jobStateDb([ACTIVE_BACKTEST]);
+  const env = loginConfiguredEnv({ LIVE_DB: db });
+  const cookie = await loggedInCookie(env);
+  const body = await (await apiFetch("/api/jobs/active?type=backtest", env, { cookie })).json();
+  assert.deepEqual(body, { job: null });
+});
+
+test("GET /api/jobs/active?type=backfill still reads LIVE_DB (run_id 'live'), unaffected by backtest jobs in SIM_DB", async () => {
+  const { db } = await jobStateDb([{ id: "backfill-1-abc", type: "backfill", params: { from: "2024-01-01", to: "2024-01-31" } }]);
+  const simDb = await simDbWithBacktestJobs([{ id: ACTIVE_BACKTEST.id }]);
+  const env = loginConfiguredEnv({ LIVE_DB: db, SIM_DB: simDb });
+  const cookie = await loggedInCookie(env);
+  const body = await (await apiFetch("/api/jobs/active?type=backfill", env, { cookie })).json();
+  assert.equal(body.job.id, "backfill-1-abc");
 });
 
 // --------------------------------------------------------------------

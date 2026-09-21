@@ -440,8 +440,13 @@ test("GET /dashboard/backtest shows no active-job panel when nothing is in fligh
 });
 
 test("GET /dashboard/backtest prepends the active-job panel when backend reports a running backtest", async () => {
-  const runningBacktest = { ...RUNNING_BACKFILL, id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] } };
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb([runningBacktest])).db }) });
+  // A backtest's job row lives in SIM_DB under its OWN run_id (index.js POST /backtest/run), never under 'live'.
+  const simDb = createTestD1([STATE_DIR, SIM_DIR]);
+  const now = new Date().toISOString();
+  const simStore = new RunStore(simDb, "backtest-1-abc");
+  await simStore.insertQueuedJob({ id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] }, now });
+  await simStore.markJobRunning({ id: "backtest-1-abc", type: "backtest", now });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db, SIM_DB: simDb }) });
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backtest", { headers: { Cookie: cookie } }), env)).text();
 

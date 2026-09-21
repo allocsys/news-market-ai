@@ -29,6 +29,7 @@ import {
   getLlmCallsData,
   getLlmCallData,
   resolveEnv,
+  getActiveJob,
 } from "./data.js";
 
 function jsonResponse(body, { status = 200 } = {}) {
@@ -129,8 +130,10 @@ const LATEST_JOB_TYPES = new Set(["backfill", "backfill_prices"]);
  * running" is an ordinary answer, not a 404, unlike the by-id route below
  * where a missing id is an error. Lets the backfill/backtest pages show
  * progress for a job submitted earlier. `env` defaults to 'live' -- a
- * backfill job only ever runs there, but a backtest job lives under its own
- * run id in SIM_DB (M3), so the backtest page's active-job poll passes it.
+ * backfill job only ever runs there. A backtest job lives under its own run id
+ * in SIM_DB (M3), so type=backtest with no specific `env` searches every
+ * backtest run for the newest in-flight one (data.js#getActiveJob) instead of
+ * looking under 'live', where one never exists.
  */
 export async function handleApiActiveJobRoute(request, env, config) {
   const auth = await checkAuth(request, config);
@@ -138,8 +141,7 @@ export async function handleApiActiveJobRoute(request, env, config) {
   const searchParams = new URL(request.url).searchParams;
   const type = searchParams.get("type");
   if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backfill_prices, backtest" }, { status: 400 });
-  const { store } = await resolveEnv(env, parseEnvParam(searchParams));
-  return jsonResponse({ job: await store.getActiveJob(type) });
+  return jsonResponse({ job: await getActiveJob(env, type, parseEnvParam(searchParams)) });
 }
 
 /**

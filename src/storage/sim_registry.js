@@ -15,6 +15,8 @@
 // `db` is SIM_DB. The read (getRecentBacktestRuns) is safe to call through
 // run_store.js#readOnly(env.SIM_DB), which is what the dashboard does.
 
+import { ACTIVE_JOB_MAX_IDLE_MS } from "./jobs.js";
+
 /**
  * Inserts the 'running' row for a just-started backtest run, before the
  * (slow, LLM-calling) comparison itself runs -- so a run that crashes the
@@ -96,4 +98,28 @@ export async function getRecentBacktestRuns(db, { limit = 10 } = {}) {
     .all();
 
   return results.map(rowToRun);
+}
+
+/**
+ * Run id of the newest in-flight ('queued' or 'running') backtest job in SIM_DB, or null.
+ *
+ * A backtest's job_progress row lives under the backtest's OWN run_id (M3), so
+ * RunStore#getActiveJob -- which is scoped to ONE run_id -- can never answer "is
+ * any backtest running?" without already knowing which one. This is the
+ * run-id-agnostic lookup the Backtest page needs after a form submit (the 303
+ * lands on /dashboard/backtest with no ?env=). Same idle cutoff as
+ * getActiveJob (`maxIdleMs`, default storage/jobs.js#ACTIVE_JOB_MAX_IDLE_MS), so
+ * a consumer killed mid-run doesn't leave a phantom bar. Pass a readOnly() handle.
+ */
+export async function getActiveBacktestRunId(db, { maxIdleMs = ACTIVE_JOB_MAX_IDLE_MS, now = new Date().toISOString() } = {}) {
+  const cutoff = new Date(Date.parse(now) - maxIdleMs).toISOString();
+  const row = await db
+    .prepare(
+      `SELECT run_id FROM job_progress
+       WHERE type = 'backtest' AND status IN ('queued', 'running') AND updated_at >= ?
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .bind(cutoff)
+    .first();
+  return row ? row.run_id : null;
 }
