@@ -26,8 +26,6 @@ import type { BacktestRun, BacktestTrade } from "@/lib/dash/types";
 export function BacktestView() {
   const backtestDetailId = useDash((s) => s.backtestDetailId);
   const openBacktest = useDash((s) => s.openBacktest);
-  const appendAudit = useDash((s) => s.appendAudit);
-  const currentUser = useDash((s) => s.currentUser);
   const setView = useDash((s) => s.setView);
   const tickerFilter = useDash((s) => s.tickerFilter);
   const tick = tickerFilter;
@@ -60,11 +58,6 @@ export function BacktestView() {
     }
     toast.success("Backtest queued", {
       description: `Tickers: ${tickers}. Window: ${testStart} → ${testEnd}.`,
-    });
-    appendAudit({
-      action: "Triggered backtest run",
-      target: `${tickers} · ${testStart} → ${testEnd} (grace ${graceDays}d)`,
-      ip: "10.0.4.22",
     });
   }
 
