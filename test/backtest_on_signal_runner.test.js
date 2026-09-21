@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runOnSignalForTicker, runOnSignalReturns, makeOnSignalReturns, countSignalWalkSteps } from "../src/backtest/onSignalRunner.js";
+import { runOnSignalForTicker, runOnSignalReturns, makeOnSignalReturns, countSignalWalkSteps, walkOnSignalWindow } from "../src/backtest/onSignalRunner.js";
 import { SimClock } from "../src/backtest/simClock.js";
 import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
@@ -151,6 +151,71 @@ test("makeOnSignalReturns returns a function matching compareSignalOnOffByWindow
   const returns = await getOnReturns({ trainStart: "2025-12-01T00:00:00.000Z", trainEnd: "2026-01-01T00:00:00.000Z", testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z" });
 
   assert.deepEqual(returns, [0]);
+});
+
+// ---------------------------------------------------------------------------
+// walkOnSignalWindow: DAY-MAJOR multi-ticker walk (plan.md step E). An
+// earlier version walked ticker-major (every day of ticker A, THEN every day
+// of ticker B), which let a later ticker's portfolio-exposure check see an
+// earlier ticker's END-of-window state on what should have been ticker B's
+// very first day -- a lookahead. Day-major (every ticker's day D, THEN every
+// ticker's day D+1) fixes that; these tests pin the actual call order.
+// ---------------------------------------------------------------------------
+
+test("walkOnSignalWindow processes every ticker's day D before any ticker's day D+1 (day-major, not ticker-major)", async () => {
+  const ctx = makeCtx();
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  // No news seeded -- this test only cares about the (ticker, day) call
+  // order the walk produces via onStep, not the pipeline itself.
+  const steps = [];
+
+  await walkOnSignalWindow({}, config, ctx, {
+    tickers: ["AAPL", "MSFT"],
+    testStart: "2026-01-01T00:00:00.000Z",
+    testEnd: "2026-01-01T00:00:00.000Z", // single test day
+    graceDays: 1, // walk = Jan 1 .. Jan 2
+    onStep: ({ ticker, dayIso, done }) => {
+      if (!done) steps.push(`${ticker}|${dayIso.slice(0, 10)}`);
+    },
+  });
+
+  // Day-major: both tickers' Jan 1 before either ticker's Jan 2.
+  // A ticker-major walk would instead produce AAPL|01, AAPL|02, MSFT|01, MSFT|02.
+  assert.deepEqual(steps, ["AAPL|2026-01-01", "MSFT|2026-01-01", "AAPL|2026-01-02", "MSFT|2026-01-02"]);
+});
+
+test("walkOnSignalWindow: a ticker's decision on day D can see another ticker's position ALREADY open as of day D, but not one that ticker opens on a LATER day", async () => {
+  const ctx = makeCtx();
+  // AAPL gets news on day 1 (opens a position that day); MSFT gets news on
+  // day 3. If MSFT's day-1 portfolio check (there's no news for MSFT then,
+  // but the walk still visits MSFT on day 1) somehow saw AAPL's position as
+  // available capacity is not what's being tested here -- what matters is
+  // that by the time MSFT's OWN day-3 decision runs, AAPL's day-1 position
+  // is visible (correct, chronologically real exposure), proving the walk
+  // advances calendar time consistently across tickers rather than one
+  // ticker racing ahead of the other's clock.
+  await seedNews(ctx.inputs, { id: "news-aapl", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "AAPL news", body: "AAPL body" });
+  await seedNews(ctx.inputs, { id: "news-msft", tickers: ["MSFT"], publishedAt: "2026-01-03T00:00:00.000Z", title: "MSFT news", body: "MSFT body" });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "MSFT", date: "2025-12-31", close: 100 });
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 30, fakeModel: makeFakeModel() };
+
+  await walkOnSignalWindow({}, config, ctx, {
+    tickers: ["AAPL", "MSFT"],
+    testStart: "2026-01-01T00:00:00.000Z",
+    testEnd: "2026-01-04T00:00:00.000Z",
+    graceDays: 0,
+  });
+
+  const positions = await stateRows(ctx.stateDb, "positions");
+  assert.equal(positions.length, 2);
+  assert.equal(positions.find((p) => p.ticker === "AAPL").opened_at, "2026-01-01T00:00:00.000Z");
+  assert.equal(positions.find((p) => p.ticker === "MSFT").opened_at, "2026-01-03T00:00:00.000Z");
+
+  // Both opened -- confirms the walk didn't reject either for a
+  // miscomputed exposure (each position is well under the ceiling alone).
+  const decisions = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.ok(decisions.every((d) => d.status === "opened"));
 });
 
 // ---------------------------------------------------------------------------

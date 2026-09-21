@@ -57,6 +57,29 @@ test("POST /backtest/run returns 400 for a missing or malformed testStart/testEn
   assert.equal(env.BACKTEST.sent.length, 0);
 });
 
+test("POST /backtest/run returns 400 when testStart is not before testEnd, without touching the queue or SIM_DB", async () => {
+  const env = baseEnv();
+
+  const equal = await worker.fetch(
+    new Request("https://worker.example/backtest/run?testStart=2024-01-15&testEnd=2024-01-15", { method: "POST" }),
+    env
+  );
+  assert.equal(equal.status, 400);
+  const equalBody = await equal.json();
+  assert.match(equalBody.error, /must be before/);
+
+  const reversed = await worker.fetch(
+    new Request("https://worker.example/backtest/run?testStart=2024-02-01&testEnd=2024-01-01", { method: "POST" }),
+    env
+  );
+  assert.equal(reversed.status, 400);
+  const reversedBody = await reversed.json();
+  assert.match(reversedBody.error, /must be before/);
+
+  assert.equal(env.BACKTEST.sent.length, 0);
+  assert.equal((await new RunStore(env.SIM_DB, "anything").db.prepare("SELECT COUNT(*) AS n FROM job_progress").first()).n, 0);
+});
+
 test("POST /backtest/run returns 400 for a non-numeric graceDays", async () => {
   const env = baseEnv();
   const response = await worker.fetch(

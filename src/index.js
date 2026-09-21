@@ -276,6 +276,15 @@ export default {
       const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
       const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
 
+      // Same check runBacktest.js's engine already refuses with (and the
+      // same message), just moved up here so a caller mistake is a 400 at
+      // the request boundary -- before a job row is written or anything is
+      // enqueued -- rather than a queued job that immediately dies once the
+      // backtest Worker picks it up and the engine's own check fires.
+      if (!(Date.parse(testStartIso) < Date.parse(testEndIso))) {
+        return jsonResponse({ error: `testStart (${testStart}) must be before testEnd (${testEnd})` }, { status: 400 });
+      }
+
       try {
         new SimClock().assertNotFuture(testEndIso, "testEnd");
       } catch (err) {

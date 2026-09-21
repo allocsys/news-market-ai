@@ -179,13 +179,65 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
 }
 
 /**
- * Walks every ticker through one test window (sequential per ticker, for the
- * reason runOnSignalReturns gives below), leaving the resulting positions in the
- * run's store. No return value: see walkOnSignalForTicker.
+ * Walks every ticker through one test window DAY-MAJOR (days outermost,
+ * tickers innermost), leaving the resulting positions in the run's store. No
+ * return value: see walkOnSignalForTicker.
+ *
+ * DAY-MAJOR, NOT TICKER-MAJOR: an earlier version of this function looped
+ * tickers outermost, walking ticker A through its ENTIRE window (every day,
+ * including its grace period) before ticker B's walk started at all. That
+ * breaks the cross-ticker portfolio check runPipelineForTicker's portfolio
+ * stage does on every decision (store.getOpenPositionsRiskPctAsOf({asOf,
+ * excludeTicker})): by the time ticker B's day-1 decision ran, ticker A's
+ * walk had already advanced through its whole window, so B's "exposure from
+ * other tickers as of day 1" read reflected A's END-of-window state (which
+ * positions A happened to still hold on the very last day of its walk), not
+ * A's ACTUAL day-1 state -- a lookahead into A's future relative to B, and a
+ * portfolio-risk check that could wrongly approve or reject B's decision
+ * based on exposure that, chronologically, didn't exist yet. Looping days
+ * outermost and every ticker's same-day work innermost keeps the store's
+ * state, at the moment any ticker's decision is evaluated, advanced through
+ * exactly the calendar days up to and including that one -- matching what
+ * the live cron path would have seen (plan.md Adopted Pattern #6: this
+ * whole harness exists to replay the live path faithfully).
+ *
+ * Exit checks (checkOpenPositionExits) also move: now called ONCE per day,
+ * after every ticker's news for that day has run, rather than once per
+ * (ticker, day) pair -- it already scans every open position across all
+ * tickers (see exit_check.js; it takes no ticker filter), so calling it once
+ * a day is both correct and avoids redundant re-scans of positions that
+ * belong to a ticker other than the one currently "at bat".
  */
 export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock }) {
+  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
+
+  // Same per-ticker news fetch+grouping walkOnSignalForTicker does, just
+  // done once up front for every ticker so the day-major loop below can
+  // look up any (ticker, day)'s items without re-querying per day.
+  const itemsByTickerDay = new Map();
   for (const ticker of tickers) {
-    await walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix: `${testStart}|${ticker}`, onStep, clock });
+    const newsItems = await getNewsItemsInRange(ctx.inputs, { ticker, from: testStart, to: testEnd });
+    itemsByTickerDay.set(ticker, groupItemsByDay(newsItems));
+  }
+
+  for (const dayIso of eachDayIso(testStart, walkEnd)) {
+    for (const ticker of tickers) {
+      await onStep?.({ ticker, dayIso, done: false });
+      const dayItems = itemsByTickerDay.get(ticker).get(dayIso.slice(0, 10)) ?? [];
+      const prefix = `${testStart}|${ticker}`;
+      for (const item of dayItems) {
+        await runPipelineForTicker(env, config, ctx, {
+          pipelineRunId: `${prefix}|${item.id}`,
+          ticker,
+          newsItem: { id: item.id, tickers: [ticker], title: item.title, body: item.body, publishedAt: item.published_at },
+          asOf: item.published_at,
+        });
+      }
+    }
+    await checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
+    for (const ticker of tickers) {
+      await onStep?.({ ticker, dayIso, done: true });
+    }
   }
 }
 
