@@ -78,16 +78,28 @@ import { createLlmBudget } from "../llm/budget.js";
  * their own; a failure here is reported as data (status: 'failed'), not
  * re-thrown, so a bad backtest run doesn't look like a route/server bug.
  */
-export async function runManualBacktest(env, config, { inputs, store, registryDb }, { id, tickers, testStart, testEnd, trainDays = 0, testDays, graceDays, onProgress, clock = new SimClock() }) {
+export async function runManualBacktest(env, config, { inputs, store, registryDb }, { id, tickers, testStart, testEnd, trainDays = 0, testDays, graceDays, onProgress, clock = new SimClock(), cursor = null, budget = null, part = 1, maxParts = Infinity }) {
   const startedAt = new Date().toISOString();
+  // A continuation part pins the clock to part 1's now, so the grace-day clamp
+  // (computeWalkEnd) -- and with it the walk's day list -- cannot shift between
+  // parts and invalidate the cursor.
+  if (cursor) clock = new SimClock(cursor.clockNow);
   config = withLlmLogContext(config, { source: "backtest", jobId: id });
+  // The Free-plan subrequest budget (backtest/subrequestBudget.js) rides on
+  // config to the Gemini client (it charges every fetch). `unenf` runs
+  // bookkeeping that must not be cut in half: counted, never refused.
+  if (budget) config = { ...config, subrequestBudget: budget };
+  const unenf = (fn) => (budget ? budget.unenforced(fn) : fn());
   // A single [testStart, testEnd) window (no walk-forward roll) unless the
   // caller explicitly asks for one via testDays -- testDays defaults to the
   // whole window's own length so walkForwardWindows yields exactly one
   // window when trainDays=0, matching this function's own trainDays=0 default.
   const resolvedTestDays = testDays ?? Math.ceil((new Date(testEnd) - new Date(testStart)) / 86400000);
 
-  await insertBacktestRun(registryDb, { id, tickers, testStart, testEnd, trainDays, testDays: resolvedTestDays, graceDays: graceDays ?? null, startedAt });
+  // Part 1 only: a continuation part must not re-insert the registry row.
+  if (!cursor) {
+    await unenf(() => insertBacktestRun(registryDb, { id, tickers, testStart, testEnd, trainDays, testDays: resolvedTestDays, graceDays: graceDays ?? null, startedAt }));
+  }
 
   // Live-progress wiring (src/storage/jobs.js's percent convention: 0-95 for
   // the day-by-day walk, 98 for saving, 100 only via reporter.complete()).
@@ -98,7 +110,8 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
   // so the FIRST progress tick already knows the real denominator, not a
   // guess that jumps around as ticker-days complete.
   let totalSteps = 0;
-  let completedSteps = 0;
+  // Carried across parts in the cursor (each part only sees its own onStep calls).
+  let completedSteps = cursor?.completed ?? 0;
   // onStep fires twice per ticker-day (done:false when it starts, done:true
   // when it finishes, see onSignalRunner.js) -- only count the finish, so
   // completedSteps never exceeds totalSteps.
@@ -117,13 +130,17 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     current = null;
     completedSteps++;
     if (!onProgress) return;
-    await onProgress({
-      phase: "simulating",
-      percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
-      done: completedSteps,
-      total: totalSteps,
-      detail: `${ticker} ${dayIso.slice(0, 10)}`,
-    });
+    // Progress writes are bookkeeping: never let the budget cut one off in the
+    // middle of the walk's own step accounting.
+    await unenf(() =>
+      onProgress({
+        phase: "simulating",
+        percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
+        done: completedSteps,
+        total: totalSteps,
+        detail: `${ticker} ${dayIso.slice(0, 10)}`,
+      }),
+    );
   };
 
   try {
@@ -149,31 +166,73 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
 
     // PREFLIGHT (free): every ticker needs usable prices over the whole span
     // before a single LLM call is made.
-    const grid = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
-    assertPriceCoverage(grid);
+    // Part 1 only (a continuation already passed it, and reloads the grid at
+    // scoring time). Unenforced: it is a fixed cost before any unit can run.
+    let grid = null;
+    if (!cursor) {
+      grid = await unenf(async () => {
+        const g = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
+        assertPriceCoverage(g);
+        return g;
+      });
+    }
 
     if (onProgress) {
       totalSteps = windows.reduce((sum, w) => sum + countSignalWalkSteps(config, { tickers, testStart: w.testStart, testEnd: w.testEnd, graceDays, clock }), 0);
     }
 
+    // Ends this part and hands back where to pick up. Only ever RETURNS a
+    // 'continue' outcome (the worker enqueues the next part); past maxParts it
+    // throws instead, which lands in the catch below as a normal failed run.
+    const yieldPart = async (state, reason) => {
+      if (part >= maxParts) {
+        throw new Error(`Backtest exceeded ${maxParts} continuation parts without finishing (${completedSteps}/${totalSteps} ticker-days done); raise BACKTEST_MAX_PARTS or the subrequest limits`);
+      }
+      await unenf(() =>
+        onProgress?.({
+          phase: "simulating",
+          percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
+          done: completedSteps,
+          total: totalSteps,
+          detail: `Continuing in part ${part + 1}`,
+          force: true,
+        }),
+      );
+      return { id, status: "continue", reason, cursor: { clockNow: clock.now(), ...state, completed: completedSteps } };
+    };
+
     // WALK: windows in order, each one leaving its positions in the store.
-    for (const window of windows) {
-      await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep, clock });
+    if ((cursor?.phase ?? "walk") === "walk") {
+      for (let wi = cursor?.window ?? 0; wi < windows.length; wi++) {
+        const window = windows[wi];
+        const resume = cursor && wi === cursor.window ? cursor.walk ?? null : null;
+        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep, clock, cursor: resume, budget });
+        if (!res.complete) return await yieldPart({ phase: "walk", window: wi, walk: res.cursor }, res.reason);
+      }
     }
 
-    // SCORE: both sides as daily equity curves over the same grid, then sliced
-    // per window (their pooled series is the whole-span curve).
-    const positions = await store.getPositionsInRange({ from: spanStart, to: spanEnd });
-    const on = onEquityReturns(grid, positions);
-    const off = offEquityReturns(grid);
+    // SCORE needs a chunk of D1 reads + the final write; if this part has spent
+    // too much on the walk, do it in the next one.
+    if (budget) {
+      budget.setEstimate("score", { external: 0, total: tickers.length + 8 });
+      if (!budget.canStart("score")) return await yieldPart({ phase: "score", window: windows.length, walk: null }, "budget");
+    }
+    return await unenf(async () => {
+      grid ??= await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
 
-    const result = await compareSignalOnOffByWindow({
-      startDate: testStart,
-      endDate: testEnd,
-      trainDays,
-      testDays: resolvedTestDays,
-      getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, window),
-      getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, window),
+      // SCORE: both sides as daily equity curves over the same grid, then sliced
+      // per window (their pooled series is the whole-span curve).
+      const positions = await store.getPositionsInRange({ from: spanStart, to: spanEnd });
+      const on = onEquityReturns(grid, positions);
+      const off = offEquityReturns(grid);
+
+      const result = await compareSignalOnOffByWindow({
+        startDate: testStart,
+        endDate: testEnd,
+        trainDays,
+        testDays: resolvedTestDays,
+        getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, window),
+        getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, window),
     });
     result.portfolio = {
       method: "daily-equity-curve-v1",
@@ -190,10 +249,11 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     await onProgress?.({ phase: "saving", percent: 98, done: totalSteps, total: totalSteps, detail: "Saving backtest results", force: true });
     await completeBacktestRun(registryDb, { id, result, finishedAt: new Date().toISOString() });
     return { id, status: "complete", result };
+    });
   } catch (err) {
     // No suffix when it failed before the walk started (e.g. assertNotFuture).
     const error = current && !err?.skipStepSuffix ? `${err.message} [while processing ${current.ticker} ${current.dayIso.slice(0, 10)}]` : err.message;
-    await failBacktestRun(registryDb, { id, error, finishedAt: new Date().toISOString() });
+    await unenf(() => failBacktestRun(registryDb, { id, error, finishedAt: new Date().toISOString() }));
     return { id, status: "failed", error };
   }
 }
