@@ -119,6 +119,12 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         continue;
       }
 
+      // Backtest only (backtest/subrequestBudget.js): the fetch below is one
+      // subrequest. Charged OUTSIDE the try so an exhausted budget propagates
+      // as a pause signal instead of being treated as a vendor failure (which
+      // would burn a cooldown write and fall through to the next model).
+      config.subrequestBudget?.chargeExternal();
+
       try {
         const data = await callOnce(config, model, apiKey, body, ki);
         note({ model, keyIndex: ki, outcome: "ok" });

@@ -23,7 +23,7 @@
 // reflection got recorded.
 
 import { closeTheLoop } from "./reflection.js";
-import { LlmBudgetExceededError } from "../shared/errors.js";
+import { LlmBudgetExceededError, SubrequestBudgetExhaustedError } from "../shared/errors.js";
 
 /**
  * Direction-aware realized return, same sign convention as
@@ -95,6 +95,10 @@ export async function settlePositionOutcome(env, config, store, { position, exit
     // A spent LLM budget is a hard stop for the whole run, not a per-position
     // reflection hiccup: let it fail the run instead of being logged away.
     if (err instanceof LlmBudgetExceededError) throw err;
+    // A spent SUBREQUEST budget is a pause signal for the backtest walk (it
+    // saves a cursor and continues in a new invocation); logging it away here
+    // would silently drop this position's reflection.
+    if (err instanceof SubrequestBudgetExhaustedError) throw err;
     console.error("settlePositionOutcome: closeTheLoop failed -- position stays closed, no reflection recorded", {
       tradeThesisId: position.tradeThesisId,
       ticker: position.ticker,

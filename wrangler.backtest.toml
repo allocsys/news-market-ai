@@ -5,7 +5,9 @@ compatibility_flags = ["nodejs_compat"]
 
 # Private, same "no public door" convention as backend's/ingest's/llm's
 # wrangler configs -- this Worker has no meaningful HTTP surface, it only
-# ever runs via its BACKTEST queue consumer below.
+# ever runs via its BACKTEST queue consumer below. It also PRODUCES onto
+# that same queue (one continuation message per finished part, see the
+# BACKTEST producer below) -- and only that queue.
 workers_dev = false
 
 # --- D1 (plan.md "Backtest / Live Isolation" redesign) --- this Worker is
@@ -76,6 +78,17 @@ max_retries = 3
 max_concurrency = 1
 dead_letter_queue = "news-market-ai-backtest-dlq"
 
+# --- BACKTEST (produce) --- the continuation chain. A Free-plan invocation is
+# capped at 50 subrequests, so one backtest runs as many short parts: when a
+# part's budget (BACKTEST_MAX_*_SUBREQUESTS below) is spent it saves a cursor
+# and sends the next part as a delayed message to THIS queue. This is the only
+# producer this config may have (test/ci_env_isolation.test.js pins the queue
+# and the binding name -- a producer to any other queue, e.g. the live ANALYZE
+# queue, fails CI).
+[[queues.producers]]
+queue = "news-market-ai-backtest"
+binding = "BACKTEST"
+
 [observability]
 enabled = true
 head_sampling_rate = 1
@@ -107,6 +120,23 @@ GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.7
 # opt-in (not yet built) would override this via the job's own params
 # rather than this Worker-wide var.
 LLM_LOG_ENABLED = "false"
+
+# Free-plan subrequest budget PER PART (src/backtest/subrequestBudget.js).
+# EXTERNAL = Gemini fetches (Free limit 50). TOTAL also counts D1 + KV calls;
+# 40 is STRICT because it is unverified whether D1/KV fall in the separate
+# 1000 bucket -- strict costs throughput (~1 item/part), not correctness. Raise
+# TOTAL (e.g. 90) only after the per-part "backtest part finished" log shows
+# D1/KV calls do NOT count toward the 50. Keep TOTAL >= 10: below that a part
+# cannot persist even one pipeline stage and the run stalls until
+# BACKTEST_MAX_PARTS fails it. "0" disables the budget entirely
+# (no parts, no continuation -- the pre-budget single-invocation behavior).
+BACKTEST_MAX_EXTERNAL_SUBREQUESTS = "40"
+BACKTEST_MAX_TOTAL_SUBREQUESTS = "40"
+# Delay before the next part runs. Keep small: the dashboard treats a run idle
+# for 15 min as dead (ACTIVE_JOB_MAX_IDLE_MS).
+BACKTEST_CONTINUATION_DELAY_SECONDS = "15"
+# Safety cap on parts per run; exceeding it fails the run instead of looping.
+BACKTEST_MAX_PARTS = "1500"
 
 # Same watchlist convention as every other Worker's wrangler config --
 # config.js's loadConfig reads it, and a backtest with no explicit

@@ -65,6 +65,7 @@
 import { getNewsItemsInRange } from "../storage/inputs_view.js";
 import { runPipelineForTicker } from "../graph/pipeline.js";
 import { checkOpenPositionExits } from "../graph/exit_check.js";
+import { SubrequestBudgetExhaustedError } from "../shared/errors.js";
 
 const DAY_MS = 86400000;
 
@@ -117,6 +118,27 @@ function groupItemsByDay(items) {
     byDay.get(day).push(item);
   }
   return byDay;
+}
+
+/**
+ * The news items of one (ticker, day): the day's own [00:00, next 00:00) range
+ * clipped to [testStart, testEnd) (so grace days past testEnd have none and no
+ * query is made for them). Boundary values that come from the caller are passed
+ * through unchanged, so what is matched is exactly what one range read of
+ * [testStart, testEnd) grouped by day would have matched.
+ */
+async function getDayNewsItems(ctx, { ticker, dayIso, testStart, testEnd }) {
+  const dayStartMs = Date.parse(dayIso);
+  const nextDayMs = dayStartMs + DAY_MS;
+  const from = Date.parse(testStart) >= dayStartMs ? testStart : dayIso;
+  const to = Date.parse(testEnd) <= nextDayMs ? testEnd : new Date(nextDayMs).toISOString();
+  if (!(Date.parse(from) < Date.parse(to))) return [];
+  return getNewsItemsInRange(ctx.inputs, { ticker, from, to });
+}
+
+/** Whether `item` sorts strictly after a resume cursor's `after` key in getNewsItemsInRange's (published_at, id) order. */
+function isAfterCursorKey(item, after) {
+  return item.published_at > after.publishedAt || (item.published_at === after.publishedAt && item.id > after.id);
 }
 
 /**
@@ -207,37 +229,117 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
  * tickers (see exit_check.js; it takes no ticker filter), so calling it once
  * a day is both correct and avoids redundant re-scans of positions that
  * belong to a ticker other than the one currently "at bat".
+ *
+ * BUDGETED / RESUMABLE WALK (backtest-worker.js, subrequestBudget.js): a Worker
+ * invocation can only make so many subrequests, so the walk can be PAUSED and
+ * continued in a later invocation. With a `budget` it stops (returns
+ * `{ complete: false, cursor, reason }`) at the first point where the next unit
+ * of work -- one news item, or one day's exit check -- would not fit in what is
+ * left, or where the budget runs out mid-item; without one it always runs to the
+ * end, exactly as before. Passing that `cursor` back in resumes at the same spot:
+ *   cursor = { day: ISO midnight, ticker: index, after: {publishedAt, id} | null, exits: bool }
+ * i.e. "on `day`, ticker #`ticker`'s items up to and including `after` are done"
+ * (`exits: true`: every ticker's items for `day` are done, the exit check is not).
+ * `after` is a (published_at, id) KEY, not a position: news ingested while the
+ * run is paused cannot shift what is skipped. An item interrupted mid-pipeline
+ * is simply run again -- graph/checkpointer.js resumes it from its last finished
+ * stage -- and the day's exit check is never cut in half (it runs inside
+ * `budget.unenforced`, which counts but never refuses): a position closed but not yet reflected on
+ * would change what later decisions remember.
+ *
+ * News is therefore read lazily, one (ticker, day) at a time, instead of the
+ * whole window up front: resuming would otherwise re-page the whole window's
+ * news in every invocation. The union of the per-day ranges is exactly
+ * [testStart, testEnd), so what gets processed is unchanged.
+ *
+ * Returns `{ complete: true }` or `{ complete: false, cursor, reason }`
+ * (`reason`: "budget" = the next unit didn't fit, "exhausted" = the budget ran
+ * out inside a unit).
  */
-export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock }) {
+
+export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock, cursor = null, budget = null }) {
   const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
+  const days = eachDayIso(testStart, walkEnd);
 
-  // Same per-ticker news fetch+grouping walkOnSignalForTicker does, just
-  // done once up front for every ticker so the day-major loop below can
-  // look up any (ticker, day)'s items without re-querying per day.
-  const itemsByTickerDay = new Map();
-  for (const ticker of tickers) {
-    const newsItems = await getNewsItemsInRange(ctx.inputs, { ticker, from: testStart, to: testEnd });
-    itemsByTickerDay.set(ticker, groupItemsByDay(newsItems));
+  let dayIndex = 0;
+  if (cursor) {
+    dayIndex = days.indexOf(cursor.day);
+    if (dayIndex < 0) throw new Error(`walkOnSignalWindow: resume cursor day ${cursor.day} is not one of this window's walk days`);
   }
+  // Where the walk is right now; a copy of it IS the cursor whenever the walk pauses.
+  const pos = cursor ? { day: cursor.day, ticker: cursor.ticker, after: cursor.after ?? null, exits: Boolean(cursor.exits) } : { day: days[0], ticker: 0, after: null, exits: false };
+  const pause = (reason) => ({ complete: false, reason, cursor: { ...pos, after: pos.after ? { ...pos.after } : null } });
+  const prefixFor = (ticker) => `${testStart}|${ticker}`;
 
-  for (const dayIso of eachDayIso(testStart, walkEnd)) {
-    for (const ticker of tickers) {
-      await onStep?.({ ticker, dayIso, done: false });
-      const dayItems = itemsByTickerDay.get(ticker).get(dayIso.slice(0, 10)) ?? [];
-      const prefix = `${testStart}|${ticker}`;
-      for (const item of dayItems) {
-        await runPipelineForTicker(env, config, ctx, {
-          pipelineRunId: `${prefix}|${item.id}`,
-          ticker,
-          newsItem: { id: item.id, tickers: [ticker], title: item.title, body: item.body, publishedAt: item.published_at },
-          asOf: item.published_at,
-        });
+  try {
+    for (; dayIndex < days.length; dayIndex++) {
+      const dayIso = days[dayIndex];
+      if (dayIso !== pos.day) Object.assign(pos, { day: dayIso, ticker: 0, after: null, exits: false });
+
+      // Resuming straight into a day's exit check: no ticker segment runs this
+      // time, so re-announce the last one (the failure suffix in runBacktest.js
+      // then still names a ticker-day if the exit check throws).
+      const resumedIntoExits = pos.exits;
+      if (!pos.exits) {
+        while (pos.ticker < tickers.length) {
+          const ticker = tickers[pos.ticker];
+          // Read first, announce second: a failing news read is a setup
+          // failure, not something to blame on a ticker-day that hasn't begun.
+          let dayItems;
+          try {
+            // A fixed cost of reaching the first item (re-paid on every resume),
+            // so it is counted but never refused: refusing it could leave a
+            // small budget stuck before any item, making no progress at all.
+            const read = () => getDayNewsItems(ctx, { ticker, dayIso, testStart, testEnd });
+            dayItems = budget ? await budget.unenforced(read) : await read();
+          } catch (err) {
+            // Not a pipeline failure: keep runBacktest.js from blaming the
+            // previous ticker-day (whose items all finished) for a read error.
+            if (err && typeof err === "object" && !(err instanceof SubrequestBudgetExhaustedError)) err.skipStepSuffix = true;
+            throw err;
+          }
+          // Told when a ticker's day starts -- again on resume, so the failure
+          // suffix in runBacktest.js still names the ticker-day in flight.
+          await onStep?.({ ticker, dayIso, done: false });
+          for (const item of dayItems) {
+            if (pos.after && !isAfterCursorKey(item, pos.after)) continue;
+            if (budget && !budget.canStart("item")) return pause("budget");
+            const before = budget?.mark();
+            await runPipelineForTicker(env, config, ctx, {
+              pipelineRunId: `${prefixFor(ticker)}|${item.id}`,
+              ticker,
+              newsItem: { id: item.id, tickers: [ticker], title: item.title, body: item.body, publishedAt: item.published_at },
+              asOf: item.published_at,
+            });
+            budget?.recordUnit("item", before);
+            pos.after = { publishedAt: item.published_at, id: item.id };
+          }
+          pos.ticker++;
+          pos.after = null;
+        }
+        pos.exits = true;
+      }
+
+      if (budget && !budget.canStart("exits")) return pause("budget");
+      if (resumedIntoExits && tickers.length) await onStep?.({ ticker: tickers[tickers.length - 1], dayIso, done: false });
+      // Runs regardless of whether any news landed today -- an already-open
+      // position from an earlier day can still hit its stop-loss/take-profit/
+      // time-based exit on a day with no news at all, same as the live path.
+      const exitsBefore = budget?.mark();
+      const runExits = () => checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
+      if (budget) await budget.unenforced(runExits);
+      else await runExits();
+      budget?.recordUnit("exits", exitsBefore);
+      for (const ticker of tickers) {
+        await onStep?.({ ticker, dayIso, done: true });
       }
     }
-    await checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
-    for (const ticker of tickers) {
-      await onStep?.({ ticker, dayIso, done: true });
-    }
+    return { complete: true };
+  } catch (err) {
+    // The budget ran out INSIDE a unit (an item's pipeline, a news read): the
+    // work already done is in the store/checkpoints, so pause where we are.
+    if (err instanceof SubrequestBudgetExhaustedError) return pause("exhausted");
+    throw err;
   }
 }
 

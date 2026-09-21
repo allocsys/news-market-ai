@@ -235,11 +235,26 @@ three D1s and a second KV isolate state but add no quota.
   (`llm_calls` is ~4 rows per call) unless a run opts in.
 - KV: 1K writes, 1K lists and 100K reads per day. Cooldown keys are written only
   on rate-limit events.
-- Queues: 10K ops per day. A backtest is one message on `BACKTEST`; the
-  `SimClock` walk runs inside the consumer and never fans out per day.
+- Queues: 10K ops per day. A backtest is a **chain** of messages on `BACKTEST`
+  (one per part, see the next bullet), roughly 3 ops per message, shared with
+  live. The `SimClock` walk never fans out per day.
 - Workers: 50 queries per invocation on Free. Whether each statement in a `batch`
   counts is **unmeasured** (`node:sqlite` has no such cap); `commitThesis` stays
   at 3 statements. Needs a real deploy to settle.
+- **Backtest subrequest budget and parts (built, unverified live).** The `backtest`
+  Worker gives each invocation a `SubrequestBudget` (`src/backtest/subrequestBudget.js`)
+  that counts Gemini fetches (`BACKTEST_MAX_EXTERNAL_SUBREQUESTS`, default 40) and
+  D1/KV calls (`BACKTEST_MAX_TOTAL_SUBREQUESTS`, default 40). When the next unit
+  (a news item, a day's exit check, scoring) will not fit, `runManualBacktest`
+  returns a cursor and the Worker sends the next **part** to its own queue after
+  `BACKTEST_CONTINUATION_DELAY_SECONDS` (15). `BACKTEST_MAX_PARTS` (1500) fails a
+  runaway chain; `0` for either limit turns the budget off. Which limit is real
+  is unverified: **strict** (D1/KV count toward the 50) means about one item per
+  part; **loose** (they sit in the separate 1000 bucket) about five. The per-part
+  log line `backtest part finished` shows real usage; raise the TOTAL only after
+  it shows D1/KV are not counted. Keep TOTAL at 10 or more: below that a part
+  cannot persist one pipeline stage and the run stalls until the parts cap fails
+  it. The per-run LLM-call counter resets each part. Workers Paid removes all of this.
 - Concurrent backtests share `sim`: `run_id` prevents collisions but writes
   contend and the DB grows; delete-by-run must chunk.
 - No cross-DB joins or transactions. None needed today.

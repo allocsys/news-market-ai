@@ -44,3 +44,20 @@ export class LlmBudgetExceededError extends Error {
     this.limit = limit;
   }
 }
+
+/**
+ * Thrown by the backtest's per-invocation subrequest budget
+ * (backtest/subrequestBudget.js) when the NEXT D1/KV/fetch call would push the
+ * current Worker invocation past its budget. Unlike LlmBudgetExceededError this
+ * is a PAUSE signal, not a failure: the walk catches it, saves a cursor and
+ * continues in a fresh invocation (a re-enqueued queue message), resuming the
+ * interrupted news item from its stage checkpoint. Nothing on the pipeline path
+ * may swallow it (graph/settle.js re-throws it).
+ */
+export class SubrequestBudgetExhaustedError extends Error {
+  constructor(detail) {
+    super(`Subrequest budget exhausted for this invocation (${detail})`);
+    this.name = "SubrequestBudgetExhaustedError";
+    this.detail = detail;
+  }
+}

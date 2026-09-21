@@ -70,7 +70,13 @@ export function findBacktestConfigViolations(cfg, ids, { otherKvIds = [] } = {})
     if (otherKvIds.includes(k.id)) problems.push(`KV ${k.binding} shares its id with another Worker's namespace (live cooldown state would be shared)`);
   }
 
-  if ((cfg.arrays["queues.producers"] ?? []).length) problems.push("backtest must not produce to any queue (it cannot trigger live work)");
+  // The ONE allowed producer is its own continuation queue (a Free-plan run is
+  // a chain of short parts). Any other queue -- above all live's ANALYZE -- or a
+  // different binding name would let a backtest trigger live work.
+  const producers = cfg.arrays["queues.producers"] ?? [];
+  if (producers.length !== 1 || producers[0].queue !== "news-market-ai-backtest" || producers[0].binding !== "BACKTEST") {
+    problems.push(`backtest must produce to exactly one queue, news-market-ai-backtest as binding BACKTEST (its own continuation chain; it must not produce to any other queue), got ${JSON.stringify(producers.map((q) => `${q.binding}->${q.queue}`))}`);
+  }
   const consumers = cfg.arrays["queues.consumers"] ?? [];
   if (consumers.length !== 1 || consumers[0].queue !== "news-market-ai-backtest") problems.push(`must consume exactly news-market-ai-backtest, got ${JSON.stringify(consumers.map((c) => c.queue))}`);
 
@@ -119,7 +125,7 @@ test("every wrangler config in the repo parses into the shape the checks expect 
 // wrangler.backtest.toml: no live binding
 // ---------------------------------------------------------------------------
 
-test("wrangler.backtest.toml binds only SIM_DB, INPUTS_DB and its own KV, and consumes only BACKTEST -- no live DB, no live KV, no producers", () => {
+test("wrangler.backtest.toml binds only SIM_DB, INPUTS_DB and its own KV, and consumes only BACKTEST, producing only onto its own BACKTEST queue -- no live DB, no live KV, no other producers", () => {
   const ids = referenceIds();
   const otherKvIds = WRANGLER_FILES.filter((f) => f !== "wrangler.backtest.toml").flatMap((f) => (read(f).arrays.kv_namespaces ?? []).map((k) => k.id));
   assert.deepEqual(findBacktestConfigViolations(read("wrangler.backtest.toml"), ids, { otherKvIds }), []);
@@ -133,7 +139,11 @@ test("the binding check actually detects violations (it isn't vacuously passing)
   assert.ok(bad(`[[d1_databases]]\nbinding = "LIVE_DB"\ndatabase_id = "${ids.live}"`).some((p) => /live database/.test(p)));
   assert.ok(bad(`[[d1_databases]]\nbinding = "X"\ndatabase_id = "${ids.live}"`).some((p) => /unexpected D1 binding X/.test(p)), "a live DB under any binding name is caught");
   assert.ok(bad(`[[d1_databases]]\nbinding = "DB"\ndatabase_id = "${ids.legacy}"`).some((p) => /legacy/.test(p)));
-  assert.ok(bad(`[[queues.producers]]\nqueue = "news-market-ai-analyze"\nbinding = "ANALYZE"`).some((p) => /must not produce/.test(p)));
+  assert.ok(bad(`[[queues.producers]]\nqueue = "news-market-ai-analyze"\nbinding = "ANALYZE"`).some((p) => /must not produce to any other queue/.test(p)), "an extra producer to live's queue is rejected");
+  // A wrong binding name on the one allowed queue, or a missing producer:
+  assert.ok(findBacktestConfigViolations(parseWranglerToml(good.replace('binding = "BACKTEST"', 'binding = "JOBS"')), ids, { otherKvIds: [] }).some((p) => /exactly one queue/.test(p)), "wrong binding name is rejected");
+  assert.ok(findBacktestConfigViolations(parseWranglerToml(good.replace('queue = "news-market-ai-backtest"\nbinding = "BACKTEST"', 'queue = "news-market-ai-analyze"\nbinding = "BACKTEST"')), ids, { otherKvIds: [] }).some((p) => /exactly one queue/.test(p)), "the BACKTEST binding pointed at live's analyze queue is rejected");
+  assert.ok(findBacktestConfigViolations(parseWranglerToml(good.replace(/\[\[queues\.producers\]\][^\[]*/, "")), ids, { otherKvIds: [] }).some((p) => /exactly one queue/.test(p)), "a missing producer is flagged");
   assert.ok(bad(`[[queues.consumers]]\nqueue = "news-market-ai-analyze"`).some((p) => /consume exactly/.test(p)));
   assert.ok(bad(`[[services]]\nbinding = "BACKEND"\nservice = "news-market-ai"`).some((p) => /services/.test(p)));
   assert.ok(bad(`[[kv_namespaces]]\nbinding = "LIVE_KV"\nid = "abc"`).some((p) => /exactly one CACHE_KV/.test(p)));
