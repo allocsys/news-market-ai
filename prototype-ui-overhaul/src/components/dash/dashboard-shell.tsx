@@ -16,7 +16,6 @@ import { PipelineView } from "./views/pipeline";
 import { LlmCallsView } from "./views/llm-calls";
 import { BackfillView } from "./views/backfill";
 import { BacktestView } from "./views/backtest";
-import { SettingsView } from "./views/settings";
 import { PageSkeleton } from "./shared/skeleton";
 import type { ViewId } from "@/lib/dash/types";
 
@@ -32,7 +31,6 @@ const VIEW_RENDERERS: Record<ViewId, React.ComponentType> = {
   llm: LlmCallsView,
   backfill: BackfillView,
   backtest: BacktestView,
-  settings: SettingsView,
 };
 
 export function DashboardShell() {
