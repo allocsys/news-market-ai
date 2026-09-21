@@ -5,14 +5,14 @@ import { NAV_ITEMS, MOBILE_NAV_IDS } from "@/lib/dash/mock-data";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Wallet, BarChart3, GitPullRequestArrow, Briefcase, LineChart,
-  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse, Settings,
+  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse,
   MoreHorizontal, type LucideIcon,
 } from "lucide-react";
 import type { ViewId } from "@/lib/dash/types";
 
 const ICONS: Record<string, LucideIcon> = {
   LayoutDashboard, Wallet, BarChart3, GitPullRequestArrow, Briefcase, LineChart,
-  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse, Settings,
+  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse,
 };
 
 const GROUP_LABELS: Record<string, string> = {
@@ -123,12 +123,6 @@ function UserChip() {
   const currentUser = useDash((s) => s.currentUser);
   const logout = useDash((s) => s.logout);
   if (!currentUser) return null;
-  const HUES: Record<string, string> = {
-    blue: "from-blue-500 to-blue-600",
-    emerald: "from-emerald-500 to-emerald-600",
-    amber: "from-amber-500 to-amber-600",
-    purple: "from-purple-500 to-purple-600",
-  };
   return (
     <button
       onClick={() => {
@@ -138,18 +132,13 @@ function UserChip() {
         "w-full flex items-center gap-2.5 p-2 rounded-lg border border-border bg-card hover:bg-muted/40 transition-colors",
         "md:justify-center lg:justify-start"
       )}
-      title={`Sign out ${currentUser.displayName}`}
+      title={`Sign out ${currentUser}`}
     >
-      <div
-        className={cn(
-          "size-7 rounded-full grid place-items-center text-white text-[11px] font-semibold shrink-0 bg-gradient-to-br",
-          HUES[currentUser.hue]
-        )}
-      >
-        {currentUser.initials}
+      <div className="size-7 rounded-full grid place-items-center text-white text-[11px] font-semibold shrink-0 bg-gradient-to-br from-blue-500 to-blue-600">
+        {currentUser[0]?.toUpperCase()}
       </div>
       <div className="hidden lg:block min-w-0">
-        <div className="text-xs font-medium truncate">{currentUser.displayName}</div>
+        <div className="text-xs font-medium truncate">{currentUser}</div>
         <div className="text-[10px] text-muted-foreground truncate">Sign out →</div>
       </div>
     </button>
