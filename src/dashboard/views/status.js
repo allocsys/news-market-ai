@@ -83,14 +83,17 @@ function renderProgressPanel({ detail, pollUrl }) {
  * #run-next-steps link on completion/failure -- both callers
  * (renderRunAcceptedPage, renderActiveJobPanel) know these statically at
  * render time, so they're baked in here rather than re-derived client-side.
+ * When `reloadOnComplete` is true, terminal status instead triggers a page reload
+ * after ~800ms so the permalink page re-fetches and renders the final result.
  */
-function renderProgressScript({ pollUrl, label, backLink, backLabel }) {
+function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnComplete }) {
   return `<script>
       (function () {
         var pollUrl = ${JSON.stringify(pollUrl)};
-        var label = ${JSON.stringify(label)};
-        var backLink = ${JSON.stringify(backLink)};
-        var backLabel = ${JSON.stringify(backLabel)};
+        var label = ${JSON.stringify(label || "")};
+        var backLink = ${JSON.stringify(backLink || "")};
+        var backLabel = ${JSON.stringify(backLabel || "")};
+        var reloadOnComplete = ${Boolean(reloadOnComplete)};
         var dot = document.getElementById("run-status-dot");
         var phaseEl = document.getElementById("run-phase-detail");
         var titleEl = document.getElementById("run-status-title");
@@ -145,7 +148,13 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel }) {
             if (staleTimer) clearTimeout(staleTimer);
             markTerminal("var(--color-success-text)");
             if (phaseEl) phaseEl.textContent = job.detail || "Complete.";
-            showNextSteps("complete");
+            if (reloadOnComplete) {
+              setTimeout(function () {
+                window.location.reload();
+              }, 800);
+            } else {
+              showNextSteps("complete");
+            }
             return;
           }
           if (job.status === "failed") {
@@ -154,7 +163,13 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel }) {
             markTerminal("var(--color-danger-text)");
             if (bar) bar.style.background = "var(--color-danger-text)";
             if (phaseEl) phaseEl.textContent = "Failed: " + (job.error || "unknown error");
-            showNextSteps("failed");
+            if (reloadOnComplete) {
+              setTimeout(function () {
+                window.location.reload();
+              }, 800);
+            } else {
+              showNextSteps("failed");
+            }
             return;
           }
           if (phaseEl) phaseEl.textContent = job.detail || (job.phase ? job.phase + "..." : job.status + "...");
@@ -236,4 +251,23 @@ export function renderActiveJobPanel(job) {
     ${PULSE_STYLE}
     ${renderProgressScript({ pollUrl, label, backLink, backLabel: label })}
   </section>`;
+}
+
+/**
+ * Live progress panel variant for the single-run backtest detail page
+ * (/dashboard/backtest/:id). Composes the existing internal helpers
+ * (renderProgressPanel, renderProgressScript, jobPollUrl, describeJob) without
+ * duplicating their logic. Unlike renderActiveJobPanel, it omits the outer
+ * <h2> heading and <section id="active-job"> wrapper because it sits inside the
+ * backtest detail page's existing "Equity curve & positions opened" panel body.
+ * On completion or failure, it waits ~800ms for the final text to be visible
+ * before calling window.location.reload() to re-fetch /api/backtest-runs/:id
+ * and render the real equity-curve chart instead of the progress bar.
+ */
+export function renderJobProgressPanel(job) {
+  if (!job || !job.id) return "";
+  const pollUrl = jobPollUrl(job.id, job.type || "backtest");
+  return `${renderProgressPanel({ detail: describeJob(job), pollUrl })}
+    ${PULSE_STYLE}
+    ${renderProgressScript({ pollUrl, reloadOnComplete: true })}`;
 }
