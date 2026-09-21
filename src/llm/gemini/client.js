@@ -147,6 +147,14 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         // Bad/revoked key: skip to the next key on this SAME model. Must not
         // `break`, or we'd abandon the remaining keys entirely.
         if (isBadKey) continue;
+        // 404: the model was retired / is unavailable to this project (Google:
+        // "no longer available to new users"). Every key fails identically, so
+        // skip this model's remaining keys and try the NEXT model instead of
+        // killing the whole run. Nothing left to try -> surface it.
+        if (err.status === 404) {
+          if (mi === models.length - 1) throw err;
+          break;
+        }
         if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
 
         if (isRateLimited) {

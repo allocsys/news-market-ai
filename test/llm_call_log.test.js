@@ -433,3 +433,24 @@ test("pruneLlmCalls deletes only rows older than the retention window", async ()
 
   assert.deepEqual((await rows()).map((r) => r.label), ["edge-in", "new"]);
 });
+
+test("a 404 (model retired / unavailable) skips to the NEXT model instead of failing the run, and does not try the model's other keys", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const calls = mockFetch(t, (url) => (url.includes("m-quick") ? jsonResponse(404, { error: { message: "no longer available to new users" } }) : jsonResponse(200, geminiEnvelope("hi"))));
+
+  const trace = {};
+  await geminiGenerateContent({}, cascadeConfig({ geminiApiKeys: ["key-a", "key-b"] }), { contents: [] }, { trace });
+
+  assert.deepEqual(trace.attempts.map((a) => [a.model, a.keyIndex, a.outcome, a.status ?? null]), [
+    ["m-quick", 0, "error", 404],
+    ["m-fallback", 0, "ok", null],
+  ]);
+  assert.equal(calls.filter((u) => u.includes("m-quick")).length, 1, "key-b is not tried on a model every key 404s on");
+  assert.equal(trace.modelUsed, "m-fallback");
+});
+
+test("a 404 on the LAST model has nothing left to fall to and is surfaced", async (t) => {
+  t.mock.method(console, "log", () => {});
+  mockFetch(t, () => jsonResponse(404, { error: { message: "no longer available" } }));
+  await assert.rejects(geminiGenerateContent({}, cascadeConfig(), { contents: [] }), /no longer available/);
+});

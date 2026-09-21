@@ -26,7 +26,7 @@ export function loadConfig(env) {
     geminiApiKeys: parseList(env.GEMINI_API_KEYS),
     // Two-tier strategy (plan.md Adopted Pattern #7): quick/cheap model for
     // high-volume analyst passes, deep model reserved for debate/judge/trader.
-    geminiQuickModel: env.GEMINI_QUICK_MODEL || "gemini-2.5-flash-lite",
+    geminiQuickModel: env.GEMINI_QUICK_MODEL || "gemini-3.5-flash-lite",
     geminiDeepModel: env.GEMINI_DEEP_MODEL || "gemini-2.5-flash",
     geminiFallbackModels: parseList(env.GEMINI_FALLBACK_MODELS),
     // LLM call log (storage/llm_calls.js, migrations/state/): every
