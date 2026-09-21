@@ -36,7 +36,6 @@ export function BackfillView() {
   const [priceTo, setPriceTo] = useState(todayStr);
   const [confirm, setConfirm] = useState<"news" | "prices" | null>(null);
 
-  const appendAudit = useDash((s) => s.appendAudit);
   const currentUser = useDash((s) => s.currentUser);
 
   const lastNewsRun = JOBS.find((j) => j.kind === "backfill_news");
@@ -47,13 +46,6 @@ export function BackfillView() {
       description: kind === "news"
         ? `Range: ${newsFrom} → ${newsTo}. Real Finnhub API calls in flight.`
         : `Tickers: ${priceTickers}. Range: ${priceFrom} → ${priceTo}.`,
-    });
-    appendAudit({
-      action: `Triggered ${kind === "news" ? "news" : "price"} backfill`,
-      target: kind === "news"
-        ? `${newsFrom} → ${newsTo}`
-        : `${priceTickers} (${priceFrom} → ${priceTo})`,
-      ip: "10.0.4.22",
     });
   }
 
@@ -190,7 +182,7 @@ export function BackfillView() {
                 <Row label="Range" value={`${newsFrom} → ${newsTo}`} />
                 <Row label="Source" value="Finnhub news" />
                 <Row label="Est. calls" value={`${Math.max(1, Math.round((new Date(newsTo).getTime() - new Date(newsFrom).getTime()) / 86400_000))} calls (1 per day)`} />
-                <Row label="Triggered by" value={currentUser?.displayName ?? "—"} />
+                <Row label="Triggered by" value={currentUser ?? "—"} />
               </>
             ) : confirm === "prices" ? (
               <>
@@ -198,7 +190,7 @@ export function BackfillView() {
                 <Row label="Range" value={`${priceFrom} → ${priceTo}`} />
                 <Row label="Source" value="Tiingo prices" />
                 <Row label="Est. calls" value={`${priceTickers.split(",").filter(Boolean).length} calls (1 per ticker)`} />
-                <Row label="Triggered by" value={currentUser?.displayName ?? "—"} />
+                <Row label="Triggered by" value={currentUser ?? "—"} />
               </>
             ) : null}
           </div>
