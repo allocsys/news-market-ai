@@ -108,7 +108,7 @@ GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5
 # rest of the system does. Keep in sync with backend's WATCHLIST_TICKERS if
 # the watchlist ever changes -- there is no single shared source for this
 # value across Workers, same as ingest/dashboard already don't share `vars`.
-WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO"
 
 # Secrets -- set via `wrangler secret put GEMINI_API_KEYS --config wrangler.llm.toml`,
 # never committed:
