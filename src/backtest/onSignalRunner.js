@@ -65,9 +65,14 @@
 import { getNewsItemsInRange } from "../storage/inputs_view.js";
 import { runPipelineForTicker } from "../graph/pipeline.js";
 import { checkOpenPositionExits } from "../graph/exit_check.js";
-import { SubrequestBudgetExhaustedError } from "../shared/errors.js";
+import { SubrequestBudgetExhaustedError, VendorError } from "../shared/errors.js";
 
 const DAY_MS = 86400000;
+
+/** A Gemini failure worth pausing for (see walkOnSignalWindow): the client's cascade is exhausted but a later try may succeed. */
+function isTransientGeminiError(err) {
+  return err instanceof VendorError && err.vendor === "gemini" && err.transient === true;
+}
 
 /** Every UTC calendar day from `startIso` (truncated to midnight) through `endIso`, inclusive, as ISO strings. */
 function eachDayIso(startIso, endIso) {
@@ -252,9 +257,22 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
  * news in every invocation. The union of the per-day ranges is exactly
  * [testStart, testEnd), so what gets processed is unchanged.
  *
+ * GEMINI OUTAGES PAUSE, THEY DON'T FAIL (budgeted walks only): when a news
+ * item's pipeline throws a transient Gemini VendorError -- the client's whole
+ * model cascade came up empty (llm/gemini/client.js: rate limits, overload,
+ * timeouts, everything in cooldown) -- the walk pauses at that item exactly as
+ * for "exhausted" (its finished stages are checkpointed, the item re-runs on
+ * resume) and reports `reason: "transient"` with the error and its
+ * `retryAfterSeconds` hint, so the caller can delay the next part. Before this,
+ * a sub-minute outage failed the run and deleted 72 minutes of work. Only the
+ * item's pipeline pauses: a news read or the exit check that throws still
+ * fails the run, and with no budget (no continuation chain to resume in)
+ * nothing changes -- the error propagates as before.
+ *
  * Returns `{ complete: true }` or `{ complete: false, cursor, reason }`
  * (`reason`: "budget" = the next unit didn't fit, "exhausted" = the budget ran
- * out inside a unit).
+ * out inside a unit, "transient" = Gemini was unavailable inside a unit; that
+ * one also carries `error` and `retryAfterSeconds`).
  */
 
 export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock, cursor = null, budget = null }) {
@@ -268,7 +286,7 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
   }
   // Where the walk is right now; a copy of it IS the cursor whenever the walk pauses.
   const pos = cursor ? { day: cursor.day, ticker: cursor.ticker, after: cursor.after ?? null, exits: Boolean(cursor.exits) } : { day: days[0], ticker: 0, after: null, exits: false };
-  const pause = (reason) => ({ complete: false, reason, cursor: { ...pos, after: pos.after ? { ...pos.after } : null } });
+  const pause = (reason, extra = {}) => ({ complete: false, reason, cursor: { ...pos, after: pos.after ? { ...pos.after } : null }, ...extra });
   const prefixFor = (ticker) => `${testStart}|${ticker}`;
 
   try {
@@ -305,12 +323,17 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
             if (pos.after && !isAfterCursorKey(item, pos.after)) continue;
             if (budget && !budget.canStart("item")) return pause("budget");
             const before = budget?.mark();
-            await runPipelineForTicker(env, config, ctx, {
-              pipelineRunId: `${prefixFor(ticker)}|${item.id}`,
-              ticker,
-              newsItem: { id: item.id, tickers: [ticker], title: item.title, body: item.body, publishedAt: item.published_at },
-              asOf: item.published_at,
-            });
+            try {
+              await runPipelineForTicker(env, config, ctx, {
+                pipelineRunId: `${prefixFor(ticker)}|${item.id}`,
+                ticker,
+                newsItem: { id: item.id, tickers: [ticker], title: item.title, body: item.body, publishedAt: item.published_at },
+                asOf: item.published_at,
+              });
+            } catch (err) {
+              if (budget && isTransientGeminiError(err)) return pause("transient", { error: err, retryAfterSeconds: err.retryAfterSeconds ?? null });
+              throw err;
+            }
             budget?.recordUnit("item", before);
             pos.after = { publishedAt: item.published_at, id: item.id };
           }
