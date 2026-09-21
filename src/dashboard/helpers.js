@@ -221,13 +221,14 @@ export function positionsTable(positions, { closed = false } = {}) {
         <td data-label="Direction">${escapeHtml(p.direction ?? "\u2014")}</td>
         <td class="num" data-label="Size">${(p.positionSizePct * 100).toFixed(1)}%</td>
         <td class="num" data-label="Entry">${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
+        ${closed ? `<td class="num" data-label="Exit">${p.exitPrice != null ? "$" + Number(p.exitPrice).toFixed(2) : "\u2014"}</td>` : ""}
         <td class="num" data-label="Opened">${fmtTime(p.openedAt)}</td>
         ${closed ? `<td class="num" data-label="Closed">${fmtTime(p.closedAt)}</td><td data-label="Reason">${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
       </tr>`
     )
     .join("\n");
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th><th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
+    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th>${closed ? "<th>Exit</th>" : ""}<th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
@@ -272,7 +273,7 @@ export function backtestRunsList(runs) {
           ? `<p class="empty">${escapeHtml(r.error ?? "failed with no recorded error message")}</p>`
           : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
       const timelineLink = r.status === "complete" ? `<p class="note"><a href="/dashboard/backtest/${escapeHtml(encodeURIComponent(r.id))}">View trade timeline &rarr;</a></p>` : "";
-      const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery(parseLlmParams(null), { llmJob: r.id })}">View every LLM call this run made &rarr;</a></p>`;
+      const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery({ ...parseLlmParams(null), env: r.id }, { llmJob: r.id })}">View every LLM call this run made &rarr;</a></p>`;
       return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${timelineLink}${llmLink}${body}</div></details>`;
     })
     .join("\n");

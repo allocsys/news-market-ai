@@ -79,7 +79,7 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
 
     <section>
       <h2>Recently closed <span class="h2-count">${closedPositions.length}</span></h2>
-      <p class="note">Last 20 exits. No exit price is recorded on close -- realized return can't be shown, only how and when a position closed.</p>
+      <p class="note">Last 20 exits. The exit price is recorded on close (a dash means none was available).</p>
       ${positionsTable(closedPositions, { closed: true })}
     </section>
   </section>`;

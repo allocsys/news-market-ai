@@ -90,7 +90,7 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
     </section>
     <section>
       <h2>Recently closed${closedPositionsError ? "" : ` <span class="h2-count">${closedPositions.length}</span>`}</h2>
-      <p class="note">No exit price is recorded on close -- realized return can't be shown, only how/when a position closed.</p>
+      <p class="note">The exit price is recorded on close (a dash means none was available, e.g. a time-based exit with no price data).</p>
       ${closedPositionsError ? errorState(closedPositionsError) : `
         <div class="chart-row-2" style="margin-bottom:1.5rem">
           ${closeReasonsDonut}
