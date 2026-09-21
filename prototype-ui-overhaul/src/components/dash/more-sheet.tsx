@@ -8,13 +8,13 @@ import {
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Wallet, BarChart3, GitPullRequestArrow, Briefcase, LineChart,
-  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse, Settings,
+  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse,
   type LucideIcon,
 } from "lucide-react";
 
 const ICONS: Record<string, LucideIcon> = {
   LayoutDashboard, Wallet, BarChart3, GitPullRequestArrow, Briefcase, LineChart,
-  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse, Settings,
+  Workflow, BrainCircuit, DatabaseBackup, FlaskConical, HeartPulse,
 };
 
 const GROUP_LABELS: Record<string, string> = {
@@ -40,7 +40,7 @@ export function MoreSheet() {
         <SheetHeader className="px-5 py-4 border-b border-border">
           <SheetTitle className="text-base">All sections</SheetTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            12 sections grouped by function. Tap any to jump there — your global ticker
+            11 sections grouped by function. Tap any to jump there — your global ticker
             filter and env selector stay active.
           </p>
         </SheetHeader>
