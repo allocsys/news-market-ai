@@ -59,6 +59,16 @@ import { withLlmLogContext } from "../storage/llm_calls.js";
 import { SimClock } from "./simClock.js";
 import { createLlmBudget } from "../llm/budget.js";
 
+// Consecutive Gemini-outage pauses on one news item before the run gives up
+// (config.backtestMaxTransientStalls overrides; that config key is the source of
+// truth, this only covers a hand-built config that lacks it).
+const DEFAULT_MAX_TRANSIENT_STALLS = 30;
+
+/** A stored stall error is quoted in the final failure message: keep two of them well under any row/message limit. */
+function clipStallError(message, max = 700) {
+  return message.length > max ? `${message.slice(0, max)}...` : message;
+}
+
 /**
  * Runs one full signal on/off backtest, persisting its params up front
  * ('running') and its result or error once it resolves ('complete' /
@@ -184,7 +194,10 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     // Ends this part and hands back where to pick up. Only ever RETURNS a
     // 'continue' outcome (the worker enqueues the next part); past maxParts it
     // throws instead, which lands in the catch below as a normal failed run.
-    const yieldPart = async (state, reason) => {
+    // `extra.delaySeconds` asks the worker to delay the next part by at least that
+    // long (a Gemini outage: no point retrying before the cooldowns clear);
+    // `extra.detail` overrides the progress line.
+    const yieldPart = async (state, reason, extra = {}) => {
       if (part >= maxParts) {
         throw new Error(`Backtest exceeded ${maxParts} continuation parts without finishing (${completedSteps}/${totalSteps} ticker-days done); raise BACKTEST_MAX_PARTS or the subrequest limits`);
       }
@@ -194,11 +207,11 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
           percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
           done: completedSteps,
           total: totalSteps,
-          detail: `Continuing in part ${part + 1}`,
+          detail: extra.detail ?? `Continuing in part ${part + 1}`,
           force: true,
         }),
       );
-      return { id, status: "continue", reason, cursor: { clockNow: clock.now(), ...state, completed: completedSteps } };
+      return { id, status: "continue", reason, ...(extra.delaySeconds ? { delaySeconds: extra.delaySeconds } : {}), cursor: { clockNow: clock.now(), ...state, completed: completedSteps } };
     };
 
     // WALK: windows in order, each one leaving its positions in the store.
@@ -207,7 +220,33 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
         const window = windows[wi];
         const resume = cursor && wi === cursor.window ? cursor.walk ?? null : null;
         const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep, clock, cursor: resume, budget });
-        if (!res.complete) return await yieldPart({ phase: "walk", window: wi, walk: res.cursor }, res.reason);
+        if (!res.complete) {
+          if (res.reason === "transient") {
+            // Gemini was unavailable inside a news item (the client's whole cascade came
+            // up empty): PAUSE and retry after a delay instead of failing -- a run used
+            // to die, and its data get deleted, over an outage of under a minute. The
+            // cursor carries a stall counter for THIS spot (window/day/ticker/last
+            // finished item): only N pauses in a row on the same item mean the outage is
+            // not passing, and only then does the run fail (with the first outage's
+            // trace, since the later parts mostly see nothing but cooldown skips).
+            const cur = res.cursor;
+            const key = `${wi}|${cur.day}|${cur.ticker}|${cur.after?.id ?? ""}`;
+            const prev = cursor?.stall?.key === key ? cursor.stall : null;
+            const count = (prev?.count ?? 0) + 1;
+            const message = res.error?.message ?? "unknown Gemini error";
+            const firstError = prev?.firstError ?? clipStallError(message);
+            const maxStalls = config.backtestMaxTransientStalls ?? DEFAULT_MAX_TRANSIENT_STALLS;
+            if (maxStalls > 0 && count > maxStalls) {
+              throw new Error(`Gemini stayed unavailable through ${maxStalls} consecutive pauses on the same news item (${tickers[cur.ticker] ?? `ticker #${cur.ticker}`} ${cur.day.slice(0, 10)}); giving up. First outage: ${firstError} | Latest: ${clipStallError(message)}`);
+            }
+            const delaySeconds = Math.max(config.backtestTransientPauseSeconds ?? 0, res.retryAfterSeconds ?? 0);
+            return await yieldPart({ phase: "walk", window: wi, walk: cur, stall: { key, count, firstError } }, "transient", {
+              delaySeconds,
+              detail: `Gemini unavailable (pause ${count}); retrying in part ${part + 1}`,
+            });
+          }
+          return await yieldPart({ phase: "walk", window: wi, walk: res.cursor }, res.reason);
+        }
       }
     }
 
