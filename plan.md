@@ -556,7 +556,7 @@ exits, technical analyst on price bars, realized-return settlement feeding the
 reflection loop, date-windowed historical backfill, the signal on/off backtest
 harness (`runManualBacktest`, persisted in `backtest_runs`) and a live-progress
 job panel. Backtest/live isolation is built (M1–M5). CI and deploys are green
-across all five Workers (step A = PR #69 `031825d`, deploy #349 green; step A2 = PR #71 `bff216a`; plan.md update = PR #70 `d25b6c0`; step B = PR #72 `617aec4`; step C = PR #73 `92fcfc2`; all squash-merged 2026-09-21 or the night before; step D in review). Price bars still do not exist: the first live price backfill failed on Yahoo (see "Live incident: first price backfill failed") and the Tiingo replacement (A2) has not been run yet because the owner has not added `TIINGO_API_KEY`.
+across all five Workers (step A = PR #69 `031825d`, deploy #349 green; step A2 = PR #71 `bff216a`; plan.md update = PR #70 `d25b6c0`; step B = PR #72 `617aec4`; step C = PR #73 `92fcfc2`; step D = PR #74 `a000743`; all squash-merged; step E in review). Price bars still do not exist: the first live price backfill failed on Yahoo (see "Live incident: first price backfill failed") and the Tiingo replacement (A2) has not been run yet because the owner has not added `TIINGO_API_KEY`.
 
 **Backtests are NOT yet trustworthy.** An audit (2026-09-20, in response to
 "is backtesting bug free?") answered **no**: results would currently be
@@ -727,10 +727,29 @@ multi-ticker ordering, long-window queue limits.
   costs or slippage. Original spec: Position-weighted daily equity curve for BOTH
   on and off, same horizon and universe; fix Sharpe periods; baseline returns null
   if the entry bar is too far after `testStart` (now: the ticker is refused).
-- **E. Walk and preflight.** Day-major multi-ticker walk; as-of predicates in
-  `commitThesis` for backtest runs; validate `testStart < testEnd` at
-  `POST /backtest/run` too (the engine now refuses it, step D). The price-coverage
-  preflight that used to be here is done (step D).
+- **E. Walk and preflight (DONE, PR pending owner go-ahead).** `walkOnSignalWindow`
+  is now DAY-MAJOR (days outermost, tickers innermost) instead of ticker-major:
+  the old order walked ticker A through its entire window -- test span plus
+  grace period -- before ticker B's walk started at all, so B's first-day
+  portfolio-exposure check (`getOpenPositionsRiskPctAsOf`) could see A's
+  END-of-window state instead of A's actual state as of that day, a real
+  lookahead into the future relative to B. `RunStore#commitThesis`'s three
+  portfolio-risk-ceiling subqueries were also fixed: they summed exposure with
+  a plain `closed_at IS NULL` (live/current-state) scan instead of the as-of
+  bound (`opened_at <= asOf AND (closed_at IS NULL OR closed_at > asOf)`)
+  `getOpenPositionsRiskPctAsOf` already used correctly -- harmless in live
+  (asOf is always "now" there) but wrong in a backtest replay where insertion
+  order across tickers/days doesn't always match asOf order. `POST
+  /backtest/run` now validates `testStart < testEnd` itself (same message the
+  engine already used) as a 400 before a job row is written or anything is
+  enqueued, rather than a queued job dying once the `backtest` Worker picks it
+  up. Tests: 2 new cases in `test/run_store.test.js` (as-of ceiling check, plus
+  a regression guard that same-or-earlier exposure still counts), 2 new cases
+  in `test/backtest_on_signal_runner.test.js` (day-major call order, and a
+  cross-ticker positions-open-correctly-as-of-each-day check), 1 new case in
+  `test/index_backtest_enqueue.test.js`. All three fixes were mutation-checked
+  (temporarily reverted, confirmed the new test for that fix fails, restored).
+  The price-coverage preflight that used to be planned here is done in step D.
 - **F. Small first backtest.** 1 ticker, 2–3 weeks, before any long run. Ask the
   owner whether to set `BACKTEST_MAX_LLM_CALLS` for that run (standing decision
   is uncapped, but the wasted-call risk in finding 1 was found), and measure queue

@@ -292,6 +292,21 @@ export class RunStore {
       throw new LookaheadViolationError("commitThesis requires an explicit asOf timestamp");
     }
 
+    // The p3 exposure sums below are bounded to AS OF `asOf`
+    // (opened_at <= asOf AND (closed_at IS NULL OR closed_at > asOf)) --
+    // the same point-in-time pattern getOpenPositionsRiskPctAsOf uses --
+    // rather than a plain `closed_at IS NULL` scan of whatever the table's
+    // CURRENT state happens to be. In live operation (asOf always "now")
+    // the two are equivalent, since nothing can have opened_at in the
+    // future or a closed_at past "now". But this store is also replayed
+    // for backtests, where a single run's positions table accumulates
+    // rows across many tickers and days that are NOT always inserted in
+    // strict chronological order relative to every other ticker's asOf
+    // (see onSignalRunner.js's day-major walk) -- a plain `closed_at IS
+    // NULL` scan there could count a position some other ticker opened
+    // later the same day toward THIS decision's exposure check, understating
+    // how much room was actually available at this asOf. The as-of bound
+    // makes the exposure check correct regardless of insertion order.
     const closeOld = this.db
       .prepare(
         `UPDATE positions
@@ -303,10 +318,10 @@ export class RunStore {
            )
            AND (
              SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
-             WHERE p3.run_id = ? AND p3.ticker != ? AND p3.closed_at IS NULL
+             WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
            ) + ? <= ?`
       )
-      .bind(asOf, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, positionSizePct, MAX_PORTFOLIO_RISK_PCT);
+      .bind(asOf, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT);
 
     const openNew = this.db
       .prepare(
@@ -318,13 +333,13 @@ export class RunStore {
          )
          AND (
            SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
-           WHERE p3.run_id = ? AND p3.ticker != ? AND p3.closed_at IS NULL
+           WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
          ) + ? <= ?`
       )
       .bind(
         this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf,
         this.runId, ticker, asOf,
-        this.runId, ticker, positionSizePct, MAX_PORTFOLIO_RISK_PCT
+        this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT
       );
 
     const insertDecision = this.db
@@ -338,7 +353,7 @@ export class RunStore {
              ) THEN '${TRADE_DECISION_STATUS.SUPERSEDED}'
              WHEN (
                SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
-               WHERE p3.run_id = ? AND p3.ticker != ? AND p3.closed_at IS NULL
+               WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
              ) + ? > ? THEN '${TRADE_DECISION_STATUS.REJECTED}'
              ELSE '${TRADE_DECISION_STATUS.OPENED}'
            END),
@@ -349,7 +364,7 @@ export class RunStore {
         this.runId, id, ticker, asOf, debateId,
         JSON.stringify(thesis), JSON.stringify(riskDecision), portfolioDecision != null ? JSON.stringify(portfolioDecision) : null,
         this.runId, ticker, asOf,
-        this.runId, ticker, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
+        this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         opinions != null ? JSON.stringify(opinions) : null,
         debate != null ? JSON.stringify(debate) : null,
         createdAt
