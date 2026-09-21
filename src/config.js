@@ -219,12 +219,31 @@ export function loadConfig(env) {
     tiingoApiKey: env.TIINGO_API_KEY || "",
     tiingoApiBase: env.TIINGO_API_BASE || "https://api.tiingo.com",
     tiingoMinRequestIntervalMs: Number(env.TIINGO_MIN_REQUEST_INTERVAL_MS) || 0,
+    // Live trailing-window path only (ingestion/sources/tiingo.js#fetchDailyBars,
+    // used by ingestPriceBars once priceLiveSource is "tiingo" -- see below).
+    // There is no separate Tiingo "recent bars" endpoint, so the live fetch is
+    // just a normal [from, to] EOD/FX request over the last N calendar days
+    // ending today. 7 (not 5, unlike yfinanceRange's "5d") gives a weekend +
+    // a holiday enough room to still land on the latest trading day.
+    tiingoLiveWindowDays: Number(env.TIINGO_LIVE_WINDOW_DAYS) || 7,
     // Which vendor ingestion/ingest.js#backfillHistoricalPriceBars asks:
     // "tiingo" or "yfinance". Unset means Tiingo once a Tiingo key exists,
     // otherwise Yahoo (the original behaviour), so adding the secret is the
-    // only step needed to switch. Only the historical backfill uses this; the
-    // */15 cron's live bars (ingestPriceBars) still come from yfinance.
+    // only step needed to switch.
     priceBackfillSource: env.PRICE_BACKFILL_SOURCE || (env.TIINGO_API_KEY ? "tiingo" : "yfinance"),
+    // Which vendor ingestion/ingest.js#ingestPriceBars (the */15 cron's live,
+    // per-ticker price fetch) asks: "tiingo" or "yfinance". Added to fix the
+    // sustained yfinance 429 documented in ingestion/sources/yfinance.js's
+    // header (every ticker, every tick, since 2026-09-18) -- same
+    // key-present-means-Tiingo default as priceBackfillSource above, so an
+    // ingest Worker that already has TIINGO_API_KEY (it does, for the price
+    // backfill) switches its live bars to Tiingo too with no extra config.
+    // Tiingo's free-plan hourly limit (50/hour, see tiingo.js's header) is
+    // NOT exceeded at the current watchlist size: one request per ticker per
+    // ingest_ticker invocation, one invocation per ticker per 15-minute tick,
+    // so 5 tickers is 20 requests/hour -- re-check this math before growing
+    // the watchlist much further.
+    priceLiveSource: env.PRICE_LIVE_SOURCE || (env.TIINGO_API_KEY ? "tiingo" : "yfinance"),
     // RSS feeds (ingestion/sources/rss.js) and standalone article pages to
     // scrape (ingestion/sources/html_scrape.js) -- "TICKER|url" pairs, or a
     // bare url when the source isn't ticker-scoped (see parseTickerUrlList

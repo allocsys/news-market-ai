@@ -43,6 +43,17 @@
 // still records a fresh one when it gets a 429. If it 429s in practice, the
 // fallback is a different daily-bar source or seeding bars by hand (see
 // plan.md, "Historical price backfill").
+// UPDATE (2026-09-21, later): the 429 never self-resolved -- Workers
+// Observability confirmed it recurring on EVERY */15 cron tick from
+// 2026-09-18 23:44 UTC through 2026-09-21, for every watchlist ticker. Fixed
+// by giving ingestPriceBars (ingestion/ingest.js) a configurable vendor
+// (config.priceLiveSource, see config.js) with the same
+// key-present-means-Tiingo default as the historical backfill's
+// priceBackfillSource -- see ingestion/sources/tiingo.js#fetchDailyBars for
+// the live-path counterpart. This file is UNCHANGED and still the fallback
+// (PRICE_LIVE_SOURCE=yfinance, or no Tiingo key at all); every 429/cooldown
+// detail documented above still applies whenever this adapter is the one
+// actually selected.
 //
 // Every returned bar is run through market_data_validator.js#validatePriceBar
 // before being handed back, matching gdelt.js's validate-before-return

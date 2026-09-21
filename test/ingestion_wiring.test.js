@@ -318,6 +318,47 @@ test("ingestPriceBars rethrows a non-VendorError (a real bug, not a vendor failu
   await assert.rejects(() => ingestPriceBars(config, db), TypeError);
 });
 
+test("ingestPriceBars uses Tiingo instead of yfinance when priceLiveSource is \"tiingo\"", async (t) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const config = { watchlist: [{ ticker: "AAPL" }], priceLiveSource: "tiingo", tiingoApiKey: "k", tiingoLiveWindowDays: 7 };
+  const calls = [];
+  t.mock.method(global, "fetch", async (url) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, json: async () => [{ date: `${today}T00:00:00.000Z`, open: 100, high: 102, low: 98, close: 101, volume: 1000 }] };
+  });
+
+  const db = new FakeDb();
+  const result = await ingestPriceBars(config, db);
+
+  assert.equal(result.count, 1);
+  assert.equal(db.priceBars[0].source, "tiingo");
+  assert.ok(calls[0].includes("api.tiingo.com"), "no request went to Yahoo");
+});
+
+test("ingestPriceBars logs and returns count:0, without throwing, when Tiingo is selected but TIINGO_API_KEY is missing", async (t) => {
+  const config = { watchlist: [{ ticker: "AAPL" }], priceLiveSource: "tiingo", tiingoApiKey: "" };
+  const calls = [];
+  t.mock.method(global, "fetch", async (url) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, json: async () => [] };
+  });
+  const errorLogs = [];
+  t.mock.method(console, "error", (...args) => errorLogs.push(args));
+
+  const db = new FakeDb();
+  const result = await ingestPriceBars(config, db);
+
+  assert.deepEqual(result, { count: 0 });
+  assert.equal(calls.length, 0, "the missing-key check throws before any request");
+  assert.ok(errorLogs.some(([msg, detail]) => msg.includes("price bar ingestion") && detail.source === "tiingo" && /TIINGO_API_KEY/.test(detail.message)));
+});
+
+test("ingestPriceBars rejects an unknown priceLiveSource instead of silently falling back", async () => {
+  const config = { watchlist: [{ ticker: "AAPL" }], priceLiveSource: "tingo" };
+  const db = new FakeDb();
+  await assert.rejects(() => ingestPriceBars(config, db), /unknown PRICE_LIVE_SOURCE "tingo"/);
+});
+
 // ---------------------------------------------------------------------------
 // finnhub.js explicit {from, to} range
 // ---------------------------------------------------------------------------

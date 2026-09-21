@@ -17,7 +17,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/ingest-worker.js";
 import { loadConfig } from "../src/config.js";
-import { fetchHistoricalBars, isTiingoFxTicker } from "../src/ingestion/sources/tiingo.js";
+import { fetchHistoricalBars, fetchDailyBars, isTiingoFxTicker } from "../src/ingestion/sources/tiingo.js";
 import { backfillHistoricalPriceBars } from "../src/ingestion/ingest.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR } from "./helpers/engine_ctx.js";
@@ -257,7 +257,7 @@ test("defaults to the watchlist when no tickers are given", async (t) => {
 });
 
 // ---------------------------------------------------------------------------
-// config.js: which source the backfill uses
+// config.js: which source the backfill / the live cron uses
 // ---------------------------------------------------------------------------
 
 test("priceBackfillSource: yfinance by default, tiingo once a key exists, and an explicit value always wins", () => {
@@ -267,6 +267,71 @@ test("priceBackfillSource: yfinance by default, tiingo once a key exists, and an
   assert.equal(loadConfig({ PRICE_BACKFILL_SOURCE: "tiingo" }).priceBackfillSource, "tiingo");
   assert.equal(loadConfig({ TIINGO_API_KEY: "k" }).tiingoApiKey, "k");
   assert.equal(loadConfig({}).tiingoApiBase, "https://api.tiingo.com");
+});
+
+test("priceLiveSource: yfinance by default, tiingo once a key exists, and an explicit value always wins (same defaulting as priceBackfillSource)", () => {
+  assert.equal(loadConfig({}).priceLiveSource, "yfinance");
+  assert.equal(loadConfig({ TIINGO_API_KEY: "k" }).priceLiveSource, "tiingo");
+  assert.equal(loadConfig({ TIINGO_API_KEY: "k", PRICE_LIVE_SOURCE: "yfinance" }).priceLiveSource, "yfinance");
+  assert.equal(loadConfig({ PRICE_LIVE_SOURCE: "tiingo" }).priceLiveSource, "tiingo");
+  // Independent from PRICE_BACKFILL_SOURCE -- each can be set on its own.
+  assert.equal(loadConfig({ TIINGO_API_KEY: "k", PRICE_BACKFILL_SOURCE: "yfinance" }).priceLiveSource, "tiingo");
+  assert.equal(loadConfig({}).tiingoLiveWindowDays, 7);
+  assert.equal(loadConfig({ TIINGO_LIVE_WINDOW_DAYS: "3" }).tiingoLiveWindowDays, 3);
+});
+
+// ---------------------------------------------------------------------------
+// tiingo.js#fetchDailyBars -- the live trailing-window path
+// ---------------------------------------------------------------------------
+
+test("fetchDailyBars asks for a [today - (window-1), today] range, one request per ticker, same routing as fetchHistoricalBars", async (t) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const windowStart = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10); // tiingoLiveWindowDays default 7 -> 6 days back
+  const calls = mockTiingo(t, { AAPL: eodRows([today]), XAUUSD: fxRows([today]) });
+
+  const { bars, errors } = await fetchDailyBars(config, { tickers: ["AAPL", "XAUUSD"] });
+
+  assert.equal(errors.length, 0);
+  assert.deepEqual(calls.map((c) => c.url.pathname), ["/tiingo/daily/AAPL/prices", "/tiingo/fx/xauusd/prices"]);
+  assert.equal(calls[0].url.searchParams.get("startDate"), windowStart);
+  assert.deepEqual(bars.map((b) => `${b.ticker}:${b.source}`), ["AAPL:tiingo", "XAUUSD:tiingo_fx"]);
+});
+
+test("fetchDailyBars respects config.tiingoLiveWindowDays instead of the default 7", async (t) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const windowStart = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10); // window 3 -> 2 days back
+  const calls = mockTiingo(t, { AAPL: eodRows([today]) });
+
+  await fetchDailyBars({ ...config, tiingoLiveWindowDays: 3 }, { tickers: ["AAPL"] });
+
+  assert.equal(calls[0].url.searchParams.get("startDate"), windowStart);
+});
+
+test("fetchDailyBars defaults tickers to config.watchlist, same as fetchHistoricalBars", async (t) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const calls = mockTiingo(t, { AAPL: eodRows([today]), MSFT: eodRows([today]) });
+
+  await fetchDailyBars(config);
+
+  assert.deepEqual(calls.map((c) => c.url.pathname).sort(), ["/tiingo/daily/AAPL/prices", "/tiingo/daily/MSFT/prices"]);
+});
+
+test("fetchDailyBars with no TIINGO_API_KEY throws upfront (same as fetchHistoricalBars), without any request", async (t) => {
+  const calls = mockTiingo(t, {});
+  await assert.rejects(() => fetchDailyBars({ ...config, tiingoApiKey: "" }, { tickers: ["AAPL"] }), /TIINGO_API_KEY/);
+  assert.equal(calls.length, 0);
+});
+
+test("fetchDailyBars isolates a per-ticker 429, same as fetchHistoricalBars", async (t) => {
+  const today = new Date().toISOString().slice(0, 10);
+  mockTiingo(t, { AAPL: eodRows([today]), MSFT: 429 });
+
+  const { bars, errors } = await fetchDailyBars(config, { tickers: ["AAPL", "MSFT"] });
+
+  assert.equal(bars.length, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].ticker, "MSFT");
+  assert.match(errors[0].error.message, /429/);
 });
 
 // ---------------------------------------------------------------------------

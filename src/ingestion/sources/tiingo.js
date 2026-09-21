@@ -48,6 +48,7 @@ import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
 import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 import { withRetry } from "../../shared/retry.js";
+import { toDayString, addDays } from "../date_windows.js";
 
 const VENDOR = "tiingo";
 const DEFAULT_API_BASE = "https://api.tiingo.com";
@@ -192,4 +193,31 @@ export async function fetchHistoricalBars(config, { tickers = config.watchlist.m
   }
 
   return { bars, errors, requests: tickers.length };
+}
+
+/**
+ * Live trailing-window daily bars for `tickers` (defaults to
+ * config.watchlist) -- the Tiingo counterpart to yfinance.js#fetchDailyBars,
+ * for ingestion/ingest.js#ingestPriceBars once config.priceLiveSource is
+ * "tiingo" (see config.js's own comment on why this exists: the sustained
+ * yfinance 429 documented in yfinance.js's header). Same
+ * `{ bars, errors: [{ ticker, error }] }` contract as the yfinance version,
+ * `kv` accepted-and-ignored for signature parity (yfinance's cooldown cache
+ * has no Tiingo equivalent yet).
+ *
+ * There is no separate "recent bars" Tiingo endpoint, so this is just
+ * fetchHistoricalBars over a computed [from, to] ending today
+ * (config.tiingoLiveWindowDays calendar days back, see config.js) --
+ * generous enough to still include the latest trading day across a weekend
+ * or holiday, at no extra request cost (one request per ticker regardless of
+ * how wide the range is). A missing TIINGO_API_KEY therefore throws upfront
+ * here too (same as fetchHistoricalBars); ingestPriceBars is the one that
+ * catches it and degrades to "no live bars this tick" rather than failing
+ * the whole ingest_ticker job, same as any other VendorError from this file.
+ */
+export async function fetchDailyBars(config, { tickers = config.watchlist.map((w) => w.ticker) } = {}, { kv } = {}) {
+  const to = toDayString(Date.now());
+  const windowDays = Number(config.tiingoLiveWindowDays) > 0 ? Number(config.tiingoLiveWindowDays) : 7;
+  const from = addDays(to, -(windowDays - 1));
+  return fetchHistoricalBars(config, { tickers, from, to });
 }
