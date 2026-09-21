@@ -56,7 +56,8 @@ test("llmQuery omits defaults so links stay short, and drops the paging cursor w
 
 test("backtestRunsList links each run to its own LLM calls", () => {
   const html = backtestRunsList([{ id: "backtest-7-abc", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00Z", testEnd: "2024-02-01T00:00:00Z", status: "failed", error: "boom", result: null }]);
-  assert.ok(html.includes('href="/dashboard/llm?llmJob=backtest-7-abc"'));
+  // Backtest calls are logged under the run's own environment, so the link must carry env too or it queries live and shows nothing.
+  assert.ok(html.includes('href="/dashboard/llm?llmJob=backtest-7-abc&env=backtest-7-abc"'));
 });
 
 test("the LLM page is reachable: desktop nav, the mobile More menu, and the More cards", () => {
