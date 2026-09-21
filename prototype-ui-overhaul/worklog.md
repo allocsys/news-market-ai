@@ -30,3 +30,20 @@ Stage Summary:
 - 22 screenshots saved to /home/z/my-project/download/ for offline review.
 - README.md documents the prototype's usage, features, and screenshots.
 - Tech stack: Next.js 16 + TypeScript + Tailwind 4 + shadcn/ui + Zustand + Sonner + vaul/Sheet, all hand-rolled SVG charts (no chart library).
+
+---
+Task ID: 2
+Agent: Claude (cleanup pass)
+Task: Remove scaffold leftovers and revert prototype auth to match the production single-operator model.
+
+Work Log:
+- Removed unused scaffold: Prisma schema + client, default hello-world API route, websocket example files, Caddyfile.
+- Removed the Settings view (users/roles/audit/permissions matrix) — the production dashboard has no settings page, so the prototype now has 11 sections instead of 12.
+- Removed the multi-user auth model (roles, 2FA hints, per-user audit log, user picker) from types/store/mock-data and rewrote the login screen, top bar, and sidebar to use a single-operator username/password login, mirroring the existing `src/auth/session.js` pattern.
+- Updated package.json to drop Prisma scripts/deps and next-auth (unused).
+- Updated README.md to reflect the single-operator login, 11 views, and removed Settings/Prisma references.
+- Removed the stale login and Settings screenshots (need regeneration).
+
+Stage Summary:
+- Prototype now matches production's auth model (single operator credential, no roles/audit) while keeping the rest of the UI/UX overhaul intact.
+- 11 views + login instead of 12 views + login.
