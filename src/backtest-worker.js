@@ -136,9 +136,12 @@ export default {
             // LAST step, after runManualBacktest's forced progress update: if
             // the send throws, the outer catch retries THIS part (checkpoints
             // make that cheap) instead of leaving a half-started second chain.
+            // A Gemini-outage pause (reason 'transient') asks for a longer delay than the
+            // usual continuation one; never shorter than it.
+            const delaySeconds = Math.max(config.backtestContinuationDelaySeconds, outcome.delaySeconds ?? 0);
             await env.BACKTEST.send(
               { type: "backtest", id, tickers, testStart, testEnd, graceDays, part: part + 1, cursor: outcome.cursor },
-              { delaySeconds: config.backtestContinuationDelaySeconds }
+              { delaySeconds }
             );
             message.ack();
             continue;
