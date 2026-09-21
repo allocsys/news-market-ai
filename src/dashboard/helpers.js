@@ -241,16 +241,21 @@ export function backtestMetricRow(label, on, off, delta, { isPercent = true } = 
 export function backtestResultTable(result) {
   if (!result) return "";
   const { on, off, delta } = result.overall;
+  // Runs saved before the daily-equity-curve scoring (plan.md step D) have no `portfolio`.
+  const p = result.portfolio;
+  const scoring = p
+    ? `Scored on ${p.days} daily portfolio return${p.days === 1 ? "" : "s"} (${escapeHtml(p.from)} to ${escapeHtml(p.to)}) over ${escapeHtml(p.tickers.join(", "))}. Signal ON = the positions the pipeline opened, sized by the risk rules, the rest in cash (average ${(p.on.avgExposure * 100).toFixed(1)}% invested, ${p.on.positionsTraded} position${p.on.positionsTraded === 1 ? "" : "s"}${p.on.positionsIgnored ? `, ${p.on.positionsIgnored} could not be replayed` : ""}). Signal OFF = equal-weight buy &amp; hold of the same tickers, fully invested. `
+    : "";
   return `<div class="table-wrap"><table>
     <thead><tr><th>Metric</th><th>Signal ON</th><th>Signal OFF (buy &amp; hold)</th><th>Delta</th></tr></thead>
     <tbody>
       ${backtestMetricRow("Cumulative return", on.cumulativeReturn, off.cumulativeReturn, delta.cumulativeReturn)}
       ${backtestMetricRow("Sharpe ratio", on.sharpeRatio, off.sharpeRatio, delta.sharpeRatio, { isPercent: false })}
-      ${backtestMetricRow("Win rate", on.winRate, off.winRate, delta.winRate)}
+      ${backtestMetricRow(p ? "Up days" : "Win rate", on.winRate, off.winRate, delta.winRate)}
       ${backtestMetricRow("Max drawdown", on.maxDrawdown, off.maxDrawdown, delta.maxDrawdown)}
     </tbody>
   </table></div>
-  <p class="note">Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>`;
+  <p class="note">${scoring}Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>`;
 }
 
 export const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed" };

@@ -1,9 +1,19 @@
 // The real end-to-end backtest run plan.md's Known Gaps section flagged as
-// the last open item under "Backtest harness": wiring
-// onSignalRunner.js#makeOnSignalReturns + noSignalBaseline.js#makeBuyAndHoldOffReturns
-// + signalCompare.js#compareSignalOnOffByWindow together behind one real,
-// callable, PERSISTED invocation -- mirroring backfillHistoricalNews's own
-// gated-secret operational entry point (POST /backfill).
+// the last open item under "Backtest harness": wiring the on-signal walk
+// (onSignalRunner.js) + the daily equity-curve scoring of BOTH sides
+// (equity.js) + signalCompare.js#compareSignalOnOffByWindow together behind
+// one real, callable, PERSISTED invocation -- mirroring backfillHistoricalNews's
+// own gated-secret operational entry point (POST /backfill).
+//
+// HOW A RUN GOES (plan.md step D): (1) PREFLIGHT, before any LLM call: load the
+// price bars for the whole span and require every requested ticker to have
+// usable ones (priceGrid.js); a ticker that cannot be scored fails the run
+// with a message naming it, never a quietly smaller universe. (2) WALK: for
+// each walk-forward window in order, replay the real pipeline over the
+// backfilled news (onSignalRunner.js#walkOnSignalWindow), leaving positions in
+// the run's store. (3) SCORE: replay those positions into a daily portfolio
+// equity curve and compare it with the equal-weight buy-and-hold curve of the
+// same tickers over the same days (equity.js), then slice both by window.
 //
 // M3: runs inside the `backtest` Worker (src/backtest-worker.js), off the
 // BACKTEST queue. Everything it touches is SIM-side: `store` is
@@ -12,10 +22,10 @@
 // INPUTS_DB handle. No LIVE_DB anywhere in this call graph.
 //
 // SCOPE / WHAT THIS DOES NOT DO: this does NOT call backfillHistoricalNews
-// itself and does NOT touch Finnhub at all -- both onSignalRunner.js and
-// noSignalBaseline.js only ever read news/price data ALREADY in D1
-// (storage/inputs_view.js#getNewsItemsInRange / getPriceBarsAsOf), never live vendor
-// traffic. A caller wanting to backtest a period with no backfilled news
+// itself and does NOT touch Finnhub at all -- the walk and the scoring only
+// ever read news/price data ALREADY in D1 (storage/inputs_view.js#
+// getNewsItemsInRange / getPriceBarsAsOf / getPriceBarsInRange), never live
+// vendor traffic. A caller wanting to backtest a period with no backfilled news
 // yet must run POST /backfill for that range FIRST, as a separate,
 // deliberate step -- this module has no opinion on that and will just
 // (correctly) produce empty/thin "on" returns for a window with no
@@ -33,14 +43,16 @@
 // TRAIN/TEST WINDOWING: compareSignalOnOffByWindow's walk-forward windows
 // (pointInTime.js#walkForwardWindows) need trainDays/testDays, not just an
 // overall [testStart, testEnd) -- trainDays has no effect on either return
-// series here (neither onSignalRunner.js nor noSignalBaseline.js reads
-// anything from a window's trainStart/trainEnd fields, only testStart/
-// testEnd), it exists purely to size each walk-forward step. A caller with
+// series here (neither the walk nor the scoring reads anything from a
+// window's trainStart/trainEnd fields, only testStart/testEnd), it exists
+// purely to size each walk-forward step. A caller with
 // no walk-forward opinion can pass trainDays=0 for one single test window
 // spanning the whole [testStart, testEnd) range.
 
-import { makeOnSignalReturns, countSignalWalkSteps } from "./onSignalRunner.js";
-import { makeBuyAndHoldOffReturns } from "./noSignalBaseline.js";
+import { walkOnSignalWindow, countSignalWalkSteps } from "./onSignalRunner.js";
+import { onEquityReturns, offEquityReturns, sliceSeriesByWindow, meanOf, DEFAULT_MAX_PRICE_GAP_DAYS } from "./equity.js";
+import { loadPriceGrid, assertPriceCoverage } from "./priceGrid.js";
+import { walkForwardWindows } from "./pointInTime.js";
 import { compareSignalOnOffByWindow } from "./signalCompare.js";
 import { insertBacktestRun, completeBacktestRun, failBacktestRun } from "../storage/sim_registry.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
@@ -121,18 +133,59 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     // 'failed' run rather than escaping and looping the queue message.
     config = { ...config, llmBudget: createLlmBudget(config.backtestMaxLlmCalls) };
     clock.assertNotFuture(testEnd, "testEnd");
-    if (onProgress) totalSteps = countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays, clock });
-    const getOnReturns = makeOnSignalReturns(env, config, { inputs, store }, { tickers, graceDays, onStep, clock });
-    const getOffReturns = makeBuyAndHoldOffReturns(inputs, { tickers });
+
+    // The walk-forward windows this run covers (contiguous test windows; the
+    // same ones compareSignalOnOffByWindow rolls below). None fitting is a
+    // caller mistake, refused here instead of "completing" with an empty result.
+    if (!(Date.parse(testStart) < Date.parse(testEnd))) {
+      throw new Error(`testStart (${testStart}) must be before testEnd (${testEnd})`);
+    }
+    const windows = [...walkForwardWindows(testStart, testEnd, { trainDays, testDays: resolvedTestDays })];
+    if (windows.length === 0) {
+      throw new Error(`No walk-forward window fits in ${testStart} .. ${testEnd} with trainDays=${trainDays} and testDays=${resolvedTestDays}; nothing to run`);
+    }
+    const spanStart = windows[0].testStart;
+    const spanEnd = windows[windows.length - 1].testEnd;
+
+    // PREFLIGHT (free): every ticker needs usable prices over the whole span
+    // before a single LLM call is made.
+    const grid = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
+    assertPriceCoverage(grid);
+
+    if (onProgress) {
+      totalSteps = windows.reduce((sum, w) => sum + countSignalWalkSteps(config, { tickers, testStart: w.testStart, testEnd: w.testEnd, graceDays, clock }), 0);
+    }
+
+    // WALK: windows in order, each one leaving its positions in the store.
+    for (const window of windows) {
+      await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep, clock });
+    }
+
+    // SCORE: both sides as daily equity curves over the same grid, then sliced
+    // per window (their pooled series is the whole-span curve).
+    const positions = await store.getPositionsInRange({ from: spanStart, to: spanEnd });
+    const on = onEquityReturns(grid, positions);
+    const off = offEquityReturns(grid);
 
     const result = await compareSignalOnOffByWindow({
       startDate: testStart,
       endDate: testEnd,
       trainDays,
       testDays: resolvedTestDays,
-      getOnReturns,
-      getOffReturns,
+      getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, window),
+      getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, window),
     });
+    result.portfolio = {
+      method: "daily-equity-curve-v1",
+      from: grid.from,
+      to: grid.to,
+      days: grid.dates.length,
+      tickers: grid.tickers,
+      maxGapDays: DEFAULT_MAX_PRICE_GAP_DAYS,
+      on: { avgExposure: meanOf(on.exposure), positionsTraded: on.positionsTraded, positionsIgnored: on.positionsIgnored },
+      off: { avgExposure: meanOf(off.exposure), holdings: grid.tickers.length },
+      series: { dates: grid.dates, on: on.returns, off: off.returns, onExposure: on.exposure },
+    };
 
     await onProgress?.({ phase: "saving", percent: 98, done: totalSteps, total: totalSteps, detail: "Saving backtest results", force: true });
     await completeBacktestRun(registryDb, { id, result, finishedAt: new Date().toISOString() });

@@ -373,6 +373,34 @@ export async function getPriceBarsAsOf(db, { ticker, asOf, limit = 200 }) {
 }
 
 /**
+ * Backtest SCORING read, NOT for agents: every bar for `ticker` dated
+ * `fromDate <= date < toDate` (both bare `YYYY-MM-DD`), oldest first, no row cap
+ * (a ticker has at most one bar per day, so the result is bounded by the span).
+ * Same carve-out as RunStore#getRealizedReturnsInRange: the equity-curve scorer
+ * (backtest/equity.js) has to read prices across the whole test span, which no
+ * asOf-gated read may do, so nothing in the agent/pipeline path calls this;
+ * both bounds are required so it can never become "give me everything". It
+ * returns only what scoring needs (date, close).
+ */
+export async function getPriceBarsInRange(db, { ticker, fromDate, toDate }) {
+  if (!fromDate || !toDate) {
+    throw new LookaheadViolationError("getPriceBarsInRange requires an explicit {fromDate, toDate} range");
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT ticker, date, close
+       FROM price_bars
+       WHERE ticker = ? AND date >= ? AND date < ?
+       ORDER BY date ASC`
+    )
+    .bind(ticker, fromDate, toDate)
+    .all();
+
+  return results;
+}
+
+/**
  * One row per (ticker, tag, fiscalYear, fiscalPeriod, form) -- a restated
  * figure (10-K/A) for a period already covered by an earlier filing is a
  * NEW row, not an overwrite. See the fundamental_facts table in

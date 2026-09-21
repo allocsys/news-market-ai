@@ -271,8 +271,8 @@ export default {
       const graceDays = graceDaysRaw;
 
       // Point-in-time date strings (YYYY-MM-DD) become UTC-midnight ISO
-      // timestamps -- onSignalRunner.js/noSignalBaseline.js both expect
-      // full ISO strings.
+      // timestamps -- onSignalRunner.js and the equity scoring (equity.js) both
+      // expect full ISO strings.
       const testStartIso = testStart.length === 10 ? `${testStart}T00:00:00.000Z` : testStart;
       const testEndIso = testEnd.length === 10 ? `${testEnd}T00:00:00.000Z` : testEnd;
 
