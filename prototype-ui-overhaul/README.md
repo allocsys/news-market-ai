@@ -8,7 +8,7 @@ doesn't disturb the production code — it's a parallel UI proposal for review.
 
 🟢 **Prototype only**. Not wired to the live Cloudflare Workers backend.
 All data is mock data in `src/lib/dash/mock-data.ts` (positions, decisions,
-LLM calls, pipeline, backtest runs, users, audit log).
+LLM calls, pipeline, backtest runs).
 
 ## What this reimagines
 
@@ -28,21 +28,21 @@ numerics, hand-rolled SVG charts, accessibility-first) while adding:
    hidden (no battery drain in background). Manual "Refresh now" + toast.
 4. **Dual theme** — dark (default) / light / system preference. Manual toggle
    in top bar. Light theme is for shared-screen presentations.
-5. **Multi-user auth** — 4 demo users with roles (admin / operator / viewer)
-   + 2FA hints + per-user audit log seeded + appended on every trigger.
+5. **Single-operator login** — mirrors the production auth model: one shared
+   operator credential, no roles or audit trail.
 6. **Mobile bottom sheet** — replaces the old "More" overflow hub with a
-   slide-up sheet (vaul) showing all 12 sections grouped by
+   slide-up sheet (vaul) showing all 11 sections grouped by
    Monitor / Operations / System.
 7. **Data export** — CSV + JSON dropdown on every DataTable.
 8. **Skeleton + toast UX** — Sonner toasts on every action; PageSkeleton
    during view transitions; fade-in animations gated by
    `prefers-reduced-motion`.
 
-## Pages (12 views + login)
+## Pages (11 views + login)
 
 | # | View | Path-equivalent | What's new |
 |---|------|-----------------|------------|
-| — | Login | `/login` | Multi-user picker instead of single shared password |
+| — | Login | `/login` | Single operator login, matching the production auth model |
 | 1 | Overview (new) | (none) | Command center — replaces Snapshot as landing |
 | 2 | Snapshot | `/dashboard/snapshot` | Refined layout, kept structure |
 | 3 | Activity | `/dashboard/activity` | Range pills 7/14/30/60d, stacked-bar SVG |
@@ -54,7 +54,6 @@ numerics, hand-rolled SVG charts, accessibility-first) while adding:
 | 9 | LLM Calls | `/dashboard/llm` + `/dashboard/llm/:id` | Cursor paging + detail dialog with cascade attempts |
 | 10 | Backfill | `/dashboard/backfill` | Confirm dialog before quota-spending triggers |
 | 11 | Backtest | `/dashboard/backtest` + `/dashboard/backtest/:id` | Run label + collapsible runs + equity curve |
-| 12 | Settings (new) | (none) | Users + audit log + permissions matrix |
 
 ## How to run it locally
 
@@ -72,8 +71,7 @@ npm install
 npm run dev
 ```
 
-Pick any user from the login screen — password is any non-empty value
-(demo prototype, no real auth).
+Log in with any non-empty username/password (demo prototype, no real auth).
 
 ## File structure
 
@@ -98,16 +96,14 @@ prototype-ui-overhaul/
 │   │   │   ├── data-table.tsx     ← CSV/JSON export + mobile card transform
 │   │   │   ├── skeleton.tsx, empty-state.tsx
 │   │   │   └── primitives.tsx     ← Panel, PageHeader, FilterPills
-│   │   └── views/  (12 view components)
+│   │   └── views/  (11 view components)
 │   ├── hooks/                     ← use-mobile, use-toast (shadcn defaults)
 │   └── lib/
 │       ├── utils.ts               ← cn helper
-│       ├── db.ts                  ← Prisma client (unused in prototype)
 │       └── dash/
 │           ├── store.ts           ← Zustand store
 │           ├── mock-data.ts       ← ~480 lines of realistic mock data
 │           └── types.ts           ← Domain types
-├── prisma/                        ← Prisma schema (scaffold default)
 ├── public/
 ├── screenshots/                  ← 22 PNG screenshots of every page
 ├── package.json
