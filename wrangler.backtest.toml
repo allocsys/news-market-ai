@@ -91,7 +91,7 @@ invocation_logs = true
 # these same config.js fields regardless of which Worker is running it.
 GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
 GEMINI_DEEP_MODEL = "gemini-3.5-flash"
-GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash"
+GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-2.5-flash"
 
 # Per-run cap on LLM calls (src/llm/budget.js): a run that tries call number
 # max+1 fails with "LLM call budget exceeded". Counts logical calls (one per
