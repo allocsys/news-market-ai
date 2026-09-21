@@ -270,6 +270,20 @@ async function renderBacktestDetail(request, env, config, id) {
   if (!BACKTEST_ID_RE.test(id)) return shell(renderBacktestDetailView({ run: null }), 404);
   try {
     const detail = await fetchBackendJson(env, `/api/backtest-runs/${encodeURIComponent(id)}`);
+    // If the backtest run is still in progress (neither complete nor failed),
+    // best-effort fetch its job_progress row from backend's GET /api/jobs/:id
+    // using its run id as both the job id and the env query param (since a
+    // backtest job's run id IS its SIM_DB environment -- see status.js#jobPollUrl).
+    // A failed lookup is non-fatal and leaves detail.activeJob unset so the view
+    // falls back to the static "Still running..." text.
+    if (detail.run && detail.run.status !== "complete" && detail.run.status !== "failed") {
+      try {
+        const job = await fetchBackendJson(env, `/api/jobs/${encodeURIComponent(id)}?env=${encodeURIComponent(id)}`);
+        detail.activeJob = job;
+      } catch (err) {
+        console.warn("dashboard backtest active-job lookup failed (non-fatal)", { id, message: err.message });
+      }
+    }
     return shell(renderBacktestDetailView(detail));
   } catch (err) {
     if (err.status === 404) return shell(renderBacktestDetailView({ run: null }), 404);

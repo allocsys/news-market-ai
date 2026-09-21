@@ -7,6 +7,7 @@ import {
   escapeHtml, fmtTime, errorState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery,
   tradeTimelineChart, tradeTimelineSummary, newsBasis, signedPct, outcomeColor,
 } from "../helpers.js";
+import { renderJobProgressPanel } from "./status.js";
 
 const NEWS_PREVIEW_CHARS = 160;
 const DASH = "\u2014";
@@ -44,7 +45,7 @@ export function tradeTimelineTable(positions) {
   </table></div>`;
 }
 
-export function renderBacktestDetailView({ run = null, positions = [], positionsError = null, truncated = false, error = null } = {}) {
+export function renderBacktestDetailView({ run = null, positions = [], positionsError = null, truncated = false, error = null, activeJob = null } = {}) {
   const back = `<p class="note"><a href="/dashboard/backtest">&larr; All backtest runs</a></p>`;
   const head = `<h2>Trade timeline</h2>`;
   if (error) return `<section id="backtest-detail">${back}${head}${errorState(error)}</section>`;
@@ -60,7 +61,12 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
 
   let chartBody;
   if (run.status === "failed") chartBody = `<p class="empty">${escapeHtml(run.error ?? "failed with no recorded error message")}</p>`;
-  else if (run.status !== "complete") chartBody = `<p class="empty">Still running -- the equity curve is drawn once scoring finishes. Positions opened so far are listed below; reload to update.</p>`;
+  else if (run.status !== "complete") {
+    // renderJobProgressPanel returns "" for a job with no id, so fall back to
+    // the static text on that too -- not just when there is no job at all --
+    // rather than leaving the chart area blank.
+    chartBody = (activeJob && renderJobProgressPanel(activeJob)) || `<p class="empty">Still running -- the equity curve is drawn once scoring finishes. Positions opened so far are listed below; reload to update.</p>`;
+  }
   else chartBody = tradeTimelineChart(series, positions);
 
   const stats = run.status === "complete"
