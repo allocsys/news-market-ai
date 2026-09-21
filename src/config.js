@@ -66,6 +66,14 @@ export function loadConfig(env) {
     // runaway chain fails the run instead of looping forever).
     backtestContinuationDelaySeconds: intOrDefault(env.BACKTEST_CONTINUATION_DELAY_SECONDS, 15),
     backtestMaxParts: intOrDefault(env.BACKTEST_MAX_PARTS, 1500),
+    // A Gemini outage (every model in the cascade rate-limited / overloaded /
+    // timing out) PAUSES a backtest instead of failing it: the part ends, and the
+    // next one is delayed by at least this many seconds (the larger of this and
+    // the cascade's own retryAfterSeconds hint; cooldowns last >= 60s, so the
+    // default clears them). The run only fails after this many CONSECUTIVE pauses
+    // stuck on the same news item; '0' means never give up on that ground.
+    backtestTransientPauseSeconds: intOrDefault(env.BACKTEST_TRANSIENT_PAUSE_SECONDS, 90),
+    backtestMaxTransientStalls: intOrDefault(env.BACKTEST_MAX_TRANSIENT_STALLS, 30),
     // Timeout for every plain-`fetch` ingestion call (shared/fetch_with_timeout.js)
     // -- gdelt.js (search + full-text enrichment), html_scrape.js, yfinance.js,
     // rss.js, edgar_fundamentals.js, edgar_cik_lookup.js. UPDATE: added after a
