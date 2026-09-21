@@ -3,6 +3,15 @@
 // for these values, so there's exactly one place that knows the env var
 // names.
 
+// Non-negative integer var: `fallback` when unset/blank, and '0' is honored
+// (it means "disabled" for the backtest subrequest budget). A malformed value
+// falls back too, rather than silently turning the guard off.
+function intOrDefault(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
 function parseList(value) {
   return (value || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
@@ -45,6 +54,18 @@ export function loadConfig(env) {
     // means no cap, and a malformed value must fail the run (createLlmBudget)
     // rather than be coerced to "no cap" by a Number(x) || default.
     backtestMaxLlmCalls: env.BACKTEST_MAX_LLM_CALLS,
+    // Free-plan subrequest budget for one backtest-worker invocation
+    // (backtest/subrequestBudget.js). External = Gemini fetches (limit 50 on
+    // Free); TOTAL also counts D1/KV calls -- 40 STRICT by default because it is
+    // unverified whether D1/KV fall in the separate 1000 bucket. Raise TOTAL only
+    // after the per-part log shows that. '0' disables the budget (and the
+    // continuation chain with it).
+    backtestMaxExternalSubrequests: intOrDefault(env.BACKTEST_MAX_EXTERNAL_SUBREQUESTS, 40),
+    backtestMaxTotalSubrequests: intOrDefault(env.BACKTEST_MAX_TOTAL_SUBREQUESTS, 40),
+    // Delay before a continuation part runs, and the cap on parts per run (a
+    // runaway chain fails the run instead of looping forever).
+    backtestContinuationDelaySeconds: intOrDefault(env.BACKTEST_CONTINUATION_DELAY_SECONDS, 15),
+    backtestMaxParts: intOrDefault(env.BACKTEST_MAX_PARTS, 1500),
     // Timeout for every plain-`fetch` ingestion call (shared/fetch_with_timeout.js)
     // -- gdelt.js (search + full-text enrichment), html_scrape.js, yfinance.js,
     // rss.js, edgar_fundamentals.js, edgar_cik_lookup.js. UPDATE: added after a

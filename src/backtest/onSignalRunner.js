@@ -283,10 +283,20 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
       if (!pos.exits) {
         while (pos.ticker < tickers.length) {
           const ticker = tickers[pos.ticker];
+          // Read first, announce second: a failing news read is a setup
+          // failure, not something to blame on a ticker-day that hasn't begun.
+          let dayItems;
+          try {
+            dayItems = await getDayNewsItems(ctx, { ticker, dayIso, testStart, testEnd });
+          } catch (err) {
+            // Not a pipeline failure: keep runBacktest.js from blaming the
+            // previous ticker-day (whose items all finished) for a read error.
+            if (err && typeof err === "object" && !(err instanceof SubrequestBudgetExhaustedError)) err.skipStepSuffix = true;
+            throw err;
+          }
           // Told when a ticker's day starts -- again on resume, so the failure
           // suffix in runBacktest.js still names the ticker-day in flight.
           await onStep?.({ ticker, dayIso, done: false });
-          const dayItems = await getDayNewsItems(ctx, { ticker, dayIso, testStart, testEnd });
           for (const item of dayItems) {
             if (pos.after && !isAfterCursorKey(item, pos.after)) continue;
             if (budget && !budget.canStart("item")) return pause("budget");

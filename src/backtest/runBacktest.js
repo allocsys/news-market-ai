@@ -192,7 +192,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     return { id, status: "complete", result };
   } catch (err) {
     // No suffix when it failed before the walk started (e.g. assertNotFuture).
-    const error = current ? `${err.message} [while processing ${current.ticker} ${current.dayIso.slice(0, 10)}]` : err.message;
+    const error = current && !err?.skipStepSuffix ? `${err.message} [while processing ${current.ticker} ${current.dayIso.slice(0, 10)}]` : err.message;
     await failBacktestRun(registryDb, { id, error, finishedAt: new Date().toISOString() });
     return { id, status: "failed", error };
   }
