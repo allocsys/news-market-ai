@@ -7,7 +7,7 @@ import { useTheme } from "./theme-provider";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  Search, RefreshCw, Sun, Moon, Monitor, ChevronDown, LogOut, History, Settings,
+  Search, RefreshCw, Sun, Moon, Monitor, ChevronDown, LogOut,
   Command, X, Circle,
 } from "lucide-react";
 import {
@@ -25,8 +25,6 @@ export function TopBar() {
   const markRefreshed = useDash((s) => s.markRefreshed);
   const currentUser = useDash((s) => s.currentUser);
   const logout = useDash((s) => s.logout);
-  const audit = useDash((s) => s.audit);
-  const setView = useDash((s) => s.setView);
 
   const { theme, setTheme } = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -180,37 +178,15 @@ export function TopBar() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="h-9 pl-1.5 pr-2 rounded-lg border border-border flex items-center gap-2 hover:bg-muted/40 transition-colors">
-                <div
-                  className={cn(
-                    "size-6 rounded-full grid place-items-center text-white text-[10px] font-semibold bg-gradient-to-br",
-                    `from-${currentUser.hue}-500 to-${currentUser.hue}-600`
-                  )}
-                  style={{
-                    background:
-                      currentUser.hue === "blue" ? "linear-gradient(135deg,#3b82f6,#2563eb)" :
-                      currentUser.hue === "emerald" ? "linear-gradient(135deg,#10b981,#059669)" :
-                      currentUser.hue === "amber" ? "linear-gradient(135deg,#f59e0b,#d97706)" :
-                      "linear-gradient(135deg,#a855f7,#9333ea)",
-                  }}
-                >
-                  {currentUser.initials}
+                <div className="size-6 rounded-full grid place-items-center text-white text-[10px] font-semibold bg-gradient-to-br from-blue-500 to-blue-600">
+                  {currentUser[0]?.toUpperCase()}
                 </div>
-                <span className="text-xs font-medium hidden sm:block">{currentUser.displayName.split(" ")[0]}</span>
+                <span className="text-xs font-medium hidden sm:block">{currentUser}</span>
                 <ChevronDown className="size-3 opacity-60" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-64">
-              <DropdownMenuLabel className="text-xs flex flex-col gap-0.5">
-                <span>{currentUser.displayName}</span>
-                <span className="text-[10px] font-normal text-muted-foreground uppercase tracking-wider">@{currentUser.username} · {currentUser.role}</span>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setView("settings")} className="text-xs gap-2">
-                <History className="size-3.5" /> Audit log ({audit.length})
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setView("settings")} className="text-xs gap-2">
-                <Settings className="size-3.5" /> User & role settings
-              </DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="text-xs">{currentUser}</DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => { if (confirm("Sign out?")) logout(); }} className="text-xs gap-2 text-red-500">
                 <LogOut className="size-3.5" /> Sign out
