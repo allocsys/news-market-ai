@@ -112,7 +112,7 @@ LLM_LOG_ENABLED = "false"
 # config.js's loadConfig reads it, and a backtest with no explicit
 # `tickers` in its request falls back to config.watchlist (see src/index.js's
 # POST /backtest/run route). Keep in sync with the other configs.
-WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO"
 
 # BACKTEST_DAILY_WRITE_BUDGET (plan.md's "Backtest write cap (proposed)",
 # default 40K) is NOT set here -- still awaiting owner approval as of this

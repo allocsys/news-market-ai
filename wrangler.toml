@@ -145,7 +145,7 @@ invocation_logs = true
 # Watchlist for GDELT ingestion (src/ingestion/sources/gdelt.js) -- one
 # GDELT DOC API query per ticker, comma-separated. See src/config.js for
 # why this is ticker-symbol-as-query for now (v1, deliberately blunt).
-WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO"
 
 # EDGAR_USER_AGENT / EDGAR_CIK_MAP moved to wrangler.ingest.toml (plan.md
 # Step 5) -- this Worker no longer calls EDGAR directly (ingestTickerData/

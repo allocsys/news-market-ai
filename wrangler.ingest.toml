@@ -111,7 +111,7 @@ invocation_logs = true
 # Keep in sync with backend's WATCHLIST_TICKERS if the watchlist ever
 # changes -- there is no single shared source for this value across
 # Workers, same as dashboard/backend already don't share `vars` today.
-WATCHLIST_TICKERS = "AAPL,MSFT,TSLA"
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO"
 
 # SEC EDGAR requires a descriptive User-Agent identifying the requester
 # (https://www.sec.gov/os/webmaster-faq#developers) -- not a secret, just an
