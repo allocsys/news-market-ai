@@ -381,13 +381,26 @@ under real load (see "Free-plan budgets" above).
 **Backtests were NOT trustworthy as of the 2026-09-20 audit** ("is backtesting
 bug free?" → no). Steps A–E of the fix plan below are done; **step F (a real
 small first backtest)** is still open as of 2026-09-22 — no run has completed
-cleanly yet. Two runs tracked so far, neither a clean result: an earlier one
-(`backtest-1789988827184-yk8suu` or `backtest-1789998004894-9ih6hr` —
-plan.md's own prior revisions disagree on which was the latest; unreconciled)
-and a 2026-09-22 AAPL run that died to the Gemini `gemini-2.5-flash`
-retirement incident (see "LLM Calling Layer" above), unrelated to backtest
-correctness itself. The owner re-triggered a run after that fix deployed;
-treat ITS result as the first trustworthy backtest once it completes.
+cleanly yet. **Run-id ambiguity from earlier revisions now RESOLVED** (queried
+`sim.backtest_runs` directly rather than continuing to guess): the two
+previously-unreconciled early runs, by actual `started_at` —
+`backtest-1789988827184-yk8suu` (2026-09-21T11:07, failed: Gemini key
+cooldown) came BEFORE `backtest-1789998004894-9ih6hr` (2026-09-21T13:40,
+failed: the `gemini-2.5-flash` retirement incident, see "LLM Calling Layer"
+above) — `9ih6hr` was the later of the two. A further run not previously
+recorded here, `backtest-1790057927594-67gar5` (2026-09-22T06:18), ALSO died
+to the same `gemini-2.5-flash` 404 — the model-list fix wasn't live yet even
+at that point. **The fix is confirmed live** as of the run now in flight,
+`backtest-1790062895870-1gc5b2` (started 2026-09-22T07:41, AAPL,
+2026-08-23→2026-09-22): as of this note it's 28% through (9/31 parts,
+`job_progress` last updated seconds before this check) and gracefully
+pausing/retrying on transient Gemini unavailability ("Gemini unavailable
+(pause 1); retrying in part 173") instead of dying outright — exactly the
+behavior the fix was meant to produce. **Treat ITS result as the first
+trustworthy backtest once it completes; don't interrupt it** — it's spending
+real Gemini quota on a ~30-day window. Check progress via a direct
+`sim.backtest_runs`/`job_progress` D1 query rather than polling the dashboard
+repeatedly (costs nothing, doesn't risk the run).
 
 ### Next steps: make backtests trustworthy
 Working rules: each step is its own PR off `main`; CI `test` job is the real
