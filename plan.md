@@ -379,10 +379,14 @@ under real load (see "Free-plan budgets" above).
 
 **Backtests were NOT trustworthy as of the 2026-09-20 audit** ("is backtesting
 bug free?" → no). Steps A–E of the fix plan below are done; **step F (a real
-small first backtest) is in progress** as of 2026-09-21 — run
-`backtest-1789988827184-yk8suu`, tickers AAPL/MSFT/TSLA/XAUUSD/USO,
-2026-09-14→09-21, status `running`, zero errors so far. Treat its result as the
-first trustworthy backtest once it completes.
+small first backtest)** is still open as of 2026-09-22 — no run has completed
+cleanly yet. Two runs tracked so far, neither a clean result: an earlier one
+(`backtest-1789988827184-yk8suu` or `backtest-1789998004894-9ih6hr` —
+plan.md's own prior revisions disagree on which was the latest; unreconciled)
+and a 2026-09-22 AAPL run that died to the Gemini `gemini-2.5-flash`
+retirement incident (see "LLM Calling Layer" above), unrelated to backtest
+correctness itself. The owner re-triggered a run after that fix deployed;
+treat ITS result as the first trustworthy backtest once it completes.
 
 ### Next steps: make backtests trustworthy
 Working rules: each step is its own PR off `main`; CI `test` job is the real
