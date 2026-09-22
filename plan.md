@@ -568,8 +568,13 @@ against generic-AI-design defaults, then reviewed with the owner before build
   detail/confirm sub-pages). Exact routing/URL scheme (redirect old paths vs.
   rename outright) not yet decided -- resolve at Step 2.
 
-**Steps (ordered, one PR each, off `dashboard-redesign/polish-reorg`):**
-1. **Design tokens + shell foundation** -- rewrite `shell.js`'s CSS custom
+**Steps (ordered, one PR each into `main`, each branched fresh off `main`'s
+current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
+1. **Design tokens + shell foundation** -- DONE, PR #92, squash-merged to
+   `main` @ `55cbbbf` (2026-09-22). Also covered `src/login.js` (found via
+   `search_code`, not in the original scope -- it keeps its own standalone
+   palette). Light theme and general status colors intentionally untouched,
+   per plan. Step 2 is on `dashboard-redesign/step-2-nav-reorg`. -- rewrite `shell.js`'s CSS custom
    properties (`:root` and `:root[data-theme="dark"]`) to the new palette/type
    tokens above; swap font imports (Fraunces/IBM Plex Sans/IBM Plex Mono);
    no layout/markup changes yet, so every existing view re-themes for free
