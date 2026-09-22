@@ -955,6 +955,61 @@ const STYLE = `
     .mobile-more-card .nav-icon { opacity: 1; display: inline-flex; }
   }
 
+  /* ---- Ticker search palette (plan.md "Dashboard: Scoped UX Adoption" item 6) ----
+     Unlike the mobile More sheet, this overlay isn't gated to the mobile media
+     query -- a command palette is equally useful with a keyboard on desktop
+     (Ctrl/Cmd+K), so the same centered-overlay markup renders at every
+     breakpoint instead of a bottom-sheet-on-mobile / dropdown-on-desktop split. */
+  .search-backdrop {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(15, 23, 42, 0.45);
+    opacity: 0; visibility: hidden;
+    transition: opacity 200ms ease, visibility 0s linear 200ms;
+  }
+  .search-backdrop[data-open="true"] { opacity: 1; visibility: visible; transition: opacity 200ms ease, visibility 0s linear 0s; }
+  .search-palette {
+    position: fixed; top: 12vh; left: 50%; transform: translateX(-50%);
+    z-index: 201; width: min(480px, 92vw); max-height: 60vh;
+    display: flex; flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    overflow: hidden;
+    opacity: 0; visibility: hidden;
+    transition: opacity 180ms ease, visibility 0s linear 180ms;
+  }
+  .search-palette[data-open="true"] { opacity: 1; visibility: visible; transition: opacity 180ms ease, visibility 0s linear 0s; }
+  .search-palette-input-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+  .search-palette-input-row .nav-icon { color: var(--text-subtle); }
+  .search-palette-input {
+    flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+    font-size: 0.9375rem; color: var(--text-main); font-family: var(--font-sans);
+  }
+  .search-palette-input::placeholder { color: var(--text-subtle); }
+  .search-palette-kbd {
+    font-family: var(--font-mono); font-size: 0.6875rem; color: var(--text-subtle);
+    background: var(--bg-elevated); border: 1px solid var(--border-color);
+    border-radius: 4px; padding: 0.1rem 0.4rem; flex-shrink: 0;
+  }
+  .search-palette-results { overflow-y: auto; padding: 0.4rem; }
+  .search-result {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.6rem 0.75rem; border-radius: var(--radius-sm);
+    color: var(--text-main); text-decoration: none;
+    font-family: var(--font-mono); font-weight: 600; letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+  .search-result:hover, .search-result.active { background: var(--bg-hover); }
+  .search-empty { padding: 1.25rem 1rem; color: var(--text-subtle); font-size: 0.8125rem; text-align: center; }
+  @media (max-width: 767px) {
+    .search-palette { top: 6vh; width: 92vw; max-height: 78vh; }
+  }
+
   /* ---- Mini stat rows (big number + label, used inside panels) ---- */
   .mini-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 1rem 1.5rem; }
   .mini-stat { min-width: 0; }
