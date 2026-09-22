@@ -632,10 +632,20 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    new CSS rule that uses them carries a light-theme fallback
    (`var(--bull, var(--color-success-text))` etc.) so nothing goes unstyled
    before Step 6 ports the tokens properly.
-5. **Stat cards -> instrument readouts** -- restyle `statCard`/`miniStats`
-   and the donut/gauge SVG generators in `helpers.js` (`donutChart`,
-   `gaugeChart`) to match the new token system; used across Overview,
-   Snapshot, Positions, Activity.
+5. **Stat cards -> instrument readouts** -- DONE, PR #95, squash-merged to
+   `main` @ `d0de153` (2026-09-22, branched off `main`'s tip). CSS-only, no
+   markup/data change -- `.stat-card`/`.donut-cell`/`.gauge-cell`/
+   `.chart-cell` drop `box-shadow: var(--shadow-card)` for a hairline
+   border only (matching Step 3's ledger tables; only shell/panel chrome
+   keeps `shadow-card` now). `.stat-card`'s radial accent-glow `::after`
+   is replaced with a thin tick-mark rule under the value (a repeating
+   hairline pattern like a gauge's minor scale) -- `statCard()`'s
+   `--stat-accent-glow` custom property is simply unused now, no JS
+   change needed for a CSS-only step. Numeric readouts (`.stat-value`,
+   `.donut-center-value`, `.gauge-value`, `.mini-stat-value`) switch from
+   `--font-display` (Fraunces, reserved for editorial verdict/thesis
+   callouts per the Step 1 token comment) to `--font-mono` (IBM Plex
+   Mono) with tabular-nums, matching tickers/timestamps elsewhere.
 6. **Light theme parity** -- port every token above to `:root` (light
    variant) keeping the same role mapping; re-verify the no-flash
    cookie/localStorage theme sync still matches on first paint.
@@ -646,7 +656,7 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    new motion, and color contrast on both themes before calling the redesign
    done.
 
-**Status:** Steps 1-4 done (PR #92, PR #93, Step 3 -- see its entry above for the out-of-process direct-push caveat, audited and left in place 2026-09-22 -- and PR #94). Step 5 (stat cards -> instrument readouts) is next, not yet started. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed -- but every step still gets its own branch + PR, no direct pushes to main.
+**Status:** Steps 1-5 done (PR #92, PR #93, Step 3 -- see its entry above for the out-of-process direct-push caveat, audited and left in place 2026-09-22 -- PR #94, and PR #95). Step 6 (light theme parity) is next, not yet started. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed -- but every step still gets its own branch + PR, no direct pushes to main.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
