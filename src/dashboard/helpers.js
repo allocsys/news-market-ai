@@ -181,17 +181,60 @@ export function traderLine(thesis) {
   return `<div class="llm-block"><span class="llm-agent">Trader</span>${escapeHtml(thesis.instrument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(thesis.rationale ?? "\u2014")})</span></div>`;
 }
 
+/**
+ * Bull-left / bear-right / judge-beneath card (plan.md "Heavy Polish, Redesign
+ * & Reorganization" Step 4, 2026-09-22) -- the one deliberate bold visual
+ * move in the redesign: a trade decision's reasoning read as an actual
+ * two-sided argument with a ruling, not a generic list. Bull argument left
+ * (--bull, sage), bear argument right (--bear, brick), divided by a single
+ * amber spine (--accent); the judge's ruling sits beneath in serif italic
+ * (--font-display) like an actual finding. Sourced entirely from existing
+ * opinions[]/debate/thesis fields -- render-only, no data-layer change.
+ * Two callers: llmAnswerDetails (below, used by decisionsTable's collapsed
+ * "LLM reasoning" column) and views/overview.js's latest-decision panel,
+ * which renders this directly, unwrapped -- the one card the operator sees
+ * without a click. --bull/--bear are dark-theme-only as of Step 1; light
+ * theme parity is Step 6, same deferral Step 1 already made for this pair.
+ */
+export function verdictCard(d) {
+  if (!d.opinions && !d.debate) {
+    return `<p class="empty">Not recorded for this decision (predates LLM-answer logging).</p>`;
+  }
+  const opinionLines = (d.opinions ?? []).map(analystOpinionLine).join("\n");
+  const bull = d.debate?.bull;
+  const bear = d.debate?.bear;
+  const confidencePct = typeof d.debate?.confidence === "number" ? `${(d.debate.confidence * 100).toFixed(0)}%` : "\u2014";
+  return `<div class="verdict-card">
+    ${opinionLines ? `<div class="verdict-analysts">${opinionLines}</div>` : ""}
+    <div class="verdict-debate">
+      <div class="verdict-side verdict-bull">
+        <span class="verdict-side-label">Bull</span>
+        <p class="verdict-argument">${escapeHtml(bull?.argument ?? "\u2014")}</p>
+        <p class="verdict-reasoning">${escapeHtml(bull?.justification ?? "\u2014")}</p>
+      </div>
+      <div class="verdict-spine" aria-hidden="true"></div>
+      <div class="verdict-side verdict-bear">
+        <span class="verdict-side-label">Bear</span>
+        <p class="verdict-argument">${escapeHtml(bear?.argument ?? "\u2014")}</p>
+        <p class="verdict-reasoning">${escapeHtml(bear?.justification ?? "\u2014")}</p>
+      </div>
+    </div>
+    <div class="verdict-ruling">
+      <p class="verdict-ruling-text">${escapeHtml(d.debate?.direction ?? "\u2014")} \u2014 ${confidencePct} confidence, ${escapeHtml(d.debate?.timeHorizon ?? "\u2014")} horizon.</p>
+      <p class="verdict-reasoning">${escapeHtml(d.debate?.justification ?? "\u2014")}</p>
+    </div>
+    ${traderLine(d.thesis)}
+  </div>`;
+}
+
 export function llmAnswerDetails(d) {
   if (!d.opinions && !d.debate) {
     return `<details class="llm-answer"><summary>view</summary><p class="empty">Not recorded for this decision (predates LLM-answer logging).</p></details>`;
   }
-  const opinionLines = (d.opinions ?? []).map(analystOpinionLine).join("\n");
   return `<details class="llm-answer">
     <summary>view</summary>
     <div class="llm-answer-body">
-      ${opinionLines}
-      ${debateLines(d.debate)}
-      ${traderLine(d.thesis)}
+      ${verdictCard(d)}
     </div>
   </details>`;
 }
