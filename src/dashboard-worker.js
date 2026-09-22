@@ -19,6 +19,7 @@ import { loadConfig } from "./config.js";
 import { renderLoginPage } from "./login.js";
 import { renderShell } from "./dashboard/shell.js";
 import { renderRunAcceptedPage, renderActiveJobPanel } from "./dashboard/views/status.js";
+import { renderOverviewView } from "./dashboard/views/overview.js";
 import { renderSnapshotView } from "./dashboard/views/snapshot.js";
 import { renderActivityView } from "./dashboard/views/activity.js";
 import { renderChartsView } from "./dashboard/views/charts.js";
@@ -172,6 +173,7 @@ async function requireSession(request, config) {
 }
 
 const SECTION_RENDERERS = {
+  overview: renderOverviewView,
   snapshot: renderSnapshotView,
   activity: renderActivityView,
   charts: renderChartsView,
@@ -184,6 +186,7 @@ const SECTION_RENDERERS = {
 };
 
 const SECTION_API_PATH = {
+  overview: "/api/overview",
   snapshot: "/api/snapshot",
   activity: "/api/activity",
   charts: "/api/charts",
@@ -390,7 +393,13 @@ export default {
       }
     }
 
+    // Landing page stays /dashboard/snapshot for now (plan.md doesn't
+    // explicitly call for changing it, and the prototype screenshots don't
+    // settle it either) -- Overview is added as a nav destination, not a
+    // redirect target, until that's a deliberate decision rather than a
+    // side effect of adding the page.
     if (pathname === "/dashboard") return redirect("/dashboard/snapshot");
+    if (pathname === "/dashboard/overview") return renderSection(request, env, config, "overview");
     if (pathname === "/dashboard/snapshot") return renderSection(request, env, config, "snapshot");
     if (pathname === "/dashboard/activity") return renderSection(request, env, config, "activity");
     if (pathname === "/dashboard/charts") return renderSection(request, env, config, "charts");
