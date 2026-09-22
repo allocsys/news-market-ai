@@ -612,11 +612,26 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    reaffirmed for Step 4 onward: no more direct pushes to `main`, every
    step gets its own branch + PR even though merge no longer needs a
    per-PR go-ahead.**
-4. **Verdict/decision card** -- the one bold move: rebuild how a single trade
-   decision renders (used on Overview's "latest decision" and throughout
-   Decisions) as the bull-left/bear-right/judge-beneath card described above,
-   sourced from the existing `opinions[]`/`debate`/`thesis`/`riskDecision`
-   fields -- no data-layer changes, render-only.
+4. **Verdict/decision card** -- DONE, PR #94, squash-merged to `main` @
+   `e2662e8` (2026-09-22, branched off `main`'s tip -- shipped correctly
+   through a branch + PR + green CI this time, per the process fix recorded
+   in Step 3's entry above). `helpers.js` got a new `verdictCard(d)`: bull
+   argument left (`--bull`, sage), bear argument right (`--bear`, brick),
+   divided by a single amber (`--accent`) spine, the judge's ruling beneath
+   in serif italic (`--font-display`) -- sourced entirely from existing
+   `opinions[]`/`debate`/`thesis` fields, render-only, no data-layer change.
+   `llmAnswerDetails` (Decisions table's collapsed "LLM reasoning" column)
+   now renders it automatically; Overview's latest-decision panel renders
+   it **unwrapped**, not behind a click -- the one card visible without
+   expanding anything, per the "one bold move" framing above. Also fixed
+   `.llm-agent-bull`/`.llm-agent-bear` (existing debate-line badges) to use
+   `--bull`/`--bear` instead of the generic success/danger tokens they'd
+   been borrowing -- Step 1's own comment flagged that pair as reserved
+   specifically for bull/bear semantics, and this is the first real
+   consumer. `--bull`/`--bear` are dark-theme-only as of Step 1, so every
+   new CSS rule that uses them carries a light-theme fallback
+   (`var(--bull, var(--color-success-text))` etc.) so nothing goes unstyled
+   before Step 6 ports the tokens properly.
 5. **Stat cards -> instrument readouts** -- restyle `statCard`/`miniStats`
    and the donut/gauge SVG generators in `helpers.js` (`donutChart`,
    `gaugeChart`) to match the new token system; used across Overview,
