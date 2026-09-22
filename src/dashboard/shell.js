@@ -879,6 +879,78 @@ const STYLE = `
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .bottom-nav .nav-index { display: none; }
+
+    /* ---- Mobile "More" bottom sheet (plan.md "Dashboard: Scoped UX Adoption" item 4) ----
+       Tapping "More" opens this in-page overlay instead of a full-page nav
+       to /dashboard/more (see renderMobileMoreSheet + renderBottomNav's
+       #mobile-more-trigger below). The href stays a real fallback for no-JS
+       clients; the click handler near the end of this script only
+       intercepts it once the sheet markup is confirmed present. */
+    .mobile-more-backdrop {
+      position: fixed; inset: 0; z-index: 150;
+      background: rgba(15, 23, 42, 0.45);
+      opacity: 0; visibility: hidden;
+      transition: opacity 200ms ease, visibility 0s linear 200ms;
+    }
+    .mobile-more-backdrop[data-open="true"] {
+      opacity: 1; visibility: visible;
+      transition: opacity 200ms ease, visibility 0s linear 0s;
+    }
+    .mobile-more-sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 151;
+      max-height: 80vh; overflow-y: auto;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-color);
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+      box-shadow: var(--shadow-pop);
+      padding: 0.5rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom, 0px));
+      transform: translateY(100%);
+      visibility: hidden;
+      transition: transform 220ms ease, visibility 0s linear 220ms;
+    }
+    .mobile-more-sheet[data-open="true"] {
+      transform: translateY(0);
+      visibility: visible;
+      transition: transform 220ms ease, visibility 0s linear 0s;
+    }
+    .mobile-more-sheet-handle {
+      width: 36px; height: 4px; border-radius: 2px;
+      background: var(--border-strong);
+      margin: 0.5rem auto 0.75rem;
+    }
+    .mobile-more-sheet-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 0.85rem;
+    }
+    .mobile-more-sheet-title {
+      font-family: var(--font-display); font-weight: 600; font-size: 1rem;
+      color: var(--text-main);
+    }
+    .mobile-more-sheet-close {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; border-radius: var(--radius-sm);
+      background: var(--bg-elevated); color: var(--text-muted);
+      border: 1px solid var(--border-color);
+      font-size: 1.25rem; line-height: 1; cursor: pointer; padding: 0;
+    }
+    .mobile-more-sheet-close:hover { color: var(--text-main); background: var(--bg-hover); }
+    .mobile-more-sheet-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;
+    }
+    .mobile-more-card {
+      display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
+      padding: 0.9rem 0.5rem;
+      background: var(--bg-elevated); border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      text-decoration: none; color: var(--text-muted);
+      font-size: 0.75rem; font-weight: 500; text-align: center;
+      min-height: 44px;
+      transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+    }
+    .mobile-more-card:hover, .mobile-more-card.active {
+      color: var(--text-main); background: var(--bg-hover); border-color: var(--border-strong);
+    }
+    .mobile-more-card .nav-icon { opacity: 1; display: inline-flex; }
   }
 
   /* ---- Mini stat rows (big number + label, used inside panels) ---- */
@@ -1021,6 +1093,39 @@ const MOBILE_NAV_SECTIONS = [
   ["more", "More", "10"],
 ];
 
+/**
+ * "More" sheet overlay (plan.md "Dashboard: Scoped UX Adoption" item 4).
+ * Renders the backdrop + slide-up panel that the mobile "More" tab opens
+ * in-page, instead of navigating to /dashboard/more. Built from the same
+ * NAV_SECTIONS list the desktop rail nav uses (see renderNav above), filtered
+ * to the ids NOT already pinned in MOBILE_NAV_SECTIONS -- so this list can
+ * never drift out of sync with the desktop nav or the bottom bar. Markup is
+ * hidden by default (the `hidden` attribute); the click-handling IIFE near
+ * the bottom of renderShell's <script> toggles it via a `data-open`
+ * attribute instead of removing `hidden` outright, so CSS can transition it
+ * in/out (see the '.mobile-more-sheet' rules under the mobile media query
+ * in STYLE).
+ */
+function renderMobileMoreSheet(activeSection, env) {
+  const overflowIds = ["activity", "charts", "llm", "backfill", "backtest"];
+  const cards = NAV_SECTIONS.filter(([id]) => overflowIds.includes(id))
+    .map(([id, label]) => {
+      const active = activeSection === id;
+      const icon = ICONS[id] ?? "";
+      return `<a href="${escapeHtml(navHref(id, env))}" class="mobile-more-card${active ? " active" : ""}"><span class="nav-icon">${icon}</span><span>${escapeHtml(label)}</span></a>`;
+    })
+    .join("");
+  return `<div class="mobile-more-backdrop" id="mobile-more-backdrop" hidden></div><div class="mobile-more-sheet" id="mobile-more-sheet" role="dialog" aria-modal="true" aria-label="All sections" hidden><div class="mobile-more-sheet-handle"></div><div class="mobile-more-sheet-header"><span class="mobile-more-sheet-title">All sections</span><button type="button" class="mobile-more-sheet-close" id="mobile-more-close" aria-label="Close">&times;</button></div><div class="mobile-more-sheet-grid">${cards}</div></div>`;
+}
+
+/**
+ * Mobile bottom nav is a curated subset of the most-used sections, with
+ * "More" as the overflow -- see MOBILE_NAV_SECTIONS above. The "More" tab
+ * (#mobile-more-trigger) keeps a real href to /dashboard/more as a no-JS
+ * fallback; the click-intercept + sheet-open logic lives in renderShell's
+ * inline script, which only wires up once it confirms #mobile-more-sheet is
+ * present in the DOM (see renderMobileMoreSheet above).
+ */
 function renderBottomNav(activeSection, env) {
   const moreIds = ["activity", "charts", "llm", "backfill", "backtest", "more"];
   const links = MOBILE_NAV_SECTIONS.map(([id, label, n]) => {
@@ -1029,9 +1134,10 @@ function renderBottomNav(activeSection, env) {
       active = true;
     }
     const icon = ICONS[id] ?? "";
-    return `<a href="${escapeHtml(navHref(id, env))}"${active ? ' class="active"' : ""}><span class="nav-icon">${icon}</span><span>${escapeHtml(label)}</span></a>`;
+    const moreAttrs = id === "more" ? ` id="mobile-more-trigger" aria-haspopup="dialog" aria-expanded="false"` : "";
+    return `<a href="${escapeHtml(navHref(id, env))}"${active ? ' class="active"' : ""}${moreAttrs}><span class="nav-icon">${icon}</span><span>${escapeHtml(label)}</span></a>`;
   }).join("");
-  return `<nav class="bottom-nav">${links}</nav>`;
+  return `<nav class="bottom-nav">${links}</nav>${renderMobileMoreSheet(activeSection, env)}`;
 }
 
 /**
@@ -1362,6 +1468,88 @@ ${themeColorMeta}
         });
       }
     }
+  })();
+
+  // ---- Mobile "More" bottom sheet (plan.md "Dashboard: Scoped UX Adoption" item 4) ----
+  // Intercepts a click on the mobile bottom nav's "More" tab and opens the
+  // in-page sheet (renderMobileMoreSheet's markup) instead of letting the
+  // browser navigate to the tab's real href ('/dashboard/more' -- kept as a
+  // no-JS fallback, see renderBottomNav). Only wires up once every element it
+  // needs is confirmed present, so a page that somehow renders without the
+  // sheet markup just falls back to the plain link with no JS error.
+  (function () {
+    var trigger = document.getElementById("mobile-more-trigger");
+    var sheet = document.getElementById("mobile-more-sheet");
+    var backdrop = document.getElementById("mobile-more-backdrop");
+    var closeBtn = document.getElementById("mobile-more-close");
+    if (!trigger || !sheet || !backdrop || !closeBtn) return;
+
+    var isOpen = false;
+
+    function focusables() {
+      return sheet.querySelectorAll('a[href], button:not([disabled])');
+    }
+
+    function open() {
+      if (isOpen) return;
+      isOpen = true;
+      sheet.hidden = false;
+      backdrop.hidden = false;
+      // Two rAFs so the browser paints the 'hidden' removal first, then the
+      // data-open transition actually animates instead of jumping straight
+      // to its end state.
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          sheet.setAttribute("data-open", "true");
+          backdrop.setAttribute("data-open", "true");
+        });
+      });
+      trigger.setAttribute("aria-expanded", "true");
+      document.body.style.overflow = "hidden";
+      var first = focusables()[0];
+      if (first) first.focus();
+      document.addEventListener("keydown", onKeydown);
+    }
+
+    function close() {
+      if (!isOpen) return;
+      isOpen = false;
+      sheet.removeAttribute("data-open");
+      backdrop.removeAttribute("data-open");
+      trigger.setAttribute("aria-expanded", "false");
+      document.body.style.overflow = "";
+      document.removeEventListener("keydown", onKeydown);
+      // Wait for the CSS transition (see '.mobile-more-sheet's 220ms rule in
+      // STYLE) before re-adding 'hidden', so it slides down instead of
+      // vanishing instantly.
+      setTimeout(function () {
+        if (!isOpen) { sheet.hidden = true; backdrop.hidden = true; }
+      }, 240);
+      trigger.focus();
+    }
+
+    function onKeydown(e) {
+      if (e.key === "Escape") { close(); return; }
+      if (e.key !== "Tab") return;
+      // Minimal focus trap: wrap Tab/Shift+Tab between the sheet's first and
+      // last focusable elements while open.
+      var items = focusables();
+      if (!items.length) return;
+      var first = items[0];
+      var last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
+    }
+
+    trigger.addEventListener("click", function (e) {
+      e.preventDefault();
+      if (isOpen) { close(); } else { open(); }
+    });
+    closeBtn.addEventListener("click", close);
+    backdrop.addEventListener("click", close);
   })();
 </script>
 </head>
