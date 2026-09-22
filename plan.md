@@ -225,8 +225,22 @@ transient failure. Model-first because 429/503 is usually per-model/per-key.
 **Cooldown:** KV `gemini:cooldown:<model>:<keyIndex>` with `expirationTtl`,
 written only on a rate-limit event; fails open if KV unreachable. The fallback
 list must differ from the requested model (a single-model cascade let one 503
-kill a whole backtest, fixed PR #41). `wrangler.llm.toml`: quick tier
-`3.1-flash-lite → 2.5-flash-lite → 2.5-flash`; deep tier prepends `3.5-flash`.
+kill a whole backtest, fixed PR #41).
+
+**Current model set (2026-09-22):** quick-tier primary `3.1-flash-lite`,
+deep-tier primary `3.6-flash`; shared fallback list `3.1-flash-lite,
+3.5-flash-lite, 3.7-flash, 3.8-flash, 3.6-flash, 3-flash-preview`
+(`wrangler.llm.toml`/`wrangler.backtest.toml`, `client.js` drops whichever
+entry equals the requested model). **Live incident (2026-09-22):** Google
+retired `gemini-2.5-flash` (404 "no longer available to new users") while it
+sat as the LAST fallback entry — a 404 is correctly treated as fatal-not-
+transient (not a cooldown), so a cascade that exhausted every other model
+died outright instead of pausing, killing a live backtest mid-run (AAPL
+2026-09-15). Fixed by dropping it from the list and bumping the deep-tier
+default (`config.js` too) off the same dead model to `3.6-flash`. **Lesson:**
+a fallback-list entry can go from "occasionally rate-limited" to
+"permanently retired" with no warning — revisit the list periodically rather
+than treating it as a fixed constant.
 
 **LLM call log** (`/dashboard/llm`): every Gemini prompt/response, including
 failures, logged to `llm_calls` (state schema, scoped by `env_run_id`). One
