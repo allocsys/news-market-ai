@@ -635,7 +635,10 @@ const STYLE = `
   .env-dropdown-failed > summary:hover { background: var(--bg-hover); color: var(--text-muted); }
   .env-dropdown-failed .env-option { opacity: 0.75; }
   @media (max-width: 767px) {
-    .env-dropdown-panel { left: auto; right: 0; width: max(260px, 80vw); }
+    .env-dropdown-panel {
+      left: 0; right: auto;
+      width: max(260px, 80vw); max-width: calc(100vw - 2rem);
+    }
   }
 
   .filter-form { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
