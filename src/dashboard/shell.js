@@ -277,6 +277,7 @@ const STYLE = `
     transition: color 150ms ease, background 150ms ease, transform 100ms ease;
   }
   .section-nav a:hover { color: var(--text-main); background: var(--bg-hover); }
+  .section-nav a:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .section-nav a:active { transform: scale(0.99); }
   .section-nav a.active {
     color: var(--text-main); font-weight: 600;
@@ -564,6 +565,7 @@ const STYLE = `
     transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
   }
   .pill:hover { border-color: var(--border-strong); color: var(--text-main); background: var(--bg-hover); }
+  .pill:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .pill-active {
     color: #fff; background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
     border-color: var(--accent); font-weight: 600;
@@ -656,6 +658,7 @@ const STYLE = `
     transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
   }
   .auto-refresh-toggle:hover { border-color: var(--border-strong); color: var(--text-main); background: var(--bg-hover); }
+  .auto-refresh-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .auto-refresh-toggle[data-on="true"] { color: var(--color-success-text); border-color: rgba(16, 185, 129, 0.35); }
   .auto-refresh-dot {
     width: 6px; height: 6px; border-radius: 50%;
@@ -951,6 +954,7 @@ const STYLE = `
     .bottom-nav a:hover, .bottom-nav a.active {
       color: var(--text-main);
     }
+    .bottom-nav a:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
     .bottom-nav a.active {
       color: var(--accent-bright); font-weight: 600;
       border-top-color: var(--accent-bright);
@@ -1030,6 +1034,7 @@ const STYLE = `
     .mobile-more-card:hover, .mobile-more-card.active {
       color: var(--text-main); background: var(--bg-hover); border-color: var(--border-strong);
     }
+    .mobile-more-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
     .mobile-more-card .nav-icon { opacity: 1; display: inline-flex; }
   }
 
@@ -1063,6 +1068,10 @@ const STYLE = `
     padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
   }
+  /* .search-palette-input below sets outline:none with no other focus style of
+     its own (it's borderless/transparent by design, to sit flush in the
+     palette); this ring on the row is its keyboard-focus indicator instead. */
+  .search-palette-input-row:focus-within { box-shadow: inset 0 0 0 2px var(--focus-ring); }
   .search-palette-input-row .nav-icon { color: var(--text-subtle); }
   .search-palette-input {
     flex: 1; min-width: 0; border: none; outline: none; background: transparent;
@@ -1083,6 +1092,7 @@ const STYLE = `
     cursor: pointer;
   }
   .search-result:hover, .search-result.active { background: var(--bg-hover); }
+  .search-result:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .search-empty { padding: 1.25rem 1rem; color: var(--text-subtle); font-size: 0.8125rem; text-align: center; }
   @media (max-width: 767px) {
     .search-palette { top: 6vh; width: 92vw; max-height: 78vh; }
