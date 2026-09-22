@@ -29,6 +29,7 @@ import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix } from "./helpers.js";
 // and section headers without an external icon font. Each is a single path or
 // small group of paths using stroke="currentColor" so the link's color cascades.
 const ICONS = {
+  overview: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>`,
   snapshot: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="M13.4 10.6 19 5"/><path d="M19 5h-3"/><path d="M19 5v3"/><path d="M10.6 13.4 5 19"/><path d="M5 19h3"/><path d="M5 19v-3"/><path d="M13.4 13.4 19 19"/><path d="M19 19v-3"/><path d="M19 19h-3"/><path d="M10.6 10.6 5 5"/><path d="M5 5h3"/><path d="M5 5v3"/></svg>`,
   activity: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><rect x="7" y="11" width="3" height="6" rx="0.5"/><rect x="12" y="7" width="3" height="10" rx="0.5"/><rect x="17" y="13" width="3" height="4" rx="0.5"/></svg>`,
   charts: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 14 3-4 3 3 4-6"/></svg>`,
@@ -1052,6 +1053,7 @@ const STYLE = `
 `;
 
 export const NAV_SECTIONS = [
+  ["overview", "Overview", "OV"],
   ["snapshot", "Snapshot", "SN"],
   ["activity", "Activity", "AC"],
   ["charts", "Charts", "CH"],
@@ -1107,7 +1109,12 @@ const MOBILE_NAV_SECTIONS = [
  * in STYLE).
  */
 function renderMobileMoreSheet(activeSection, env) {
-  const overflowIds = ["activity", "charts", "llm", "backfill", "backtest"];
+  // Overview rides in the 'More' overflow rather than one of the six pinned
+  // MOBILE_NAV_SECTIONS slots (below) -- it is new and unproven as a
+  // most-used mobile destination, unlike snapshot/decisions/positions/
+  // pipeline/health, which this pinning was tuned around. Revisit once it's
+  // clear operators actually reach for it from a phone.
+  const overflowIds = ["overview", "activity", "charts", "llm", "backfill", "backtest"];
   const cards = NAV_SECTIONS.filter(([id]) => overflowIds.includes(id))
     .map(([id, label]) => {
       const active = activeSection === id;
@@ -1127,7 +1134,7 @@ function renderMobileMoreSheet(activeSection, env) {
  * present in the DOM (see renderMobileMoreSheet above).
  */
 function renderBottomNav(activeSection, env) {
-  const moreIds = ["activity", "charts", "llm", "backfill", "backtest", "more"];
+  const moreIds = ["overview", "activity", "charts", "llm", "backfill", "backtest", "more"];
   const links = MOBILE_NAV_SECTIONS.map(([id, label, n]) => {
     let active = activeSection === id;
     if (id === "more" && moreIds.includes(activeSection)) {
