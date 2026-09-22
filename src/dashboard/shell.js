@@ -485,8 +485,8 @@ const STYLE = `
     margin-right: 0.5rem; vertical-align: middle;
     border: 1px solid var(--border-color);
   }
-  .llm-agent-bull { background: var(--bull-bg, rgba(16, 185, 129, 0.18)); color: var(--bull, var(--color-success-text)); border-color: var(--bull, rgba(16, 185, 129, 0.3)); }
-  .llm-agent-bear { background: var(--bear-bg, rgba(239, 68, 68, 0.18)); color: var(--bear, var(--color-danger-text)); border-color: var(--bear, rgba(239, 68, 68, 0.3)); }
+  .llm-agent-bull { background: var(--bull-bg); color: var(--bull); border-color: var(--bull); }
+  .llm-agent-bear { background: var(--bear-bg); color: var(--bear); border-color: var(--bear); }
   .llm-justification { color: var(--text-muted); font-style: italic; }
 
   /* ---- Verdict card: bull/bear debate + judge's ruling (plan.md Step 4, 2026-09-22) ----
@@ -496,9 +496,7 @@ const STYLE = `
      (--bear, brick), a single amber spine (--accent) between them, the
      judge's ruling beneath in serif italic (--font-display) like an actual
      finding. See helpers.js#verdictCard for the two call sites. --bull/--bear
-     fall back to the generic success/danger tokens so light theme (Step 6
-     work, not yet ported) still renders something legible instead of unstyled
-     text -- same deferral pattern as .llm-agent-bull/-bear above. */
+     are now defined in both themes (plan.md Step 6, light theme parity). */
   .verdict-card { display: flex; flex-direction: column; gap: 1rem; }
   .verdict-analysts { display: flex; flex-direction: column; gap: 0.5rem; }
   .verdict-debate {
@@ -507,13 +505,13 @@ const STYLE = `
   }
   .verdict-spine { width: 2px; background: var(--accent); opacity: 0.55; align-self: stretch; }
   .verdict-side { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.85rem 1rem; border-radius: var(--radius-md); }
-  .verdict-bull { background: var(--bull-bg, var(--color-success-bg)); border-left: 2px solid var(--bull, var(--color-success-text)); }
-  .verdict-bear { background: var(--bear-bg, var(--color-danger-bg)); border-left: 2px solid var(--bear, var(--color-danger-text)); }
+  .verdict-bull { background: var(--bull-bg); border-left: 2px solid var(--bull); }
+  .verdict-bear { background: var(--bear-bg); border-left: 2px solid var(--bear); }
   .verdict-side-label {
     font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
   }
-  .verdict-bull .verdict-side-label { color: var(--bull, var(--color-success-text)); }
-  .verdict-bear .verdict-side-label { color: var(--bear, var(--color-danger-text)); }
+  .verdict-bull .verdict-side-label { color: var(--bull); }
+  .verdict-bear .verdict-side-label { color: var(--bear); }
   .verdict-argument { font-size: 0.8125rem; line-height: 1.55; color: var(--text-main); margin: 0; }
   .verdict-reasoning { font-size: 0.75rem; color: var(--text-muted); font-style: italic; margin: 0; }
   .verdict-ruling {
@@ -528,8 +526,8 @@ const STYLE = `
     .verdict-debate { grid-template-columns: 1fr; gap: 0.75rem; }
     .verdict-spine { display: none; }
     .verdict-bull, .verdict-bear { border-left: none; border-top: 2px solid; }
-    .verdict-bull { border-top-color: var(--bull, var(--color-success-text)); }
-    .verdict-bear { border-top-color: var(--bear, var(--color-danger-text)); }
+    .verdict-bull { border-top-color: var(--bull); }
+    .verdict-bear { border-top-color: var(--bear); }
   }
 
   tr.stale-row td { color: var(--color-warning-text); }
