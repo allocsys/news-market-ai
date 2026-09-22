@@ -393,6 +393,24 @@ export default {
       }
     }
 
+    // Ticker-search palette's data source (shell.js's search script fetches
+    // this on open). Same proxy shape as /dashboard/jobs/ above: session-gated
+    // here (this Worker is the only public one), raw JSON forwarded from
+    // backend's GET /api/tickers -- not rendered through renderSection since
+    // nothing here becomes a page, just a fetch a client script consumes.
+    if (pathname === "/dashboard/tickers") {
+      const auth = await requireSession(request, config);
+      if (auth.redirect === "__disabled__") return jsonResponse({ error: "dashboard is not configured" }, { status: 503 });
+      if (auth.redirect) return jsonResponse({ error: "unauthorized" }, { status: 401 });
+      const envParam = parseEnvParam(url.searchParams);
+      try {
+        const data = await fetchBackendJson(env, `/api/tickers${envSuffix(envParam)}`);
+        return jsonResponse(data);
+      } catch (err) {
+        return jsonResponse({ error: err.message }, { status: err.status || 500 });
+      }
+    }
+
     // Landing page stays /dashboard/snapshot for now (plan.md doesn't
     // explicitly call for changing it, and the prototype screenshots don't
     // settle it either) -- Overview is added as a nav destination, not a
