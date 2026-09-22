@@ -574,12 +574,23 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    `main` @ `55cbbbf` (2026-09-22). Also covered `src/login.js` (found via
    `search_code`, not in the original scope -- it keeps its own standalone
    palette). Light theme and general status colors intentionally untouched,
-   per plan. Step 2 is on `dashboard-redesign/step-2-nav-reorg`.
-2. **Navigation reorg** -- IN PROGRESS, `dashboard-redesign/step-2-nav-reorg`
-   (branched off `main` @ `55cbbbf`). Collapse 12 sections to the 5 groups above in the
-   desktop rail, tablet icon rail, and mobile bottom-nav/more-sheet; drop
-   numbered badges; decide + implement the URL/routing scheme for
-   merged/renamed sections (old links must not 404 -- redirect or alias).
+   per plan.
+2. **Navigation reorg** -- DONE, PR #93, squash-merged to `main` @ `f258b36`
+   (2026-09-22, branched off `main` @ `55cbbbf`). `shell.js`'s new
+   `NAV_GROUPS` collapses the 12 flat sections into 5 groups (Overview /
+   Book / Research / Operations / Backtest) across the desktop rail, tablet
+   icon rail, and mobile bottom-nav + More sheet; numbered badges dropped.
+   **Nav-level grouping only -- no page or data merging**; every section
+   keeps its own route/renderer/data fetch (full merging, if ever done, is
+   separate future scope, not part of this step). **Routing decision
+   (owner, 2026-09-22):** old per-section URLs (`/dashboard/snapshot` etc.)
+   are completely unchanged -- nothing renamed, so nothing needed a redirect
+   or could 404. New `/dashboard/book`, `/dashboard/research`,
+   `/dashboard/operations` landing routes were added, each 302ing to its
+   group's first section, so the group itself is a single click too.
+   **Merge timing confirmed (owner, 2026-09-22): auto-merge on green CI**,
+   for this step and going forward -- no more per-PR go-ahead needed. Step 3
+   is on `dashboard-redesign/step-3-ledger-tables`.
 3. **Ledger table redesign** -- restyle `positionsTable`, `decisionsTable`,
    `checkpointsTable`, and the LLM-calls list in `helpers.js` to the
    hairline-ruled ledger treatment; keep the existing `< 768px` stacked-card
@@ -603,9 +614,9 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    new motion, and color contrast on both themes before calling the redesign
    done.
 
-**Status:** Step 1 done (PR #92, merged). Step 2 in progress. Merge timing
-(auto-merge-if-green vs. wait for explicit per-PR go-ahead) still not
-confirmed -- ask before merging each step's PR even when CI is green.
+**Status:** Steps 1-2 done and merged (PR #92, PR #93). Step 3 (ledger table
+redesign) starting on `dashboard-redesign/step-3-ledger-tables`. Merge timing
+confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
