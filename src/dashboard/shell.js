@@ -565,6 +565,24 @@ const STYLE = `
     background: var(--color-success-text);
     box-shadow: 0 0 6px var(--color-success-strong);
   }
+  .auto-refresh-toggle {
+    font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 500;
+    color: var(--text-muted); background: var(--bg-surface);
+    border: 1px solid var(--border-color); border-radius: 999px;
+    padding: 0.3rem 0.65rem; cursor: pointer; appearance: none;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+  }
+  .auto-refresh-toggle:hover { border-color: var(--border-strong); color: var(--text-main); background: var(--bg-hover); }
+  .auto-refresh-toggle[data-on="true"] { color: var(--color-success-text); border-color: rgba(16, 185, 129, 0.35); }
+  .auto-refresh-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-subtle); flex-shrink: 0;
+    transition: background 150ms ease, box-shadow 150ms ease;
+  }
+  .auto-refresh-toggle[data-on="true"] .auto-refresh-dot {
+    background: var(--color-success-text); box-shadow: 0 0 6px var(--color-success-strong);
+  }
 
   /* ---- Summary stat cards ---- */
   .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.75rem; }
@@ -1044,10 +1062,18 @@ function renderMobileHeader(sessionUsername) {
   </div>`;
 }
 
+/**
+ * Per-page toolbar: the existing manual "Refresh" link, plus a client-side
+ * auto-refresh toggle (plan.md "Dashboard: Scoped UX Adoption" item 1). The
+ * toggle's on/off state is a per-browser localStorage preference (see the
+ * inline script in renderShell below) -- same "no D1/session-table change"
+ * rule as the theme toggle, this isn't per-user state either.
+ */
 function renderPageToolbar(refreshHref) {
   if (!refreshHref) return "";
   return `<div class="page-toolbar">
         <span class="page-toolbar-updated">Loaded ${fmtTime(new Date().toISOString())}</span>
+        <button type="button" class="auto-refresh-toggle" id="auto-refresh-toggle" data-on="true" title="Toggle auto-refresh"><span class="auto-refresh-dot"></span><span id="auto-refresh-toggle-label">Auto-refresh on</span></button>
         <a href="${escapeHtml(refreshHref)}" class="btn btn-secondary" title="Reload this page with the latest data"><span aria-hidden="true">\u21bb</span> Refresh</a>
       </div>`;
 }
@@ -1117,6 +1143,108 @@ ${themeColorMeta}
     try { localStorage.setItem("theme", next); } catch (e) {}
     document.cookie = "theme=" + next + "; path=/; max-age=31536000; SameSite=Lax";
   }
+
+  // ---- Auto-refresh (plan.md "Dashboard: Scoped UX Adoption" item 1) ----
+  // Re-fetches this exact page's own URL on an interval and swaps in the
+  // freshly-rendered #dashboard-main content, so the SAME server-side
+  // template-string renderers (src/dashboard/views/*.js, reached via
+  // dashboard-worker.js's renderSection) that built the page on first load
+  // build every refresh too -- no renderer logic is duplicated client-side,
+  // and no new backend route is needed (this is the exact request a manual
+  // click of "Refresh" already makes).
+  //
+  // Only wired up when both #dashboard-main and the toggle button exist --
+  // i.e. section-view pages that pass refreshHref (see renderPageToolbar).
+  // Confirm pages, /dashboard/more, and the llm/backtest-detail permalinks
+  // render neither and get no auto-refresh.
+  //
+  // Paused while the tab is hidden (visibilitychange) to avoid burning
+  // background D1 reads against the free-tier budget (plan.md "Free-plan
+  // budgets"), and paused on any tick where a #active-job progress panel is
+  // present (src/dashboard/views/status.js) -- that panel already polls
+  // itself every 1.5s via DOM references captured at parse time, and an
+  // innerHTML swap here would detach those references mid-poll and freeze
+  // the bar. That job's own poller calls location.reload() on completion,
+  // which naturally resumes normal auto-refresh afterward.
+  //
+  // KNOWN LIMITATION: swapping #dashboard-main's innerHTML discards any
+  // in-progress, not-yet-submitted state inside it -- an open <details> (LLM
+  // answer disclosure), a half-filled filter-form, exact scroll position on
+  // a very different-height page. Acceptable for a first cut; revisit if it
+  // proves annoying in practice.
+  (function () {
+    var INTERVAL_MS = 30000;
+    var main = document.getElementById("dashboard-main");
+    var toggle = document.getElementById("auto-refresh-toggle");
+    var toggleLabel = document.getElementById("auto-refresh-toggle-label");
+    if (!main || !toggle) return;
+
+    var STORAGE_KEY = "autoRefreshOn";
+    var on = true;
+    try {
+      if (localStorage.getItem(STORAGE_KEY) === "false") on = false;
+    } catch (e) {}
+
+    var timer = null;
+    var inFlight = false;
+
+    function setToggleUi() {
+      toggle.setAttribute("data-on", String(on));
+      if (toggleLabel) toggleLabel.textContent = on ? "Auto-refresh on" : "Auto-refresh off";
+    }
+
+    function schedule() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (!on || document.visibilityState === "hidden") return;
+      timer = setTimeout(tick, INTERVAL_MS);
+    }
+
+    function tick() {
+      if (!on || document.visibilityState === "hidden" || inFlight || document.getElementById("active-job")) {
+        schedule();
+        return;
+      }
+      inFlight = true;
+      fetch(window.location.href, { credentials: "same-origin" })
+        .then(function (res) {
+          if (!res.ok) throw new Error("status " + res.status);
+          return res.text();
+        })
+        .then(function (html) {
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var freshMain = doc.getElementById("dashboard-main");
+          if (freshMain) main.innerHTML = freshMain.innerHTML;
+          var freshStamp = doc.querySelector(".page-toolbar-updated");
+          var stamp = document.querySelector(".page-toolbar-updated");
+          if (freshStamp && stamp) stamp.textContent = freshStamp.textContent;
+        })
+        .catch(function () {
+          // A transient failure just tries again next tick -- never show a
+          // scary error over a momentary network blip, same rule
+          // status.js's job poller (above) follows.
+        })
+        .then(function () {
+          inFlight = false;
+          schedule();
+        });
+    }
+
+    toggle.addEventListener("click", function () {
+      on = !on;
+      try { localStorage.setItem(STORAGE_KEY, String(on)); } catch (e) {}
+      setToggleUi();
+      schedule();
+    });
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") schedule();
+      else if (timer) { clearTimeout(timer); timer = null; }
+    });
+
+    setToggleUi();
+    schedule();
+  })();
 </script>
 </head>
 <body>
@@ -1134,7 +1262,7 @@ ${themeColorMeta}
       <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}<div class="rail-meta-row">theme ${renderThemeToggle()}</div></div>
     </aside>
     <div class="content">
-      <main>
+      <main id="dashboard-main">
       ${renderPageToolbar(refreshHref)}
       ${bodyHtml}
       </main>
