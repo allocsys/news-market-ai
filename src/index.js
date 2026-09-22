@@ -48,6 +48,9 @@ import { loadConfig } from "./config.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
 import { SimClock } from "./backtest/simClock.js";
+import { cancelBacktestRun, getBacktestRun } from "./storage/sim_registry.js";
+import { cleanupCancelledRun, cleanupOldRuns } from "./backtest/cleanup.js";
+import { BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import {
   handleApiSnapshotRoute,
   handleApiActivityRoute,
@@ -309,6 +312,87 @@ export default {
       } catch (err) {
         console.error("backtest enqueue failed", { id, tickers, message: err.message });
         return jsonResponse({ error: "backtest enqueue failed", message: err.message }, { status: 500 });
+      }
+    }
+
+    // POST /backtest/:id/cancel -- terminate a RUNNING backtest. Cooperative,
+    // not preemptive: the backtest Worker's own invocation (if one is active
+    // right now, mid-part) keeps running until it next checks in -- there is
+    // no way to kill a live Workers invocation from here. What this DOES do,
+    // synchronously, before responding:
+    //   1. Atomically flip backtest_runs to 'cancelled' (sim_registry.js#
+    //      cancelBacktestRun, guarded on `status = 'running'` so a race with
+    //      the run finishing/failing on its own can't resurrect it).
+    //   2. Mark the run's job_progress row 'cancelled' too (RunStore#
+    //      cancelJob), so the dashboard's active-job lookup (which filters on
+    //      status IN ('queued','running')) stops showing it immediately.
+    //   3. Best-effort delete the run's partial state-table data
+    //      (cleanupCancelledRun -- same chunked, bounded shape as a failed
+    //      run's cleanup), right here rather than waiting for the run's own
+    //      queued continuation message to arrive (which could be minutes away
+    //      during a Gemini-outage pause -- see backtest-worker.js's own
+    //      redelivery check, which retries this cleanup defensively if it was
+    //      cut short here).
+    // Step 1 alone is what actually stops the run: the backtest Worker's
+    // redelivery check (backtest-worker.js) acks without re-running once it
+    // sees this row is no longer 'running', however long that message was
+    // already queued for.
+    if (pathname.startsWith("/backtest/") && pathname.endsWith("/cancel") && request.method === "POST") {
+      const id = pathname.slice("/backtest/".length, pathname.length - "/cancel".length);
+      if (!BACKTEST_ID_RE.test(id)) {
+        return jsonResponse({ error: "backtest run id is malformed" }, { status: 400 });
+      }
+
+      const finishedAt = new Date().toISOString();
+      let cancelled;
+      try {
+        cancelled = await cancelBacktestRun(env.SIM_DB, { id, finishedAt });
+      } catch (err) {
+        console.error("backtest cancel failed", { id, message: err.message });
+        return jsonResponse({ error: "backtest cancel failed", message: err.message }, { status: 500 });
+      }
+
+      if (!cancelled) {
+        // Either unknown, or already terminal -- tell the two apart rather than
+        // giving a flat "couldn't cancel" for both.
+        const row = await getBacktestRun(env.SIM_DB, id).catch(() => null);
+        if (!row) return jsonResponse({ error: "backtest run not found" }, { status: 404 });
+        return jsonResponse({ error: `backtest run is already ${row.status}, not running` }, { status: 409 });
+      }
+
+      const store = new RunStore(env.SIM_DB, id);
+      await store.cancelJob({ id, detail: "Cancelled by operator" }).catch((err) => {
+        console.warn("backtest cancel: job_progress update failed (non-fatal)", { id, message: err.message });
+      });
+      const cleanup = await cleanupCancelledRun(env.SIM_DB, store, id);
+      console.log("backtest run cancelled", { id, cleanup });
+      return jsonResponse({ cancelled: true, id, cleanup });
+    }
+
+    // POST /backtest/cleanup?olderThanDays=&maxRuns= -- bulk-delete the
+    // per-trade state-table data of old, already-TERMINAL runs (complete,
+    // failed or cancelled -- never a running one). Operator-triggered only
+    // (the dashboard's "Clean up old runs" button on /dashboard/backtest),
+    // never automatic -- see backtest/cleanup.js#cleanupOldRuns's own header
+    // for the tradeoff (registry row + result summary kept, trade-level
+    // detail deleted) and why this doesn't conflict with plan.md's "complete
+    // runs are never auto-deleted" rule for the FAILED-run cleanup path.
+    // Bounded per call (maxRuns, capped below so one request can't queue up
+    // an unbounded amount of D1 write work) -- calling it again later picks
+    // up wherever the previous call left off.
+    if (pathname === "/backtest/cleanup" && request.method === "POST") {
+      const olderThanDaysRaw = Number(url.searchParams.get("olderThanDays"));
+      const olderThanDays = Number.isFinite(olderThanDaysRaw) && olderThanDaysRaw > 0 ? olderThanDaysRaw : 30;
+      const maxRunsRaw = Number(url.searchParams.get("maxRuns"));
+      const maxRuns = Number.isInteger(maxRunsRaw) && maxRunsRaw > 0 ? Math.min(maxRunsRaw, 20) : 5;
+
+      try {
+        const result = await cleanupOldRuns(env.SIM_DB, { olderThanDays, maxRuns });
+        console.log("backtest cleanupOldRuns finished", result);
+        return jsonResponse({ accepted: true, ...result });
+      } catch (err) {
+        console.error("backtest cleanup failed", { message: err.message });
+        return jsonResponse({ error: "backtest cleanup failed", message: err.message }, { status: 500 });
       }
     }
 
