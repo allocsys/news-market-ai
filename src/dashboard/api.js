@@ -26,6 +26,7 @@ import {
   getPositionsData,
   getPipelineData,
   getOverviewData,
+  getTickersData,
   getBacktestRunsData,
   getBacktestRunDetailData,
   getLlmCallsData,
@@ -96,6 +97,14 @@ export async function handleApiPipelineRoute(request, env, config) {
   if (auth.redirect) return unauthorized();
   const envParam = parseEnvParam(new URL(request.url).searchParams);
   return jsonResponse(await getPipelineData(env, { env: envParam }));
+}
+
+/** GET /api/tickers -- `{ tickers, error, resolvedEnv, envError }`, the ticker-search palette's universe (data.js#getTickersData). Env-aware like snapshot/positions/pipeline: `?env=` picks live or a backtest. */
+export async function handleApiTickersRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const envParam = parseEnvParam(new URL(request.url).searchParams);
+  return jsonResponse(await getTickersData(env, { env: envParam }));
 }
 
 export async function handleApiBacktestRunsRoute(request, env, config) {
