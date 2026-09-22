@@ -896,6 +896,24 @@ export class RunStore {
       .run();
   }
 
+  /**
+   * Marks a job 'cancelled' -- the operator-terminated counterpart to
+   * failJob, written by POST /backtest/:id/cancel (src/index.js) right after
+   * sim_registry.js#cancelBacktestRun flips the backtest_runs row. Keeps the
+   * last reported percent/phase, same as failJob, so the dashboard can show
+   * how far it got before being stopped. An UNGUARDED UPDATE (unlike
+   * updateJobProgress's `status IN ('queued','running')` guard): the cancel
+   * route is itself already gated on cancelBacktestRun's atomic
+   * running-only transition, so by the time this runs the job is known to
+   * have been in flight -- no separate status check needed here.
+   */
+  async cancelJob({ id, detail = null, now = nowIso() }) {
+    await this.db
+      .prepare(`UPDATE job_progress SET status = 'cancelled', detail = ?, updated_at = ?, finished_at = ? WHERE run_id = ? AND id = ?`)
+      .bind(truncate(detail, MAX_DETAIL_LENGTH), now, now, this.runId, id)
+      .run();
+  }
+
   /** One job, with JSON columns parsed and keys camelCased for the API. Null if there's no such id in this run. */
   async getJob(id) {
     const row = await this.db.prepare(`SELECT ${JOB_COLUMNS} FROM job_progress WHERE run_id = ? AND id = ?`).bind(this.runId, id).first();

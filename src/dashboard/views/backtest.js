@@ -24,6 +24,29 @@ export function backtestTriggerForm() {
   </form>`;
 }
 
+/**
+ * "Clean up old runs" form -- POST /backtest/cleanup (src/index.js), bulk-
+ * deletes the trade-level data of old, already-finished (complete/failed/
+ * cancelled) runs, keeping each run's registry row and result summary. A
+ * still-running run is never touched by this -- use "Terminate run" (see
+ * helpers.js#terminateRunForm) for one of those instead. Defaults to 30
+ * days and lets the operator override it. Confirmed client-side since the
+ * per-trade detail (the "View trade timeline" page) can't be recovered
+ * afterward for whatever it catches.
+ */
+function backtestCleanupForm() {
+  return `<form method="post" action="/backtest/cleanup" class="filter-bar" onsubmit="return confirm('Delete trade-level data for terminal (complete/failed/cancelled) runs older than the chosen window? Each run\u2019s summary result is kept, but its trade timeline is deleted and can\u2019t be recovered.');">
+    <div class="filter-group">
+      <span class="filter-label">Older than (days)</span>
+      <input class="filter-form" type="number" name="olderThanDays" value="30" min="1" step="1" style="width:6rem">
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">&nbsp;</span>
+      <button type="submit" class="btn btn-destructive">Clean up old runs</button>
+    </div>
+  </form>`;
+}
+
 export function renderBacktestView({ backtestRuns, error }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
@@ -33,6 +56,14 @@ export function renderBacktestView({ backtestRuns, error }) {
       <div class="panel-header"><span class="panel-title">Trigger a new run</span></div>
       <div class="panel-body">
         ${backtestTriggerForm()}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:1.5rem">
+      <div class="panel-header"><span class="panel-title">Clean up old runs</span></div>
+      <div class="panel-body">
+        <p class="note">Frees D1 storage by deleting positions/decisions/LLM-call data for old finished runs. Each run's headline result and its "running"/"complete"/"failed"/"cancelled" status stay in the Recent runs list below -- only the per-trade timeline is removed, and only for runs that already finished. A currently-running run is never touched here; terminate it from its own entry below instead.</p>
+        ${backtestCleanupForm()}
       </div>
     </div>
 

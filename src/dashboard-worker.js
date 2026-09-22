@@ -294,7 +294,7 @@ async function renderBacktestDetail(request, env, config, id) {
     // backtest job's run id IS its SIM_DB environment -- see status.js#jobPollUrl).
     // A failed lookup is non-fatal and leaves detail.activeJob unset so the view
     // falls back to the static "Still running..." text.
-    if (detail.run && detail.run.status !== "complete" && detail.run.status !== "failed") {
+    if (detail.run && detail.run.status !== "complete" && detail.run.status !== "failed" && detail.run.status !== "cancelled") {
       try {
         const job = await fetchBackendJson(env, `/api/jobs/${encodeURIComponent(id)}?env=${encodeURIComponent(id)}`);
         detail.activeJob = job;
@@ -551,6 +551,41 @@ export default {
           backLabel: "Backfill",
           jobId: body.id,
         }),
+      });
+    }
+
+    // POST /backtest/:id/cancel -- terminate a running backtest (the
+    // dashboard's "Terminate run" button, see dashboard/views/status.js and
+    // helpers.js#backtestRunsList). Same session-gate-then-forward shape as
+    // handleTriggerRoute's other callers, but the backend path carries the
+    // run id, so it's built per-request rather than passed as a constant.
+    // No query/form params to validate -- the id in the URL IS the payload.
+    if (pathname.startsWith("/backtest/") && pathname.endsWith("/cancel") && request.method === "POST") {
+      const id = pathname.slice("/backtest/".length, pathname.length - "/cancel".length);
+      if (!BACKTEST_ID_RE.test(id)) {
+        return jsonResponse({ error: "backtest run id is malformed" }, { status: 400 });
+      }
+      return handleTriggerRoute(request, env, config, {
+        backendPath: `/backtest/${encodeURIComponent(id)}/cancel`,
+        buildQuery: () => ({ params: {}, activeSection: "backtest" }),
+        formSubmitAccepted: () => ({}),
+      });
+    }
+
+    // POST /backtest/cleanup -- bulk-delete old terminal runs' trade-level
+    // data (the dashboard's "Clean up old runs" button, see
+    // dashboard/views/backtest.js). `olderThanDays` is the only field the
+    // form submits; backend defaults it (and maxRuns) if omitted.
+    if (pathname === "/backtest/cleanup" && request.method === "POST") {
+      return handleTriggerRoute(request, env, config, {
+        backendPath: "/backtest/cleanup",
+        buildQuery: (searchParams, fromForm) => {
+          const olderThanDays = searchParams.get("olderThanDays") ?? fromForm("olderThanDays");
+          const params = {};
+          if (olderThanDays) params.olderThanDays = olderThanDays;
+          return { params, activeSection: "backtest" };
+        },
+        formSubmitAccepted: () => ({}),
       });
     }
 
