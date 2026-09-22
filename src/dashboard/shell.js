@@ -1254,7 +1254,7 @@ ${themeColorMeta}
   // ---- CSV/JSON export (plan.md "Dashboard: Scoped UX Adoption" item 4) ----
   // Reads the JSON this page's SSR render already fetched from backend's
   // /api/* route, embedded server-side into #dashboard-export-data (see
-  // dashboard-worker.js#renderSection's `exportData` -- exactly the `data`
+  // dashboard-worker.js#renderSection's 'exportData' -- exactly the 'data'
   // object each render*View already consumed, not a second fetch). No new
   // backend route, no server-side file generation.
   (function () {
