@@ -1650,7 +1650,7 @@ ${themeColorMeta}
   // /dashboard/llm?llmTicker=<ticker> -- see renderSearchPalette's own header
   // for why that page and not a new one. Same backdrop/panel open-close
   // choreography as the mobile More sheet above (two rAFs so the transition
-  // actually animates, `hidden` re-added only after the CSS transition ends).
+  // actually animates, 'hidden' re-added only after the CSS transition ends).
   (function () {
     var triggers = document.querySelectorAll(".search-trigger");
     var backdrop = document.getElementById("search-backdrop");
