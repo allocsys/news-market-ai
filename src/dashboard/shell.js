@@ -137,13 +137,13 @@ const STYLE = `
     --text-subtle: #7c879c;
     --text-inverse: #f1f5f9;
 
-    --accent: #2f6fed;
-    --accent-hover: #2158c9;
-    --accent-bright: #4d8bff;
-    --accent-deep: #1d4ed8;
-    --accent-subtle: rgba(47, 111, 237, 0.08);
-    --accent-glow: rgba(77, 139, 255, 0.16);
-    --focus-ring: #2f6fed;
+    --accent: #a85d1e;
+    --accent-hover: #8f4e17;
+    --accent-bright: #c17828;
+    --accent-deep: #7a4515;
+    --accent-subtle: rgba(168, 93, 30, 0.08);
+    --accent-glow: rgba(193, 120, 40, 0.16);
+    --focus-ring: #a85d1e;
 
     --color-success-bg: rgba(16, 185, 129, 0.10);
     --color-success-text: #0a8f63;
@@ -154,16 +154,29 @@ const STYLE = `
     --color-warning-bg: rgba(245, 158, 11, 0.12);
     --color-warning-text: #9a6208;
     --color-warning-strong: #f59e0b;
-    --color-info-bg: rgba(47, 111, 237, 0.10);
-    --color-info-text: #2f6fed;
+    --color-info-bg: rgba(168, 93, 30, 0.10);
+    --color-info-text: #a85d1e;
 
-    /* Chart palette -- 6-step categorical scale used by the donut/gauge helpers. */
-    --chart-1: #2f6fed;
-    --chart-2: #0a8f63;
-    --chart-3: #b3790b;
-    --chart-4: #d43f3f;
-    --chart-5: #7c5cd1;
-    --chart-6: #7c879c;
+    /* Bull/bear semantics (plan.md Step 1 introduces these for dark mode;
+       Step 6 ports them here). Darkened from DARK_VARS' --bull/--bear the
+       same way --color-success-text etc. are darker than their dark-mode
+       counterparts, for contrast on a white surface. Kept separate from
+       the general success/danger tokens above -- same reasoning as DARK_VARS. */
+    --bull: #3f7d57;
+    --bull-bg: rgba(78, 155, 107, 0.10);
+    --bear: #a33f2e;
+    --bear-bg: rgba(193, 82, 63, 0.10);
+
+    /* Chart palette -- 6-step categorical scale used by the donut/gauge helpers.
+       chart-1 now tracks --accent (amber, was blue); chart-2/chart-4 lean
+       toward the bull-sage/bear-brick hues so the two themes read as the
+       same palette; chart-3/5/6 re-tuned to stay distinct from those. */
+    --chart-1: #a85d1e;
+    --chart-2: #3f7d57;
+    --chart-3: #8a6a17;
+    --chart-4: #a33f2e;
+    --chart-5: #6b4f8c;
+    --chart-6: #6b7688;
 
     /* Translucent surface used by the mobile header / bottom nav backdrop-filter
        blur, and the subtle top-of-page glow -- both theme-dependent, so they're
