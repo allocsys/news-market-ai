@@ -45,7 +45,7 @@ import { loadConfig } from "./config.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
-import { cleanupFailedRun } from "./backtest/cleanup.js";
+import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
 import { SubrequestBudget, countedD1, countedKv, cooldownMemoKv } from "./backtest/subrequestBudget.js";
 
 /** Per-message backtest context: SIM_DB read/write under this run's own id, INPUTS_DB read-only. Mirrors llm-worker.js's buildLiveContext shape. */
@@ -99,9 +99,21 @@ export default {
           // whole walk from scratch and could overwrite the 'failed' row; a
           // complete run has nothing left to do. A 'running' row (a run whose
           // Worker died mid-walk) still proceeds and resumes from checkpoints.
+          // 'cancelled' (POST /backtest/:id/cancel, src/index.js) is terminal the
+          // same way: this message was already in flight (queued with a delay,
+          // see the 'continue' branch below) when the operator cancelled, so it
+          // arrives here after the fact. The cancel route already did a
+          // best-effort cleanup synchronously; retrying it here too (never
+          // throws, cheap no-op once the data is already gone) is defense in
+          // depth against that first pass having been cut short by its own
+          // maxChunks.
           const existing = await runEnv.SIM_DB.prepare(`SELECT status FROM backtest_runs WHERE id = ?`).bind(id).first();
-          if (existing?.status === "complete" || existing?.status === "failed") {
-            console.log("backtest job already finished, acking without re-running", { id, status: existing.status });
+          if (existing?.status === "complete" || existing?.status === "failed" || existing?.status === "cancelled") {
+            console.log("backtest job already finished/cancelled, acking without re-running", { id, status: existing.status });
+            if (existing.status === "cancelled") {
+              const cleanup = await cleanupCancelledRun(runEnv.SIM_DB, ctx.store, id);
+              console.log("backtest cancelled-run cleanup retry on redelivery", { id, cleanup });
+            }
             message.ack();
             continue;
           }
