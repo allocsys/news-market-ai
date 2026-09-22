@@ -155,7 +155,8 @@ test("getStaleTerminalBacktestRuns respects limit", async () => {
 
 test("getStaleTerminalBacktestRuns returns nothing when no run is old enough", async () => {
   const db = createTestD1([STATE_DIR, SIM_DIR]);
-  await registryRow(db, "bt-1", "failed", { startedAt: "2026-01-04T00:00:00.000Z" });
+  const daysAgo = (n) => new Date(Date.now() - n * 24 * 3600 * 1000).toISOString();
+  await registryRow(db, "bt-1", "failed", { startedAt: daysAgo(1) });
   const stale = await getStaleTerminalBacktestRuns(db, { olderThanDays: 30, limit: 10 });
   assert.deepEqual(stale, []);
 });
@@ -330,7 +331,7 @@ test("cleanupOldRuns sweeps stale terminal runs, deletes their state-table data,
   assert.equal(await count(db, "positions", "recent-failed"), 2);
 });
 
-test("cleanupOldRuns respects maxRuns per call and is safe to re-call to finish a larger backlog", async () => {
+test("cleanupOldRuns respects maxRuns per call (caps candidates to the oldest N), and re-calling with the same maxRuns is a safe no-op (idempotent) rather than advancing to the next batch", async () => {
   const db = createTestD1([STATE_DIR, SIM_DIR]);
   const now = Date.now();
   const daysAgo = (n) => new Date(now - n * 24 * 3600 * 1000).toISOString();
@@ -345,10 +346,21 @@ test("cleanupOldRuns respects maxRuns per call and is safe to re-call to finish 
   assert.deepEqual(first.processed.map((p) => p.id), ["a", "b"], "oldest first");
   assert.equal(await count(db, "positions", "a"), 0);
   assert.equal(await count(db, "positions", "b"), 0);
-  assert.equal(await count(db, "positions", "c"), 1, "not yet touched");
+  assert.equal(await count(db, "positions", "c"), 1, "not yet touched -- outside this call's maxRuns window");
 
+  // The registry status is unchanged by cleanup (rows are kept, not marked
+  // "cleaned"), so getStaleTerminalBacktestRuns' oldest-first candidate
+  // selection re-picks the SAME oldest runs (a, b) again -- re-calling with
+  // an unchanged maxRuns does not "advance" through the backlog. It is
+  // still safe: a/b's data is already gone, so this is a cheap idempotent
+  // no-op (deleted: 0, complete: true), not a re-delete or an error.
   const second = await cleanupOldRuns(db, { olderThanDays: 30, maxRuns: 2 });
-  assert.deepEqual(second.processed.map((p) => p.id), ["c", "d"]);
+  assert.deepEqual(second.processed.map((p) => p.id), ["a", "b"]);
+  assert.ok(second.processed.every((p) => p.deleted === 0 && p.complete === true));
+
+  // Reaching c/d in a later call requires a wider maxRuns that covers them.
+  const third = await cleanupOldRuns(db, { olderThanDays: 30, maxRuns: 4 });
+  assert.deepEqual(third.processed.map((p) => p.id), ["a", "b", "c", "d"]);
   assert.equal(await count(db, "positions", "c"), 0);
   assert.equal(await count(db, "positions", "d"), 0);
 });
