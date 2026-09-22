@@ -11,7 +11,7 @@
 //     no heavy shadows (Cloudflare Worker HTML stays print-friendly).
 //   - All animations honor prefers-reduced-motion.
 
-import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix } from "./helpers.js";
+import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix, themeToggle } from "./helpers.js";
 
 // ---- Inline SVG icon set (Lucide-style stroke icons, 20x20, currentColor) ----
 // Stored as raw <svg> strings so they can be dropped into nav links, badges,
@@ -35,29 +35,122 @@ const ICONS = {
 
 const STYLE = `
   :root {
-    color-scheme: dark;
+    color-scheme: light;
 
-    /* Elevation ladder -- each step is a slightly lighter shade of the same
-       navy hue, so layered surfaces read as depth instead of as separate colors. */
+    --bg-base: #f8fafc;
+    --bg-surface: #ffffff;
+    --bg-elevated: #ffffff;
+    --bg-hover: #f1f5f9;
+    --bg-active: #e2e8f0;
+
+    --border-color: #e2e8f0;
+    --border-subtle: #f1f5f9;
+    --border-strong: #cbd5e1;
+
+    --text-main: #0b1020;
+    --text-muted: #475569;
+    --text-subtle: #64748b;
+    --text-inverse: #ffffff;
+
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-bright: #3b82f6;
+    --accent-deep: #1e40af;
+    --accent-subtle: rgba(37, 99, 235, 0.1);
+    --accent-glow: rgba(59, 130, 246, 0.18);
+    --focus-ring: #2563eb;
+
+    --color-success-bg: rgba(5, 150, 105, 0.1);
+    --color-success-text: #059669;
+    --color-success-strong: #059669;
+    --color-danger-bg: rgba(220, 38, 38, 0.1);
+    --color-danger-text: #dc2626;
+    --color-danger-strong: #dc2626;
+    --color-warning-bg: rgba(217, 119, 6, 0.1);
+    --color-warning-text: #d97706;
+    --color-warning-strong: #d97706;
+    --color-info-bg: rgba(37, 99, 235, 0.1);
+    --color-info-text: #2563eb;
+
+    --chart-1: #2563eb;
+    --chart-2: #059669;
+    --chart-3: #d97706;
+    --chart-4: #dc2626;
+    --chart-5: #9333ea;
+    --chart-6: #0891b2;
+
+    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-display: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 18px;
+
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1);
+    --shadow-pop: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  }
+
+  [data-theme="dark"],
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg-base: #070b14;
+      --bg-surface: #0d1320;
+      --bg-elevated: #131b2e;
+      --bg-hover: #1a2238;
+      --bg-active: #1e2940;
+      --border-color: #1f2a44;
+      --border-subtle: #161e30;
+      --border-strong: #2c3a5a;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-subtle: #64748b;
+      --text-inverse: #0b1020;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --accent-bright: #60a5fa;
+      --accent-deep: #1d4ed8;
+      --accent-subtle: rgba(59, 130, 246, 0.14);
+      --accent-glow: rgba(96, 165, 250, 0.22);
+      --focus-ring: #60a5fa;
+      --color-success-bg: rgba(16, 185, 129, 0.12);
+      --color-success-text: #34d399;
+      --color-success-strong: #10b981;
+      --color-danger-bg: rgba(239, 68, 68, 0.12);
+      --color-danger-text: #f87171;
+      --color-danger-strong: #ef4444;
+      --color-warning-bg: rgba(245, 158, 11, 0.12);
+      --color-warning-text: #fbbf24;
+      --color-warning-strong: #f59e0b;
+      --color-info-bg: rgba(59, 130, 246, 0.12);
+      --color-info-text: #60a5fa;
+      --chart-1: #60a5fa;
+      --chart-2: #34d399;
+      --chart-3: #fbbf24;
+      --chart-4: #f87171;
+      --chart-5: #a78bfa;
+      --chart-6: #94a3b8;
+      --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+      --shadow-pop: 0 12px 32px -8px rgba(0, 0, 0, 0.55);
+    }
+  }
+
+  [data-theme="dark"] {
+    color-scheme: dark;
     --bg-base: #070b14;
     --bg-surface: #0d1320;
     --bg-elevated: #131b2e;
     --bg-hover: #1a2238;
     --bg-active: #1e2940;
-
-    /* Hairline borders, deliberately faint -- the elevation ladder carries
-       the separation, borders just keep edges crisp at 1x device pixel. */
     --border-color: #1f2a44;
     --border-subtle: #161e30;
     --border-strong: #2c3a5a;
-
     --text-main: #f1f5f9;
     --text-muted: #94a3b8;
     --text-subtle: #64748b;
     --text-inverse: #0b1020;
-
-    /* Accent: blue, with a lighter step (--accent-bright) for highlights and
-       darker steps (--accent-hover, --accent-deep) for hover/pressed states. */
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-bright: #60a5fa;
@@ -65,7 +158,6 @@ const STYLE = `
     --accent-subtle: rgba(59, 130, 246, 0.14);
     --accent-glow: rgba(96, 165, 250, 0.22);
     --focus-ring: #60a5fa;
-
     --color-success-bg: rgba(16, 185, 129, 0.12);
     --color-success-text: #34d399;
     --color-success-strong: #10b981;
@@ -77,24 +169,12 @@ const STYLE = `
     --color-warning-strong: #f59e0b;
     --color-info-bg: rgba(59, 130, 246, 0.12);
     --color-info-text: #60a5fa;
-
-    /* Chart palette -- 6-step categorical scale used by the donut/gauge helpers. */
     --chart-1: #60a5fa;
     --chart-2: #34d399;
     --chart-3: #fbbf24;
     --chart-4: #f87171;
     --chart-5: #a78bfa;
     --chart-6: #94a3b8;
-
-    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-display: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-
-    --radius-sm: 6px;
-    --radius-md: 10px;
-    --radius-lg: 14px;
-    --radius-xl: 18px;
-
     --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 12px 32px -8px rgba(0, 0, 0, 0.55);
   }
@@ -108,14 +188,33 @@ const STYLE = `
     background: var(--bg-base);
     /* Subtle radial glow at the top so the page doesn't read as a flat slab.
        Fixed so it stays put on scroll, like a desk lamp. */
-    background-image: radial-gradient(900px 480px at 12% -8%, rgba(59, 130, 246, 0.08), transparent 70%),
-                      radial-gradient(700px 360px at 88% 0%, rgba(167, 139, 250, 0.05), transparent 70%);
+    background-image: radial-gradient(900px 480px at 12% -8%, rgba(37, 99, 235, 0.04), transparent 70%),
+                      radial-gradient(700px 360px at 88% 0%, rgba(147, 51, 234, 0.03), transparent 70%);
     background-attachment: fixed;
     color: var(--text-main);
     line-height: 1.5;
     font-size: 0.875rem;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Theme toggle button */
+  .theme-toggle-btn {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    font-family: var(--font-sans); font-size: 0.75rem; font-weight: 500;
+    color: var(--text-muted); background: var(--bg-surface);
+    border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+    padding: 0.35rem 0.65rem; cursor: pointer; width: 100%; justify-content: flex-start;
+    transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+  }
+  .theme-toggle-btn:hover { color: var(--text-main); border-color: var(--border-strong); background: var(--bg-hover); }
+  .theme-icon-dark { display: inline; }
+  .theme-icon-light { display: none; }
+  [data-theme="dark"] .theme-icon-dark { display: none; }
+  [data-theme="dark"] .theme-icon-light { display: inline; }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) .theme-icon-dark { display: none; }
+    html:not([data-theme="light"]) .theme-icon-light { display: inline; }
   }
 
   .shell { display: flex; min-height: 100vh; }
@@ -189,7 +288,6 @@ const STYLE = `
   .section-nav a.active .nav-index { color: var(--accent-bright); }
 
   .rail-meta {
-    margin-top: auto;
     font-size: 0.6875rem; line-height: 1.7; color: var(--text-subtle);
     border-top: 1px solid var(--border-color); padding: 1rem 0.5rem 0.25rem;
   }
@@ -917,7 +1015,10 @@ function renderMobileHeader(sessionUsername) {
         <span class="wordmark-sub">operations ledger</span>
       </span>
     </div>
-    <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}</div>
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+      ${themeToggle()}
+      <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}</div>
+    </div>
   </div>`;
 }
 
@@ -929,9 +1030,9 @@ function renderPageToolbar(refreshHref) {
       </div>`;
 }
 
-export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref, env = "live" }) {
+export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref, env = "live", theme = null }) {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en"${theme ? ` data-theme="${escapeHtml(theme)}"` : ""}>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -948,6 +1049,23 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
     document.getElementById(toId).value = to.toISOString().slice(0, 10);
     document.getElementById(fromId).value = from.toISOString().slice(0, 10);
   }
+  function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme');
+    let next = 'dark';
+    if (current === 'dark') {
+      next = 'light';
+    } else if (current === 'light') {
+      next = 'dark';
+    } else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      next = prefersDark ? 'light' : 'dark';
+    }
+    document.documentElement.setAttribute('data-theme', next);
+    try {
+      localStorage.setItem('theme', next);
+    } catch (e) {}
+    document.cookie = `theme=${next}; path=/; max-age=31536000; SameSite=Lax`;
+  }
 </script>
 </head>
 <body>
@@ -962,7 +1080,10 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
         </span>
       </div>
       ${renderNav(activeSection, env)}
-      <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}</div>
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 0.75rem;">
+        <div>${themeToggle()}</div>
+        <div class="rail-meta" style="margin-top:0; border-top: 1px solid var(--border-color); padding: 1rem 0.5rem 0.25rem;">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}</div>
+      </div>
     </aside>
     <div class="content">
       <main>
