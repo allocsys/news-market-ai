@@ -307,22 +307,30 @@ export function backtestResultTable(result) {
   <p class="note">${scoring}Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>`;
 }
 
-export const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed" };
+export const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed", cancelled: "cancelled" };
+
+/** "Terminate run" form for a running backtest row -- POST /backtest/:id/cancel (src/index.js via dashboard-worker.js), confirmed client-side since it deletes the run's partial data. Used by backtestRunsList below and by status.js's active-job panels. */
+export function terminateRunForm(id) {
+  return `<form method="post" action="/backtest/${escapeHtml(encodeURIComponent(id))}/cancel" onsubmit="return confirm('Terminate this backtest run? Its partial progress and data will be deleted; this can\u2019t be undone.');">
+    <button type="submit" class="btn btn-destructive">Terminate run</button>
+  </form>`;
+}
 
 export function backtestRunsList(runs) {
   if (runs.length === 0) return `<p class="empty">No backtest runs yet -- use the form above to trigger one.</p>`;
   return runs
     .map((r) => {
-      const semanticStatus = r.status === "complete" ? "approved" : r.status === "failed" ? "rejected" : "neutral";
+      const semanticStatus = r.status === "complete" ? "approved" : r.status === "failed" || r.status === "cancelled" ? "rejected" : "neutral";
       const summary = `<span class="ticker">${escapeHtml(r.tickers.join(", "))}</span> &middot; ${fmtTime(r.testStart)} &rarr; ${fmtTime(r.testEnd)} &middot; ${statusBadge(semanticStatus, BACKTEST_STATUS_LABEL[r.status] ?? r.status)}`;
       const body = r.status === "complete"
         ? backtestResultTable(r.result)
-        : r.status === "failed"
-          ? `<p class="empty">${escapeHtml(r.error ?? "failed with no recorded error message")}</p>`
+        : r.status === "failed" || r.status === "cancelled"
+          ? `<p class="empty">${escapeHtml(r.error ?? (r.status === "cancelled" ? "cancelled, no further detail recorded" : "failed with no recorded error message"))}</p>`
           : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
       const timelineLink = r.status === "complete" ? `<p class="note"><a href="/dashboard/backtest/${escapeHtml(encodeURIComponent(r.id))}">View trade timeline &rarr;</a></p>` : "";
       const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery({ ...parseLlmParams(null), env: r.id }, { llmJob: r.id })}">View every LLM call this run made &rarr;</a></p>`;
-      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${timelineLink}${llmLink}${body}</div></details>`;
+      const terminate = r.status === "running" ? terminateRunForm(r.id) : "";
+      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${timelineLink}${llmLink}${body}${terminate}</div></details>`;
     })
     .join("\n");
 }
