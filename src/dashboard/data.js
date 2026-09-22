@@ -7,7 +7,7 @@
 import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.js";
 import { getRecentBacktestRuns, getBacktestRun, getActiveBacktestRunId } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
-import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT } from "./helpers.js";
+import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT, STALE_INGESTION_HOURS, PIPELINE_STALE_HOURS } from "./helpers.js";
 import { computeRealizedReturn } from "../shared/returns.js";
 
 /**
