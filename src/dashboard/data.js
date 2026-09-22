@@ -198,6 +198,79 @@ export async function getPipelineData(env, params = {}) {
   return { checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error, resolvedEnv, envError };
 }
 
+/**
+ * Composes getSnapshotData + getHealthData + getPipelineData + the single
+ * latest trade decision (getDecisionsData with decisionLimit 1) for the
+ * Overview command-center page -- REUSES those four functions rather than
+ * re-reading D1 (plan.md "Dashboard: Scoped UX Adoption" item 5). The
+ * prototype's mock data assumed two computed fields the real rows don't
+ * carry, added here (not in the renderer, so the view stays a pure template):
+ *   - health.<source>.fresh: same staleness rule healthRow() already applies
+ *     (helpers.js), lastIngestedAt vs STALE_INGESTION_HOURS (26h) -- missing
+ *     lastIngestedAt counts as stale, same default healthRow uses.
+ *   - checkpoint.status ('ok' | 'stale') and checkpoint.lastStageLabel (the
+ *     raw `stage` value humanized, e.g. "exit_check" -> "Exit Check"), from
+ *     `updated_at` vs PIPELINE_STALE_HOURS (2h -- see helpers.js's own
+ *     comment on why this is a much tighter window than ingestion staleness).
+ *     There is no per-checkpoint failure signal recorded anywhere upstream,
+ *     so 'error' is not produced despite being a plausible third status --
+ *     only 'ok'/'stale' are real today; a checkpoint that simply stops
+ *     appearing is what a crashed run looks like here (see pipeline.js's
+ *     own note).
+ *
+ * resolveEnv is invoked three times internally (once inside each of
+ * getSnapshotData/getPipelineData/getDecisionsData) rather than once shared --
+ * a small registry-lookup duplication, not a duplicated PANEL read, which is
+ * what this function's contract actually promises. resolvedEnv/envError are
+ * read off getSnapshotData's result; all three calls resolve identically for
+ * a given `params.env` so this is just picking one, not preferring it.
+ *
+ * Each composed section keeps its OWN error (snapshotError/healthError/
+ * pipelineError/latestDecisionError) rather than folding into one shared
+ * error the way getSnapshotData's stat-grid does -- Overview's panels are
+ * independent widgets on one page (alert strip, stat cards, pipeline pulse,
+ * latest-decision panel), so one panel's failure shouldn't blank the others.
+ */
+export async function getOverviewData(env, params) {
+  const [snapshot, health, pipelineResult, latestDecisionResult] = await Promise.all([
+    getSnapshotData(env, params),
+    getHealthData(env),
+    getPipelineData(env, params),
+    getDecisionsData(env, { ...params, decisionLimit: 1, decisionStatus: "all" }),
+  ]);
+
+  const now = Date.now();
+  const withFresh = (stat) => ({
+    ...stat,
+    fresh: Boolean(stat?.lastIngestedAt) && now - new Date(stat.lastIngestedAt).getTime() <= STALE_INGESTION_HOURS * 3600 * 1000,
+  });
+  const healthWithFresh = health.health
+    ? { news: withFresh(health.health.news), priceBars: withFresh(health.health.priceBars), fundamentals: withFresh(health.health.fundamentals) }
+    : null;
+
+  const humanizeStage = (stage) => (stage ? String(stage).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Unknown");
+  const checkpointsWithStatus = pipelineResult.checkpoints.map((c) => {
+    const stale = !c.updated_at || now - new Date(c.updated_at).getTime() > PIPELINE_STALE_HOURS * 3600 * 1000;
+    return { ...c, status: stale ? "stale" : "ok", lastStageLabel: humanizeStage(c.stage) };
+  });
+
+  return {
+    openPositions: snapshot.openPositions,
+    closedPositions: snapshot.closedPositions,
+    decisionStats: snapshot.decisionStats,
+    totalExposurePct: snapshot.totalExposurePct,
+    snapshotError: snapshot.error,
+    health: healthWithFresh,
+    healthError: health.error,
+    checkpoints: checkpointsWithStatus,
+    pipelineError: pipelineResult.error,
+    latestDecision: latestDecisionResult.decisions[0] ?? null,
+    latestDecisionError: latestDecisionResult.error,
+    resolvedEnv: snapshot.resolvedEnv,
+    envError: snapshot.envError ?? pipelineResult.envError ?? latestDecisionResult.envError ?? null,
+  };
+}
+
 export async function getBacktestRunsData(env) {
   // The registry lives on SIM_DB (M3); the dashboard API never writes, so the handle is read-only.
   const backtestRunsResult = await safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 10 }));
