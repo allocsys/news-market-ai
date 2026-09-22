@@ -483,20 +483,29 @@ visual system; this replaces the visual system itself, plus reorganizes
 navigation). Branch: `dashboard-redesign/polish-reorg`, cut from `main` @
 `83bc8e4`.
 
-**Working rules -- corrected 2026-09-22, supersedes the "each step its own PR
-off this branch's tip, CI is the real test" text this section originally
-shipped with:** that original plan doesn't hold up against how CI is actually
-wired -- `.github/workflows/deploy.yml`'s `pull_request` trigger is scoped to
+**Working rules -- corrected a second time, 2026-09-22:** the first correction
+(below, kept for the record) decided to batch everything behind this branch
+with no per-step CI, given `main`-only CI. Owner then explicitly chose the
+other option: **ship incrementally.** Each step goes to `main` directly as
+its own real PR (so it gets actual `test`-job CI coverage), not batched
+behind `dashboard-redesign/polish-reorg`. Step 1's two commits (`99c3ce9`
+shell.js, `3ab368d` login.js) are being PR'd into `main` now, from this same
+branch, as the first incremental step -- meaning Step 1's changes go live
+(dark-theme tokens + fonts only, no layout change) before the rest of the
+redesign exists. **For Step 2 onward:** branch fresh off `main`'s new tip
+after each merge, not off this now-partially-merged branch, to avoid a messy
+re-diff against already-merged history. Merge timing (auto-merge-if-green vs.
+wait for explicit per-PR go-ahead) is **not yet confirmed** for this plan --
+ask before merging Step 1's PR even if CI is green, same caution as the
+original UI-overhaul plan's unconfirmed carry-over.
+
+*(First correction, superseded above, kept for the record: that original plan
+doesn't hold up against how CI is actually wired --
+`.github/workflows/deploy.yml`'s `pull_request` trigger is scoped to
 `branches: [main]` only, so a PR targeting this feature branch never runs the
-`test` job at all; the only way to get real CI coverage per step would be to
-target every step's PR at `main` directly, i.e. ship each step to production
-as it lands, which is a materially different (and higher-risk) plan than
-"batch the redesign behind a feature branch, land it once done." Decided
-(2026-09-22): **no per-step CI.** Commits land directly on
-`dashboard-redesign/polish-reorg` (not sub-branches/PRs), reviewed manually
-step by step; the whole redesign gets tested together and goes through CI for
-the first time as **one PR from this branch into `main`** once all 7 steps
-are done and manually reviewed.
+`test` job at all. Decided 2026-09-22 (v1): no per-step CI, batch behind this
+branch, one PR to `main` at the end. Reversed same day (v2, above) once the
+owner weighed in.)*
 
 **Near-miss incident (2026-09-22, no production impact):** triggered
 `workflow_dispatch` on this branch to try to get a CI signal for Step 1's
