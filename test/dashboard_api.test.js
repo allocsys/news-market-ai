@@ -57,6 +57,7 @@ async function apiFetch(path, env, { cookie } = {}) {
 // without pinning to exact values, which an empty database can't
 // meaningfully provide anyway.
 const API_ROUTES = [
+  { path: "/api/overview", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "snapshotError", "health", "healthError", "checkpoints", "pipelineError", "latestDecision", "latestDecisionError", "resolvedEnv", "envError"] },
   { path: "/api/snapshot", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "error", "resolvedEnv", "envError"] },
   { path: "/api/activity", keys: ["decisionStats", "error", "resolvedEnv", "envError"] },
   { path: "/api/charts", keys: ["priceBarsByTicker", "error", "resolvedEnv", "envError"] },
@@ -97,6 +98,10 @@ for (const { path } of API_ROUTES) {
     assert.deepEqual(Object.keys(body).sort(), API_ROUTES.find((r) => r.path === path).keys.sort());
     // Empty real DBs: every panel's query must actually RUN (a wrong table or
     // column would surface as that panel's error, not as an empty list).
+    // /api/overview's `health` is a nested object, not a top-level `*error`
+    // key, so this loop -- which only walks TOP-LEVEL keys -- can't see a
+    // health-panel failure; healthError (top-level, on the same response)
+    // already covers that case identically to every other route here.
     for (const [key, value] of Object.entries(body)) {
       if (/error$/i.test(key)) assert.equal(value, null, `${path}: ${key} should be null on empty real databases`);
     }

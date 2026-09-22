@@ -38,6 +38,11 @@ export const POSITIONS_LIMIT_OPTIONS = [10, 25, 50, 100];
 export const RANGE_PRESET_DAYS = [7, 14, 30, 90];
 export const STALE_INGESTION_HOURS = 26;
 export const PRICE_CHART_TICKER_LIMIT = 8;
+// Pipeline checkpoints update on the */15 cron, far more often than the daily-ish
+// ingestion sources STALE_INGESTION_HOURS was tuned for -- a ticker whose last
+// checkpoint hasn't moved in 2h most likely has a stuck/crashed run, not just a
+// quiet news day. Used by data.js#getOverviewData to flag a checkpoint "stale".
+export const PIPELINE_STALE_HOURS = 2;
 
 function pickFromOptions(raw, options, fallback) {
   const parsed = Number.isNaN(Number(raw)) ? raw : Number(raw);
@@ -61,7 +66,7 @@ export function parseEnvParam(searchParams) {
 }
 
 /** Sections whose data is scoped by `?env=` (the environment selector shows on these, and the nav keeps the chosen env across them). Charts/health/backfill/backtest/more stay env-unaware: price bars and ingestion health are shared market data, and the last three are about launching/listing runs, not viewing one. */
-export const ENV_SECTIONS = ["snapshot", "activity", "decisions", "positions", "pipeline", "llm"];
+export const ENV_SECTIONS = ["overview", "snapshot", "activity", "decisions", "positions", "pipeline", "llm"];
 
 /** "?env=<id>" for a non-live environment, "" for live -- for links that must carry the selected environment along. `env` is already vetted by parseEnvParam/resolveEnv (BACKTEST_ID_RE), so nothing here needs more than encoding. */
 export function envSuffix(env) {

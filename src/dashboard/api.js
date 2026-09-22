@@ -25,6 +25,7 @@ import {
   getDecisionsData,
   getPositionsData,
   getPipelineData,
+  getOverviewData,
   getBacktestRunsData,
   getBacktestRunDetailData,
   getLlmCallsData,
@@ -46,6 +47,14 @@ export async function handleApiSnapshotRoute(request, env, config) {
   if (auth.redirect) return unauthorized();
   const params = parseDashboardParams(new URL(request.url).searchParams);
   return jsonResponse(await getSnapshotData(env, params));
+}
+
+/** GET /api/overview -- the Overview command-center page's composed data (data.js#getOverviewData). Shares parseDashboardParams with snapshot/activity/positions since it composes getSnapshotData/getPipelineData/getDecisionsData, all of which read the same param set. */
+export async function handleApiOverviewRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const params = parseDashboardParams(new URL(request.url).searchParams);
+  return jsonResponse(await getOverviewData(env, params));
 }
 
 export async function handleApiActivityRoute(request, env, config) {
