@@ -271,6 +271,19 @@ export async function getOverviewData(env, params) {
   };
 }
 
+/**
+ * Ticker universe for the search palette (plan.md item 6): every ticker this
+ * environment has data for (RunStore#listKnownTickers -- derived from D1,
+ * not a live price/sparkline feed, see that method's own header). Same
+ * resolveEnv-then-store shape as getPipelineData; no live quote data rides
+ * along, so there is nothing else to compose here.
+ */
+export async function getTickersData(env, params) {
+  const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
+  const tickersResult = await safe(() => store.listKnownTickers());
+  return { tickers: tickersResult.data ?? [], error: tickersResult.error, resolvedEnv, envError };
+}
+
 export async function getBacktestRunsData(env) {
   // The registry lives on SIM_DB (M3); the dashboard API never writes, so the handle is read-only.
   const backtestRunsResult = await safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 10 }));

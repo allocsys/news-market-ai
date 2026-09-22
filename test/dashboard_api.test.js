@@ -65,6 +65,7 @@ const API_ROUTES = [
   { path: "/api/decisions", keys: ["decisions", "error", "resolvedEnv", "envError"] },
   { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct", "resolvedEnv", "envError"] },
   { path: "/api/pipeline", keys: ["checkpoints", "error", "resolvedEnv", "envError"] },
+  { path: "/api/tickers", keys: ["tickers", "error", "resolvedEnv", "envError"] },
   { path: "/api/backtest-runs", keys: ["backtestRuns", "error"] },
 ];
 

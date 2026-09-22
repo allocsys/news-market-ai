@@ -45,6 +45,7 @@ const ICONS = {
   logout: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>`,
   sun: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`,
   moon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>`,
 };
 
 // Every dark-theme value lives once, here, and is reused verbatim by both the
@@ -954,6 +955,61 @@ const STYLE = `
     .mobile-more-card .nav-icon { opacity: 1; display: inline-flex; }
   }
 
+  /* ---- Ticker search palette (plan.md "Dashboard: Scoped UX Adoption" item 6) ----
+     Unlike the mobile More sheet, this overlay isn't gated to the mobile media
+     query -- a command palette is equally useful with a keyboard on desktop
+     (Ctrl/Cmd+K), so the same centered-overlay markup renders at every
+     breakpoint instead of a bottom-sheet-on-mobile / dropdown-on-desktop split. */
+  .search-backdrop {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(15, 23, 42, 0.45);
+    opacity: 0; visibility: hidden;
+    transition: opacity 200ms ease, visibility 0s linear 200ms;
+  }
+  .search-backdrop[data-open="true"] { opacity: 1; visibility: visible; transition: opacity 200ms ease, visibility 0s linear 0s; }
+  .search-palette {
+    position: fixed; top: 12vh; left: 50%; transform: translateX(-50%);
+    z-index: 201; width: min(480px, 92vw); max-height: 60vh;
+    display: flex; flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    overflow: hidden;
+    opacity: 0; visibility: hidden;
+    transition: opacity 180ms ease, visibility 0s linear 180ms;
+  }
+  .search-palette[data-open="true"] { opacity: 1; visibility: visible; transition: opacity 180ms ease, visibility 0s linear 0s; }
+  .search-palette-input-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+  .search-palette-input-row .nav-icon { color: var(--text-subtle); }
+  .search-palette-input {
+    flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+    font-size: 0.9375rem; color: var(--text-main); font-family: var(--font-sans);
+  }
+  .search-palette-input::placeholder { color: var(--text-subtle); }
+  .search-palette-kbd {
+    font-family: var(--font-mono); font-size: 0.6875rem; color: var(--text-subtle);
+    background: var(--bg-elevated); border: 1px solid var(--border-color);
+    border-radius: 4px; padding: 0.1rem 0.4rem; flex-shrink: 0;
+  }
+  .search-palette-results { overflow-y: auto; padding: 0.4rem; }
+  .search-result {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.6rem 0.75rem; border-radius: var(--radius-sm);
+    color: var(--text-main); text-decoration: none;
+    font-family: var(--font-mono); font-weight: 600; letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+  .search-result:hover, .search-result.active { background: var(--bg-hover); }
+  .search-empty { padding: 1.25rem 1rem; color: var(--text-subtle); font-size: 0.8125rem; text-align: center; }
+  @media (max-width: 767px) {
+    .search-palette { top: 6vh; width: 92vw; max-height: 78vh; }
+  }
+
   /* ---- Mini stat rows (big number + label, used inside panels) ---- */
   .mini-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 1rem 1.5rem; }
   .mini-stat { min-width: 0; }
@@ -1162,6 +1218,30 @@ function renderThemeToggle() {
   return `<button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark theme" title="Toggle theme"><span class="icon-sun">${ICONS.sun}</span><span class="icon-moon">${ICONS.moon}</span></button>`;
 }
 
+/** Icon-button trigger, same shape as renderThemeToggle -- opens the search palette (see renderSearchPalette). One instance goes in the desktop rail, one in the mobile header; both share the `.search-trigger` class the client script binds to. */
+function renderSearchTrigger() {
+  return `<button type="button" class="theme-toggle search-trigger" aria-label="Search tickers" title="Search tickers (Ctrl/Cmd+K)">${ICONS.search}</button>`;
+}
+
+/**
+ * Global ticker-search palette (plan.md "Dashboard: Scoped UX Adoption" item 6).
+ * Markup only -- rendered once per page (see renderShell), opened by either
+ * renderSearchTrigger button or the Ctrl/Cmd+K shortcut, both wired in
+ * renderShell's inline script below. The ticker universe is fetched lazily
+ * on first open from GET /dashboard/tickers (a thin proxy to backend's
+ * GET /api/tickers, data.js#getTickersData -- RunStore#listKnownTickers,
+ * DISTINCT ticker across positions/trade_decisions/pipeline_checkpoints for
+ * the resolved environment), not embedded server-side, so a page load never
+ * pays for a query nobody may use. Selecting a result navigates to
+ * /dashboard/llm?llmTicker=<ticker> -- the one existing page that already
+ * knows how to filter by ticker (helpers.js#parseLlmParams) -- rather than
+ * inventing a new per-ticker page; a dedicated ticker detail view is out of
+ * scope for "land the search-by-known-ticker version first" (plan.md).
+ */
+function renderSearchPalette() {
+  return `<div class="search-backdrop" id="search-backdrop" hidden></div><div class="search-palette" id="search-palette" role="dialog" aria-modal="true" aria-label="Search tickers" hidden><div class="search-palette-input-row"><span class="nav-icon">${ICONS.search}</span><input type="text" id="search-input" class="search-palette-input" placeholder="Search tickers\u2026" autocomplete="off" spellcheck="false"><span class="search-palette-kbd">Esc</span></div><div class="search-palette-results" id="search-results"></div></div>`;
+}
+
 function renderMobileHeader(sessionUsername) {
   return `<div class="mobile-header">
     <div class="wordmark">
@@ -1171,7 +1251,7 @@ function renderMobileHeader(sessionUsername) {
         <span class="wordmark-sub">operations ledger</span>
       </span>
     </div>
-    <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}${renderThemeToggle()}</div>
+    <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}${renderSearchTrigger()}${renderThemeToggle()}</div>
   </div>`;
 }
 
@@ -1233,6 +1313,7 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 ${themeColorMeta}
 <title>news-market-ai dashboard (${escapeHtml(activeSection)})</title>
+<script>window.__DASHBOARD_ENV__ = ${JSON.stringify(env)};</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&display=swap" rel="stylesheet">
@@ -1558,6 +1639,133 @@ ${themeColorMeta}
     closeBtn.addEventListener("click", close);
     backdrop.addEventListener("click", close);
   })();
+
+  // ---- Ticker search palette (plan.md "Dashboard: Scoped UX Adoption" item 6) ----
+  // Opened by any .search-trigger button (desktop rail + mobile header, see
+  // renderSearchTrigger) or Ctrl/Cmd+K from anywhere on the page. The ticker
+  // universe is fetched once per page load, lazily on first open, from
+  // GET /dashboard/tickers (proxies backend's GET /api/tickers --
+  // data.js#getTickersData); typing filters the cached list client-side, no
+  // per-keystroke request. Selecting a result (click or Enter) navigates to
+  // /dashboard/llm?llmTicker=<ticker> -- see renderSearchPalette's own header
+  // for why that page and not a new one. Same backdrop/panel open-close
+  // choreography as the mobile More sheet above (two rAFs so the transition
+  // actually animates, 'hidden' re-added only after the CSS transition ends).
+  (function () {
+    var triggers = document.querySelectorAll(".search-trigger");
+    var backdrop = document.getElementById("search-backdrop");
+    var palette = document.getElementById("search-palette");
+    var input = document.getElementById("search-input");
+    var results = document.getElementById("search-results");
+    if (!triggers.length || !backdrop || !palette || !input || !results) return;
+
+    var tickers = null; // null = not yet loaded
+    var loading = false;
+    var isOpen = false;
+
+    function tickerHref(ticker) {
+      var env = window.__DASHBOARD_ENV__ || "live";
+      var qs = "llmTicker=" + encodeURIComponent(ticker);
+      if (env && env !== "live") qs += "&env=" + encodeURIComponent(env);
+      return "/dashboard/llm?" + qs;
+    }
+
+    function setActive(items, index) {
+      for (var i = 0; i < items.length; i++) items[i].classList.toggle("active", i === index);
+      if (index >= 0 && items[index]) items[index].scrollIntoView({ block: "nearest" });
+    }
+
+    function render(list) {
+      if (list.length === 0) {
+        results.innerHTML = '<div class="search-empty">' + (tickers === null ? "Loading tickers\u2026" : "No matching tickers") + "</div>";
+        return;
+      }
+      results.innerHTML = list
+        .map(function (t, i) {
+          return '<a href="' + tickerHref(t) + '" class="search-result' + (i === 0 ? " active" : "") + '">' + t + "</a>";
+        })
+        .join("");
+    }
+
+    function filterAndRender() {
+      var q = input.value.trim().toUpperCase();
+      if (tickers === null) { render([]); return; }
+      var list = q ? tickers.filter(function (t) { return t.indexOf(q) !== -1; }) : tickers;
+      render(list.slice(0, 50));
+    }
+
+    function loadTickers() {
+      if (tickers !== null || loading) return;
+      loading = true;
+      var env = window.__DASHBOARD_ENV__ || "live";
+      var qs = env && env !== "live" ? "?env=" + encodeURIComponent(env) : "";
+      fetch("/dashboard/tickers" + qs, { credentials: "same-origin" })
+        .then(function (res) { return res.ok ? res.json() : { tickers: [] }; })
+        .then(function (data) { tickers = data.tickers || []; })
+        .catch(function () { tickers = []; })
+        .then(function () { loading = false; filterAndRender(); });
+    }
+
+    function open() {
+      if (isOpen) return;
+      isOpen = true;
+      palette.hidden = false;
+      backdrop.hidden = false;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          palette.setAttribute("data-open", "true");
+          backdrop.setAttribute("data-open", "true");
+        });
+      });
+      document.body.style.overflow = "hidden";
+      input.value = "";
+      filterAndRender();
+      loadTickers();
+      input.focus();
+      document.addEventListener("keydown", onKeydown);
+    }
+
+    function close() {
+      if (!isOpen) return;
+      isOpen = false;
+      palette.removeAttribute("data-open");
+      backdrop.removeAttribute("data-open");
+      document.body.style.overflow = "";
+      document.removeEventListener("keydown", onKeydown);
+      setTimeout(function () {
+        if (!isOpen) { palette.hidden = true; backdrop.hidden = true; }
+      }, 200);
+    }
+
+    function onKeydown(e) {
+      if (e.key === "Escape") { close(); return; }
+      var items = results.querySelectorAll(".search-result");
+      var current = -1;
+      for (var i = 0; i < items.length; i++) if (items[i].classList.contains("active")) current = i;
+      if (e.key === "ArrowDown") {
+        if (!items.length) return;
+        e.preventDefault();
+        setActive(items, Math.min(current + 1, items.length - 1));
+      } else if (e.key === "ArrowUp") {
+        if (!items.length) return;
+        e.preventDefault();
+        setActive(items, Math.max(current - 1, 0));
+      } else if (e.key === "Enter") {
+        if (current >= 0 && items[current]) { window.location.href = items[current].getAttribute("href"); }
+      }
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        if (isOpen) { close(); } else { open(); }
+      }
+    });
+
+    for (var t = 0; t < triggers.length; t++) triggers[t].addEventListener("click", open);
+    backdrop.addEventListener("click", close);
+    input.addEventListener("input", filterAndRender);
+  })();
 </script>
 </head>
 <body>
@@ -1572,7 +1780,7 @@ ${themeColorMeta}
         </span>
       </div>
       ${renderNav(activeSection, env)}
-      <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}<div class="rail-meta-row">theme ${renderThemeToggle()}</div></div>
+      <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}<div class="rail-meta-row">search ${renderSearchTrigger()}</div><div class="rail-meta-row">theme ${renderThemeToggle()}</div></div>
     </aside>
     <div class="content">
       <main id="dashboard-main">
@@ -1582,6 +1790,7 @@ ${themeColorMeta}
     </div>
   </div>
   ${renderBottomNav(activeSection, env)}
+  ${renderSearchPalette()}
   ${exportData !== undefined ? `<script type="application/json" id="dashboard-export-data">${JSON.stringify(exportData).replace(/<\/script/gi, "<\\/script")}</script>` : ""}
 </body>
 </html>`;

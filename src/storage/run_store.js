@@ -682,6 +682,37 @@ export class RunStore {
   }
 
   /**
+   * Every distinct ticker this environment has ever touched -- unioned
+   * across positions, trade_decisions and pipeline_checkpoints (the three
+   * tables plan.md's ticker-search item names as the "cheapest option": a
+   * derived universe rather than a live price/sparkline feed, which is
+   * flagged there as unscoped future work needing its own provider
+   * decision). Sorted alphabetically, not by recency -- this backs a
+   * type-to-filter search palette, where alphabetical is the expected
+   * order, not a "most active" ranking. No live price, no sparkline: just
+   * the symbols this environment has data for, which is what a ticker
+   * search needs to route to a page that already knows how to filter or
+   * highlight that ticker.
+   */
+  async listKnownTickers() {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ticker FROM (
+           SELECT ticker FROM positions WHERE run_id = ?
+           UNION
+           SELECT ticker FROM trade_decisions WHERE run_id = ?
+           UNION
+           SELECT ticker FROM pipeline_checkpoints WHERE run_id = ?
+         )
+         WHERE ticker IS NOT NULL AND ticker != ''
+         ORDER BY ticker ASC`
+      )
+      .bind(this.runId, this.runId, this.runId)
+      .all();
+    return results.map((r) => r.ticker);
+  }
+
+  /**
    * Most recently updated pipeline_checkpoints rows, across every (pipeline
    * run, ticker) in this environment. A proxy for "recent pipeline
    * activity", not a strict health signal -- a stuck run just stops appearing
