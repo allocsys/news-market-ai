@@ -14,7 +14,7 @@ const MORE_ICONS = {
 const MORE_SECTIONS = [
   { id: "activity", title: "Activity", desc: "Trade decisions per UTC calendar day, stacked by status.", icon: MORE_ICONS.activity },
   { id: "charts", title: "Charts", desc: "Recent daily closes (unadjusted) for watchlist tickers.", icon: MORE_ICONS.charts },
-  { id: "llm", title: "LLM calls", desc: "Every prompt sent to Gemini and what came back -- live pipeline and backtests.", icon: MORE_ICONS.llm },
+  { id: "llm", title: "LLM calls", desc: "Every prompt sent to Gemini and what came back -- live pipeline; backtests aren't logged by default.", icon: MORE_ICONS.llm },
   { id: "backfill", title: "Backfill", desc: "Triggers historical news backfill (Finnhub company-news).", icon: MORE_ICONS.backfill },
   { id: "backtest", title: "Backtest", desc: "Manual backtest harness (Signal ON vs buy & hold).", icon: MORE_ICONS.backtest },
 ];

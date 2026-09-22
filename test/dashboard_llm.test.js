@@ -122,6 +122,15 @@ test("renderLlmView shows an empty state, an error state, and scope notes for a 
   assert.ok(scoped.includes('href="/dashboard/llm"'), "Show all calls clears the scope");
 });
 
+test("renderLlmView explains that backtest runs aren't logged by default, rather than looking like a filter/timing issue", () => {
+  const live = renderLlmView({ calls: [], nextBeforeId: null, params: DEFAULT_PARAMS, error: null });
+  assert.doesNotMatch(live, /off by default for backtest runs/);
+
+  const onBacktest = renderLlmView({ calls: [], nextBeforeId: null, params: { ...DEFAULT_PARAMS, env: "backtest-1" }, error: null });
+  assert.match(onBacktest, /off by default for backtest runs/);
+  assert.match(onBacktest, /<code>backtest-1<\/code>/);
+});
+
 test("renderLlmView paging: 'Older' only when another page exists, 'Newest' only when already paged in; filters survive the links", () => {
   const params = { ...DEFAULT_PARAMS, llmSource: "backtest" };
   const first = renderLlmView({ calls: [summary()], nextBeforeId: 5, params, error: null });

@@ -63,13 +63,24 @@ function scopeNote(params) {
   const chips = [];
   if (params.llmJob) chips.push(`backtest <code>${escapeHtml(params.llmJob)}</code>`);
   if (params.llmRun) chips.push(`run <code>${escapeHtml(params.llmRun)}</code>`);
-  if (chips.length === 0) return "";
-  return `<p class="note">Showing only calls for ${chips.join(" and ")}. <a href="/dashboard/llm${llmQuery(params, { llmJob: "", llmRun: "" })}">Show all calls</a></p>`;
+  const scoped = chips.length ? `<p class="note">Showing only calls for ${chips.join(" and ")}. <a href="/dashboard/llm${llmQuery(params, { llmJob: "", llmRun: "" })}">Show all calls</a></p>` : "";
+  return scoped + backtestLoggingNote(params);
+}
+
+// Backtests run with LLM call logging OFF BY DEFAULT (wrangler.backtest.toml's
+// LLM_LOG_ENABLED="false" -- saves D1 write budget on the Free plan; there is
+// no per-run opt-in yet). So this page will always show 0 calls for a
+// backtest env, running or finished -- that's expected, not a bug or a
+// filtering issue, and worth saying plainly rather than leaving someone to
+// wonder if the calls will "show up once it's done".
+function backtestLoggingNote(params) {
+  if (!params.env || params.env === "live") return "";
+  return `<p class="note">LLM call logging is off by default for backtest runs, to save D1 write budget on the Free plan &mdash; so calls made by <code>${escapeHtml(params.env)}</code> won't appear here, whether it's still running or already finished. This applies to every backtest today; there's no per-run way to turn logging on yet.</p>`;
 }
 
 function callsTable(calls, env) {
   if (calls.length === 0) {
-    return `<p class="empty">No LLM calls match these filters. Calls are logged as the pipeline and backtests run; rows older than the retention window (14 days by default) are pruned.</p>`;
+    return `<p class="empty">No LLM calls match these filters. Calls from the live pipeline and exit-check reflections are logged as they happen; rows older than the retention window (14 days by default) are pruned.</p>`;
   }
   const rows = calls
     .map((c) => {
@@ -119,7 +130,7 @@ export function renderLlmView({ calls, nextBeforeId, params, error }) {
 
   return `<section id="llm">
     <h2>LLM calls${error ? "" : ` <span class="h2-count">${calls.length}${nextBeforeId ? "+" : ""}</span>`}</h2>
-    <p class="note">Every prompt sent to Gemini and the raw text that came back, newest first &mdash; from the live pipeline, manual backtests and exit-check reflections. Failed calls (Gemini errors, unparseable JSON, schema mismatches) are logged too. A call that reused a checkpoint on retry isn't repeated here.</p>
+    <p class="note">Every prompt sent to Gemini and the raw text that came back, newest first &mdash; from the live pipeline and exit-check reflections. Failed calls (Gemini errors, unparseable JSON, schema mismatches) are logged too. A call that reused a checkpoint on retry isn't repeated here. Backtest runs aren't logged by default (see the note below when viewing one).</p>
     ${filterBar}
     ${scopeNote(params)}
     ${error ? errorState(error) : `${callsTable(calls, params.env)}${pager(params, nextBeforeId)}`}
