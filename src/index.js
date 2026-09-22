@@ -56,6 +56,7 @@ import {
   handleApiDecisionsRoute,
   handleApiPositionsRoute,
   handleApiPipelineRoute,
+  handleApiOverviewRoute,
   handleApiBacktestRunsRoute,
   handleApiBacktestRunRoute,
   handleApiLlmCallsRoute,
@@ -119,6 +120,7 @@ export default {
     if (pathname === "/api/decisions") return handleApiDecisionsRoute(request, env, config);
     if (pathname === "/api/positions") return handleApiPositionsRoute(request, env, config);
     if (pathname === "/api/pipeline") return handleApiPipelineRoute(request, env, config);
+    if (pathname === "/api/overview") return handleApiOverviewRoute(request, env, config);
     if (pathname === "/api/backtest-runs") return handleApiBacktestRunsRoute(request, env, config);
     if (pathname.startsWith("/api/backtest-runs/")) return handleApiBacktestRunRoute(request, env, config, pathname.slice("/api/backtest-runs/".length));
     // LLM call log (storage/llm_calls.js): list, then one call in full.
