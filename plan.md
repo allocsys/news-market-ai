@@ -646,7 +646,7 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    new motion, and color contrast on both themes before calling the redesign
    done.
 
-**Status:** Steps 1-3 done (PR #92, PR #93, and Step 3 -- see its entry above for the out-of-process direct-push caveat, audited and left in place 2026-09-22). Step 4 (verdict/decision card) starting on `dashboard-redesign/step-4-verdict-card`, branched off main's current tip. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed -- but every step still gets its own branch + PR, no direct pushes to main.
+**Status:** Steps 1-4 done (PR #92, PR #93, Step 3 -- see its entry above for the out-of-process direct-push caveat, audited and left in place 2026-09-22 -- and PR #94). Step 5 (stat cards -> instrument readouts) is next, not yet started. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed -- but every step still gets its own branch + PR, no direct pushes to main.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
