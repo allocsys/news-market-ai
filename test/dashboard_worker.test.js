@@ -572,7 +572,7 @@ test("the environment selector highlights a registered backtest run when ?env= s
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/snapshot?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
 
-  assert.match(html, /class="pill pill-active"[^>]*>AAPL/, "the run's own pill is active, not Live");
+  assert.match(html, /class="env-option active"[^>]*>[\s\S]*?AAPL/, "the run's own dropdown option is active, not Live");
   assert.ok(html.includes(`href="/dashboard/decisions?env=${BT}"`), "nav link to another env-aware section carries the chosen env");
   assert.ok(html.includes('href="/dashboard/charts"') && !html.includes(`href="/dashboard/charts?env=${BT}"`), "nav link to an env-unaware section does NOT carry env");
 });
@@ -581,7 +581,7 @@ test("a well-formed but unregistered ?env= heals to live: the Live pill is activ
   const env = loginConfiguredEnv();
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/decisions?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
-  assert.match(html, /class="pill pill-active"[^>]*>Live<\/a>/);
+  assert.match(html, /class="env-option active"[\s\S]*?>Live<\/span>/);
   assert.match(html, /not found/);
 });
 
@@ -611,5 +611,5 @@ test("GET /dashboard/snapshot renders fine (Live-only selector, no crash) when t
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /id="env-selector"/);
-  assert.match(html, /class="pill pill-active"[^>]*>Live<\/a>/);
+  assert.match(html, /class="env-option active"[\s\S]*?>Live<\/span>/);
 });
