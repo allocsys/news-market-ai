@@ -23,7 +23,7 @@
 // backend's GET /api/jobs/active reports one, so returning to those pages
 // shows live progress again. Both callers share the helpers below.
 
-import { escapeHtml } from "../helpers.js";
+import { escapeHtml, terminateRunForm } from "../helpers.js";
 
 /**
  * `type` matters because of where the job_progress row actually lives:
@@ -172,6 +172,21 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
             }
             return;
           }
+          if (job.status === "cancelled") {
+            stopped = true;
+            if (staleTimer) clearTimeout(staleTimer);
+            markTerminal("var(--text-muted)");
+            if (bar) bar.style.background = "var(--text-muted)";
+            if (phaseEl) phaseEl.textContent = "Cancelled by operator.";
+            if (reloadOnComplete) {
+              setTimeout(function () {
+                window.location.reload();
+              }, 800);
+            } else {
+              showNextSteps("cancelled");
+            }
+            return;
+          }
           if (phaseEl) phaseEl.textContent = job.detail || (job.phase ? job.phase + "..." : job.status + "...");
           if (job.updatedAt !== lastUpdatedAt) armStaleCheck(job.updatedAt);
         }
@@ -244,10 +259,16 @@ export function renderActiveJobPanel(job) {
   const pollUrl = jobPollUrl(job.id, job.type);
   const label = job.type === "backtest" ? "Backtest" : job.type === "backfill_prices" ? "Price backfill" : "Backfill";
   const backLink = job.type === "backtest" ? "/dashboard/backtest" : "/dashboard/backfill";
+  // Only a backtest can be terminated this way (POST /backtest/:id/cancel) --
+  // a backfill has no equivalent endpoint. job.id IS the backtest's run id
+  // (see src/index.js's POST /backtest/run, which enqueues the job under its
+  // own newly-generated id).
+  const terminate = job.type === "backtest" ? `<div style="margin-top:0.9rem">${terminateRunForm(job.id)}</div>` : "";
 
   return `<section id="active-job" data-job-id="${escapeHtml(job.id)}">
     <h2 id="run-status-title">${label} in progress</h2>
     ${renderProgressPanel({ detail: describeJob(job), pollUrl })}
+    ${terminate}
     ${PULSE_STYLE}
     ${renderProgressScript({ pollUrl, label, backLink, backLabel: label })}
   </section>`;
@@ -267,7 +288,11 @@ export function renderActiveJobPanel(job) {
 export function renderJobProgressPanel(job) {
   if (!job || !job.id) return "";
   const pollUrl = jobPollUrl(job.id, job.type || "backtest");
+  // This panel only ever appears inside the single-run backtest detail page
+  // (see its own header), so a terminate control here is always for a
+  // backtest, unlike renderActiveJobPanel above which also serves backfill.
   return `${renderProgressPanel({ detail: describeJob(job), pollUrl })}
+    <div style="margin-top:0.9rem">${terminateRunForm(job.id)}</div>
     ${PULSE_STYLE}
     ${renderProgressScript({ pollUrl, reloadOnComplete: true })}`;
 }
