@@ -737,6 +737,25 @@ const STYLE = `
   .auto-refresh-toggle[data-on="true"] .auto-refresh-dot {
     background: var(--color-success-text); box-shadow: 0 0 6px var(--color-success-strong);
   }
+  .page-toolbar-export { position: relative; }
+  .page-toolbar-export > summary { list-style: none; display: inline-flex; align-items: center; gap: 0.3rem; }
+  .page-toolbar-export > summary::-webkit-details-marker { display: none; }
+  .page-toolbar-export-chevron { opacity: 0.6; transition: transform 150ms ease; font-size: 0.65em; }
+  .page-toolbar-export[open] .page-toolbar-export-chevron { transform: rotate(180deg); }
+  .page-toolbar-export-panel {
+    position: absolute; top: calc(100% + 0.4rem); right: 0; left: auto; z-index: 60;
+    min-width: 170px; max-width: calc(100vw - 2rem);
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+    padding: 0.35rem; display: flex; flex-direction: column; gap: 0.1rem;
+  }
+  .page-toolbar-export-option {
+    appearance: none; background: none; border: none; text-align: left;
+    padding: 0.5rem 0.6rem; border-radius: var(--radius-sm);
+    font-family: inherit; font-size: 0.8125rem; color: var(--text-main); cursor: pointer;
+  }
+  .page-toolbar-export-option:hover { background: var(--bg-hover); }
+  .page-toolbar-export-option:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
   /* ---- Summary stat cards ---- */
   .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.75rem; }
@@ -987,8 +1006,13 @@ const STYLE = `
     .stat-card { padding: 0.9rem 1rem; }
     .stat-value { font-size: 1.5rem; }
     .filter-bar { gap: 0.85rem; }
-    .page-toolbar { justify-content: space-between; gap: 0.5rem; margin-bottom: 0.6rem; }
+    .page-toolbar {
+      flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 0.6rem;
+      margin-bottom: 0.6rem;
+    }
     .page-toolbar .btn { height: 32px; padding: 0 0.7rem; }
+    .page-toolbar-updated { order: -1; width: 100%; }
+    .page-toolbar-export-panel { right: auto; left: 0; }
     .chart-row-2, .chart-row-3 { grid-template-columns: 1fr; }
     .donut-wrap { flex-direction: column; align-items: stretch; }
     .donut-svg { align-self: center; }
@@ -1442,20 +1466,29 @@ function renderMobileHeader(sessionUsername) {
 
 /**
  * Per-page toolbar: manual "Refresh" link, auto-refresh toggle (plan.md
- * "Dashboard: Scoped UX Adoption" item 1), and Export CSV/JSON buttons
- * (item 4). Export works off the exact JSON this page's SSR render already
- * fetched -- see renderShell's `exportData` param and the
- * #dashboard-export-data script tag it emits -- so these buttons only do
- * anything once that data has loaded; the client-side script disables them
- * otherwise (missing tag, or a CSV click with no tabular data found).
- * `activeSection` names the downloaded file (e.g. "decisions-2026-09-22.csv").
+ * "Dashboard: Scoped UX Adoption" item 1), and an Export menu with CSV/JSON
+ * options (item 4, combined into one <details> dropdown -- two full-width
+ * buttons was cramped and wrapped badly on mobile). Export works off the
+ * exact JSON this page's SSR render already fetched -- see renderShell's
+ * `exportData` param and the #dashboard-export-data script tag it emits --
+ * so the CSV/JSON options only do anything once that data has loaded; the
+ * client-side script disables them otherwise (missing tag, or a CSV click
+ * with no tabular data found). `activeSection` names the downloaded file
+ * (e.g. "decisions-2026-09-22.csv"). The two option buttons keep their
+ * original ids (dashboard-export-csv-btn/-json-btn) so that export script
+ * doesn't need to change.
  */
 function renderPageToolbar(refreshHref, activeSection) {
   if (!refreshHref) return "";
   return `<div class="page-toolbar">
         <span class="page-toolbar-updated">Loaded ${fmtTime(new Date().toISOString())}</span>
-        <button type="button" class="btn btn-tertiary" id="dashboard-export-csv-btn" data-section="${escapeHtml(activeSection)}" title="Export this page's data as CSV">Export CSV</button>
-        <button type="button" class="btn btn-tertiary" id="dashboard-export-json-btn" data-section="${escapeHtml(activeSection)}" title="Export this page's data as JSON">Export JSON</button>
+        <details class="dropdown-details page-toolbar-export">
+          <summary class="btn btn-tertiary" title="Export this page's data">Export <span class="page-toolbar-export-chevron" aria-hidden="true">\u25be</span></summary>
+          <div class="page-toolbar-export-panel">
+            <button type="button" class="page-toolbar-export-option" id="dashboard-export-csv-btn" data-section="${escapeHtml(activeSection)}">Export as CSV</button>
+            <button type="button" class="page-toolbar-export-option" id="dashboard-export-json-btn" data-section="${escapeHtml(activeSection)}">Export as JSON</button>
+          </div>
+        </details>
         <button type="button" class="auto-refresh-toggle" id="auto-refresh-toggle" data-on="true" title="Toggle auto-refresh"><span class="auto-refresh-dot"></span><span id="auto-refresh-toggle-label">Auto-refresh on</span></button>
         <a href="${escapeHtml(refreshHref)}" class="btn btn-secondary" title="Reload this page with the latest data"><span aria-hidden="true">\u21bb</span> Refresh</a>
       </div>`;
@@ -1825,22 +1858,22 @@ ${themeColorMeta}
     backdrop.addEventListener("click", close);
   })();
 
-  // ---- Environment dropdown (views/env_selector.js) ----
+  // ---- Dropdown <details> closer (env selector + page-toolbar export menu) ----
   // Native <details>/<summary> handles the open/close toggle itself; this
   // just adds the behavior <details> doesn't give for free -- closing on an
   // outside click or Escape, same expectation as any other dropdown/menu on
-  // the page. Delegated at the document level (not per-element) since a page
-  // never has more than one .env-dropdown, but this stays correct even if
-  // that ever changes.
+  // the page. Delegated at the document level (not per-element), and shared
+  // by every <details class="dropdown-details"> on the page (currently the
+  // env selector and the toolbar's Export menu) via that common class.
   (function () {
     document.addEventListener("click", function (e) {
-      document.querySelectorAll("details.env-dropdown[open]").forEach(function (d) {
+      document.querySelectorAll("details.dropdown-details[open]").forEach(function (d) {
         if (!d.contains(e.target)) d.removeAttribute("open");
       });
     });
     document.addEventListener("keydown", function (e) {
       if (e.key !== "Escape") return;
-      document.querySelectorAll("details.env-dropdown[open]").forEach(function (d) {
+      document.querySelectorAll("details.dropdown-details[open]").forEach(function (d) {
         d.removeAttribute("open");
       });
     });

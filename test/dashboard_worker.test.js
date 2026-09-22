@@ -234,6 +234,13 @@ for (const section of REFRESHABLE_SECTIONS) {
   });
 }
 
+test("Page toolbar's Export CSV/JSON options are combined into one dropdown menu (not two loose buttons)", async () => {
+  const html = await getHtml("/dashboard/snapshot");
+  assert.match(html, /<details class="dropdown-details page-toolbar-export">/);
+  assert.match(html, /id="dashboard-export-csv-btn"[^>]*>Export as CSV<\/button>/);
+  assert.match(html, /id="dashboard-export-json-btn"[^>]*>Export as JSON<\/button>/);
+});
+
 const NON_REFRESHABLE_PAGES = [
   "/dashboard/backfill",
   "/dashboard/more",

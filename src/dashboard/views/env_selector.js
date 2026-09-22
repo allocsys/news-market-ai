@@ -127,7 +127,7 @@ export function renderEnvSelector({ runs = [], resolvedEnv = "live", envError = 
   const bar = `<div class="filter-bar" id="env-selector">
     <div class="filter-group">
       <span class="filter-label">Environment</span>
-      <details class="env-dropdown">
+      <details class="env-dropdown dropdown-details">
         <summary><span class="env-dot ${triggerDotClass}"></span><span class="env-dropdown-label">${escapeHtml(triggerLabel)}</span>${CHEVRON_ICON}</summary>
         <div class="env-dropdown-panel">${liveOption}${recentGroup}${failedBlock}</div>
       </details>

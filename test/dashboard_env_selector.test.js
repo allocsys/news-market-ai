@@ -86,7 +86,7 @@ test("runLabel: tolerates a missing tickers array entirely", () => {
 test("renderEnvSelector: default (live, no runs) shows only an active Live option and no notes", () => {
   const html = renderEnvSelector({ pathname: "/dashboard/snapshot", search: "" });
   assert.match(html, /id="env-selector"/);
-  assert.match(html, /class="env-dropdown"/);
+  assert.match(html, /class="env-dropdown dropdown-details"/);
   assert.match(html, /class="env-option active"[\s\S]*?env-dot-live/);
   assert.match(html, />Live<\/span>/);
   assert.ok(!html.includes('<p class="note">'), "no envError, no non-live banner -- no note markup at all");
