@@ -385,7 +385,15 @@ const STYLE = `
   }
   .panel-body { padding: 1.125rem; }
 
-  /* ---- Tables ---- */
+  /* ---- Tables: hairline-ruled ledger treatment (plan.md Step 3, 2026-09-22) ----
+     Reads as a financial ledger, not a card: no drop shadow, no rounded
+     corners, no elevated gradient header block. Just a hairline top/bottom
+     rule around the whole table and a hairline rule under the header and
+     between every row -- the rule itself is the design. Applies to every
+     table on the dashboard (decisionsTable, positionsTable, checkpointsTable,
+     the LLM-calls table) since they all already share these classes -- no
+     markup change needed, this is CSS only. Numeric/ticker columns keep the
+     mono font at tabular-nums so figures line up down the column. */
   .table-wrap {
     width: 100%;
     overflow-x: auto;
@@ -393,20 +401,19 @@ const STYLE = `
     max-height: 70vh;
     -webkit-overflow-scrolling: touch;
     margin-bottom: 1.25rem;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    border-top: 1px solid var(--border-strong);
+    border-bottom: 1px solid var(--border-strong);
     background: var(--bg-surface);
-    box-shadow: var(--shadow-card);
   }
   table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
-  th, td { text-align: left; padding: 0.7rem 1rem; border-bottom: 1px solid var(--border-subtle); }
+  th, td { text-align: left; padding: 0.6rem 1rem; border-bottom: 1px solid var(--border-subtle); }
   tbody tr:last-child td { border-bottom: none; }
   th {
     position: sticky; top: 0; z-index: 10;
-    background: var(--bg-elevated);
+    background: var(--bg-surface);
     color: var(--text-muted); font-weight: 600; font-size: 0.6875rem;
     text-transform: uppercase; letter-spacing: 0.07em;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-strong);
   }
   td.num { font-family: var(--font-mono); color: var(--text-main); font-variant-numeric: tabular-nums; }
   td.ticker { font-family: var(--font-mono); font-weight: 600; letter-spacing: 0.02em; color: var(--text-main); }
@@ -1067,7 +1074,7 @@ const STYLE = `
       display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
       grid-auto-flow: row dense; align-items: start; gap: 0.75rem 1rem;
       padding: 0.9rem 1rem; margin-bottom: 0.75rem;
-      background: var(--card-bg); border: 1px solid var(--border-color);
+      background: var(--card-bg); border: 1px solid var(--border-strong);
       border-radius: var(--radius-md); box-shadow: var(--shadow-card);
     }
     /* Cards nested inside another surface (panel / expanded backtest run) step up one shade. */
