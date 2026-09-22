@@ -3,6 +3,11 @@
 // resolveEnv, the D1-backed anchoring) is covered separately in test/dashboard_env.test.js;
 // this file never touches D1 -- every case here is a plain function call on hand-built
 // run/param objects, same style as test/dashboard_llm.test.js's view-layer tests.
+//
+// The selector renders as a single <details class="env-dropdown"> trigger +
+// panel (Live pinned first, then a "Recent backtests" group, then failed
+// runs tucked behind a nested "N failed runs" disclosure) rather than the
+// old flat pill-row -- see env_selector.js's file header for why.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -78,14 +83,16 @@ test("runLabel: tolerates a missing tickers array entirely", () => {
 // renderEnvSelector
 // ---------------------------------------------------------------------------
 
-test("renderEnvSelector: default (live, no runs) shows only an active Live pill and no notes", () => {
+test("renderEnvSelector: default (live, no runs) shows only an active Live option and no notes", () => {
   const html = renderEnvSelector({ pathname: "/dashboard/snapshot", search: "" });
   assert.match(html, /id="env-selector"/);
-  assert.match(html, /class="pill pill-active"[^>]*>Live<\/a>/);
-  assert.ok(!html.includes("note"), "no envError, no non-live banner -- no note markup at all");
+  assert.match(html, /class="env-dropdown"/);
+  assert.match(html, /class="env-option active"[\s\S]*?env-dot-live/);
+  assert.match(html, />Live<\/span>/);
+  assert.ok(!html.includes('<p class="note">'), "no envError, no non-live banner -- no note markup at all");
 });
 
-test("renderEnvSelector: one pill per run, each linking to its own ?env=, Live still first", () => {
+test("renderEnvSelector: Live is always the first option in the panel", () => {
   const runs = [
     { id: "backtest-2-def", tickers: ["MSFT"], testStart: "2024-02-01T00:00:00.000Z", status: "complete" },
     { id: "backtest-1-abc", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", status: "running" },
@@ -93,33 +100,70 @@ test("renderEnvSelector: one pill per run, each linking to its own ?env=, Live s
   const html = renderEnvSelector({ runs, resolvedEnv: "live", pathname: "/dashboard/decisions", search: "?decisionLimit=50" });
   const liveIdx = html.indexOf(">Live<");
   const firstRunIdx = html.indexOf("MSFT");
-  assert.ok(liveIdx > -1 && liveIdx < firstRunIdx, "Live pill comes before the run pills");
+  assert.ok(liveIdx > -1 && liveIdx < firstRunIdx, "Live option comes before the run options");
   assert.ok(html.includes('href="/dashboard/decisions?decisionLimit=50&amp;env=backtest-2-def"'));
   assert.ok(html.includes('href="/dashboard/decisions?decisionLimit=50&amp;env=backtest-1-abc"'));
   assert.match(html, /MSFT \u00b7 2024-02-01/);
   assert.match(html, /AAPL \u00b7 2024-01-01 \(running\)/);
+  assert.match(html, /Recent backtests/);
 });
 
-test("renderEnvSelector: highlights whichever pill matches resolvedEnv, not any particular position", () => {
+test("renderEnvSelector: highlights whichever option matches resolvedEnv, not any particular position", () => {
   const runs = [{ id: "backtest-1-abc", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", status: "complete" }];
   const html = renderEnvSelector({ runs, resolvedEnv: "backtest-1-abc", pathname: "/dashboard/snapshot", search: "" });
-  assert.match(html, /class="pill"[^>]*>Live<\/a>/, "Live is present but NOT active");
-  assert.ok(!/class="pill pill-active"[^>]*>Live<\/a>/.test(html));
-  assert.match(html, /class="pill pill-active"[^>]*>AAPL/, "the matching run pill is active instead");
+  assert.match(html, /class="env-option"[^>]*>[\s\S]*?>Live</, "Live is present but NOT active");
+  assert.ok(!/class="env-option active"[^>]*>[\s\S]{0,80}?>Live</.test(html));
+  assert.match(html, /class="env-option active"[^>]*>[\s\S]*?AAPL/, "the matching run option is active instead");
 });
 
-test("renderEnvSelector: resolvedEnv not present in the (capped) runs list still gets its own pill, so the active env is never invisible", () => {
+test("renderEnvSelector: resolvedEnv not present in the (capped) runs list still gets its own option, so the active env is never invisible", () => {
   const html = renderEnvSelector({ runs: [], resolvedEnv: "backtest-9-old", pathname: "/dashboard/snapshot", search: "" });
-  assert.match(html, /class="pill pill-active"[^>]*>backtest-9-old<\/a>/);
+  assert.match(html, /class="env-option active"[^>]*>[\s\S]*?backtest-9-old/);
 });
 
-test("renderEnvSelector: does NOT duplicate a pill for resolvedEnv when it's already in the runs list", () => {
+test("renderEnvSelector: does NOT duplicate an option for resolvedEnv when it's already in the runs list", () => {
   const runs = [{ id: "backtest-1-abc", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", status: "complete" }];
   const html = renderEnvSelector({ runs, resolvedEnv: "backtest-1-abc", pathname: "/dashboard/snapshot", search: "" });
-  // Anchored to <a ... class="pill -- a plain /class="pill/g also matches the
-  // wrapping <div class="pill-row">, since "pill-row" starts with that same
-  // literal substring, which overcounted by one (3 instead of 2).
-  assert.equal((html.match(/<a[^>]*class="pill/g) || []).length, 2, "exactly Live + the one run pill, no extra");
+  assert.equal((html.match(/<a[^>]*class="env-option/g) || []).length, 2, "exactly Live + the one run option, no extra");
+});
+
+test("renderEnvSelector: more than MAX_VISIBLE_RUNS non-failed runs still all render (no silent truncation without saying so is out of scope here; just checking the group renders)", () => {
+  const runs = Array.from({ length: 8 }, (_, i) => ({
+    id: `backtest-${i}`,
+    tickers: ["AAPL"],
+    testStart: "2024-01-01T00:00:00.000Z",
+    status: "complete",
+  }));
+  const html = renderEnvSelector({ runs, resolvedEnv: "live", pathname: "/dashboard/snapshot", search: "" });
+  assert.match(html, /Recent backtests/);
+});
+
+test("renderEnvSelector: failed runs are tucked behind a nested 'N failed runs' disclosure, not mixed into the main list", () => {
+  const runs = [
+    { id: "backtest-ok", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", status: "complete" },
+    { id: "backtest-bad-1", tickers: ["MSFT"], testStart: "2024-01-02T00:00:00.000Z", status: "failed" },
+    { id: "backtest-bad-2", tickers: ["TSLA"], testStart: "2024-01-03T00:00:00.000Z", status: "failed" },
+  ];
+  const html = renderEnvSelector({ runs, resolvedEnv: "live", pathname: "/dashboard/snapshot", search: "" });
+  assert.match(html, /<details class="env-dropdown-failed"><summary>2 failed runs<\/summary>/);
+  const failedDetailsIdx = html.indexOf('class="env-dropdown-failed"');
+  const msftIdx = html.indexOf("MSFT");
+  const tslaIdx = html.indexOf("TSLA");
+  assert.ok(msftIdx > failedDetailsIdx && tslaIdx > failedDetailsIdx, "both failed runs render inside the nested disclosure");
+  const recentGroupIdx = html.indexOf("Recent backtests");
+  assert.ok(recentGroupIdx > -1 && recentGroupIdx < failedDetailsIdx, "the visible 'Recent backtests' group precedes the failed-runs disclosure");
+});
+
+test("renderEnvSelector: an active env that's failed and not otherwise listed still gets its own reachable option, outside the failed-runs count", () => {
+  const runs = [{ id: "backtest-bad", tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", status: "failed" }];
+  const html = renderEnvSelector({ runs, resolvedEnv: "backtest-bad", pathname: "/dashboard/snapshot", search: "" });
+  // It's already in the failed list (href + title attrs both carry the raw
+  // id, plus the "Viewing backtest <code>...</code>" note below the
+  // dropdown -- 3 occurrences total), so it should NOT also get a separate
+  // "reachable" option rendered outside the failed-runs disclosure (which
+  // would push this past 3).
+  assert.equal((html.match(/backtest-bad/g) || []).length, 3, "href + title of the one failed option, plus the non-live banner -- no duplicate option elsewhere");
+  assert.match(html, /class="env-option active"[^>]*>[\s\S]*?AAPL/);
 });
 
 test("renderEnvSelector: envError renders as its own note, independent of the resolvedEnv banner", () => {

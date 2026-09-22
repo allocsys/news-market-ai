@@ -572,6 +572,72 @@ const STYLE = `
     box-shadow: 0 2px 8px -2px var(--accent-glow);
   }
 
+  /* ---- Environment dropdown (replaces the old flat pill-row wall: with a
+     handful of backtest attempts, most of them failed, one pill per run
+     wrapped into an unreadable chip wall. This collapses to a single
+     trigger + panel, Live pinned first, failed runs tucked behind their own
+     nested disclosure. See views/env_selector.js. Built on native
+     <details>/<summary> -- no page JS needed beyond the outside-click/Escape
+     closer in this file's inline script.) ---- */
+  .env-dropdown { position: relative; }
+  .env-dropdown > summary {
+    list-style: none; cursor: pointer; appearance: none;
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    font-size: 0.8125rem; font-weight: 600; color: var(--text-main);
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: 999px; padding: 0.4rem 0.75rem 0.4rem 0.6rem;
+    transition: border-color 150ms ease, background 150ms ease;
+  }
+  .env-dropdown > summary::-webkit-details-marker { display: none; }
+  .env-dropdown > summary:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+  .env-dropdown > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .env-dropdown[open] > summary { border-color: var(--accent); background: var(--accent-subtle); }
+  .env-dropdown-label { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .env-dot {
+    width: 0.5rem; height: 0.5rem; border-radius: 50%; flex-shrink: 0;
+    background: var(--text-subtle);
+  }
+  .env-dot-live { background: var(--color-success-strong); box-shadow: 0 0 6px var(--color-success-strong); }
+  .env-dot-running { background: var(--color-info-text); box-shadow: 0 0 6px var(--accent-glow); }
+  .env-dot-failed { background: var(--color-danger-strong); }
+  .env-dropdown-chevron { opacity: 0.55; transition: transform 150ms ease; flex-shrink: 0; }
+  .env-dropdown[open] .env-dropdown-chevron { transform: rotate(180deg); }
+  .env-dropdown-panel {
+    position: absolute; top: calc(100% + 0.4rem); left: 0; z-index: 60;
+    width: max(280px, 100%); max-width: min(380px, 88vw);
+    background: var(--bg-surface); border: 1px solid var(--border-color);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+    padding: 0.4rem; max-height: 60vh; overflow-y: auto;
+  }
+  .env-option {
+    display: flex; align-items: center; gap: 0.55rem;
+    padding: 0.5rem 0.6rem; border-radius: var(--radius-sm);
+    color: var(--text-main); text-decoration: none; font-size: 0.8125rem;
+    transition: background 120ms ease;
+  }
+  .env-option:hover { background: var(--bg-hover); }
+  .env-option.active { background: var(--accent-subtle); font-weight: 600; }
+  .env-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .env-option-status {
+    font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-subtle); flex-shrink: 0;
+  }
+  .env-dropdown-group-label {
+    font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--text-subtle); padding: 0.65rem 0.6rem 0.25rem;
+  }
+  .env-dropdown-failed { margin-top: 0.1rem; }
+  .env-dropdown-failed > summary {
+    list-style: none; cursor: pointer; padding: 0.45rem 0.6rem;
+    font-size: 0.75rem; color: var(--text-subtle); border-radius: var(--radius-sm);
+  }
+  .env-dropdown-failed > summary::-webkit-details-marker { display: none; }
+  .env-dropdown-failed > summary:hover { background: var(--bg-hover); color: var(--text-muted); }
+  .env-dropdown-failed .env-option { opacity: 0.75; }
+  @media (max-width: 767px) {
+    .env-dropdown-panel { left: auto; right: 0; width: max(260px, 80vw); }
+  }
+
   .filter-form { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
   .filter-form select, input.filter-form, .date-input {
     font-size: 0.8125rem;
@@ -1754,6 +1820,27 @@ ${themeColorMeta}
     });
     closeBtn.addEventListener("click", close);
     backdrop.addEventListener("click", close);
+  })();
+
+  // ---- Environment dropdown (views/env_selector.js) ----
+  // Native <details>/<summary> handles the open/close toggle itself; this
+  // just adds the behavior <details> doesn't give for free -- closing on an
+  // outside click or Escape, same expectation as any other dropdown/menu on
+  // the page. Delegated at the document level (not per-element) since a page
+  // never has more than one .env-dropdown, but this stays correct even if
+  // that ever changes.
+  (function () {
+    document.addEventListener("click", function (e) {
+      document.querySelectorAll("details.env-dropdown[open]").forEach(function (d) {
+        if (!d.contains(e.target)) d.removeAttribute("open");
+      });
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      document.querySelectorAll("details.env-dropdown[open]").forEach(function (d) {
+        d.removeAttribute("open");
+      });
+    });
   })();
 
   // ---- Ticker search palette (plan.md "Dashboard: Scoped UX Adoption" item 6) ----

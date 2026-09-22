@@ -380,7 +380,7 @@ test("GET /dashboard/llm/:id?env=<registered backtest> shows the selector with t
   const html = await (await dashGet(`/dashboard/llm/1?env=${BT}`, env, cookie)).text();
 
   assert.match(html, /id="env-selector"/);
-  assert.match(html, /class="pill pill-active"[^>]*>AAPL/, "the backtest's own pill is active, not Live");
+  assert.match(html, /class="env-option active"[^>]*>[\s\S]*?AAPL/, "the backtest's own dropdown option is active, not Live");
   assert.match(html, /SIM-PROMPT/);
 
   assert.ok(html.includes(`href="/dashboard/llm?env=${BT}"`), "back link carries the env");
@@ -395,7 +395,7 @@ test("GET /dashboard/llm/:id?env=<unregistered> heals to live: Live pill active,
   const cookie = await sessionCookie(env);
   const html = await (await dashGet(`/dashboard/llm/1?env=${BT}`, env, cookie)).text();
 
-  assert.match(html, /class="pill pill-active"[^>]*>Live<\/a>/);
+  assert.match(html, /class="env-option active"[\s\S]*?>Live<\/span>/);
   assert.match(html, /not found/);
   assert.match(html, /PROMPT-ONE/, "healed to live -- shows live's call 1, not a blank/error page");
 });
