@@ -85,14 +85,19 @@ invocation_logs = true
 # backend's wrangler.toml (Step 6) -- this is now the only Worker that calls
 # Gemini at all.
 GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
-GEMINI_DEEP_MODEL = "gemini-3.5-flash"
+GEMINI_DEEP_MODEL = "gemini-3.6-flash"
 # Tried in order AFTER the requested model; client.js drops whichever entry
 # equals the requested model. Do NOT make this list just the quick model --
 # that leaves quick-tier calls (most calls) with a single-model cascade and no
-# fallback. Resulting cascades:
-#   quick: 3.1-flash-lite -> 2.5-flash-lite -> 2.5-flash        (3 models)
-#   deep:  3.5-flash -> 3.1-flash-lite -> 2.5-flash-lite -> 2.5-flash
-GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.8-flash,gemini-3.6-flash,gemini-3-flash-preview,gemini-2.5-flash"
+# fallback. UPDATE (2026-09-22): dropped gemini-2.5-flash -- Google retired it
+# (404 "no longer available to new users" for every key, mid live backtest --
+# a permanent failure, not a cooldown, so hitting it as the LAST model in the
+# cascade killed the whole run instead of pausing; see client.js's 404
+# handling). Resulting cascades (client.js drops whichever fallback entry
+# equals the requested model, so each is one shorter than the raw list):
+#   quick: 3.1-flash-lite -> 3.5-flash-lite -> 3.7-flash -> 3.8-flash -> 3.6-flash -> 3-flash-preview   (6 models)
+#   deep:  3.6-flash -> 3.1-flash-lite -> 3.5-flash-lite -> 3.7-flash -> 3.8-flash -> 3-flash-preview   (6 models)
+GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.8-flash,gemini-3.6-flash,gemini-3-flash-preview"
 
 # LLM call log (dashboard "LLM calls" page; src/storage/llm_calls.js). All
 # optional -- defaults in src/config.js are on / 14 days / 60000 chars:
