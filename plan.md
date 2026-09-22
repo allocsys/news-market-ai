@@ -425,6 +425,142 @@ original reasoning in git history:**
 10. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on
     the live dashboard Worker — status unverified.
 
+## Dashboard: Scoped UX Adoption from `prototype-ui-overhaul`
+**Decided (2026-09-21), do not re-litigate:** `prototype-ui-overhaul` (a
+standalone Next.js app — React/Zustand/Radix/Recharts/Framer Motion, merged to
+`main` @ `006afbb` as PR #85) stays a **design/feature reference only**, never
+deployed. `dashboard-worker.js` is an edge-native Cloudflare Worker with
+same-process access to the `backend` Worker's JSON API and a minimal
+vanilla-JS/template-string rendering pattern; swapping the whole rendering
+stack to Next.js would need its own Node hosting (or `next-on-pages`/OpenNext),
+a heavier client bundle, and an extra network hop per data fetch — likely
+**slower** in production despite better prototype DX. Instead: port the
+prototype's UX ideas *into* the existing vanilla-JS dashboard, keep the
+Worker-native architecture. Ported features: auto-refresh, global ticker
+search, mobile bottom-sheet nav, CSV/JSON export, a command-center **Overview**
+view (fuses pipeline + last decision + exposure + stale-source alerts), and a
+dual dark/light theme.
+
+**Ground truth vs. mock data — the real backend contract does not match the
+prototype's mocks** (confirmed by full read of `src/dashboard/api.js`,
+`data.js`, `routes.js`, `helpers.js`, `src/index.js`, and
+`prototype-ui-overhaul/src/lib/dash/{mock-data,types}.ts`, 2026-09-21). Every
+port below has to translate field names, not just re-skin markup:
+- **Positions:** real (`RunStore`) uses `positionSizePct` (fraction),
+  `openedAt`/`closedAt` (ISO), `realizedReturn`; mock uses `sizePct` (percent
+  integer), `opened`/`closed`, `pnlPct`, plus a `status`/`exitReason`/`basedOn`
+  the real rows don't carry directly (would need to join via
+  `listPositionsWithDecisions`).
+- **Decisions:** real rows nest `thesis` / `riskDecision` / `portfolioDecision`
+  / `opinions` / `debate` JSON blobs from D1; mock flattens to a single
+  `reasoning: { analyst, bull, bear, verdict, trader }` plus `confidence`/`when`.
+  No 1:1 field mapping — the renderer has to assemble `reasoning`-shaped view
+  data from the real nested blobs, not just rename keys.
+- **Pipeline:** real `listRecentCheckpoints` gives snake_case `stage`/
+  `updated_at` only; mock's `PIPELINE_CHECKPOINTS` adds a computed
+  `lastStageLabel` and `status` (`ok`/`stale`/`error`) that don't exist in the
+  real row — that computation has to be added in `data.js`, not invented in
+  the renderer.
+- **Health:** real (`inputs_view.js`) returns `count`/`lastIngestedAt` per
+  source; mock's `INGESTION_SOURCES` adds a `fresh` boolean — same pattern,
+  compute `fresh` server-side from `lastIngestedAt` vs. a staleness threshold.
+- **Activity:** real `getActivityData` returns `{ daily: [{ day, status,
+  count }], totals }` (dynamic status keys); mock pre-aggregates to fixed
+  `{ date, approved, rejected }`. The real shape is actually more general —
+  port the mock's *rendering* (a stacked daily bar), not its schema.
+- **Overview / ticker search — no backend equivalent exists at all.** There is
+  no `/api/overview` route, no ticker-universe table, and no unified query
+  fusing pipeline+decisions+exposure+health. The prototype's `TICKERS` array
+  (symbol/name/price/changePct/sparkline) and command-center aggregation are
+  pure frontend mock inventions. These need new backend work, not just new
+  frontend code (see Overview below).
+
+**Target files (extends the existing one-function-per-section pattern in
+`src/dashboard/*`, no new layer, no framework):**
+- `src/dashboard/helpers.js` — new template-string renderers, matching the
+  existing pattern (`positionsTable`, `donutChart`, etc.): auto-refresh
+  control, ticker-search palette markup, mobile bottom-sheet nav, CSV/JSON
+  export buttons, theme toggle, and the Overview command-center layout.
+- `src/dashboard/data.js` — extend existing `get*Data` functions to add the
+  computed fields the mocks assume but real rows don't carry (`status` for
+  pipeline checkpoints, `fresh` for health sources); add one new
+  `getOverviewData(env, params)` that composes `getSnapshotData` +
+  `getHealthData` + `getPipelineData` + the latest decision into one payload,
+  reusing the existing functions rather than duplicating D1 reads.
+- `src/dashboard/api.js` — one new route, `GET /api/overview`, backed by
+  `getOverviewData`; new lightweight `GET /api/tickers` (or extend
+  `/api/positions`/`/api/pipeline` response) to back ticker search, backed by
+  whatever ticker universe decision comes out of Overview below; no new
+  route needed for CSV/JSON export if it's done client-side against data
+  already fetched (see Export below).
+- `src/dashboard-worker.js` — wires the new `/overview` page/tab into
+  existing SSR routing, and the theme cookie/localStorage read for
+  server-rendered initial theme (avoid flash-of-wrong-theme on first paint).
+
+**Feature-by-feature plan:**
+1. **Auto-refresh** — client-side `setInterval` re-fetching the current
+   view's existing `/api/*` JSON route and re-rendering via the existing
+   template-string renderers (no SSE/WebSocket, no new backend surface).
+   Pause on tab hidden (`document.visibilityState`) to avoid burning D1 reads
+   in the background; respect the free-tier D1 read budget (see "Free-plan
+   budgets" above) — default interval should be seconds-to-a-minute range,
+   not sub-second polling.
+2. **Global ticker search** — needs a ticker universe the backend doesn't
+   currently expose. Cheapest option: derive it from data already in D1
+   (`DISTINCT ticker` across `positions`/`trade_decisions`/`pipeline_checkpoints`)
+   rather than the prototype's static `TICKERS` mock array with live
+   price/sparkline — a real live price/sparkline feed is a separate, unscoped
+   piece of work (not decided here). Land the search-by-known-ticker version
+   first; flag live quote/sparkline data as a follow-up needing its own
+   provider decision (see "Price data sources" for the kind of tradeoff that
+   entails).
+3. **Mobile bottom-sheet nav** — pure `helpers.js` template + CSS, following
+   `NAV_ITEMS`'s `mobileNav` flag pattern from the prototype's `types.ts`/
+   `mock-data.ts` to decide which of the (now up to 12, with Overview) views
+   surface in the bottom sheet vs. overflow. No backend change.
+4. **CSV/JSON export** — client-side: serialize whatever JSON the current
+   view's `/api/*` route already returned (positions, decisions, backtest
+   results, etc.) into a CSV/JSON `Blob` and trigger a download; no new
+   backend route, no server-side file generation.
+5. **Overview (command-center)** — the one feature needing real backend work.
+   `getOverviewData` composes: open/closed position summary + exposure
+   (`getSnapshotData`), ingestion freshness (`getHealthData` + new `fresh`
+   computation), pipeline checkpoints (`getPipelineData` + new `status`
+   computation), and the single most recent decision (`getDecisionsData`,
+   limit 1). Render as `renderSummaryCards`-style stat cards plus a
+   stale-source alert list (health sources where `fresh === false`), matching
+   the prototype's visual intent without adopting its mock data model.
+6. **Dual dark/light theme** — CSS custom properties + a `prefers-color-scheme`
+   default, explicit toggle persisted client-side (`localStorage`, matching
+   this repo's existing no-framework approach) and mirrored into a cookie so
+   `dashboard-worker.js` can render the correct theme class server-side on
+   first paint (avoids flash-of-wrong-theme); no D1/session-table change —
+   this is a per-browser preference, not per-user state (there is no
+   multi-user model here, see `src/auth/session.js`).
+
+**Explicitly NOT ported:**
+- The React/Next.js/Zustand/Radix/Recharts/Framer Motion runtime itself —
+  `prototype-ui-overhaul` remains a reference only, never deployed.
+- Multi-user auth — already excluded; `src/auth/session.js` stays single
+  shared `dashboardUsername`/`dashboardPassword`, no user table.
+- The prototype's `Settings` view — already excluded in the prototype itself
+  (removed z33 cleanup) and not being reintroduced here.
+- The prototype's static live-price/sparkline `TICKERS` mock as a real feed —
+  deferred, see Ticker search above; would need its own price-provider
+  decision (see "Price data sources").
+- Any unused `shadcn` `ui/*.tsx` components left in `prototype-ui-overhaul` —
+  per explicit owner request, left in place as scaffolding; not touched here.
+
+**Suggested PR order** (one PR per item, same working rules as "Next steps:
+make backtests trustworthy" — CI is the real test, merge only on explicit
+per-PR go-ahead, squash-merge): (1) theme toggle — smallest, no data changes;
+(2) auto-refresh — client-only; (3) CSV/JSON export — client-only; (4) mobile
+bottom-sheet nav — markup/CSS only; (5) `getOverviewData` + `/api/overview` +
+Overview view — the one item touching `data.js`/`api.js`; (6) ticker search
+against the derived-from-D1 universe. This orders cheapest/lowest-risk first
+and leaves the only real backend change (Overview) to when the rest of the
+pattern is already proven out.
+
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
   (`ENTITY_RESOLUTION_USE_NAME_INDEX`), suspected but unconfirmed cause of an
