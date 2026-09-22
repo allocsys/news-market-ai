@@ -1639,6 +1639,133 @@ ${themeColorMeta}
     closeBtn.addEventListener("click", close);
     backdrop.addEventListener("click", close);
   })();
+
+  // ---- Ticker search palette (plan.md "Dashboard: Scoped UX Adoption" item 6) ----
+  // Opened by any .search-trigger button (desktop rail + mobile header, see
+  // renderSearchTrigger) or Ctrl/Cmd+K from anywhere on the page. The ticker
+  // universe is fetched once per page load, lazily on first open, from
+  // GET /dashboard/tickers (proxies backend's GET /api/tickers --
+  // data.js#getTickersData); typing filters the cached list client-side, no
+  // per-keystroke request. Selecting a result (click or Enter) navigates to
+  // /dashboard/llm?llmTicker=<ticker> -- see renderSearchPalette's own header
+  // for why that page and not a new one. Same backdrop/panel open-close
+  // choreography as the mobile More sheet above (two rAFs so the transition
+  // actually animates, `hidden` re-added only after the CSS transition ends).
+  (function () {
+    var triggers = document.querySelectorAll(".search-trigger");
+    var backdrop = document.getElementById("search-backdrop");
+    var palette = document.getElementById("search-palette");
+    var input = document.getElementById("search-input");
+    var results = document.getElementById("search-results");
+    if (!triggers.length || !backdrop || !palette || !input || !results) return;
+
+    var tickers = null; // null = not yet loaded
+    var loading = false;
+    var isOpen = false;
+
+    function tickerHref(ticker) {
+      var env = window.__DASHBOARD_ENV__ || "live";
+      var qs = "llmTicker=" + encodeURIComponent(ticker);
+      if (env && env !== "live") qs += "&env=" + encodeURIComponent(env);
+      return "/dashboard/llm?" + qs;
+    }
+
+    function setActive(items, index) {
+      for (var i = 0; i < items.length; i++) items[i].classList.toggle("active", i === index);
+      if (index >= 0 && items[index]) items[index].scrollIntoView({ block: "nearest" });
+    }
+
+    function render(list) {
+      if (list.length === 0) {
+        results.innerHTML = '<div class="search-empty">' + (tickers === null ? "Loading tickers\u2026" : "No matching tickers") + "</div>";
+        return;
+      }
+      results.innerHTML = list
+        .map(function (t, i) {
+          return '<a href="' + tickerHref(t) + '" class="search-result' + (i === 0 ? " active" : "") + '">' + t + "</a>";
+        })
+        .join("");
+    }
+
+    function filterAndRender() {
+      var q = input.value.trim().toUpperCase();
+      if (tickers === null) { render([]); return; }
+      var list = q ? tickers.filter(function (t) { return t.indexOf(q) !== -1; }) : tickers;
+      render(list.slice(0, 50));
+    }
+
+    function loadTickers() {
+      if (tickers !== null || loading) return;
+      loading = true;
+      var env = window.__DASHBOARD_ENV__ || "live";
+      var qs = env && env !== "live" ? "?env=" + encodeURIComponent(env) : "";
+      fetch("/dashboard/tickers" + qs, { credentials: "same-origin" })
+        .then(function (res) { return res.ok ? res.json() : { tickers: [] }; })
+        .then(function (data) { tickers = data.tickers || []; })
+        .catch(function () { tickers = []; })
+        .then(function () { loading = false; filterAndRender(); });
+    }
+
+    function open() {
+      if (isOpen) return;
+      isOpen = true;
+      palette.hidden = false;
+      backdrop.hidden = false;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          palette.setAttribute("data-open", "true");
+          backdrop.setAttribute("data-open", "true");
+        });
+      });
+      document.body.style.overflow = "hidden";
+      input.value = "";
+      filterAndRender();
+      loadTickers();
+      input.focus();
+      document.addEventListener("keydown", onKeydown);
+    }
+
+    function close() {
+      if (!isOpen) return;
+      isOpen = false;
+      palette.removeAttribute("data-open");
+      backdrop.removeAttribute("data-open");
+      document.body.style.overflow = "";
+      document.removeEventListener("keydown", onKeydown);
+      setTimeout(function () {
+        if (!isOpen) { palette.hidden = true; backdrop.hidden = true; }
+      }, 200);
+    }
+
+    function onKeydown(e) {
+      if (e.key === "Escape") { close(); return; }
+      var items = results.querySelectorAll(".search-result");
+      var current = -1;
+      for (var i = 0; i < items.length; i++) if (items[i].classList.contains("active")) current = i;
+      if (e.key === "ArrowDown") {
+        if (!items.length) return;
+        e.preventDefault();
+        setActive(items, Math.min(current + 1, items.length - 1));
+      } else if (e.key === "ArrowUp") {
+        if (!items.length) return;
+        e.preventDefault();
+        setActive(items, Math.max(current - 1, 0));
+      } else if (e.key === "Enter") {
+        if (current >= 0 && items[current]) { window.location.href = items[current].getAttribute("href"); }
+      }
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        if (isOpen) { close(); } else { open(); }
+      }
+    });
+
+    for (var t = 0; t < triggers.length; t++) triggers[t].addEventListener("click", open);
+    backdrop.addEventListener("click", close);
+    input.addEventListener("input", filterAndRender);
+  })();
 </script>
 </head>
 <body>
