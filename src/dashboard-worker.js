@@ -417,6 +417,17 @@ export default {
     // redirect target, until that's a deliberate decision rather than a
     // side effect of adding the page.
     if (pathname === "/dashboard") return redirect("/dashboard/snapshot");
+
+    // Nav-group landing routes (plan.md Step 2 nav reorg, 2026-09-22): each
+    // multi-section group (see shell.js's NAV_GROUPS) gets a single URL that
+    // 302s to its first section, so clicking the group itself -- not just one
+    // of its sub-links -- goes somewhere. Query string (notably ?env=)
+    // travels with the redirect so a chosen backtest survives the hop. Old
+    // per-section URLs below are completely unchanged by this reorg.
+    if (pathname === "/dashboard/book") return redirect(`/dashboard/snapshot${url.search}`);
+    if (pathname === "/dashboard/research") return redirect(`/dashboard/decisions${url.search}`);
+    if (pathname === "/dashboard/operations") return redirect(`/dashboard/pipeline${url.search}`);
+
     if (pathname === "/dashboard/overview") return renderSection(request, env, config, "overview");
     if (pathname === "/dashboard/snapshot") return renderSection(request, env, config, "snapshot");
     if (pathname === "/dashboard/activity") return renderSection(request, env, config, "activity");
