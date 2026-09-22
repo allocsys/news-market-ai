@@ -59,6 +59,43 @@ export async function failBacktestRun(db, { id, error, finishedAt }) {
     .run();
 }
 
+/**
+ * Cancels a RUNNING backtest, atomically (`WHERE status = 'running'` in the
+ * same statement as the transition, so a cancel racing the run's own
+ * completion/failure can never resurrect or double-transition a terminal
+ * row). `error` reuses the same column failBacktestRun writes to -- the
+ * registry has no separate "why it stopped" field, and the dashboard's error
+ * rendering (helpers.js#backtestRunsList) already knows how to show it.
+ * Returns whether THIS call made the change: false means the run had
+ * already finished, failed, or was cancelled by an earlier call -- the
+ * caller uses that to tell "cancelled just now" from "nothing to cancel"
+ * without a second read.
+ */
+export async function cancelBacktestRun(db, { id, finishedAt, error = "Cancelled by operator" }) {
+  const result = await db
+    .prepare(`UPDATE backtest_runs SET status = 'cancelled', error = ?, finished_at = ? WHERE id = ? AND status = 'running'`)
+    .bind(error, finishedAt, id)
+    .run();
+  return (result.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * Ids (+ status) of TERMINAL ('complete' | 'failed' | 'cancelled') runs
+ * started more than `olderThanDays` ago, oldest first, up to `limit` -- the
+ * candidate set for backtest/cleanup.js#cleanupOldRuns's bulk "clean up old
+ * runs" sweep. Deliberately never returns a 'running' row: a stuck-looking
+ * run needs an explicit, individual cancel (cancelBacktestRun above), not a
+ * silent bulk data-delete swept up by age alone.
+ */
+export async function getStaleTerminalBacktestRuns(db, { olderThanDays, limit = 5 }) {
+  const cutoff = new Date(Date.now() - olderThanDays * 24 * 3600 * 1000).toISOString();
+  const { results } = await db
+    .prepare(`SELECT id, status FROM backtest_runs WHERE status IN ('complete', 'failed', 'cancelled') AND started_at < ? ORDER BY started_at ASC LIMIT ?`)
+    .bind(cutoff, limit)
+    .all();
+  return results;
+}
+
 function rowToRun(r) {
   return {
     id: r.id,
