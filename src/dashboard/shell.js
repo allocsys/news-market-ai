@@ -661,28 +661,29 @@ const STYLE = `
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 1.1rem 1.25rem;
+    padding: 1.1rem 1.25rem 1.35rem;
     position: relative;
     overflow: hidden;
-    box-shadow: var(--shadow-card);
-    transition: border-color 200ms ease, transform 200ms ease;
+    transition: border-color 200ms ease;
   }
-  .stat-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+  .stat-card:hover { border-color: var(--border-strong); }
   .stat-card::before {
     content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
     background: var(--stat-accent, var(--accent));
     opacity: 0.85;
   }
+  /* Minor-scale tick rule under the value, like a gauge's calibration marks --
+     reinforces "instrument readout" over a plain stat tile. Replaces the old
+     radial accent-glow (::after used --stat-accent-glow, now unused). */
   .stat-card::after {
-    content: ""; position: absolute; top: -40px; right: -40px;
-    width: 120px; height: 120px; border-radius: 50%;
-    background: radial-gradient(circle, var(--stat-accent-glow, var(--accent-glow)) 0%, transparent 70%);
-    opacity: 0.4; pointer-events: none;
+    content: ""; position: absolute; left: 1.25rem; right: 1.25rem; bottom: 0.9rem; height: 1px;
+    background: repeating-linear-gradient(90deg, var(--border-strong) 0 2px, transparent 2px 8px);
+    opacity: 0.65; pointer-events: none;
   }
   .stat-value {
-    font-family: var(--font-display); font-size: 1.875rem; font-weight: 600;
+    font-family: var(--font-mono); font-size: 1.875rem; font-weight: 600;
     color: var(--text-main); font-variant-numeric: tabular-nums;
-    line-height: 1.15; letter-spacing: -0.02em;
+    line-height: 1.15; letter-spacing: -0.01em;
     position: relative; z-index: 1;
   }
   .stat-label {
@@ -718,10 +719,9 @@ const STYLE = `
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     padding: 1.1rem 1.25rem;
-    box-shadow: var(--shadow-card);
-    transition: border-color 200ms ease, transform 200ms ease;
+    transition: border-color 200ms ease;
   }
-  .chart-cell:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+  .chart-cell:hover { border-color: var(--border-strong); }
   .chart-cell-title {
     font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em;
     margin-bottom: 0.6rem; font-size: 0.9375rem; color: var(--text-main);
@@ -745,7 +745,6 @@ const STYLE = `
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     padding: 1.25rem;
-    box-shadow: var(--shadow-card);
     display: flex; flex-direction: column; gap: 1rem;
   }
   .donut-cell-title {
@@ -762,7 +761,7 @@ const STYLE = `
   }
   .donut-svg { flex-shrink: 0; }
   .donut-center-value {
-    font-family: var(--font-display); font-weight: 600;
+    font-family: var(--font-mono); font-weight: 600;
     fill: var(--text-main); font-variant-numeric: tabular-nums;
   }
   .donut-center-label {
@@ -792,7 +791,6 @@ const STYLE = `
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     padding: 1.25rem;
-    box-shadow: var(--shadow-card);
     display: flex; flex-direction: column; gap: 0.5rem;
     text-align: center;
   }
@@ -805,7 +803,7 @@ const STYLE = `
     text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
   }
   .gauge-value {
-    font-family: var(--font-display); font-weight: 600;
+    font-family: var(--font-mono); font-weight: 600;
     fill: var(--text-main); font-variant-numeric: tabular-nums;
   }
   .gauge-label {
@@ -1083,7 +1081,7 @@ const STYLE = `
   .mini-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 1rem 1.5rem; }
   .mini-stat { min-width: 0; }
   .mini-stat-value {
-    font-family: var(--font-display); font-size: 1.5rem; font-weight: 600;
+    font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600;
     font-variant-numeric: tabular-nums; line-height: 1.2; color: var(--text-main);
   }
   .mini-stat-label {
