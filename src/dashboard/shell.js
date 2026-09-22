@@ -281,11 +281,17 @@ const STYLE = `
   }
   .section-nav a.active .nav-icon { color: var(--accent-bright); opacity: 1; }
   .nav-label { flex: 1; min-width: 0; }
-  .nav-index {
-    color: var(--text-subtle); font-size: 0.6875rem; font-weight: 500;
-    font-family: var(--font-mono); letter-spacing: 0.04em;
+
+  /* Group header above a multi-section group's links (plan.md Step 2 nav
+     reorg, 2026-09-22) -- replaces the old per-link numbered badge (01, 02...)
+     dropped this step since the nav isn't a sequence. Single-section groups
+     (Overview, Backtest) render with no header at all, see renderNav. */
+  .section-nav-group-label {
+    margin: 0.85rem 0 0.15rem; padding: 0 0.625rem;
+    font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-subtle);
   }
-  .section-nav a.active .nav-index { color: var(--accent-bright); }
+  .section-nav-group-label:first-child { margin-top: 0; }
 
   .rail-meta {
     margin-top: auto;
@@ -792,7 +798,8 @@ const STYLE = `
     .rail .section-nav a.active { background: var(--bg-active); }
     .rail .section-nav a.active::before { display: none; }
     .rail .section-nav a.active { border: 1px solid var(--accent); }
-    .rail .section-nav a .nav-index, .rail .section-nav a .nav-label { display: none; }
+    .rail .section-nav-group-label { display: none; }
+    .rail .section-nav a .nav-label { display: none; }
     .rail .section-nav a .nav-icon { opacity: 1; }
     .rail .section-nav a:hover .nav-icon,
     .rail .section-nav a.active .nav-icon { color: var(--text-main); }
@@ -893,7 +900,6 @@ const STYLE = `
     .bottom-nav a > span:not(.nav-icon) {
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .bottom-nav .nav-index { display: none; }
 
     /* ---- Mobile "More" bottom sheet (plan.md "Dashboard: Scoped UX Adoption" item 4) ----
        Tapping "More" opens this in-page overlay instead of a full-page nav
@@ -1136,33 +1142,57 @@ export const NAV_SECTIONS = [
   ["more", "More", "MR"],
 ];
 
+// Nav reorg (plan.md "Dashboard: Heavy Polish..." Step 2, 2026-09-22):
+// collapses the 12 flat sections above into 5 groups for the desktop rail,
+// tablet icon rail and mobile bottom-nav. This is a NAV-LEVEL grouping only
+// -- every section keeps its own route/renderer/data fetch, nothing here
+// merges page content or data (that's explicitly out of scope for this
+// step). A group with one section renders as a plain link (no header); a
+// group with several renders a small uppercase header followed by its
+// section links. Each multi-section group also gets a landing route (see
+// dashboard-worker.js's /dashboard/book, /research, /operations) that 302s
+// to its first section, so the group is a single click, not just a label.
+// Decided 2026-09-22: old per-section URLs (/dashboard/snapshot etc.) are
+// UNCHANGED and keep working exactly as before -- nothing to redirect there,
+// since nothing was renamed. Only the new group-landing URLs are additions.
+export const NAV_GROUPS = [
+  { id: "overview", label: "Overview", sections: ["overview"] },
+  { id: "book", label: "Book", sections: ["snapshot", "positions", "charts"] },
+  { id: "research", label: "Research", sections: ["decisions", "llm"] },
+  { id: "operations", label: "Operations", sections: ["pipeline", "health", "backfill"] },
+  { id: "backtest", label: "Backtest", sections: ["backtest"] },
+];
+
 // `env` (the resolved environment, "live" by default) is appended to the links
 // of env-aware sections only, so a chosen backtest survives flipping between
 // snapshot/decisions/positions/... without the operator re-picking it.
 const navHref = (id, env) => `/dashboard/${id}${ENV_SECTIONS.includes(id) ? envSuffix(env) : ""}`;
 
-function renderNav(activeSection, env) {
-  const links = NAV_SECTIONS.map(([id, label, abbr], i) => {
-    const n = String(i + 1).padStart(2, "0");
-    const active = activeSection === id;
-    const icon = ICONS[id] ?? "";
-    return `<a href="${escapeHtml(navHref(id, env))}"${active ? ' class="active"' : ""} data-label="${escapeHtml(label)}"><span class="nav-index">${n}</span><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span></a>`;
-  }).join("");
-  return `<nav class="section-nav">${links}</nav>`;
+const SECTION_LABEL_BY_ID = Object.fromEntries(NAV_SECTIONS.map(([id, label]) => [id, label]));
+
+function renderNavLink(id, activeSection, env) {
+  const active = activeSection === id;
+  const icon = ICONS[id] ?? "";
+  const label = SECTION_LABEL_BY_ID[id] ?? id;
+  return `<a href="${escapeHtml(navHref(id, env))}"${active ? ' class="active"' : ""} data-label="${escapeHtml(label)}"><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span></a>`;
 }
 
-// Mobile bottom nav is a curated subset of the most-used sections, with "More"
-// as the overflow. This is intentionally different from the desktop nav so
-// mobile users get single-tap access to the five sections they're most
-// likely to check on a phone.
-const MOBILE_NAV_SECTIONS = [
-  ["snapshot", "Snapshot", "01"],
-  ["decisions", "Decisions", "05"],
-  ["positions", "Positions", "06"],
-  ["pipeline", "Pipeline", "07"],
-  ["health", "Health", "04"],
-  ["more", "More", "10"],
-];
+function renderNav(activeSection, env) {
+  const groups = NAV_GROUPS.map((g) => {
+    const links = g.sections.map((id) => renderNavLink(id, activeSection, env)).join("");
+    if (g.sections.length === 1) return links;
+    return `<div class="section-nav-group-label">${escapeHtml(g.label)}</div>${links}`;
+  }).join("");
+  return `<nav class="section-nav">${groups}</nav>`;
+}
+
+// Mobile bottom nav mirrors the 5 desktop nav groups (plan.md Step 2 nav
+// reorg, 2026-09-22, see NAV_GROUPS) plus "More" for overflow -- one tap per
+// group, landing on that group's first section (the same page its
+// /dashboard/<group> redirect targets, see dashboard-worker.js). Derived
+// from NAV_GROUPS directly so this can't drift from the desktop nav's
+// structure the way the old hand-curated list could.
+const MOBILE_NAV_SECTIONS = NAV_GROUPS.map((g) => [g.sections[0], g.label]).concat([["more", "More"]]);
 
 /**
  * "More" sheet overlay (plan.md "Dashboard: Scoped UX Adoption" item 4).
@@ -1178,12 +1208,12 @@ const MOBILE_NAV_SECTIONS = [
  * in STYLE).
  */
 function renderMobileMoreSheet(activeSection, env) {
-  // Overview rides in the 'More' overflow rather than one of the six pinned
-  // MOBILE_NAV_SECTIONS slots (below) -- it is new and unproven as a
-  // most-used mobile destination, unlike snapshot/decisions/positions/
-  // pipeline/health, which this pinning was tuned around. Revisit once it's
-  // clear operators actually reach for it from a phone.
-  const overflowIds = ["overview", "activity", "charts", "llm", "backfill", "backtest"];
+  // Overflow = every section not already pinned to a bottom-nav tab (plan.md
+  // Step 2 nav reorg, 2026-09-22 -- MOBILE_NAV_SECTIONS is now derived from
+  // NAV_GROUPS, one tab per group, so this is computed as whatever's left
+  // over rather than hand-maintained, avoiding the two drifting apart).
+  const pinnedIds = new Set(MOBILE_NAV_SECTIONS.map(([id]) => id));
+  const overflowIds = NAV_SECTIONS.map(([id]) => id).filter((id) => id !== "more" && !pinnedIds.has(id));
   const cards = NAV_SECTIONS.filter(([id]) => overflowIds.includes(id))
     .map(([id, label]) => {
       const active = activeSection === id;
@@ -1203,7 +1233,11 @@ function renderMobileMoreSheet(activeSection, env) {
  * present in the DOM (see renderMobileMoreSheet above).
  */
 function renderBottomNav(activeSection, env) {
-  const moreIds = ["overview", "activity", "charts", "llm", "backfill", "backtest", "more"];
+  // "More" tab reads as active whenever the current page is one of the
+  // overflow sections (same set renderMobileMoreSheet computes) -- kept as
+  // its own computation here since this function doesn't call that one.
+  const pinnedIds = new Set(MOBILE_NAV_SECTIONS.map(([id]) => id));
+  const moreIds = NAV_SECTIONS.map(([id]) => id).filter((id) => id !== "more" && !pinnedIds.has(id));
   const links = MOBILE_NAV_SECTIONS.map(([id, label, n]) => {
     let active = activeSection === id;
     if (id === "more" && moreIds.includes(activeSection)) {
