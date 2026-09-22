@@ -574,13 +574,9 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    `main` @ `55cbbbf` (2026-09-22). Also covered `src/login.js` (found via
    `search_code`, not in the original scope -- it keeps its own standalone
    palette). Light theme and general status colors intentionally untouched,
-   per plan. Step 2 is on `dashboard-redesign/step-2-nav-reorg`. -- rewrite `shell.js`'s CSS custom
-   properties (`:root` and `:root[data-theme="dark"]`) to the new palette/type
-   tokens above; swap font imports (Fraunces/IBM Plex Sans/IBM Plex Mono);
-   no layout/markup changes yet, so every existing view re-themes for free
-   and stays functionally identical -- lowest-risk step, proves the palette
-   in situ before anything else changes.
-2. **Navigation reorg** -- collapse 12 sections to the 5 groups above in the
+   per plan. Step 2 is on `dashboard-redesign/step-2-nav-reorg`.
+2. **Navigation reorg** -- IN PROGRESS, `dashboard-redesign/step-2-nav-reorg`
+   (branched off `main` @ `55cbbbf`). Collapse 12 sections to the 5 groups above in the
    desktop rail, tablet icon rail, and mobile bottom-nav/more-sheet; drop
    numbered badges; decide + implement the URL/routing scheme for
    merged/renamed sections (old links must not 404 -- redirect or alias).
@@ -607,11 +603,9 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    new motion, and color contrast on both themes before calling the redesign
    done.
 
-**Not yet started.** This session created the branch and this plan only --
-no code written. Standing instructions from the completed UI-overhaul plan
-("merge if green", "edit yourself, don't use delegate_editor") are **not**
-confirmed to carry over to this plan; re-confirm with the owner before Step 1
-lands rather than assuming.
+**Status:** Step 1 done (PR #92, merged). Step 2 in progress. Merge timing
+(auto-merge-if-green vs. wait for explicit per-PR go-ahead) still not
+confirmed -- ask before merging each step's PR even when CI is green.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
