@@ -6,10 +6,11 @@
 # fallback model. Free-tier keys from separate Google accounts work well here.
 GEMINI_API_KEYS=key1,key2,key3
 
-# Optional overrides -- see wrangler.toml [vars] for defaults.
-# GEMINI_QUICK_MODEL=gemini-2.5-flash-lite
-# GEMINI_DEEP_MODEL=gemini-2.5-flash
-# GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
+# Optional overrides -- see wrangler.llm.toml [vars] for defaults (moved
+# there from wrangler.toml in plan.md Step 6).
+# GEMINI_QUICK_MODEL=gemini-3.1-flash-lite
+# GEMINI_DEEP_MODEL=gemini-3.6-flash
+# GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.8-flash,gemini-3.6-flash,gemini-3-flash-preview
 # GEMINI_REQUEST_TIMEOUT_MS=30000
 
 # Finnhub news source (src/ingestion/sources/finnhub.js) -- replaced GDELT
