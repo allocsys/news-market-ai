@@ -1063,16 +1063,21 @@ function renderMobileHeader(sessionUsername) {
 }
 
 /**
- * Per-page toolbar: the existing manual "Refresh" link, plus a client-side
- * auto-refresh toggle (plan.md "Dashboard: Scoped UX Adoption" item 1). The
- * toggle's on/off state is a per-browser localStorage preference (see the
- * inline script in renderShell below) -- same "no D1/session-table change"
- * rule as the theme toggle, this isn't per-user state either.
+ * Per-page toolbar: manual "Refresh" link, auto-refresh toggle (plan.md
+ * "Dashboard: Scoped UX Adoption" item 1), and Export CSV/JSON buttons
+ * (item 4). Export works off the exact JSON this page's SSR render already
+ * fetched -- see renderShell's `exportData` param and the
+ * #dashboard-export-data script tag it emits -- so these buttons only do
+ * anything once that data has loaded; the client-side script disables them
+ * otherwise (missing tag, or a CSV click with no tabular data found).
+ * `activeSection` names the downloaded file (e.g. "decisions-2026-09-22.csv").
  */
-function renderPageToolbar(refreshHref) {
+function renderPageToolbar(refreshHref, activeSection) {
   if (!refreshHref) return "";
   return `<div class="page-toolbar">
         <span class="page-toolbar-updated">Loaded ${fmtTime(new Date().toISOString())}</span>
+        <button type="button" class="btn btn-tertiary" id="dashboard-export-csv-btn" data-section="${escapeHtml(activeSection)}" title="Export this page's data as CSV">Export CSV</button>
+        <button type="button" class="btn btn-tertiary" id="dashboard-export-json-btn" data-section="${escapeHtml(activeSection)}" title="Export this page's data as JSON">Export JSON</button>
         <button type="button" class="auto-refresh-toggle" id="auto-refresh-toggle" data-on="true" title="Toggle auto-refresh"><span class="auto-refresh-dot"></span><span id="auto-refresh-toggle-label">Auto-refresh on</span></button>
         <a href="${escapeHtml(refreshHref)}" class="btn btn-secondary" title="Reload this page with the latest data"><span aria-hidden="true">\u21bb</span> Refresh</a>
       </div>`;
@@ -1087,7 +1092,7 @@ function renderPageToolbar(refreshHref) {
  * avoids a flash of the wrong theme on first paint once the operator has
  * toggled at least once.
  */
-export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref, env = "live", theme }) {
+export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref, env = "live", theme, exportData }) {
   const themeAttr = theme === "light" || theme === "dark" ? ` data-theme="${theme}"` : "";
   const themeColorMeta =
     theme === "light"
@@ -1245,6 +1250,119 @@ ${themeColorMeta}
     setToggleUi();
     schedule();
   })();
+
+  // ---- CSV/JSON export (plan.md "Dashboard: Scoped UX Adoption" item 4) ----
+  // Reads the JSON this page's SSR render already fetched from backend's
+  // /api/* route, embedded server-side into #dashboard-export-data (see
+  // dashboard-worker.js#renderSection's `exportData` -- exactly the `data`
+  // object each render*View already consumed, not a second fetch). No new
+  // backend route, no server-side file generation.
+  (function () {
+    var csvBtn = document.getElementById("dashboard-export-csv-btn");
+    var jsonBtn = document.getElementById("dashboard-export-json-btn");
+    if (!csvBtn && !jsonBtn) return;
+
+    var section = (csvBtn || jsonBtn).getAttribute("data-section") || "dashboard";
+    var dataEl = document.getElementById("dashboard-export-data");
+    var data = null;
+    if (dataEl) {
+      try { data = JSON.parse(dataEl.textContent); } catch (e) {}
+    }
+
+    function isPlainObjArray(v) {
+      return Array.isArray(v) && v.length > 0 && v.every(function (x) { return x && typeof x === "object" && !Array.isArray(x); });
+    }
+
+    // One level deep only, by design: covers every current section shape
+    // (a top-level array like decisions.decisions/pipeline.checkpoints, or a
+    // top-level object holding one like snapshot.openPositions +
+    // .closedPositions). A dict-of-arrays keyed by something other than a
+    // row's own field (charts' priceBarsByTicker, keyed by ticker) is
+    // deliberately NOT picked up here -- it isn't row-shaped, so CSV export
+    // just reports "nothing to export" and JSON export still has the raw data.
+    function collectTables(obj) {
+      var tables = [];
+      if (!obj || typeof obj !== "object") return tables;
+      Object.keys(obj).forEach(function (key) {
+        var val = obj[key];
+        if (isPlainObjArray(val)) { tables.push({ name: key, rows: val }); return; }
+        if (val && typeof val === "object" && !Array.isArray(val)) {
+          Object.keys(val).forEach(function (subKey) {
+            var subVal = val[subKey];
+            if (isPlainObjArray(subVal)) tables.push({ name: key + "." + subKey, rows: subVal });
+          });
+        }
+      });
+      return tables;
+    }
+
+    function csvCell(v) {
+      var s = v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+      return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    // Multiple tables (e.g. openPositions + closedPositions) are unioned into
+    // one CSV with a leading _table column rather than one file per table --
+    // keeps this a single-click download instead of needing a picker UI.
+    function tablesToCsv(tables) {
+      var multi = tables.length > 1;
+      var columns = [];
+      var seen = {};
+      if (multi) { columns.push("_table"); seen._table = true; }
+      tables.forEach(function (t) {
+        t.rows.forEach(function (row) {
+          Object.keys(row).forEach(function (k) {
+            if (!seen[k]) { seen[k] = true; columns.push(k); }
+          });
+        });
+      });
+      var lines = [columns.map(csvCell).join(",")];
+      tables.forEach(function (t) {
+        t.rows.forEach(function (row) {
+          lines.push(columns.map(function (col) { return csvCell(col === "_table" ? t.name : row[col]); }).join(","));
+        });
+      });
+      return lines.join("\r\n");
+    }
+
+    function download(filename, content, mime) {
+      var blob = new Blob([content], { type: mime });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    var todayStamp = new Date().toISOString().slice(0, 10);
+
+    if (!data) {
+      if (csvBtn) { csvBtn.disabled = true; csvBtn.title = "No data loaded to export yet"; }
+      if (jsonBtn) { jsonBtn.disabled = true; jsonBtn.title = "No data loaded to export yet"; }
+      return;
+    }
+
+    if (jsonBtn) {
+      jsonBtn.addEventListener("click", function () {
+        download(section + "-" + todayStamp + ".json", JSON.stringify(data, null, 2), "application/json;charset=utf-8");
+      });
+    }
+
+    if (csvBtn) {
+      var tables = collectTables(data);
+      if (tables.length === 0) {
+        csvBtn.disabled = true;
+        csvBtn.title = "No tabular data on this page to export as CSV";
+      } else {
+        csvBtn.addEventListener("click", function () {
+          download(section + "-" + todayStamp + ".csv", tablesToCsv(tables), "text/csv;charset=utf-8");
+        });
+      }
+    }
+  })();
 </script>
 </head>
 <body>
@@ -1263,12 +1381,13 @@ ${themeColorMeta}
     </aside>
     <div class="content">
       <main id="dashboard-main">
-      ${renderPageToolbar(refreshHref)}
+      ${renderPageToolbar(refreshHref, activeSection)}
       ${bodyHtml}
       </main>
     </div>
   </div>
   ${renderBottomNav(activeSection, env)}
+  ${exportData !== undefined ? `<script type="application/json" id="dashboard-export-data">${JSON.stringify(exportData).replace(/<\/script/gi, "<\\/script")}</script>` : ""}
 </body>
 </html>`;
 }
