@@ -1,36 +1,38 @@
 // Server-rendered login page for src/index.js's GET/POST /login routes --
 // zero client JS (same philosophy as dashboard.js). Deliberately its own
 // small file/style rather than importing shell.js's STYLE: this page is
-// one center card, not a data-dense multi-section layout. Palette uses
-// the v2 professional product dark theme and Inter typography matching shell.js.
+// one center card, not a data-dense multi-section layout. Palette/type
+// tokens are kept in step with shell.js's DARK_VARS by hand (plan.md
+// "Dashboard: Heavy Polish, Redesign & Reorganization" Step 1, 2026-09-22) --
+// this file has no import of shell.js's STYLE to share the source of truth.
 
 import { escapeHtml } from "./dashboard/helpers.js";
 
 const LOGIN_STYLE = `
   :root {
     color-scheme: dark;
-    --bg-base: #070b14;
-    --bg-surface: #0d1320;
-    --bg-elevated: #131b2e;
-    --bg-hover: #1a2238;
-    --border-color: #1f2a44;
-    --border-strong: #2c3a5a;
-    --text-main: #f1f5f9;
-    --text-muted: #94a3b8;
-    --text-subtle: #64748b;
-    --accent: #3b82f6;
-    --accent-hover: #2563eb;
-    --accent-bright: #60a5fa;
-    --accent-deep: #1d4ed8;
-    --accent-subtle: rgba(59, 130, 246, 0.14);
-    --accent-glow: rgba(96, 165, 250, 0.22);
-    --focus-ring: #60a5fa;
+    --bg-base: #14171f;
+    --bg-surface: #1c2029;
+    --bg-elevated: #242935;
+    --bg-hover: #2b3140;
+    --border-color: #313846;
+    --border-strong: #3f4759;
+    --text-main: #edeae2;
+    --text-muted: #a8a398;
+    --text-subtle: #7d7a72;
+    --accent: #d98e3c;
+    --accent-hover: #c67d2e;
+    --accent-bright: #e8a458;
+    --accent-deep: #a8631f;
+    --accent-subtle: rgba(217, 142, 60, 0.14);
+    --accent-glow: rgba(232, 164, 88, 0.22);
+    --focus-ring: #e8a458;
     --color-danger-bg: rgba(239, 68, 68, 0.12);
     --color-danger-text: #f87171;
     --color-success-text: #34d399;
-    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-display: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
     --radius-sm: 6px;
     --radius-md: 10px;
     --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.5);
@@ -41,8 +43,8 @@ const LOGIN_STYLE = `
     font-family: var(--font-sans);
     margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
     background: var(--bg-base);
-    background-image: radial-gradient(900px 480px at 12% -8%, rgba(59, 130, 246, 0.10), transparent 70%),
-                      radial-gradient(700px 360px at 88% 0%, rgba(167, 139, 250, 0.06), transparent 70%);
+    background-image: radial-gradient(900px 480px at 12% -8%, rgba(217, 142, 60, 0.10), transparent 70%),
+                      radial-gradient(700px 360px at 88% 0%, rgba(139, 111, 158, 0.06), transparent 70%);
     background-attachment: fixed;
     color: var(--text-main);
     padding: 1.5rem;
@@ -153,11 +155,11 @@ export function renderLoginPage({ error = null, disabled = false } = {}) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#070b14">
+<meta name="theme-color" content="#14171f">
 <title>news-market-ai &mdash; login</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>${LOGIN_STYLE}</style>
 </head>
 <body>

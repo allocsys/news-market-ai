@@ -476,6 +476,138 @@ price/sparkline feed for ticker search (still a separate, undecided piece of
 work — see "Price data sources"), and unused `shadcn ui/*.tsx` scaffolding in
 `prototype-ui-overhaul` (left in place per owner request).
 
+## Dashboard: Heavy Polish, Redesign & Reorganization -- IN PROGRESS, started 2026-09-22
+Supersedes nothing (this is new scope, separate from the now-DONE "Scoped UX
+Adoption" section above -- that shipped 6 discrete features onto the existing
+visual system; this replaces the visual system itself, plus reorganizes
+navigation). Branch: `dashboard-redesign/polish-reorg`, cut from `main` @
+`83bc8e4`.
+
+**Working rules -- corrected a second time, 2026-09-22:** the first correction
+(below, kept for the record) decided to batch everything behind this branch
+with no per-step CI, given `main`-only CI. Owner then explicitly chose the
+other option: **ship incrementally.** Each step goes to `main` directly as
+its own real PR (so it gets actual `test`-job CI coverage), not batched
+behind `dashboard-redesign/polish-reorg`. Step 1's two commits (`99c3ce9`
+shell.js, `3ab368d` login.js) are being PR'd into `main` now, from this same
+branch, as the first incremental step -- meaning Step 1's changes go live
+(dark-theme tokens + fonts only, no layout change) before the rest of the
+redesign exists. **For Step 2 onward:** branch fresh off `main`'s new tip
+after each merge, not off this now-partially-merged branch, to avoid a messy
+re-diff against already-merged history. Merge timing (auto-merge-if-green vs.
+wait for explicit per-PR go-ahead) is **not yet confirmed** for this plan --
+ask before merging Step 1's PR even if CI is green, same caution as the
+original UI-overhaul plan's unconfirmed carry-over.
+
+*(First correction, superseded above, kept for the record: that original plan
+doesn't hold up against how CI is actually wired --
+`.github/workflows/deploy.yml`'s `pull_request` trigger is scoped to
+`branches: [main]` only, so a PR targeting this feature branch never runs the
+`test` job at all. Decided 2026-09-22 (v1): no per-step CI, batch behind this
+branch, one PR to `main` at the end. Reversed same day (v2, above) once the
+owner weighed in.)*
+
+**Near-miss incident (2026-09-22, no production impact):** triggered
+`workflow_dispatch` on this branch to try to get a CI signal for Step 1's
+commit outside a PR. `workflow_dispatch` does NOT run test-only -- it bypasses
+the `changes` job's path-filter logic entirely (`github.event_name ==
+'workflow_dispatch'` forces every filter output to `true`) and runs the FULL
+pipeline: `test` -> `migrate` (real D1 migrations) -> `deploy` -> every
+per-Worker deploy job including `deploy-dashboard`, regardless of which
+branch it's dispatched on. That would have deployed this in-progress,
+unreviewed redesign branch's `dashboard-worker.js`/`shell.js` straight to the
+live `dashboard` Worker. Caught and cancelled (`cancel_workflow_run`) before
+any job past the initial gating step ran -- confirmed via `get_workflow_run_logs`
+that `test`/`migrate`/`deploy`/`deploy-dashboard`/etc. all show `cancelled`,
+none `success`. **Lesson: never use `workflow_dispatch` on this repo's
+`deploy.yml` from a non-`main` branch -- it has no test-only mode, only
+full-pipeline-including-deploy.** If a CI signal is ever needed before the
+final PR, the only safe options are (a) a real PR into `main`, which ships to
+prod, or (b) manual local testing (`npm test`), not a workflow dispatch.
+
+**Why:** current dashboard (`src/dashboard/shell.js` + `helpers.js` +
+`views/*.js`, vanilla SSR template strings, no framework) uses a stock dark-
+navy-background/blue-accent palette (`#070b14` / `#3b82f6`) and a numbered
+sidebar nav ("01 Overview", "02 Snapshot"...) on a non-sequential list --
+generic SaaS-dashboard defaults, not a look grounded in what this product
+actually is: an AI trading desk where every decision is backed by a literal
+bull/bear debate and a judge's verdict (`opinions[]`, `debate.bull`/`bear`,
+`researchManager` verdict -- see "Adopted Patterns" #2 and the `decisions`
+schema in `src/dashboard/data.js`).
+
+**Design plan (frontend-design skill process: token system proposed, checked
+against generic-AI-design defaults, then reviewed with the owner before build
+-- decided 2026-09-22, this is the baseline every step below builds toward):**
+- **Color** (dark mode primary; light-mode variant keeps the same token roles,
+  ported at Step 6): Carbon Ink `#14171F` (base, warm-neutral not blue-black),
+  Slate Panel `#1C2029` (surface), Steel Elevated `#242935` (cards), Rule
+  `#313846` (hairline borders), Parchment Text `#EDEAE2` (primary text, warm
+  off-white), Ticker Amber `#D98E3C` (single primary accent, replaces generic
+  blue), Bull Sage `#4E9B6B` / Bear Brick `#C1523F` (muted, used only for
+  bull/bear semantics, not general status -- general status keeps distinct
+  success/danger/warning tokens already in `shell.js`, unchanged).
+- **Type:** Fraunces (display serif -- section headers, verdict/thesis
+  callouts, big stat numbers -- gives the AI's reasoning editorial weight
+  instead of burying it in body sans); IBM Plex Sans (UI chrome, labels, nav,
+  forms); IBM Plex Mono (tickers, IDs, timestamps, tabular figures -- same
+  superfamily as the sans). Replaces current Inter Tight/Inter/system-mono.
+- **Layout concept -- "ledger + instrument rail":** dense functional nav stays
+  (12 sections collapsing to ~5 groups, see reorg below), numbered nav badges
+  dropped (nav isn't a sequence). Data-heavy views become hairline-ruled
+  ledger tables. One deliberate bold move, everything else quiet around it:
+  the Decision/Verdict card -- bull argument left with a sage rule, bear
+  argument right with a brick rule, judge's verdict beneath set in serif
+  italic like an actual ruling, divided by a single amber spine.
+- **Reorganization:** collapse the current 12 flat nav sections toward 5
+  groups -- **Overview** (unchanged); **Book** (Snapshot + Positions +
+  Charts merged -- all three currently show open/closed positions and price
+  data from overlapping angles); **Research** (Decisions + LLM Calls -- both
+  are views into the same underlying analyst/debate/verdict pipeline);
+  **Operations** (Pipeline + Health + Backfill -- all operator/monitoring
+  tooling, none end-user-facing); **Backtest** (unchanged, including its
+  detail/confirm sub-pages). Exact routing/URL scheme (redirect old paths vs.
+  rename outright) not yet decided -- resolve at Step 2.
+
+**Steps (ordered, one PR each, off `dashboard-redesign/polish-reorg`):**
+1. **Design tokens + shell foundation** -- rewrite `shell.js`'s CSS custom
+   properties (`:root` and `:root[data-theme="dark"]`) to the new palette/type
+   tokens above; swap font imports (Fraunces/IBM Plex Sans/IBM Plex Mono);
+   no layout/markup changes yet, so every existing view re-themes for free
+   and stays functionally identical -- lowest-risk step, proves the palette
+   in situ before anything else changes.
+2. **Navigation reorg** -- collapse 12 sections to the 5 groups above in the
+   desktop rail, tablet icon rail, and mobile bottom-nav/more-sheet; drop
+   numbered badges; decide + implement the URL/routing scheme for
+   merged/renamed sections (old links must not 404 -- redirect or alias).
+3. **Ledger table redesign** -- restyle `positionsTable`, `decisionsTable`,
+   `checkpointsTable`, and the LLM-calls list in `helpers.js` to the
+   hairline-ruled ledger treatment; keep the existing `< 768px` stacked-card
+   fallback behavior, just restyled.
+4. **Verdict/decision card** -- the one bold move: rebuild how a single trade
+   decision renders (used on Overview's "latest decision" and throughout
+   Decisions) as the bull-left/bear-right/judge-beneath card described above,
+   sourced from the existing `opinions[]`/`debate`/`thesis`/`riskDecision`
+   fields -- no data-layer changes, render-only.
+5. **Stat cards -> instrument readouts** -- restyle `statCard`/`miniStats`
+   and the donut/gauge SVG generators in `helpers.js` (`donutChart`,
+   `gaugeChart`) to match the new token system; used across Overview,
+   Snapshot, Positions, Activity.
+6. **Light theme parity** -- port every token above to `:root` (light
+   variant) keeping the same role mapping; re-verify the no-flash
+   cookie/localStorage theme sync still matches on first paint.
+7. **Cross-page polish + accessibility pass** -- sweep every remaining view
+   (`activity.js`, `backfill.js`, `backtest.js`, `backtest_detail.js`,
+   `status.js`, `env_selector.js`, `more.js`) for anything not covered by
+   steps 1-6; verify keyboard focus states, `prefers-reduced-motion` on any
+   new motion, and color contrast on both themes before calling the redesign
+   done.
+
+**Not yet started.** This session created the branch and this plan only --
+no code written. Standing instructions from the completed UI-overhaul plan
+("merge if green", "edit yourself, don't use delegate_editor") are **not**
+confirmed to carry over to this plan; re-confirm with the owner before Step 1
+lands rather than assuming.
+
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
   (`ENTITY_RESOLUTION_USE_NAME_INDEX`), suspected but unconfirmed cause of an
