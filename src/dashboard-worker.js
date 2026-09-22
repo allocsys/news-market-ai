@@ -294,7 +294,7 @@ async function renderBacktestDetail(request, env, config, id) {
     // backtest job's run id IS its SIM_DB environment -- see status.js#jobPollUrl).
     // A failed lookup is non-fatal and leaves detail.activeJob unset so the view
     // falls back to the static "Still running..." text.
-    if (detail.run && detail.run.status !== "complete" && detail.run.status !== "failed") {
+    if (detail.run && detail.run.status !== "complete" && detail.run.status !== "failed" && detail.run.status !== "cancelled") {
       try {
         const job = await fetchBackendJson(env, `/api/jobs/${encodeURIComponent(id)}?env=${encodeURIComponent(id)}`);
         detail.activeJob = job;
