@@ -137,13 +137,13 @@ const STYLE = `
     --text-subtle: #7c879c;
     --text-inverse: #f1f5f9;
 
-    --accent: #2f6fed;
-    --accent-hover: #2158c9;
-    --accent-bright: #4d8bff;
-    --accent-deep: #1d4ed8;
-    --accent-subtle: rgba(47, 111, 237, 0.08);
-    --accent-glow: rgba(77, 139, 255, 0.16);
-    --focus-ring: #2f6fed;
+    --accent: #a85d1e;
+    --accent-hover: #8f4e17;
+    --accent-bright: #c17828;
+    --accent-deep: #7a4515;
+    --accent-subtle: rgba(168, 93, 30, 0.08);
+    --accent-glow: rgba(193, 120, 40, 0.16);
+    --focus-ring: #a85d1e;
 
     --color-success-bg: rgba(16, 185, 129, 0.10);
     --color-success-text: #0a8f63;
@@ -154,16 +154,29 @@ const STYLE = `
     --color-warning-bg: rgba(245, 158, 11, 0.12);
     --color-warning-text: #9a6208;
     --color-warning-strong: #f59e0b;
-    --color-info-bg: rgba(47, 111, 237, 0.10);
-    --color-info-text: #2f6fed;
+    --color-info-bg: rgba(168, 93, 30, 0.10);
+    --color-info-text: #a85d1e;
 
-    /* Chart palette -- 6-step categorical scale used by the donut/gauge helpers. */
-    --chart-1: #2f6fed;
-    --chart-2: #0a8f63;
-    --chart-3: #b3790b;
-    --chart-4: #d43f3f;
-    --chart-5: #7c5cd1;
-    --chart-6: #7c879c;
+    /* Bull/bear semantics (plan.md Step 1 introduces these for dark mode;
+       Step 6 ports them here). Darkened from DARK_VARS' --bull/--bear the
+       same way --color-success-text etc. are darker than their dark-mode
+       counterparts, for contrast on a white surface. Kept separate from
+       the general success/danger tokens above -- same reasoning as DARK_VARS. */
+    --bull: #3f7d57;
+    --bull-bg: rgba(78, 155, 107, 0.10);
+    --bear: #a33f2e;
+    --bear-bg: rgba(193, 82, 63, 0.10);
+
+    /* Chart palette -- 6-step categorical scale used by the donut/gauge helpers.
+       chart-1 now tracks --accent (amber, was blue); chart-2/chart-4 lean
+       toward the bull-sage/bear-brick hues so the two themes read as the
+       same palette; chart-3/5/6 re-tuned to stay distinct from those. */
+    --chart-1: #a85d1e;
+    --chart-2: #3f7d57;
+    --chart-3: #8a6a17;
+    --chart-4: #a33f2e;
+    --chart-5: #6b4f8c;
+    --chart-6: #6b7688;
 
     /* Translucent surface used by the mobile header / bottom nav backdrop-filter
        blur, and the subtle top-of-page glow -- both theme-dependent, so they're
@@ -472,8 +485,8 @@ const STYLE = `
     margin-right: 0.5rem; vertical-align: middle;
     border: 1px solid var(--border-color);
   }
-  .llm-agent-bull { background: var(--bull-bg, rgba(16, 185, 129, 0.18)); color: var(--bull, var(--color-success-text)); border-color: var(--bull, rgba(16, 185, 129, 0.3)); }
-  .llm-agent-bear { background: var(--bear-bg, rgba(239, 68, 68, 0.18)); color: var(--bear, var(--color-danger-text)); border-color: var(--bear, rgba(239, 68, 68, 0.3)); }
+  .llm-agent-bull { background: var(--bull-bg); color: var(--bull); border-color: var(--bull); }
+  .llm-agent-bear { background: var(--bear-bg); color: var(--bear); border-color: var(--bear); }
   .llm-justification { color: var(--text-muted); font-style: italic; }
 
   /* ---- Verdict card: bull/bear debate + judge's ruling (plan.md Step 4, 2026-09-22) ----
@@ -483,9 +496,7 @@ const STYLE = `
      (--bear, brick), a single amber spine (--accent) between them, the
      judge's ruling beneath in serif italic (--font-display) like an actual
      finding. See helpers.js#verdictCard for the two call sites. --bull/--bear
-     fall back to the generic success/danger tokens so light theme (Step 6
-     work, not yet ported) still renders something legible instead of unstyled
-     text -- same deferral pattern as .llm-agent-bull/-bear above. */
+     are now defined in both themes (plan.md Step 6, light theme parity). */
   .verdict-card { display: flex; flex-direction: column; gap: 1rem; }
   .verdict-analysts { display: flex; flex-direction: column; gap: 0.5rem; }
   .verdict-debate {
@@ -494,13 +505,13 @@ const STYLE = `
   }
   .verdict-spine { width: 2px; background: var(--accent); opacity: 0.55; align-self: stretch; }
   .verdict-side { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.85rem 1rem; border-radius: var(--radius-md); }
-  .verdict-bull { background: var(--bull-bg, var(--color-success-bg)); border-left: 2px solid var(--bull, var(--color-success-text)); }
-  .verdict-bear { background: var(--bear-bg, var(--color-danger-bg)); border-left: 2px solid var(--bear, var(--color-danger-text)); }
+  .verdict-bull { background: var(--bull-bg); border-left: 2px solid var(--bull); }
+  .verdict-bear { background: var(--bear-bg); border-left: 2px solid var(--bear); }
   .verdict-side-label {
     font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
   }
-  .verdict-bull .verdict-side-label { color: var(--bull, var(--color-success-text)); }
-  .verdict-bear .verdict-side-label { color: var(--bear, var(--color-danger-text)); }
+  .verdict-bull .verdict-side-label { color: var(--bull); }
+  .verdict-bear .verdict-side-label { color: var(--bear); }
   .verdict-argument { font-size: 0.8125rem; line-height: 1.55; color: var(--text-main); margin: 0; }
   .verdict-reasoning { font-size: 0.75rem; color: var(--text-muted); font-style: italic; margin: 0; }
   .verdict-ruling {
@@ -515,8 +526,8 @@ const STYLE = `
     .verdict-debate { grid-template-columns: 1fr; gap: 0.75rem; }
     .verdict-spine { display: none; }
     .verdict-bull, .verdict-bear { border-left: none; border-top: 2px solid; }
-    .verdict-bull { border-top-color: var(--bull, var(--color-success-text)); }
-    .verdict-bear { border-top-color: var(--bear, var(--color-danger-text)); }
+    .verdict-bull { border-top-color: var(--bull); }
+    .verdict-bear { border-top-color: var(--bear); }
   }
 
   tr.stale-row td { color: var(--color-warning-text); }
