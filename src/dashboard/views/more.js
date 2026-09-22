@@ -40,10 +40,10 @@ export function renderMoreView() {
         border: 1px solid var(--border-color);
         border-radius: var(--radius-md);
         text-decoration: none; color: var(--text-main);
-        box-shadow: var(--shadow-card);
         transition: border-color 200ms ease, transform 200ms ease, background 200ms ease;
       }
       .more-card:hover { border-color: var(--border-strong); transform: translateY(-1px); background: var(--bg-hover); }
+      .more-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
       .more-card-icon {
         width: 40px; height: 40px; flex-shrink: 0;
         display: inline-flex; align-items: center; justify-content: center;
