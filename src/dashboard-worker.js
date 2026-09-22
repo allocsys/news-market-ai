@@ -231,7 +231,7 @@ async function renderSection(request, env, config, section) {
       ? await envSelectorFor(env, { resolvedEnv, envError: data.envError ?? null, url })
       : "";
     const bodyHtml = envBar + activePanel + render(props);
-    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: resolvedEnv, theme: getThemeCookie(request) }));
+    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: resolvedEnv, theme: getThemeCookie(request), exportData: data }));
   } catch (err) {
     // backend unreachable, or returned something unexpected -- rendered as
     // a generic panel rather than guessing at the section's own error-prop
