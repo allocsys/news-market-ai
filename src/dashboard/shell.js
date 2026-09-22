@@ -1103,7 +1103,7 @@ ${themeColorMeta}
 
   // Explicit theme toggle (wired to the button(s) from renderThemeToggle).
   // Persists to BOTH localStorage (read by the early script above, on this
-  // browser only) and a `theme` cookie (read server-side by
+  // browser only) and a 'theme' cookie (read server-side by
   // dashboard-worker.js's getThemeCookie, so the next full page load already
   // renders the right data-theme attribute -- no flash).
   function currentTheme() {
