@@ -51,7 +51,7 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
   if (error) return `<section id="backtest-detail">${back}${head}${errorState(error)}</section>`;
   if (!run) return `<section id="backtest-detail">${back}${head}<p class="empty">Backtest run not found.</p></section>`;
 
-  const semantic = run.status === "complete" ? "approved" : run.status === "failed" ? "rejected" : "neutral";
+  const semantic = run.status === "complete" ? "approved" : run.status === "failed" || run.status === "cancelled" ? "rejected" : "neutral";
   const series = run.result?.portfolio?.series;
   const s = tradeTimelineSummary(series, positions);
   const llmHref = `/dashboard/llm${llmQuery({ env: run.id }, { llmJob: run.id })}`;
@@ -61,6 +61,13 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
 
   let chartBody;
   if (run.status === "failed") chartBody = `<p class="empty">${escapeHtml(run.error ?? "failed with no recorded error message")}</p>`;
+  else if (run.status === "cancelled") {
+    // Cancelled by POST /backtest/:id/cancel -- its trade-level data was
+    // deleted by that route's own cleanup (backtest/cleanup.js#
+    // cleanupCancelledRun), so there is nothing left to chart, same as a
+    // failed run. `positions` below will be empty for the same reason.
+    chartBody = `<p class="empty">${escapeHtml(run.error ?? "cancelled by operator")} -- its data was deleted, so there is no equity curve to draw.</p>`;
+  }
   else if (run.status !== "complete") {
     // renderJobProgressPanel returns "" for a job with no id, so fall back to
     // the static text on that too -- not just when there is no job at all --
