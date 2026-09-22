@@ -481,13 +481,40 @@ Supersedes nothing (this is new scope, separate from the now-DONE "Scoped UX
 Adoption" section above -- that shipped 6 discrete features onto the existing
 visual system; this replaces the visual system itself, plus reorganizes
 navigation). Branch: `dashboard-redesign/polish-reorg`, cut from `main` @
-`83bc8e4`. Working rules match the pattern above: **each step is its own PR
-off this branch's tip** (not off `main` directly, until the whole redesign is
-ready to land), **CI `test` job is the real test**, **merge into
-`dashboard-redesign/polish-reorg` only on the owner's explicit per-step
-go-ahead**, squash-merge each step. Whether/when the whole branch merges to
-`main` (all at once vs. incrementally) is undecided -- ask before assuming
-either way once steps start landing.
+`83bc8e4`.
+
+**Working rules -- corrected 2026-09-22, supersedes the "each step its own PR
+off this branch's tip, CI is the real test" text this section originally
+shipped with:** that original plan doesn't hold up against how CI is actually
+wired -- `.github/workflows/deploy.yml`'s `pull_request` trigger is scoped to
+`branches: [main]` only, so a PR targeting this feature branch never runs the
+`test` job at all; the only way to get real CI coverage per step would be to
+target every step's PR at `main` directly, i.e. ship each step to production
+as it lands, which is a materially different (and higher-risk) plan than
+"batch the redesign behind a feature branch, land it once done." Decided
+(2026-09-22): **no per-step CI.** Commits land directly on
+`dashboard-redesign/polish-reorg` (not sub-branches/PRs), reviewed manually
+step by step; the whole redesign gets tested together and goes through CI for
+the first time as **one PR from this branch into `main`** once all 7 steps
+are done and manually reviewed.
+
+**Near-miss incident (2026-09-22, no production impact):** triggered
+`workflow_dispatch` on this branch to try to get a CI signal for Step 1's
+commit outside a PR. `workflow_dispatch` does NOT run test-only -- it bypasses
+the `changes` job's path-filter logic entirely (`github.event_name ==
+'workflow_dispatch'` forces every filter output to `true`) and runs the FULL
+pipeline: `test` -> `migrate` (real D1 migrations) -> `deploy` -> every
+per-Worker deploy job including `deploy-dashboard`, regardless of which
+branch it's dispatched on. That would have deployed this in-progress,
+unreviewed redesign branch's `dashboard-worker.js`/`shell.js` straight to the
+live `dashboard` Worker. Caught and cancelled (`cancel_workflow_run`) before
+any job past the initial gating step ran -- confirmed via `get_workflow_run_logs`
+that `test`/`migrate`/`deploy`/`deploy-dashboard`/etc. all show `cancelled`,
+none `success`. **Lesson: never use `workflow_dispatch` on this repo's
+`deploy.yml` from a non-`main` branch -- it has no test-only mode, only
+full-pipeline-including-deploy.** If a CI signal is ever needed before the
+final PR, the only safe options are (a) a real PR into `main`, which ships to
+prod, or (b) manual local testing (`npm test`), not a workflow dispatch.
 
 **Why:** current dashboard (`src/dashboard/shell.js` + `helpers.js` +
 `views/*.js`, vanilla SSR template strings, no framework) uses a stock dark-
