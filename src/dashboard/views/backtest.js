@@ -6,7 +6,7 @@ export function backtestTriggerForm() {
   return `<form method="get" action="/dashboard/backtest/confirm" class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
-      <input class="filter-form" type="text" name="tickers" placeholder="AAPL,MSFT">
+      <input class="filter-form" id="backtestTickers" type="text" name="tickers" placeholder="AAPL,MSFT">
     </div>
     ${rangePresetButtons("backtestStart", "backtestEnd")}
     <div class="filter-group">

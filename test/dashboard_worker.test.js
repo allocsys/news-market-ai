@@ -241,6 +241,19 @@ test("Page toolbar's Export CSV/JSON options are combined into one dropdown menu
   assert.match(html, /id="dashboard-export-json-btn"[^>]*>Export as JSON<\/button>/);
 });
 
+test("Backtest trigger form's ticker field has a stable id so auto-refresh can restore it, same as the date fields", async () => {
+  const html = await getHtml("/dashboard/backtest");
+  assert.match(html, /<input class="filter-form" id="backtestTickers" type="text" name="tickers"/);
+});
+
+test("Auto-refresh's #dashboard-main swap captures and restores in-progress form state (quick-range/date/ticker edits), not just a blind innerHTML replace", async () => {
+  const html = await getHtml("/dashboard/backtest");
+  assert.match(html, /function captureFormState\(\)/);
+  assert.match(html, /function restoreFormState\(state\)/);
+  assert.match(html, /var savedState = captureFormState\(\);/);
+  assert.match(html, /restoreFormState\(savedState\);/);
+});
+
 const NON_REFRESHABLE_PAGES = [
   "/dashboard/backfill",
   "/dashboard/more",

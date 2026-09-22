@@ -1584,17 +1584,48 @@ ${themeColorMeta}
   // the bar. That job's own poller calls location.reload() on completion,
   // which naturally resumes normal auto-refresh afterward.
   //
-  // KNOWN LIMITATION: swapping #dashboard-main's innerHTML discards any
-  // in-progress, not-yet-submitted state inside it -- an open <details> (LLM
-  // answer disclosure), a half-filled filter-form, exact scroll position on
-  // a very different-height page. Acceptable for a first cut; revisit if it
-  // proves annoying in practice.
+  // Any not-yet-submitted <input>/<textarea>/<select> edits inside #dashboard-main
+  // (e.g. a half-filled "Trigger a new run" form, a quick-range pick) are
+  // captured by id before the swap and reapplied after it -- otherwise a
+  // refresh mid-edit would silently revert the field to the server's
+  // freshly-rendered default, which looked like "the quick-range buttons
+  // don't work" when the 30s timer landed between a click and a glance back.
+  // Open <details> disclosures are preserved the same way, by id where
+  // present. Exact scroll position on a very different-height page is a
+  // remaining, more cosmetic limitation.
   (function () {
     var INTERVAL_MS = 30000;
     var main = document.getElementById("dashboard-main");
     var toggle = document.getElementById("auto-refresh-toggle");
     var toggleLabel = document.getElementById("auto-refresh-toggle-label");
     if (!main || !toggle) return;
+
+    function captureFormState() {
+      var state = { fields: {}, openDetails: {} };
+      main.querySelectorAll("input[id], textarea[id], select[id], input[name], textarea[name], select[name]").forEach(function (el) {
+        var key = el.id ? "id:" + el.id : "name:" + el.name;
+        if (el.type === "checkbox" || el.type === "radio") state.fields[key] = { checked: el.checked };
+        else state.fields[key] = { value: el.value };
+      });
+      main.querySelectorAll("details[id][open]").forEach(function (el) {
+        state.openDetails[el.id] = true;
+      });
+      return state;
+    }
+
+    function restoreFormState(state) {
+      Object.keys(state.fields).forEach(function (key) {
+        var el = key.slice(0, 3) === "id:" ? document.getElementById(key.slice(3)) : main.querySelector('[name="' + key.slice(5) + '"]');
+        if (!el || !(el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
+        var saved = state.fields[key];
+        if ("checked" in saved) el.checked = saved.checked;
+        else el.value = saved.value;
+      });
+      Object.keys(state.openDetails).forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el && el.tagName === "DETAILS") el.setAttribute("open", "");
+      });
+    }
 
     var STORAGE_KEY = "autoRefreshOn";
     var on = true;
@@ -1623,6 +1654,7 @@ ${themeColorMeta}
         return;
       }
       inFlight = true;
+      var savedState = captureFormState();
       fetch(window.location.href, { credentials: "same-origin" })
         .then(function (res) {
           if (!res.ok) throw new Error("status " + res.status);
@@ -1631,7 +1663,10 @@ ${themeColorMeta}
         .then(function (html) {
           var doc = new DOMParser().parseFromString(html, "text/html");
           var freshMain = doc.getElementById("dashboard-main");
-          if (freshMain) main.innerHTML = freshMain.innerHTML;
+          if (freshMain) {
+            main.innerHTML = freshMain.innerHTML;
+            restoreFormState(savedState);
+          }
           var freshStamp = doc.querySelector(".page-toolbar-updated");
           var stamp = document.querySelector(".page-toolbar-updated");
           if (freshStamp && stamp) stamp.textContent = freshStamp.textContent;
