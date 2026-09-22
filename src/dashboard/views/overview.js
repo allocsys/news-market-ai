@@ -19,7 +19,7 @@
 // the extra read -- this alert strip covers stale ingestion sources, stuck
 // pipeline checkpoints, and any panel that failed to load.
 import {
-  escapeHtml, fmtTime, errorState, donutChart, gaugeChart, renderSummaryCards, statusBadge, llmAnswerDetails, envSuffix,
+  escapeHtml, fmtTime, errorState, donutChart, gaugeChart, renderSummaryCards, statusBadge, verdictCard, envSuffix,
 } from "../helpers.js";
 
 const SOURCE_LABEL = { news: "News", priceBars: "Price bars", fundamentals: "Fundamentals" };
@@ -113,7 +113,7 @@ function renderLatestDecisionPanel(d, error) {
         ${statusBadge(d.status)}
       </div>
       <p class="note" style="margin-bottom:0.75rem">${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</p>
-      ${llmAnswerDetails(d)}
+      ${verdictCard(d)}
     </div>
   </div>`;
 }

@@ -472,9 +472,52 @@ const STYLE = `
     margin-right: 0.5rem; vertical-align: middle;
     border: 1px solid var(--border-color);
   }
-  .llm-agent-bull { background: rgba(16, 185, 129, 0.18); color: var(--color-success-text); border-color: rgba(16, 185, 129, 0.3); }
-  .llm-agent-bear { background: rgba(239, 68, 68, 0.18); color: var(--color-danger-text); border-color: rgba(239, 68, 68, 0.3); }
+  .llm-agent-bull { background: var(--bull-bg, rgba(16, 185, 129, 0.18)); color: var(--bull, var(--color-success-text)); border-color: var(--bull, rgba(16, 185, 129, 0.3)); }
+  .llm-agent-bear { background: var(--bear-bg, rgba(239, 68, 68, 0.18)); color: var(--bear, var(--color-danger-text)); border-color: var(--bear, rgba(239, 68, 68, 0.3)); }
   .llm-justification { color: var(--text-muted); font-style: italic; }
+
+  /* ---- Verdict card: bull/bear debate + judge's ruling (plan.md Step 4, 2026-09-22) ----
+     The one deliberate bold move in this redesign: a trade decision's LLM
+     reasoning rendered as an actual two-sided argument with a ruling, not a
+     generic panel. Bull argument left (--bull, sage), bear argument right
+     (--bear, brick), a single amber spine (--accent) between them, the
+     judge's ruling beneath in serif italic (--font-display) like an actual
+     finding. See helpers.js#verdictCard for the two call sites. --bull/--bear
+     fall back to the generic success/danger tokens so light theme (Step 6
+     work, not yet ported) still renders something legible instead of unstyled
+     text -- same deferral pattern as .llm-agent-bull/-bear above. */
+  .verdict-card { display: flex; flex-direction: column; gap: 1rem; }
+  .verdict-analysts { display: flex; flex-direction: column; gap: 0.5rem; }
+  .verdict-debate {
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 1.25rem;
+    align-items: stretch;
+  }
+  .verdict-spine { width: 2px; background: var(--accent); opacity: 0.55; align-self: stretch; }
+  .verdict-side { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.85rem 1rem; border-radius: var(--radius-md); }
+  .verdict-bull { background: var(--bull-bg, var(--color-success-bg)); border-left: 2px solid var(--bull, var(--color-success-text)); }
+  .verdict-bear { background: var(--bear-bg, var(--color-danger-bg)); border-left: 2px solid var(--bear, var(--color-danger-text)); }
+  .verdict-side-label {
+    font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .verdict-bull .verdict-side-label { color: var(--bull, var(--color-success-text)); }
+  .verdict-bear .verdict-side-label { color: var(--bear, var(--color-danger-text)); }
+  .verdict-argument { font-size: 0.8125rem; line-height: 1.55; color: var(--text-main); margin: 0; }
+  .verdict-reasoning { font-size: 0.75rem; color: var(--text-muted); font-style: italic; margin: 0; }
+  .verdict-ruling {
+    padding-top: 0.85rem; border-top: 1px solid var(--border-color);
+    display: flex; flex-direction: column; gap: 0.3rem;
+  }
+  .verdict-ruling-text {
+    font-family: var(--font-display); font-style: italic; font-size: 1rem;
+    color: var(--text-main); margin: 0; line-height: 1.4;
+  }
+  @media (max-width: 767px) {
+    .verdict-debate { grid-template-columns: 1fr; gap: 0.75rem; }
+    .verdict-spine { display: none; }
+    .verdict-bull, .verdict-bear { border-left: none; border-top: 2px solid; }
+    .verdict-bull { border-top-color: var(--bull, var(--color-success-text)); }
+    .verdict-bear { border-top-color: var(--bear, var(--color-danger-text)); }
+  }
 
   tr.stale-row td { color: var(--color-warning-text); }
   .stale-flag, .ok-flag {
