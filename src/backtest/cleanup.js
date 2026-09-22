@@ -22,6 +22,9 @@
 // retry, no self-enqueue (the backtest Worker holds no queue producer; see
 // test/ci_env_isolation.test.js).
 
+import { RunStore } from "../storage/run_store.js";
+import { getStaleTerminalBacktestRuns } from "../storage/sim_registry.js";
+
 /**
  * @param {object} registryDb SIM_DB (the backtest_runs registry lives there).
  * @param {RunStore} store    RunStore(SIM_DB, id) for the run being cleaned.
