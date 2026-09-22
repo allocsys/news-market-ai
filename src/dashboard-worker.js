@@ -46,6 +46,20 @@ function isPlausibleDateString(value) {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+function getThemeCookie(request) {
+  const header = request.headers.get("Cookie") || "";
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const key = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (key === "theme") {
+      return value === "dark" || value === "light" ? value : null;
+    }
+  }
+  return null;
+}
+
 function htmlResponse(html, { status = 200 } = {}) {
   return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 }
@@ -202,6 +216,7 @@ async function renderSection(request, env, config, section) {
   const apiPath = SECTION_API_PATH[section] + (url.search || "");
   const render = SECTION_RENDERERS[section];
 
+  const theme = getThemeCookie(request);
   try {
     const data = await fetchBackendJson(env, apiPath);
     const resolvedEnv = data.resolvedEnv ?? "live";
@@ -216,7 +231,7 @@ async function renderSection(request, env, config, section) {
       ? await envSelectorFor(env, { resolvedEnv, envError: data.envError ?? null, url })
       : "";
     const bodyHtml = envBar + activePanel + render(props);
-    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: resolvedEnv }));
+    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: resolvedEnv, theme }));
   } catch (err) {
     // backend unreachable, or returned something unexpected -- rendered as
     // a generic panel rather than guessing at the section's own error-prop
@@ -224,7 +239,7 @@ async function renderSection(request, env, config, section) {
     // most others just `error`) and risking a render crash on a malformed prop.
     console.error(`dashboard ${section} backend fetch failed`, { message: err.message });
     const bodyHtml = `<section><h2>${section}</h2>${errorState(err.message)}</section>`;
-    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: parseEnvParam(url.searchParams) }));
+    return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: parseEnvParam(url.searchParams), theme }));
   }
 }
 
@@ -239,8 +254,9 @@ async function renderLlmCall(request, env, config, id) {
   const url = new URL(request.url);
   const callEnv = parseEnvParam(url.searchParams);
 
+  const theme = getThemeCookie(request);
   const shell = (bodyHtml, status = 200, shellEnv = callEnv) =>
-    htmlResponse(renderShell({ activeSection: "llm", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: shellEnv }), { status });
+    htmlResponse(renderShell({ activeSection: "llm", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: shellEnv, theme }), { status });
 
   if (!/^\d+$/.test(id)) return shell(renderLlmCallView({ call: null, env: callEnv }), 404);
   try {
@@ -264,8 +280,9 @@ async function renderBacktestDetail(request, env, config, id) {
   if (auth.redirect === "__disabled__") return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
   if (auth.redirect) return redirect(auth.redirect);
 
+  const theme = getThemeCookie(request);
   const shell = (bodyHtml, status = 200) =>
-    htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request) }), { status });
+    htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), theme }), { status });
 
   if (!BACKTEST_ID_RE.test(id)) return shell(renderBacktestDetailView({ run: null }), 404);
   try {
@@ -323,8 +340,9 @@ async function handleTriggerRoute(request, env, config, { backendPath, buildQuer
     const res = await callBackend(env, `${backendPath}?${qs.toString()}`, { method: "POST" });
     const body = await res.json();
     if (!res.ok) {
+      const theme = getThemeCookie(request);
       return isFormSubmit
-        ? htmlResponse(renderShell({ activeSection: built.activeSection, sessionUsername, bodyHtml: `<section>${errorState(body.message || body.error)}</section>` }), { status: res.status })
+        ? htmlResponse(renderShell({ activeSection: built.activeSection, sessionUsername, bodyHtml: `<section>${errorState(body.message || body.error)}</section>`, theme }), { status: res.status })
         : jsonResponse(body, { status: res.status });
     }
     if (isFormSubmit) {
@@ -392,6 +410,7 @@ export default {
       const auth = await requireSession(request, config);
       if (auth.redirect === "__disabled__") return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
       if (auth.redirect) return redirect(auth.redirect);
+      const theme = getThemeCookie(request);
 
       if (pathname === "/dashboard/backfill") {
         // The progress panel uses fixed element ids (status.js), so only ONE can be on the
@@ -400,15 +419,15 @@ export default {
         const activePanel = newsPanel || (await activeJobPanelFor(env, "backfill_prices"));
         const lastRun = await lastFinishedBackfillJob(env);
         const lastPriceRun = await lastFinishedBackfillJob(env, "backfill_prices");
-        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView({ lastRun, lastPriceRun }) }));
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView({ lastRun, lastPriceRun }), theme }));
       }
       if (pathname === "/dashboard/backfill/confirm") {
         const bodyHtml = renderBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to") });
-        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml, theme }));
       }
       if (pathname === "/dashboard/backfill-prices/confirm") {
         const bodyHtml = renderPriceBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to"), tickers: url.searchParams.get("tickers") });
-        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml }));
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml, theme }));
       }
       if (pathname === "/dashboard/backtest/confirm") {
         const bodyHtml = renderBacktestConfirmPage({
@@ -417,9 +436,9 @@ export default {
           tickers: url.searchParams.get("tickers"),
           graceDays: url.searchParams.get("graceDays"),
         });
-        return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml }));
+        return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, theme }));
       }
-      return htmlResponse(renderShell({ activeSection: "more", sessionUsername: auth.sessionUsername, bodyHtml: renderMoreView() }));
+      return htmlResponse(renderShell({ activeSection: "more", sessionUsername: auth.sessionUsername, bodyHtml: renderMoreView(), theme }));
     }
 
     // AFTER the pure-UI block above, which returns for /dashboard/backtest/confirm -- this prefix match must never see it.
