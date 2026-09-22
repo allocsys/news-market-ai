@@ -103,8 +103,12 @@ invocation_logs = true
 # "on" side calls the real pipeline (analysts/debate/trader), which reads
 # these same config.js fields regardless of which Worker is running it.
 GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
-GEMINI_DEEP_MODEL = "gemini-3.5-flash"
-GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.8-flash,gemini-3.6-flash,gemini-3-flash-preview,gemini-2.5-flash"
+GEMINI_DEEP_MODEL = "gemini-3.6-flash"
+# UPDATE (2026-09-22): dropped gemini-2.5-flash -- Google retired it (404 "no
+# longer available to new users"), which killed a live backtest outright when
+# the cascade fell all the way through to it as the last model (see
+# wrangler.llm.toml's fuller note and client.js's 404 handling).
+GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.8-flash,gemini-3.6-flash,gemini-3-flash-preview"
 
 # Per-run cap on LLM calls (src/llm/budget.js): a run that tries call number
 # max+1 fails with "LLM call budget exceeded". Counts logical calls (one per
