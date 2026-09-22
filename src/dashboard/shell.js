@@ -1,8 +1,9 @@
 // Shared page chrome (shell, desktop sidebar nav, mobile header & bottom tab bar, CSS style).
 //
 // Design system:
-//   - Premium fintech dark theme. Surfaces use a subtle elevation ladder
-//     (--bg-base -> --bg-surface -> --bg-elevated) instead of a single flat panel.
+//   - Premium fintech theme, light by default, full dark mode available.
+//     Surfaces use a subtle elevation ladder (--bg-base -> --bg-surface ->
+//     --bg-elevated) instead of a single flat panel, in both themes.
 //   - Typography: Inter Tight for headings (tighter display weight), Inter for
 //     body, ui-monospace for tabular numerics. Loaded via Google Fonts.
 //   - Sidebar: 248px on desktop, 72px icon-rail on tablet, hidden on mobile
@@ -10,8 +11,18 @@
 //   - Cards have a 1px hairline border + faint top highlight (premium feel),
 //     no heavy shadows (Cloudflare Worker HTML stays print-friendly).
 //   - All animations honor prefers-reduced-motion.
+//
+// Theming: every color is a CSS custom property on :root, defined once for
+// light (the default) and overridden identically under both
+// `@media (prefers-color-scheme: dark)` (guarded so an explicit light choice
+// still wins) and `:root[data-theme="dark"]` (the explicit toggle, see
+// renderThemeToggle below). No JS framework, no rebuild -- same
+// vanilla-JS/template-string approach as the rest of this dashboard.
+// `renderShell`'s `theme` param, when known, is what dashboard-worker.js read
+// from the `theme` cookie server-side, so first paint already has the right
+// `data-theme` attribute and there's no flash of the wrong theme.
 
-import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix, themeToggle } from "./helpers.js";
+import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix } from "./helpers.js";
 
 // ---- Inline SVG icon set (Lucide-style stroke icons, 20x20, currentColor) ----
 // Stored as raw <svg> strings so they can be dropped into nav links, badges,
@@ -31,126 +42,30 @@ const ICONS = {
   more: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`,
   refresh: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>`,
   logout: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>`,
+  sun: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`,
+  moon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>`,
 };
 
-const STYLE = `
-  :root {
-    color-scheme: light;
-
-    --bg-base: #f8fafc;
-    --bg-surface: #ffffff;
-    --bg-elevated: #ffffff;
-    --bg-hover: #f1f5f9;
-    --bg-active: #e2e8f0;
-
-    --border-color: #e2e8f0;
-    --border-subtle: #f1f5f9;
-    --border-strong: #cbd5e1;
-
-    --text-main: #0b1020;
-    --text-muted: #475569;
-    --text-subtle: #64748b;
-    --text-inverse: #ffffff;
-
-    --accent: #2563eb;
-    --accent-hover: #1d4ed8;
-    --accent-bright: #3b82f6;
-    --accent-deep: #1e40af;
-    --accent-subtle: rgba(37, 99, 235, 0.1);
-    --accent-glow: rgba(59, 130, 246, 0.18);
-    --focus-ring: #2563eb;
-
-    --color-success-bg: rgba(5, 150, 105, 0.1);
-    --color-success-text: #059669;
-    --color-success-strong: #059669;
-    --color-danger-bg: rgba(220, 38, 38, 0.1);
-    --color-danger-text: #dc2626;
-    --color-danger-strong: #dc2626;
-    --color-warning-bg: rgba(217, 119, 6, 0.1);
-    --color-warning-text: #d97706;
-    --color-warning-strong: #d97706;
-    --color-info-bg: rgba(37, 99, 235, 0.1);
-    --color-info-text: #2563eb;
-
-    --chart-1: #2563eb;
-    --chart-2: #059669;
-    --chart-3: #d97706;
-    --chart-4: #dc2626;
-    --chart-5: #9333ea;
-    --chart-6: #0891b2;
-
-    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-display: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-
-    --radius-sm: 6px;
-    --radius-md: 10px;
-    --radius-lg: 14px;
-    --radius-xl: 18px;
-
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1);
-    --shadow-pop: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-  }
-
-  [data-theme="dark"],
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --bg-base: #070b14;
-      --bg-surface: #0d1320;
-      --bg-elevated: #131b2e;
-      --bg-hover: #1a2238;
-      --bg-active: #1e2940;
-      --border-color: #1f2a44;
-      --border-subtle: #161e30;
-      --border-strong: #2c3a5a;
-      --text-main: #f1f5f9;
-      --text-muted: #94a3b8;
-      --text-subtle: #64748b;
-      --text-inverse: #0b1020;
-      --accent: #3b82f6;
-      --accent-hover: #2563eb;
-      --accent-bright: #60a5fa;
-      --accent-deep: #1d4ed8;
-      --accent-subtle: rgba(59, 130, 246, 0.14);
-      --accent-glow: rgba(96, 165, 250, 0.22);
-      --focus-ring: #60a5fa;
-      --color-success-bg: rgba(16, 185, 129, 0.12);
-      --color-success-text: #34d399;
-      --color-success-strong: #10b981;
-      --color-danger-bg: rgba(239, 68, 68, 0.12);
-      --color-danger-text: #f87171;
-      --color-danger-strong: #ef4444;
-      --color-warning-bg: rgba(245, 158, 11, 0.12);
-      --color-warning-text: #fbbf24;
-      --color-warning-strong: #f59e0b;
-      --color-info-bg: rgba(59, 130, 246, 0.12);
-      --color-info-text: #60a5fa;
-      --chart-1: #60a5fa;
-      --chart-2: #34d399;
-      --chart-3: #fbbf24;
-      --chart-4: #f87171;
-      --chart-5: #a78bfa;
-      --chart-6: #94a3b8;
-      --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.5);
-      --shadow-pop: 0 12px 32px -8px rgba(0, 0, 0, 0.55);
-    }
-  }
-
-  [data-theme="dark"] {
-    color-scheme: dark;
+// Every dark-theme value lives once, here, and is reused verbatim by both the
+// `prefers-color-scheme: dark` block (default dark, unless the operator
+// explicitly picked light) and the `[data-theme="dark"]` block (explicit
+// toggle). Keeping one source avoids the two ever drifting apart.
+const DARK_VARS = `
     --bg-base: #070b14;
     --bg-surface: #0d1320;
     --bg-elevated: #131b2e;
     --bg-hover: #1a2238;
     --bg-active: #1e2940;
+
     --border-color: #1f2a44;
     --border-subtle: #161e30;
     --border-strong: #2c3a5a;
+
     --text-main: #f1f5f9;
     --text-muted: #94a3b8;
     --text-subtle: #64748b;
     --text-inverse: #0b1020;
+
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-bright: #60a5fa;
@@ -158,6 +73,7 @@ const STYLE = `
     --accent-subtle: rgba(59, 130, 246, 0.14);
     --accent-glow: rgba(96, 165, 250, 0.22);
     --focus-ring: #60a5fa;
+
     --color-success-bg: rgba(16, 185, 129, 0.12);
     --color-success-text: #34d399;
     --color-success-strong: #10b981;
@@ -169,15 +85,100 @@ const STYLE = `
     --color-warning-strong: #f59e0b;
     --color-info-bg: rgba(59, 130, 246, 0.12);
     --color-info-text: #60a5fa;
+
     --chart-1: #60a5fa;
     --chart-2: #34d399;
     --chart-3: #fbbf24;
     --chart-4: #f87171;
     --chart-5: #a78bfa;
     --chart-6: #94a3b8;
+
+    --surface-translucent: rgba(13, 19, 32, 0.92);
+    --bg-glow-1: rgba(59, 130, 246, 0.08);
+    --bg-glow-2: rgba(167, 139, 250, 0.05);
+
     --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 12px 32px -8px rgba(0, 0, 0, 0.55);
+`;
+
+const STYLE = `
+  :root {
+    color-scheme: light dark;
+
+    /* Light theme (default). Same elevation-ladder / hairline-border /
+       two-step-accent structure as dark, just re-tuned for a white surface. */
+    --bg-base: #f6f8fb;
+    --bg-surface: #ffffff;
+    --bg-elevated: #eef2f8;
+    --bg-hover: #e7ecf5;
+    --bg-active: #dbe7fc;
+
+    --border-color: #e1e7f0;
+    --border-subtle: #ebeff5;
+    --border-strong: #c7d1e0;
+
+    --text-main: #0f1729;
+    --text-muted: #55627a;
+    --text-subtle: #7c879c;
+    --text-inverse: #f1f5f9;
+
+    --accent: #2f6fed;
+    --accent-hover: #2158c9;
+    --accent-bright: #4d8bff;
+    --accent-deep: #1d4ed8;
+    --accent-subtle: rgba(47, 111, 237, 0.08);
+    --accent-glow: rgba(77, 139, 255, 0.16);
+    --focus-ring: #2f6fed;
+
+    --color-success-bg: rgba(16, 185, 129, 0.10);
+    --color-success-text: #0a8f63;
+    --color-success-strong: #10b981;
+    --color-danger-bg: rgba(239, 68, 68, 0.10);
+    --color-danger-text: #d43f3f;
+    --color-danger-strong: #ef4444;
+    --color-warning-bg: rgba(245, 158, 11, 0.12);
+    --color-warning-text: #9a6208;
+    --color-warning-strong: #f59e0b;
+    --color-info-bg: rgba(47, 111, 237, 0.10);
+    --color-info-text: #2f6fed;
+
+    /* Chart palette -- 6-step categorical scale used by the donut/gauge helpers. */
+    --chart-1: #2f6fed;
+    --chart-2: #0a8f63;
+    --chart-3: #b3790b;
+    --chart-4: #d43f3f;
+    --chart-5: #7c5cd1;
+    --chart-6: #7c879c;
+
+    /* Translucent surface used by the mobile header / bottom nav backdrop-filter
+       blur, and the subtle top-of-page glow -- both theme-dependent, so they're
+       vars rather than hardcoded rgba(). */
+    --surface-translucent: rgba(255, 255, 255, 0.88);
+    --bg-glow-1: rgba(47, 111, 237, 0.05);
+    --bg-glow-2: rgba(124, 92, 209, 0.04);
+
+    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-display: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 18px;
+
+    --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 8px 24px -12px rgba(15, 23, 42, 0.12);
+    --shadow-pop: 0 12px 32px -8px rgba(15, 23, 42, 0.18);
   }
+
+  /* Dark theme: applied automatically when the OS/browser prefers dark AND
+     the operator hasn't explicitly picked light (the :not guard), OR
+     unconditionally when the operator explicitly picked dark via the toggle
+     (the [data-theme="dark"] rule below). Both blocks share DARK_VARS so
+     they can never drift out of sync. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {${DARK_VARS}    }
+  }
+  :root[data-theme="dark"] {${DARK_VARS}  }
 
   * { box-sizing: border-box; }
 
@@ -187,34 +188,18 @@ const STYLE = `
     margin: 0; padding: 0;
     background: var(--bg-base);
     /* Subtle radial glow at the top so the page doesn't read as a flat slab.
-       Fixed so it stays put on scroll, like a desk lamp. */
-    background-image: radial-gradient(900px 480px at 12% -8%, rgba(37, 99, 235, 0.04), transparent 70%),
-                      radial-gradient(700px 360px at 88% 0%, rgba(147, 51, 234, 0.03), transparent 70%);
+       Fixed so it stays put on scroll, like a desk lamp. Colors are theme
+       vars so the glow re-tunes itself in dark mode instead of overpowering
+       a light surface. */
+    background-image: radial-gradient(900px 480px at 12% -8%, var(--bg-glow-1), transparent 70%),
+                      radial-gradient(700px 360px at 88% 0%, var(--bg-glow-2), transparent 70%);
     background-attachment: fixed;
     color: var(--text-main);
     line-height: 1.5;
     font-size: 0.875rem;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-  }
-
-  /* Theme toggle button */
-  .theme-toggle-btn {
-    display: inline-flex; align-items: center; gap: 0.5rem;
-    font-family: var(--font-sans); font-size: 0.75rem; font-weight: 500;
-    color: var(--text-muted); background: var(--bg-surface);
-    border: 1px solid var(--border-color); border-radius: var(--radius-sm);
-    padding: 0.35rem 0.65rem; cursor: pointer; width: 100%; justify-content: flex-start;
-    transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
-  }
-  .theme-toggle-btn:hover { color: var(--text-main); border-color: var(--border-strong); background: var(--bg-hover); }
-  .theme-icon-dark { display: inline; }
-  .theme-icon-light { display: none; }
-  [data-theme="dark"] .theme-icon-dark { display: none; }
-  [data-theme="dark"] .theme-icon-light { display: inline; }
-  @media (prefers-color-scheme: dark) {
-    html:not([data-theme="light"]) .theme-icon-dark { display: none; }
-    html:not([data-theme="light"]) .theme-icon-light { display: inline; }
+    transition: background-color 150ms ease, color 150ms ease;
   }
 
   .shell { display: flex; min-height: 100vh; }
@@ -288,6 +273,7 @@ const STYLE = `
   .section-nav a.active .nav-index { color: var(--accent-bright); }
 
   .rail-meta {
+    margin-top: auto;
     font-size: 0.6875rem; line-height: 1.7; color: var(--text-subtle);
     border-top: 1px solid var(--border-color); padding: 1rem 0.5rem 0.25rem;
   }
@@ -297,6 +283,29 @@ const STYLE = `
     display: inline-flex; align-items: center; gap: 0.3rem;
   }
   .rail-meta-row a:hover { text-decoration: underline; }
+
+  /* ---- Theme toggle ---- */
+  .theme-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; flex-shrink: 0;
+    background: var(--bg-elevated); color: var(--text-muted);
+    border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+    cursor: pointer; padding: 0;
+    transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+  }
+  .theme-toggle:hover { color: var(--text-main); background: var(--bg-hover); border-color: var(--border-strong); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .theme-toggle .icon-sun, .theme-toggle .icon-moon { display: none; }
+  /* Show the icon for the theme NOT currently active (i.e. what clicking
+     switches to), matching the common sun/moon toggle convention. */
+  .theme-toggle .icon-moon { display: inline-flex; }
+  [data-theme="dark"] .theme-toggle .icon-sun { display: inline-flex; }
+  [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .theme-toggle .icon-sun { display: inline-flex; }
+    :root:not([data-theme="light"]) .theme-toggle .icon-moon { display: none; }
+  }
+  .rail-meta-row .theme-toggle { margin-left: auto; }
 
   /* ---- Content + main ---- */
   .content { flex: 1 1 auto; min-width: 0; }
@@ -797,7 +806,8 @@ const STYLE = `
     .mobile-header .wordmark-text { display: flex; }
     .mobile-header .wordmark-sub { display: none; }
     .mobile-header .rail-meta {
-      display: block; margin: 0; border-top: none; padding: 0;
+      display: flex; align-items: center; gap: 0.6rem;
+      margin: 0; border-top: none; padding: 0;
       font-size: 0.75rem; line-height: 1;
     }
     .content { width: 100%; }
@@ -816,7 +826,7 @@ const STYLE = `
     /* Fixed bottom navigation bar (min 44x44px touch targets) */
     .bottom-nav {
       position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
-      background: rgba(13, 19, 32, 0.92);
+      background: var(--surface-translucent);
       border-top: 1px solid var(--border-color);
       display: flex; align-items: stretch;
       padding: 0.4rem 0.25rem;
@@ -1006,6 +1016,21 @@ function renderBottomNav(activeSection, env) {
   return `<nav class="bottom-nav">${links}</nav>`;
 }
 
+/**
+ * Theme toggle button, per-browser preference (no D1/session-table change --
+ * this repo has no multi-user model, see src/auth/session.js). Both icons are
+ * always in the markup; CSS shows whichever one represents what clicking
+ * switches TO (sun while dark, moon while light), so no server-side theme
+ * knowledge is needed here -- it self-corrects visually via the same
+ * data-theme/prefers-color-scheme rules the rest of the page uses.
+ * `toggleTheme()` (defined in renderShell's inline script) does the actual
+ * flip: sets `data-theme` on <html>, and mirrors the choice to both
+ * localStorage and a `theme` cookie so the next SSR render already knows.
+ */
+function renderThemeToggle() {
+  return `<button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark theme" title="Toggle theme"><span class="icon-sun">${ICONS.sun}</span><span class="icon-moon">${ICONS.moon}</span></button>`;
+}
+
 function renderMobileHeader(sessionUsername) {
   return `<div class="mobile-header">
     <div class="wordmark">
@@ -1015,10 +1040,7 @@ function renderMobileHeader(sessionUsername) {
         <span class="wordmark-sub">operations ledger</span>
       </span>
     </div>
-    <div style="display:flex; align-items:center; gap:0.5rem;">
-      ${themeToggle()}
-      <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}</div>
-    </div>
+    <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}${renderThemeToggle()}</div>
   </div>`;
 }
 
@@ -1030,13 +1052,42 @@ function renderPageToolbar(refreshHref) {
       </div>`;
 }
 
-export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref, env = "live", theme = null }) {
+/**
+ * `theme`: "light" | "dark" | undefined, resolved server-side by
+ * dashboard-worker.js from the `theme` cookie (see getThemeCookie there).
+ * undefined means no explicit choice yet -- `data-theme` is omitted so
+ * `prefers-color-scheme` decides, same as a first-ever visit. Passing a
+ * known value here (rather than always defaulting to one theme) is what
+ * avoids a flash of the wrong theme on first paint once the operator has
+ * toggled at least once.
+ */
+export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshHref, env = "live", theme }) {
+  const themeAttr = theme === "light" || theme === "dark" ? ` data-theme="${theme}"` : "";
+  const themeColorMeta =
+    theme === "light"
+      ? `<meta name="theme-color" content="#f6f8fb">`
+      : theme === "dark"
+        ? `<meta name="theme-color" content="#070b14">`
+        : `<meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#070b14" media="(prefers-color-scheme: dark)">`;
   return `<!DOCTYPE html>
-<html lang="en"${theme ? ` data-theme="${escapeHtml(theme)}"` : ""}>
+<html lang="en"${themeAttr}>
 <head>
 <meta charset="UTF-8">
+<script>
+  // Runs before the stylesheet, so a theme picked on an earlier visit (stored
+  // in localStorage) can win over a stale/missing server-rendered data-theme
+  // attribute before first paint -- e.g. if the cookie got cleared but
+  // localStorage didn't. If they agree (the common case, since toggleTheme
+  // below always writes both together) this is a no-op.
+  (function () {
+    try {
+      var stored = localStorage.getItem("theme");
+      if (stored === "light" || stored === "dark") document.documentElement.setAttribute("data-theme", stored);
+    } catch (e) {}
+  })();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#070b14">
+${themeColorMeta}
 <title>news-market-ai dashboard (${escapeHtml(activeSection)})</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1049,22 +1100,22 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
     document.getElementById(toId).value = to.toISOString().slice(0, 10);
     document.getElementById(fromId).value = from.toISOString().slice(0, 10);
   }
+
+  // Explicit theme toggle (wired to the button(s) from renderThemeToggle).
+  // Persists to BOTH localStorage (read by the early script above, on this
+  // browser only) and a `theme` cookie (read server-side by
+  // dashboard-worker.js's getThemeCookie, so the next full page load already
+  // renders the right data-theme attribute -- no flash).
+  function currentTheme() {
+    var attr = document.documentElement.getAttribute("data-theme");
+    if (attr === "light" || attr === "dark") return attr;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
   function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme');
-    let next = 'dark';
-    if (current === 'dark') {
-      next = 'light';
-    } else if (current === 'light') {
-      next = 'dark';
-    } else {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      next = prefersDark ? 'light' : 'dark';
-    }
-    document.documentElement.setAttribute('data-theme', next);
-    try {
-      localStorage.setItem('theme', next);
-    } catch (e) {}
-    document.cookie = `theme=${next}; path=/; max-age=31536000; SameSite=Lax`;
+    var next = currentTheme() === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("theme", next); } catch (e) {}
+    document.cookie = "theme=" + next + "; path=/; max-age=31536000; SameSite=Lax";
   }
 </script>
 </head>
@@ -1080,10 +1131,7 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
         </span>
       </div>
       ${renderNav(activeSection, env)}
-      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 0.75rem;">
-        <div>${themeToggle()}</div>
-        <div class="rail-meta" style="margin-top:0; border-top: 1px solid var(--border-color); padding: 1rem 0.5rem 0.25rem;">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}</div>
-      </div>
+      <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}<div class="rail-meta-row">theme ${renderThemeToggle()}</div></div>
     </aside>
     <div class="content">
       <main>
