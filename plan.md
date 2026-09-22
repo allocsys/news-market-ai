@@ -646,9 +646,23 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    `--font-display` (Fraunces, reserved for editorial verdict/thesis
    callouts per the Step 1 token comment) to `--font-mono` (IBM Plex
    Mono) with tabular-nums, matching tickers/timestamps elsewhere.
-6. **Light theme parity** -- port every token above to `:root` (light
-   variant) keeping the same role mapping; re-verify the no-flash
-   cookie/localStorage theme sync still matches on first paint.
+6. **Light theme parity** -- DONE, PR #96, branched off `main`'s tip
+   (`fea713a`). Light `:root` had never been touched by this redesign --
+   it was still on the pre-Step-1 blue accent (`#2f6fed`) and its old
+   chart palette. Ported the same token roles: `--accent` family ->
+   deep burnt-amber (`#a85d1e`), re-tuned for white-surface contrast the
+   same way light's existing `--color-success-text` etc. are darker than
+   their dark-mode counterparts (not a literal copy of DARK_VARS' hex
+   values); `--chart-1..6` re-tuned so chart-1 tracks the new accent and
+   chart-2/4 lean toward the bull/bear hues, matching dark's palette
+   shape; `--bull`/`--bull-bg`/`--bear`/`--bear-bg` added to light
+   (previously only in `DARK_VARS`, referenced only via Step 4's
+   `var(--bull, var(--color-success-text))`-style fallbacks -- those
+   fallbacks are now dropped from `.llm-agent-bull/-bear` and
+   `.verdict-*` since both themes define the tokens directly). No-flash
+   cookie/localStorage theme sync (`renderShell`'s early inline script)
+   untouched -- CSS custom property values only, no change to the
+   toggle/attribute logic.
 7. **Cross-page polish + accessibility pass** -- sweep every remaining view
    (`activity.js`, `backfill.js`, `backtest.js`, `backtest_detail.js`,
    `status.js`, `env_selector.js`, `more.js`) for anything not covered by
@@ -656,7 +670,7 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    new motion, and color contrast on both themes before calling the redesign
    done.
 
-**Status:** Steps 1-5 done (PR #92, PR #93, Step 3 -- see its entry above for the out-of-process direct-push caveat, audited and left in place 2026-09-22 -- PR #94, and PR #95). Step 6 (light theme parity) is next, not yet started. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed -- but every step still gets its own branch + PR, no direct pushes to main.
+**Status:** Steps 1-6 done (PR #92, PR #93, Step 3 -- see its entry above for the out-of-process direct-push caveat, audited and left in place 2026-09-22 -- PR #94, PR #95, and PR #96 -- pending CI as of this write, will auto-merge on green). Step 7 (cross-page polish + accessibility) is next. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed -- but every step still gets its own branch + PR, no direct pushes to main.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
