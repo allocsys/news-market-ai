@@ -591,10 +591,27 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    **Merge timing confirmed (owner, 2026-09-22): auto-merge on green CI**,
    for this step and going forward -- no more per-PR go-ahead needed. Step 3
    is on `dashboard-redesign/step-3-ledger-tables`.
-3. **Ledger table redesign** -- restyle `positionsTable`, `decisionsTable`,
-   `checkpointsTable`, and the LLM-calls list in `helpers.js` to the
-   hairline-ruled ledger treatment; keep the existing `< 768px` stacked-card
-   fallback behavior, just restyled.
+3. **Ledger table redesign** -- DONE, but **shipped out of process**: landed
+   as commit `85056c6` pushed **directly to `main`**, not through a
+   `step-3-ledger-tables` branch/PR as the working rule requires (that
+   branch was created off `main` @ `7a6d0b4` but never actually used --
+   left orphaned on the remote, safe to ignore). Caught and audited
+   2026-09-22: content is CSS-only (`shell.js` `.table-wrap`/`table`/`th`/
+   `td`), no markup or data changes needed since `positionsTable`,
+   `decisionsTable`, `checkpointsTable`, and the LLM-calls table already
+   share those classes; restyled to the hairline-ruled ledger treatment
+   (dropped card shadow/rounded corners/elevated header, hairline
+   top/bottom rule + rule under header, `< 768px` stacked-card fallback
+   kept, restyled to match). Uses `--border-strong`/`--border-subtle`,
+   both already defined by Step 1's tokens -- verified present before
+   trusting the change. CI still ran on the direct push (`test` and
+   `deploy-dashboard` both green) and it's live in production, so **not
+   reverted** -- reverting a correct, tested, already-deployed change to
+   redo it through a branch would be pure churn. Recorded here so the step
+   is truthfully marked done and the process gap doesn't repeat. **Rule
+   reaffirmed for Step 4 onward: no more direct pushes to `main`, every
+   step gets its own branch + PR even though merge no longer needs a
+   per-PR go-ahead.**
 4. **Verdict/decision card** -- the one bold move: rebuild how a single trade
    decision renders (used on Overview's "latest decision" and throughout
    Decisions) as the bull-left/bear-right/judge-beneath card described above,
