@@ -4,8 +4,11 @@
 //   - Premium fintech theme, light by default, full dark mode available.
 //     Surfaces use a subtle elevation ladder (--bg-base -> --bg-surface ->
 //     --bg-elevated) instead of a single flat panel, in both themes.
-//   - Typography: Inter Tight for headings (tighter display weight), Inter for
-//     body, ui-monospace for tabular numerics. Loaded via Google Fonts.
+//   - Typography (plan.md "Dashboard: Heavy Polish, Redesign & Reorganization"
+//     Step 1, 2026-09-22): Fraunces (display serif) for headings, verdict/
+//     thesis callouts and big stat numbers; IBM Plex Sans for body/UI chrome;
+//     IBM Plex Mono for tickers/IDs/timestamps/tabular figures. Loaded via
+//     Google Fonts. Replaces the prior Inter Tight/Inter/system-mono set.
 //   - Sidebar: 248px on desktop, 72px icon-rail on tablet, hidden on mobile
 //     (replaced by a top app bar + bottom tab bar with Lucide-style stroke icons).
 //   - Cards have a 1px hairline border + faint top highlight (premium feel),
@@ -53,28 +56,28 @@ const ICONS = {
 // explicitly picked light) and the `[data-theme="dark"]` block (explicit
 // toggle). Keeping one source avoids the two ever drifting apart.
 const DARK_VARS = `
-    --bg-base: #070b14;
-    --bg-surface: #0d1320;
-    --bg-elevated: #131b2e;
-    --bg-hover: #1a2238;
-    --bg-active: #1e2940;
+    --bg-base: #14171f;
+    --bg-surface: #1c2029;
+    --bg-elevated: #242935;
+    --bg-hover: #2b3140;
+    --bg-active: #333b4d;
 
-    --border-color: #1f2a44;
-    --border-subtle: #161e30;
-    --border-strong: #2c3a5a;
+    --border-color: #313846;
+    --border-subtle: #262b36;
+    --border-strong: #3f4759;
 
-    --text-main: #f1f5f9;
-    --text-muted: #94a3b8;
-    --text-subtle: #64748b;
-    --text-inverse: #0b1020;
+    --text-main: #edeae2;
+    --text-muted: #a8a398;
+    --text-subtle: #7d7a72;
+    --text-inverse: #14171f;
 
-    --accent: #3b82f6;
-    --accent-hover: #2563eb;
-    --accent-bright: #60a5fa;
-    --accent-deep: #1d4ed8;
-    --accent-subtle: rgba(59, 130, 246, 0.14);
-    --accent-glow: rgba(96, 165, 250, 0.22);
-    --focus-ring: #60a5fa;
+    --accent: #d98e3c;
+    --accent-hover: #c67d2e;
+    --accent-bright: #e8a458;
+    --accent-deep: #a8631f;
+    --accent-subtle: rgba(217, 142, 60, 0.14);
+    --accent-glow: rgba(232, 164, 88, 0.22);
+    --focus-ring: #e8a458;
 
     --color-success-bg: rgba(16, 185, 129, 0.12);
     --color-success-text: #34d399;
@@ -85,19 +88,29 @@ const DARK_VARS = `
     --color-warning-bg: rgba(245, 158, 11, 0.12);
     --color-warning-text: #fbbf24;
     --color-warning-strong: #f59e0b;
-    --color-info-bg: rgba(59, 130, 246, 0.12);
-    --color-info-text: #60a5fa;
+    --color-info-bg: rgba(217, 142, 60, 0.12);
+    --color-info-text: #e8a458;
 
-    --chart-1: #60a5fa;
-    --chart-2: #34d399;
-    --chart-3: #fbbf24;
-    --chart-4: #f87171;
-    --chart-5: #a78bfa;
-    --chart-6: #94a3b8;
+    /* Bull/bear semantics (plan.md Step 1 introduces the tokens; Step 4's
+       verdict card is the first consumer). Deliberately separate from the
+       general success/danger tokens above -- a rejected decision isn't the
+       same concept as a bear argument, even though today's UI has no
+       bear-argument surface yet. */
+    --bull: #4e9b6b;
+    --bull-bg: rgba(78, 155, 107, 0.14);
+    --bear: #c1523f;
+    --bear-bg: rgba(193, 82, 63, 0.14);
 
-    --surface-translucent: rgba(13, 19, 32, 0.92);
-    --bg-glow-1: rgba(59, 130, 246, 0.08);
-    --bg-glow-2: rgba(167, 139, 250, 0.05);
+    --chart-1: #d98e3c;
+    --chart-2: #4e9b6b;
+    --chart-3: #c9a227;
+    --chart-4: #c1523f;
+    --chart-5: #8b6f9e;
+    --chart-6: #8b93a1;
+
+    --surface-translucent: rgba(28, 32, 41, 0.92);
+    --bg-glow-1: rgba(217, 142, 60, 0.08);
+    --bg-glow-2: rgba(139, 111, 158, 0.05);
 
     --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 12px 32px -8px rgba(0, 0, 0, 0.55);
@@ -159,9 +172,9 @@ const STYLE = `
     --bg-glow-1: rgba(47, 111, 237, 0.05);
     --bg-glow-2: rgba(124, 92, 209, 0.04);
 
-    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-display: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
     --radius-sm: 6px;
     --radius-md: 10px;
@@ -1291,8 +1304,8 @@ export function renderShell({ activeSection, sessionUsername, bodyHtml, refreshH
     theme === "light"
       ? `<meta name="theme-color" content="#f6f8fb">`
       : theme === "dark"
-        ? `<meta name="theme-color" content="#070b14">`
-        : `<meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#070b14" media="(prefers-color-scheme: dark)">`;
+        ? `<meta name="theme-color" content="#14171f">`
+        : `<meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#14171f" media="(prefers-color-scheme: dark)">`;
   return `<!DOCTYPE html>
 <html lang="en"${themeAttr}>
 <head>
@@ -1316,7 +1329,7 @@ ${themeColorMeta}
 <script>window.__DASHBOARD_ENV__ = ${JSON.stringify(env)};</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>${STYLE}</style>
 <script>
   function setDateRange(fromId, toId, days) {
