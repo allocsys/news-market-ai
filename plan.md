@@ -663,14 +663,30 @@ current tip -- branch naming convention: `dashboard-redesign/step-N-<name>`):**
    cookie/localStorage theme sync (`renderShell`'s early inline script)
    untouched -- CSS custom property values only, no change to the
    toggle/attribute logic.
-7. **Cross-page polish + accessibility pass** -- sweep every remaining view
-   (`activity.js`, `backfill.js`, `backtest.js`, `backtest_detail.js`,
-   `status.js`, `env_selector.js`, `more.js`) for anything not covered by
-   steps 1-6; verify keyboard focus states, `prefers-reduced-motion` on any
-   new motion, and color contrast on both themes before calling the redesign
-   done.
+7. **Cross-page polish + accessibility pass** -- DONE, PR #97, branched off
+   `main`'s tip (`96a15fd`). Swept `activity.js`/`backfill.js`/`backtest.js`/
+   `backtest_detail.js`/`status.js`/`env_selector.js`/`more.js`/`helpers.js` --
+   most already used shared tokens/classes throughout and needed nothing.
+   Two real gaps found and fixed: (1) keyboard focus states in `shell.js` --
+   `.pill`, `.search-result`, `.mobile-more-card`, `.bottom-nav a`,
+   `.section-nav a`, `.auto-refresh-toggle` had no explicit `:focus-visible`
+   (added the same ring `.theme-toggle`/`.btn` already use);
+   `.search-palette-input` set `outline: none` with nothing replacing it
+   (added a `:focus-within` ring on its parent row instead, since the input
+   has no border/background of its own); (2) `more.js`'s `.more-card` still
+   had `box-shadow: var(--shadow-card)`, left over from before Step 5
+   established content cards drop the shadow for a hairline border only --
+   dropped it, added the same focus ring. `prefers-reduced-motion` already
+   globally covered (shell.js's blanket rule + `status.js`'s own override on
+   the pulse animation) -- checked, no gaps. Color contrast on Step 6's new
+   light-theme tokens hand-computed against white: `--accent`/
+   `--color-info-text` (`#a85d1e`) ≈ 4.94:1, `--bull` (`#3f7d57`) ≈ 4.90:1,
+   `--bear` (`#a33f2e`) ≈ 6.35:1 -- all clear AA for normal text (4.5:1),
+   accent/bull with less margin than bear; worth a real contrast-checker
+   pass rather than trusting hand arithmetic, but nothing failing as
+   computed.
 
-**Status:** Steps 1-6 done (PR #92, PR #93, Step 3 -- see its entry above for the out-of-process direct-push caveat, audited and left in place 2026-09-22 -- PR #94, PR #95, and PR #96 -- pending CI as of this write, will auto-merge on green). Step 7 (cross-page polish + accessibility) is next. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed -- but every step still gets its own branch + PR, no direct pushes to main.
+**Status: ALL 7 STEPS DONE.** PR #92, PR #93, Step 3 (out-of-process direct-push caveat, audited and left in place 2026-09-22 -- see its own entry above), PR #94, PR #95, PR #96, and PR #97 (pending CI as of this write, will auto-merge on green). "Dashboard: Heavy Polish, Redesign & Reorganization" is complete -- design tokens, nav reorg, ledger tables, verdict card, stat-card instrument readouts, light theme parity, and the cross-page polish/accessibility pass. Merge timing confirmed 2026-09-22: auto-merge on green CI, no per-PR go-ahead needed.
 
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off**
