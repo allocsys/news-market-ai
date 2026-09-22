@@ -1218,6 +1218,30 @@ function renderThemeToggle() {
   return `<button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark theme" title="Toggle theme"><span class="icon-sun">${ICONS.sun}</span><span class="icon-moon">${ICONS.moon}</span></button>`;
 }
 
+/** Icon-button trigger, same shape as renderThemeToggle -- opens the search palette (see renderSearchPalette). One instance goes in the desktop rail, one in the mobile header; both share the `.search-trigger` class the client script binds to. */
+function renderSearchTrigger() {
+  return `<button type="button" class="theme-toggle search-trigger" aria-label="Search tickers" title="Search tickers (Ctrl/Cmd+K)">${ICONS.search}</button>`;
+}
+
+/**
+ * Global ticker-search palette (plan.md "Dashboard: Scoped UX Adoption" item 6).
+ * Markup only -- rendered once per page (see renderShell), opened by either
+ * renderSearchTrigger button or the Ctrl/Cmd+K shortcut, both wired in
+ * renderShell's inline script below. The ticker universe is fetched lazily
+ * on first open from GET /dashboard/tickers (a thin proxy to backend's
+ * GET /api/tickers, data.js#getTickersData -- RunStore#listKnownTickers,
+ * DISTINCT ticker across positions/trade_decisions/pipeline_checkpoints for
+ * the resolved environment), not embedded server-side, so a page load never
+ * pays for a query nobody may use. Selecting a result navigates to
+ * /dashboard/llm?llmTicker=<ticker> -- the one existing page that already
+ * knows how to filter by ticker (helpers.js#parseLlmParams) -- rather than
+ * inventing a new per-ticker page; a dedicated ticker detail view is out of
+ * scope for "land the search-by-known-ticker version first" (plan.md).
+ */
+function renderSearchPalette() {
+  return `<div class="search-backdrop" id="search-backdrop" hidden></div><div class="search-palette" id="search-palette" role="dialog" aria-modal="true" aria-label="Search tickers" hidden><div class="search-palette-input-row"><span class="nav-icon">${ICONS.search}</span><input type="text" id="search-input" class="search-palette-input" placeholder="Search tickers\u2026" autocomplete="off" spellcheck="false"><span class="search-palette-kbd">Esc</span></div><div class="search-palette-results" id="search-results"></div></div>`;
+}
+
 function renderMobileHeader(sessionUsername) {
   return `<div class="mobile-header">
     <div class="wordmark">
@@ -1227,7 +1251,7 @@ function renderMobileHeader(sessionUsername) {
         <span class="wordmark-sub">operations ledger</span>
       </span>
     </div>
-    <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}${renderThemeToggle()}</div>
+    <div class="rail-meta">${sessionUsername ? `<span class="rail-meta-row" style="margin:0;display:inline-flex;" title="Logged in as ${escapeHtml(sessionUsername)}"><a href="/logout">${ICONS.logout} log out</a></span>` : ""}${renderSearchTrigger()}${renderThemeToggle()}</div>
   </div>`;
 }
 
@@ -1628,7 +1652,7 @@ ${themeColorMeta}
         </span>
       </div>
       ${renderNav(activeSection, env)}
-      <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}<div class="rail-meta-row">theme ${renderThemeToggle()}</div></div>
+      <div class="rail-meta">generated ${fmtTime(new Date().toISOString())}<br>architecture &amp; known gaps in plan.md${sessionUsername ? `<div class="rail-meta-row">logged in as ${escapeHtml(sessionUsername)} &middot; ${ICONS.logout}<a href="/logout">log out</a></div>` : ""}<div class="rail-meta-row">search ${renderSearchTrigger()}</div><div class="rail-meta-row">theme ${renderThemeToggle()}</div></div>
     </aside>
     <div class="content">
       <main id="dashboard-main">
@@ -1638,6 +1662,7 @@ ${themeColorMeta}
     </div>
   </div>
   ${renderBottomNav(activeSection, env)}
+  ${renderSearchPalette()}
   ${exportData !== undefined ? `<script type="application/json" id="dashboard-export-data">${JSON.stringify(exportData).replace(/<\/script/gi, "<\\/script")}</script>` : ""}
 </body>
 </html>`;
