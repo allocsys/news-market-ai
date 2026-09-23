@@ -75,9 +75,11 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
 
   if (stage === null || stage === "ingested") {
     // priceBars feeds the technical analyst only -- see that agent's own
-    // header for why an empty result (yfinance not wired into this
-    // pipeline yet, a separate known gap) makes it return null rather than
-    // asking the LLM to analyze nothing.
+    // header for why an empty result (Tiingo has no backfilled bars yet for
+    // this ticker -- yfinance itself was dropped 2026-09-20, Tiingo has been
+    // the live bar source since 2026-09-21, see plan.md "Price data
+    // sources") makes it return null rather than asking the LLM to analyze
+    // nothing.
     const priceBars = await getPriceBarsAsOf(inputs, { ticker, asOf });
     const [newsOpinion, sentimentOpinion, technicalOpinion] = await Promise.all([
       runNewsEventAnalyst(env, config, newsItem),
