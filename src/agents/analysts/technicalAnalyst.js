@@ -5,14 +5,15 @@
 // computed off real storage/inputs_view.js#getPriceBarsAsOf rows (plan.md Adopted
 // Pattern #9: the model interprets real numbers, it never invents them).
 //
-// HONEST SCOPE: price_bars is only populated once yfinance ingestion is
-// wired into graph/pipeline.js (a separate, already-documented plan.md
-// gap) -- until then getPriceBarsAsOf returns no rows for most/all
-// tickers, computeTechnicalSnapshot returns { hasData: false }, and this
-// agent returns null without calling the LLM at all, rather than asking a
-// model to analyze a blank slate. graph/pipeline.js must filter a null
-// result out of its opinions array, same as any other optional analyst
-// output.
+// HONEST SCOPE: price_bars is populated by Tiingo ingestion (plan.md "Price
+// data sources" -- yfinance was dropped 2026-09-20 after Yahoo 429'd every
+// Workers-egress call; Tiingo has been the live bar source since 2026-09-21).
+// A ticker with no backfilled history yet, or one outside Tiingo's covered
+// set, still has no rows -- getPriceBarsAsOf returns none,
+// computeTechnicalSnapshot returns { hasData: false }, and this agent
+// returns null without calling the LLM at all, rather than asking a model to
+// analyze a blank slate. graph/pipeline.js must filter a null result out of
+// its opinions array, same as any other optional analyst output.
 
 import { callStructured } from "../utils/structured.js";
 import { AnalystOpinion } from "../../schemas/index.js";
