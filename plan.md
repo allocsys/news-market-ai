@@ -435,6 +435,120 @@ original reasoning in git history:**
   unverified — the part/continuation mechanism (confirmed strict-budgeted,
   ~1 item/part, no errors) is the mitigation, but a multi-month run hasn't been
   tried yet.
+- **G. Same-day replacement produces phantom zero-PnL trades (found
+  2026-09-23, owner-reported: "orders get replaced at the same price with no
+  PnL" during a live backtest run).** Root cause: `getPriceBarsAsOf` resolves
+  visibility at UTC-calendar-day granularity (`shared/price_availability.js`,
+  step C's intentional no-lookahead fix), so any two news items for the SAME
+  ticker on the SAME UTC day resolve to the identical "current price" — the
+  previous day's close. `graph/pipeline.js`'s replace path (one price fetch
+  feeding both `entryPrice` and `exitPrice`) then closes the earlier same-day
+  position at the exact price it was opened at, so
+  `shared/returns.js#computeRealizedReturn` always returns exactly 0 for a
+  same-day replacement — a real close, but a fabricated PnL of zero, not the
+  position's actual economics.
+
+  **Proper fix (not yet started, needs an owner decision first — see
+  blocker below):** replay REAL intraday fills instead of the previous day's
+  daily close for entry/exit pricing, so a same-day replace prices both legs
+  off what the market was actually doing at each news item's own timestamp,
+  not one shared once-a-day number.
+
+  **Blocker — data source decision needed:** no intraday historical price
+  source exists in this repo. This is the same kind of vendor/cost call the
+  "Price data sources" section above already routes through the owner (see
+  gold/oil/forex sourcing) — needs the owner's go-ahead before any ingestion
+  code is written.
+
+  **Vendor research (2026-09-23):**
+  | Provider | Relevant plan | Price | Intraday history depth | Notes |
+  |---|---|---|---|---|
+  | **Tiingo (already integrated)** | Power | $30/mo | Capped at the most recent **2,000 data points per ticker regardless of plan** (~5 trading days at 1min, ~5 weeks at 5min) | Live/recent-window feed, NOT a historical archive — confirmed unusable for backfilling a 90-day backtest window. Ruled out. |
+  | **Polygon.io (rebranded "Massive")** | Starter | $29/mo | 5 years, unlimited calls, real 1-min/hour aggregate bars | Strong for equities (AAPL/MSFT/TSLA); no forex/commodities at this tier |
+  | **Twelve Data** | Grow | $29/mo | 1min–8h intraday, forex included | Repo already uses Twelve Data's free tier for forex signals (see "Price data sources"); Grow would cover gold/oil too — one vendor for both equities and FX/commodities |
+
+  **Free-tier survey (2026-09-23), why paid was avoided:**
+  | Provider (free) | Limit | Verdict |
+  |---|---|---|
+  | EODHD | 20 calls/day, intraday not even in the free plan | Ruled out |
+  | Alpha Vantage | 25 requests/day | Ruled out — too thin for a backfill |
+  | Finnhub | `/stock/candle` now returns "no access" on free plans (moved to paid, confirmed via GitHub issue) | Ruled out for equities |
+  | **Alpaca** | No hard daily cap, real-time/historical US equities | **In. Equities only — no forex/commodities.** |
+  | **Twelve Data Basic** | 800 requests/day, forex intraday included | **In. Already used for forex signals; only XAUUSD needs it here.** |
+
+  **DECIDED (2026-09-23, owner): Alpaca + Twelve Data, both free tiers.** No
+  paid vendor. Split by instrument, not blended:
+  - **Alpaca** — AAPL, MSFT, TSLA, **and USO** (USO is a US-listed ETF, not a
+    forex/commodity pair, so it goes through Alpaca same as the equities).
+  - **Twelve Data (free Basic, 800 req/day)** — **XAUUSD only**, the one true
+    forex/commodity instrument in the set. Far lighter load on the 800/day
+    budget than routing everything through it.
+
+  **Gradual backfill, not a bulk loop:** resumable, not a single long-running
+  job. New `intraday_backfill_status` table in `inputs` (ticker, date,
+  vendor, status, last_attempt) tracked per (symbol, day); a cron-driven
+  Worker tick claims the next unfilled day per ticker and advances the
+  status row, so an interrupted run resumes from where it left off instead
+  of re-fetching or silently skipping gaps — same self-continuing-parts
+  shape as the existing news backfill (`POST /backfill`).
+
+  **Rate limiting:** a token-bucket/counter per vendor, persisted in D1 (not
+  in-memory — Workers don't guarantee state survives between invocations),
+  checked before each fetch; on exhaustion the tick backs off and resumes
+  next cron run rather than retrying in a hot loop. Live candle fetching
+  (going-forward, not backfill) shares the same budget/counter per vendor so
+  the two paths can't double-spend the daily cap.
+
+  **Retention: rolling 4–6 month window on `price_bars_intraday`.** Backtest
+  window is 90 days, so 4–6 months is comfortable headroom. A scheduled purge
+  deletes rows older than the window — purge must never run against a day
+  that an in-flight backtest run is actively reading (check/lock, or simply
+  purge conservatively — e.g. only rows older than 6 months, checked before
+  any backtest run starts, never mid-run). Once a day's intraday bars age
+  out, `getIntradayPriceAsOf` returns nothing for it and the pipeline falls
+  back to the existing daily-close read (per Adopted Pattern #11) — that
+  fallback must log loudly so a backtest reaching past the retention window
+  isn't mistaken for a fully intraday-priced run.
+
+  **Implementation plan (each its own PR, same working rule as A–F above):**
+  1. **Schema:** new `price_bars_intraday` table in `migrations/inputs/`
+     (ticker, timestamp, open/high/low/close/volume, source) — kept separate
+     from `price_bars` (daily) rather than widening that table, since the
+     two have different granularity/retention/volume profiles and every
+     existing daily reader (`getPriceBarsAsOf`, `getPriceBarsInRange`, the
+     technical analyst) stays untouched.
+  2. **Ingestion adapter:** extend `ingestion/sources/tiingo.js` (or a new
+     sibling file) with an intraday fetch function, following the same
+     per-ticker VendorError/throttle/retry conventions as
+     `fetchHistoricalBars` — plus a historical backfill path, since
+     replaying old backtests needs intraday history for the whole window,
+     not just going-forward live data.
+  3. **Point-in-time read:** a new `getIntradayPriceAsOf(db, { ticker, asOf })`
+     in `storage/inputs_view.js`, same required-`asOf` /
+     no-"give me everything" convention as every other reader in that file —
+     visible-at-`asOf` here means the intraday bar's own timestamp `<= asOf`
+     (finer-grained than the daily cutoff, no calendar-day rounding), with
+     its own `assertNoPriceBarLookahead`-style guard and a leak-check test
+     mirroring `test/price_bars_no_same_day_leak.test.js`.
+  4. **Pipeline change:** `graph/pipeline.js`'s portfolio_checked stage
+     (currently one `getPriceBarsAsOf(..., limit: 1)` call feeding both
+     `entryPrice` and `exitPrice`) calls the new intraday reader instead,
+     falling back to the existing daily-close read when no intraday bar
+     exists at that `asOf` (illiquid tickers, vendor gaps, or a backtest
+     window with no intraday history backfilled yet) — never silently
+     degrading without logging which path was used, per Adopted Pattern #11.
+     `graph/exit_check.js` gets the same fallback-aware swap, since it
+     independently sources `currentPrice` for stop-loss/take-profit checks.
+  5. **Tests:** a same-day-replace-has-real-PnL test (two news items, one
+     ticker, one UTC day, distinct intraday prices → nonzero realized
+     return), a lookahead leak-check on the new reader, and a fallback test
+     (no intraday bar → daily close still used, logged).
+  6. **Backfill:** historical intraday backfill for whatever window the next
+     real backtest run covers — cost/rate-limit sizing depends on the vendor
+     chosen in the blocker above, so this step's scope isn't fixed yet.
+
+  Not started. Needs the owner's data-source decision before step 1's
+  migration is written.
 
 ### Other remaining work
 1. **Live verification** (not yet observed): a real ANALYZE crash-and-retry,
