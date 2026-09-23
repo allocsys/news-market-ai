@@ -455,14 +455,21 @@ original reasoning in git history:**
   not one shared once-a-day number.
 
   **Blocker — data source decision needed:** no intraday historical price
-  source exists in this repo. `ingestion/sources/tiingo.js` only calls
-  Tiingo's End-of-Day API; Tiingo's intraday endpoint needs a paid
-  Power/Advanced plan (exact price unconfirmed — check before committing),
-  not the free plan already in use for EOD bars. This is the same kind of
-  vendor/cost call the "Price data sources" section above already routes
-  through the owner (see gold/oil/forex sourcing) — needs the owner's
-  go-ahead on a paid tier (or a different intraday vendor) before any
-  ingestion code is written.
+  source exists in this repo. This is the same kind of vendor/cost call the
+  "Price data sources" section above already routes through the owner (see
+  gold/oil/forex sourcing) — needs the owner's go-ahead before any ingestion
+  code is written.
+
+  **Vendor research (2026-09-23):**
+  | Provider | Relevant plan | Price | Intraday history depth | Notes |
+  |---|---|---|---|---|
+  | **Tiingo (already integrated)** | Power | $30/mo | Capped at the most recent **2,000 data points per ticker regardless of plan** (~5 trading days at 1min, ~5 weeks at 5min) | Live/recent-window feed, NOT a historical archive — confirmed unusable for backfilling a 90-day backtest window. Ruled out. |
+  | **Polygon.io (rebranded "Massive")** | Starter | $29/mo | 5 years, unlimited calls, real 1-min/hour aggregate bars | Strong for equities (AAPL/MSFT/TSLA); no forex/commodities at this tier |
+  | **Twelve Data** | Grow | $29/mo | 1min–8h intraday, forex included | Repo already uses Twelve Data's free tier for forex signals (see "Price data sources"); Grow would cover gold/oil too — one vendor for both equities and FX/commodities |
+
+  **Leaning:** Twelve Data Grow, since it's the only option that covers both
+  equities and forex/gold in one vendor (matches the mixed instrument set
+  this repo already trades) — not yet decided, owner's call.
 
   **Implementation plan once a source is picked (each its own PR, same
   working rule as A–F above):**
