@@ -12,13 +12,13 @@
 // on a position that already closed).
 //
 // HONEST SCOPE: currentPrice comes from inputs_view.js#getPriceBarsAsOf,
-// which reads the price_bars table -- but yfinance ingestion is not yet
-// wired into graph/pipeline.js (separate, already-documented plan.md gap).
-// So in practice price_bars will be empty for most/all tickers until that
-// lands, and this function will only be able to fire time-based exits
-// until then -- an honest degradation per evaluateExit's own null-price
-// handling, not a silent one. Not yet exercised against real price data
-// for the same reason.
+// which reads the price_bars table -- populated by Tiingo ingestion (plan.md
+// "Price data sources"; yfinance was dropped 2026-09-20 after Yahoo 429'd
+// every Workers-egress call, Tiingo has been the live bar source since
+// 2026-09-21). Stop-loss/take-profit exits can fire for any ticker Tiingo
+// has backfilled bars for; a ticker with no bars yet still falls back to
+// evaluateExit's null-price handling and only the time-based exit can
+// trigger for it -- an honest per-ticker degradation, not a blanket one.
 
 import { getPriceBarsAsOf } from "../storage/inputs_view.js";
 import { evaluateExit } from "../agents/risk_mgmt/exit.js";
