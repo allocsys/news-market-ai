@@ -467,12 +467,50 @@ original reasoning in git history:**
   | **Polygon.io (rebranded "Massive")** | Starter | $29/mo | 5 years, unlimited calls, real 1-min/hour aggregate bars | Strong for equities (AAPL/MSFT/TSLA); no forex/commodities at this tier |
   | **Twelve Data** | Grow | $29/mo | 1min–8h intraday, forex included | Repo already uses Twelve Data's free tier for forex signals (see "Price data sources"); Grow would cover gold/oil too — one vendor for both equities and FX/commodities |
 
-  **Leaning:** Twelve Data Grow, since it's the only option that covers both
-  equities and forex/gold in one vendor (matches the mixed instrument set
-  this repo already trades) — not yet decided, owner's call.
+  **Free-tier survey (2026-09-23), why paid was avoided:**
+  | Provider (free) | Limit | Verdict |
+  |---|---|---|
+  | EODHD | 20 calls/day, intraday not even in the free plan | Ruled out |
+  | Alpha Vantage | 25 requests/day | Ruled out — too thin for a backfill |
+  | Finnhub | `/stock/candle` now returns "no access" on free plans (moved to paid, confirmed via GitHub issue) | Ruled out for equities |
+  | **Alpaca** | No hard daily cap, real-time/historical US equities | **In. Equities only — no forex/commodities.** |
+  | **Twelve Data Basic** | 800 requests/day, forex intraday included | **In. Already used for forex signals; only XAUUSD needs it here.** |
 
-  **Implementation plan once a source is picked (each its own PR, same
-  working rule as A–F above):**
+  **DECIDED (2026-09-23, owner): Alpaca + Twelve Data, both free tiers.** No
+  paid vendor. Split by instrument, not blended:
+  - **Alpaca** — AAPL, MSFT, TSLA, **and USO** (USO is a US-listed ETF, not a
+    forex/commodity pair, so it goes through Alpaca same as the equities).
+  - **Twelve Data (free Basic, 800 req/day)** — **XAUUSD only**, the one true
+    forex/commodity instrument in the set. Far lighter load on the 800/day
+    budget than routing everything through it.
+
+  **Gradual backfill, not a bulk loop:** resumable, not a single long-running
+  job. New `intraday_backfill_status` table in `inputs` (ticker, date,
+  vendor, status, last_attempt) tracked per (symbol, day); a cron-driven
+  Worker tick claims the next unfilled day per ticker and advances the
+  status row, so an interrupted run resumes from where it left off instead
+  of re-fetching or silently skipping gaps — same self-continuing-parts
+  shape as the existing news backfill (`POST /backfill`).
+
+  **Rate limiting:** a token-bucket/counter per vendor, persisted in D1 (not
+  in-memory — Workers don't guarantee state survives between invocations),
+  checked before each fetch; on exhaustion the tick backs off and resumes
+  next cron run rather than retrying in a hot loop. Live candle fetching
+  (going-forward, not backfill) shares the same budget/counter per vendor so
+  the two paths can't double-spend the daily cap.
+
+  **Retention: rolling 4–6 month window on `price_bars_intraday`.** Backtest
+  window is 90 days, so 4–6 months is comfortable headroom. A scheduled purge
+  deletes rows older than the window — purge must never run against a day
+  that an in-flight backtest run is actively reading (check/lock, or simply
+  purge conservatively — e.g. only rows older than 6 months, checked before
+  any backtest run starts, never mid-run). Once a day's intraday bars age
+  out, `getIntradayPriceAsOf` returns nothing for it and the pipeline falls
+  back to the existing daily-close read (per Adopted Pattern #11) — that
+  fallback must log loudly so a backtest reaching past the retention window
+  isn't mistaken for a fully intraday-priced run.
+
+  **Implementation plan (each its own PR, same working rule as A–F above):**
   1. **Schema:** new `price_bars_intraday` table in `migrations/inputs/`
      (ticker, timestamp, open/high/low/close/volume, source) — kept separate
      from `price_bars` (daily) rather than widening that table, since the
