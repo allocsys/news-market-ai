@@ -149,10 +149,11 @@ test("onEquityReturns: a later position is sized off the equity the earlier ones
   closeAll(r.returns, [0, 0.01, 0, 0.05]);
 });
 
-test("onEquityReturns: a position that opens and closes inside one UTC day never earns anything; one opened before the span is active from its first day", () => {
+test("onEquityReturns: a position that opens and closes inside one UTC day is active for that one day and earns its move; one opened before the span is active from its first day", () => {
   const sameDay = onEquityReturns(grid(), [pos({ id: "d", openedAt: "2024-01-03T09:00:00.000Z", closedAt: "2024-01-03T15:00:00.000Z" })]);
-  assert.deepEqual(sameDay.returns, [0, 0, 0, 0]);
-  assert.equal(sameDay.positionsTraded, 0);
+  // Active only on its open day, Jan 3: alloc 0.10, value 0.10 * 121/110 = 0.11, pnl 0.01, return 0.01.
+  closeAll(sameDay.returns, [0, 0.01, 0, 0]);
+  assert.equal(sameDay.positionsTraded, 1);
 
   // Opened Dec 29 at 100 (the Friday close), so it earns Jan 2's +10% and Jan 3's +10% on 0.10 of equity 1.
   const carried = onEquityReturns(grid(), [pos({ id: "c", entryPrice: 100, openedAt: "2023-12-29T18:00:00.000Z", closedAt: "2024-01-04T00:00:00.000Z" })]);
