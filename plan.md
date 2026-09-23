@@ -435,6 +435,75 @@ original reasoning in git history:**
   unverified — the part/continuation mechanism (confirmed strict-budgeted,
   ~1 item/part, no errors) is the mitigation, but a multi-month run hasn't been
   tried yet.
+- **G. Same-day replacement produces phantom zero-PnL trades (found
+  2026-09-23, owner-reported: "orders get replaced at the same price with no
+  PnL" during a live backtest run).** Root cause: `getPriceBarsAsOf` resolves
+  visibility at UTC-calendar-day granularity (`shared/price_availability.js`,
+  step C's intentional no-lookahead fix), so any two news items for the SAME
+  ticker on the SAME UTC day resolve to the identical "current price" — the
+  previous day's close. `graph/pipeline.js`'s replace path (one price fetch
+  feeding both `entryPrice` and `exitPrice`) then closes the earlier same-day
+  position at the exact price it was opened at, so
+  `shared/returns.js#computeRealizedReturn` always returns exactly 0 for a
+  same-day replacement — a real close, but a fabricated PnL of zero, not the
+  position's actual economics.
+
+  **Proper fix (not yet started, needs an owner decision first — see
+  blocker below):** replay REAL intraday fills instead of the previous day's
+  daily close for entry/exit pricing, so a same-day replace prices both legs
+  off what the market was actually doing at each news item's own timestamp,
+  not one shared once-a-day number.
+
+  **Blocker — data source decision needed:** no intraday historical price
+  source exists in this repo. `ingestion/sources/tiingo.js` only calls
+  Tiingo's End-of-Day API; Tiingo's intraday endpoint needs a paid
+  Power/Advanced plan (exact price unconfirmed — check before committing),
+  not the free plan already in use for EOD bars. This is the same kind of
+  vendor/cost call the "Price data sources" section above already routes
+  through the owner (see gold/oil/forex sourcing) — needs the owner's
+  go-ahead on a paid tier (or a different intraday vendor) before any
+  ingestion code is written.
+
+  **Implementation plan once a source is picked (each its own PR, same
+  working rule as A–F above):**
+  1. **Schema:** new `price_bars_intraday` table in `migrations/inputs/`
+     (ticker, timestamp, open/high/low/close/volume, source) — kept separate
+     from `price_bars` (daily) rather than widening that table, since the
+     two have different granularity/retention/volume profiles and every
+     existing daily reader (`getPriceBarsAsOf`, `getPriceBarsInRange`, the
+     technical analyst) stays untouched.
+  2. **Ingestion adapter:** extend `ingestion/sources/tiingo.js` (or a new
+     sibling file) with an intraday fetch function, following the same
+     per-ticker VendorError/throttle/retry conventions as
+     `fetchHistoricalBars` — plus a historical backfill path, since
+     replaying old backtests needs intraday history for the whole window,
+     not just going-forward live data.
+  3. **Point-in-time read:** a new `getIntradayPriceAsOf(db, { ticker, asOf })`
+     in `storage/inputs_view.js`, same required-`asOf` /
+     no-"give me everything" convention as every other reader in that file —
+     visible-at-`asOf` here means the intraday bar's own timestamp `<= asOf`
+     (finer-grained than the daily cutoff, no calendar-day rounding), with
+     its own `assertNoPriceBarLookahead`-style guard and a leak-check test
+     mirroring `test/price_bars_no_same_day_leak.test.js`.
+  4. **Pipeline change:** `graph/pipeline.js`'s portfolio_checked stage
+     (currently one `getPriceBarsAsOf(..., limit: 1)` call feeding both
+     `entryPrice` and `exitPrice`) calls the new intraday reader instead,
+     falling back to the existing daily-close read when no intraday bar
+     exists at that `asOf` (illiquid tickers, vendor gaps, or a backtest
+     window with no intraday history backfilled yet) — never silently
+     degrading without logging which path was used, per Adopted Pattern #11.
+     `graph/exit_check.js` gets the same fallback-aware swap, since it
+     independently sources `currentPrice` for stop-loss/take-profit checks.
+  5. **Tests:** a same-day-replace-has-real-PnL test (two news items, one
+     ticker, one UTC day, distinct intraday prices → nonzero realized
+     return), a lookahead leak-check on the new reader, and a fallback test
+     (no intraday bar → daily close still used, logged).
+  6. **Backfill:** historical intraday backfill for whatever window the next
+     real backtest run covers — cost/rate-limit sizing depends on the vendor
+     chosen in the blocker above, so this step's scope isn't fixed yet.
+
+  Not started. Needs the owner's data-source decision before step 1's
+  migration is written.
 
 ### Other remaining work
 1. **Live verification** (not yet observed): a real ANALYZE crash-and-retry,
