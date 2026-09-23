@@ -225,7 +225,14 @@ export function onEquityReturns(grid, positions) {
 
     for (const pos of replayable) {
       if (pos.openDate > date) continue;
-      if (pos.closeDate !== null && date >= pos.closeDate) continue;
+      // A position opened and closed (e.g. replaced) within the same UTC day
+      // has openDate === closeDate; the plain `date >= closeDate` check below
+      // would then exclude it on its only active day, silently dropping every
+      // same-day round trip from the curve. Let it be active for exactly that
+      // one day (never any day after), consistent with the header's own
+      // "priced at the same prior close both times, a 0% round trip" intent.
+      if (pos.closeDate !== null && date >= pos.closeDate && pos.closeDate !== pos.openDate) continue;
+      if (pos.closeDate !== null && pos.closeDate === pos.openDate && date !== pos.openDate) continue;
 
       if (pos.allocation === null) {
         pos.allocation = pos.positionSizePct * equity;
