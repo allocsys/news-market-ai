@@ -1654,7 +1654,6 @@ ${themeColorMeta}
         return;
       }
       inFlight = true;
-      var savedState = captureFormState();
       fetch(window.location.href, { credentials: "same-origin" })
         .then(function (res) {
           if (!res.ok) throw new Error("status " + res.status);
@@ -1664,6 +1663,7 @@ ${themeColorMeta}
           var doc = new DOMParser().parseFromString(html, "text/html");
           var freshMain = doc.getElementById("dashboard-main");
           if (freshMain) {
+            var savedState = captureFormState();
             main.innerHTML = freshMain.innerHTML;
             restoreFormState(savedState);
           }
