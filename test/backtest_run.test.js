@@ -123,20 +123,30 @@ test("runManualBacktest persists a 'failed' run with the error message, still re
   assert.equal(persisted.result, null);
 });
 
-test("runManualBacktest with no backfilled news for the window still completes, with a thin/empty 'on' side (never fabricates)", async () => {
+test("runManualBacktest refuses a ticker with prices but no backfilled news in the span BEFORE any LLM call, naming it (no thin/empty 'on' side)", async () => {
   const ctx = makeBacktestCtx();
-  // nothing backfilled for this ticker/window -- only price bars for the off side
+  // nothing backfilled for this ticker/window -- only price bars, so the price preflight passes and the news preflight is what refuses
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-06", close: 100 });
-  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  let calls = 0;
+  const model = makeFakeModel();
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: async (...args) => { calls++; return model(...args); } };
 
   const outcome = await runManualBacktest({}, config, ctx, {
     id: "run-empty", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
   });
 
-  assert.equal(outcome.status, "complete");
-  assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0); // no news -> no pipeline run -> no position
-  assert.equal(outcome.result.overall.on.cumulativeReturn, 0); // empty return series, not a fabricated number
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.error, /News coverage check failed/);
+  assert.match(outcome.error, /no LLM calls were made/);
+  assert.match(outcome.error, /AAPL has no backfilled news/);
+  assert.doesNotMatch(outcome.error, /while processing/);
+  assert.equal(calls, 0, "not one model call was spent");
+  assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0);
+  const persisted = await getRun(ctx.registryDb, "run-empty");
+  assert.equal(persisted.status, "failed");
+  assert.match(persisted.error, /News coverage check failed/);
+  assert.equal(persisted.result, null);
 });
 
 // ---------------------------------------------------------------------------
