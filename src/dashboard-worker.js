@@ -610,6 +610,18 @@ export default {
       });
     }
 
+    // POST /backtest/purge -- delete failed and cancelled runs entirely,
+    // registry rows included (the dashboard's "Delete failed & cancelled runs"
+    // button, see dashboard/views/backtest.js). No fields: the backend picks
+    // every failed/cancelled run itself and bounds the batch.
+    if (pathname === "/backtest/purge" && request.method === "POST") {
+      return handleTriggerRoute(request, env, config, {
+        backendPath: "/backtest/purge",
+        buildQuery: () => ({ params: {}, activeSection: "backtest" }),
+        formSubmitAccepted: () => ({}),
+      });
+    }
+
     if (pathname === "/backtest/run" && request.method === "POST") {
       return handleTriggerRoute(request, env, config, {
         backendPath: "/backtest/run",
