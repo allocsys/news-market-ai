@@ -26,6 +26,7 @@
 // messages keep working -- llm-worker.js maps it to `pipelineRunId`.
 
 import { getPriceBarsAsOf } from "../storage/inputs_view.js";
+import { resolveCurrentPrice } from "./price_resolution.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
 import { runTechnicalAnalyst } from "../agents/analysts/technicalAnalyst.js";
@@ -163,9 +164,11 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
     } else {
       // Fetched ONCE -- it's both the exitPrice for a replaced existing
       // position and the entryPrice for the new one below, since both
-      // happen at the same ticker/asOf.
-      const priceBars = await getPriceBarsAsOf(inputs, { ticker, asOf, limit: 1 });
-      const currentPrice = priceBars[0]?.close ?? null;
+      // happen at the same ticker/asOf. Finding G step 4: intraday-first,
+      // daily-close fallback (see price_resolution.js) -- this is what lets
+      // two same-day decisions for the same ticker get distinct real prices
+      // instead of sharing one previous-day close (finding G's root cause).
+      const { price: currentPrice } = await resolveCurrentPrice(inputs, { ticker, asOf });
 
       if (currentPrice == null) {
         // HONEST SCOPE: no price_bars data for this ticker as of `asOf`
