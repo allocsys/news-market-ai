@@ -156,12 +156,13 @@ test("a large response (well beyond any vendor page-size cap seen elsewhere in t
 // empty ranges, HTTP failures
 // ---------------------------------------------------------------------------
 
-test("a 404 (no data in the window, e.g. a weekend) is an empty result, not an error", async (t) => {
+test("a 404 is a per-ticker failure, not retried -- unlike twelvedata.js this adapter has no empty-window special case for it (the owner's verified sample never returned one; a real 404 here is worth surfacing, not silently swallowing)", async (t) => {
   const calls = mockTiingoFx(t, [{ status: 404, body: { detail: "Not Found" } }]);
   const { bars, errors } = await run();
   assert.equal(calls.length, 1, "not retried");
   assert.equal(bars.length, 0);
-  assert.equal(errors.length, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].error.status, 404);
 });
 
 test("an empty array with a 200 is also just an empty result", async (t) => {
