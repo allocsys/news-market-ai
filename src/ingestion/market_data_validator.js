@@ -77,6 +77,46 @@ export function validatePriceBar(bar, { now = new Date(), source } = {}) {
 }
 
 /**
+ * Same checks as validatePriceBar, applied to an intraday bar (`ts`, a full
+ * ISO8601 UTC timestamp, instead of `date`, a YYYY-MM-DD day) -- see
+ * schemas/index.js#PriceBarIntraday. Kept as a separate function rather than
+ * generalizing validatePriceBar over a field name, so a future change to one
+ * granularity's rules (e.g. an intraday-only staleness check) doesn't have to
+ * thread a parameter through the daily path too.
+ */
+export function validatePriceBarIntraday(bar, { now = new Date(), source } = {}) {
+  const vendor = source ?? bar.source;
+  const ts = new Date(bar.ts);
+
+  if (Number.isNaN(ts.getTime())) {
+    throw new VendorError(vendor, `unparseable ts: ${JSON.stringify(bar.ts)}`);
+  }
+  if (ts.getTime() > now.getTime()) {
+    throw new VendorError(vendor, `ts ${bar.ts} is in the future relative to ${now.toISOString()}`);
+  }
+
+  for (const field of ["open", "high", "low", "close", "volume"]) {
+    if (typeof bar[field] !== "number" || Number.isNaN(bar[field])) {
+      throw new VendorError(vendor, `${field} is not a valid number: ${JSON.stringify(bar[field])}`);
+    }
+  }
+  if (bar.volume < 0) {
+    throw new VendorError(vendor, `volume ${bar.volume} is negative`);
+  }
+  if (bar.high < bar.low) {
+    throw new VendorError(vendor, `high ${bar.high} is less than low ${bar.low}`);
+  }
+  if (bar.high < bar.open || bar.high < bar.close) {
+    throw new VendorError(vendor, `high ${bar.high} is less than open (${bar.open}) or close (${bar.close})`);
+  }
+  if (bar.low > bar.open || bar.low > bar.close) {
+    throw new VendorError(vendor, `low ${bar.low} is greater than open (${bar.open}) or close (${bar.close})`);
+  }
+
+  return bar;
+}
+
+/**
  * Sanity-checks a fundamental fact before insertion -- same "grounded, not
  * free-associated" principle (Adopted Pattern #9) as validateNormalizedNewsItem
  * and validatePriceBar, applied to XBRL data. Checks `filedAt` (the public

@@ -255,6 +255,29 @@ export function loadConfig(env) {
     // ending today. 7 (not 5, unlike yfinanceRange's "5d") gives a weekend +
     // a holiday enough room to still land on the latest trading day.
     tiingoLiveWindowDays: Number(env.TIINGO_LIVE_WINDOW_DAYS) || 7,
+    // Intraday bars for plan.md finding G (step 2): Alpaca (AAPL/MSFT/TSLA/USO,
+    // ingestion/sources/alpaca.js) and Twelve Data (XAUUSD only,
+    // ingestion/sources/twelvedata.js). No default keys, same convention as
+    // tiingoApiKey/finnhubApiKey -- secrets on the `ingest` Worker only; an
+    // unset key makes the adapter throw once, up front.
+    alpacaApiKey: env.ALPACA_API_KEY_ID || "",
+    alpacaApiSecret: env.ALPACA_API_SECRET_KEY || "",
+    alpacaApiBase: env.ALPACA_API_BASE || "https://data.alpaca.markets",
+    // "iex" is the only feed Alpaca's free tier serves (sip 403s).
+    alpacaFeed: env.ALPACA_FEED || "iex",
+    alpacaIntradayTimeframe: env.ALPACA_INTRADAY_TIMEFRAME || "5Min",
+    // Published free limit is 200 requests/minute per key; 350ms (~171/min)
+    // leaves a safety margin. Not tuned against live traffic.
+    alpacaMinRequestIntervalMs: Number(env.ALPACA_MIN_REQUEST_INTERVAL_MS) || 350,
+    twelveDataApiKey: env.TWELVE_DATA_API_KEY || "",
+    twelveDataApiBase: env.TWELVE_DATA_API_BASE || "https://api.twelvedata.com",
+    // Must be a key of INTERVAL_MS in twelvedata.js (an unlisted value fails fast).
+    twelveDataIntradayInterval: env.TWELVE_DATA_INTRADAY_INTERVAL || "5min",
+    // Free Basic plan, published: 8 requests/minute (7500ms; 7600ms adds
+    // 100ms padding) and 800 requests/day (enforced across invocations by
+    // shared/d1_rate_limiter.js).
+    twelveDataMinRequestIntervalMs: Number(env.TWELVE_DATA_MIN_REQUEST_INTERVAL_MS) || 7600,
+    twelveDataDailyRequestLimit: Number(env.TWELVE_DATA_DAILY_REQUEST_LIMIT) || 800,
     // Which vendor ingestion/ingest.js#backfillHistoricalPriceBars asks:
     // "tiingo" or "yfinance". Unset means Tiingo once a Tiingo key exists,
     // otherwise Yahoo (the original behaviour), so adding the secret is the
