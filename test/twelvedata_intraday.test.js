@@ -175,7 +175,7 @@ test("with the daily cap already spent, no request is made and the ticker report
   assert.equal(await currentCount(db, { vendor: "twelvedata" }), 3, "a denied reservation costs nothing");
 });
 
-test("the cap defaults to 800/day, and a limit in config overrides it", async (t) => {
+test("the cap defaults to 800/day: request 800 fits, request 801 does not", async (t) => {
   const calls = mockTwelveData(t, [page([])]);
   const db = newDb();
   await reserve(db, { vendor: "twelvedata", limit: 800, n: 799 });
@@ -315,14 +315,18 @@ test("a network failure is retried up to retryMaxAttempts, and the API key is sc
   assert.ok(!errors[0].error.message.includes(KEY));
 });
 
-test("an unparseable body and an unexpected shape are per-ticker failures", async (t) => {
+test("an unparseable body is a per-ticker failure", async (t) => {
   mockTwelveData(t, [{ badJson: true }]);
-  const bad = await run();
-  assert.match(bad.errors[0].error.message, /unparseable JSON/);
+  const { bars, errors } = await run();
+  assert.equal(bars.length, 0);
+  assert.match(errors[0].error.message, /unparseable JSON/);
+});
 
+test("an unexpected response shape (no `values` array) is a per-ticker failure", async (t) => {
   mockTwelveData(t, [{ body: { something: "else" } }]);
-  const odd = await run();
-  assert.match(odd.errors[0].error.message, /unexpected response shape/);
+  const { bars, errors } = await run();
+  assert.equal(bars.length, 0);
+  assert.match(errors[0].error.message, /unexpected response shape/);
 });
 
 // ---------------------------------------------------------------------------
