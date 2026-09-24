@@ -37,6 +37,20 @@ binding = "LIVE_DB"
 database_name = "news-market-ai-live"
 database_id = "215b7856-a888-41e1-b929-e9612e99ebd8"
 
+# SIM_DB (step 6, 2026-09-24): added ONLY so the intraday_purge_tick branch
+# below can call storage/sim_registry.js#getActiveBacktestRunId to check
+# whether a backtest is currently queued/running before purging old
+# price_bars_intraday rows (ingestion/intraday_purge.js) -- purging while a
+# backtest might be reading an old window would risk pulling a price out
+# from under an in-flight run. Read-only in practice (nothing in this
+# Worker ever writes to SIM_DB), same wider-grant-than-strictly-needed
+# tradeoff LIVE_DB's own comment above already flags -- a D1 binding can't
+# be scoped read-only in config.
+[[d1_databases]]
+binding = "SIM_DB"
+database_name = "news-market-ai-sim"
+database_id = "55a8fab8-9f30-4c1f-9393-d5393af669fb"
+
 # --- KV --- this Worker is now the ONLY one that touches the EDGAR CIK
 # lookup cache (edgar_cik_lookup.js) and the entity-resolution SEC
 # name-index cache (entity_resolution.js), plus Finnhub/yfinance's

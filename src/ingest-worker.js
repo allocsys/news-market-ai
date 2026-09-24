@@ -43,6 +43,8 @@
 
 import { loadConfig } from "./config.js";
 import { ingestTickerData, ingestFeedNews, backfillHistoricalNews, backfillHistoricalPriceBars } from "./ingestion/ingest.js";
+import { runIntradayBackfillTick } from "./ingestion/intraday_backfill.js";
+import { purgeOldIntradayBars } from "./ingestion/intraday_purge.js";
 import { sendInChunks } from "./ingestion/enqueue.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
@@ -255,6 +257,43 @@ export default {
           } catch (err) {
             console.error("backfill_prices job failed", { id, from, to, message: err.message });
             await reporter.fail(err.message);
+          }
+        } else if (job.type === "intraday_backfill_tick") {
+          // Gradual intraday backfill (plan.md finding G step 6,
+          // ingestion/intraday_backfill.js) -- rides the same BACKFILL
+          // queue/consumer as `backfill`/`backfill_prices` above, produced
+          // by backend's scheduled() every `*/15` cron tick (src/index.js).
+          // No job_progress row: unlike a one-shot operator-triggered
+          // backfill, this is an ongoing, self-continuing background job
+          // with no single "done" moment to report -- its state IS the
+          // intraday_backfill_status table, queryable directly. A per-
+          // ticker vendor failure is caught and logged INSIDE
+          // runIntradayBackfillTick (that ticker's status row is marked
+          // 'failed', eligible for a later tick to re-claim) -- it never
+          // reaches here, so this branch's own try/catch only guards
+          // against an actual bug (a non-VendorError), same ack-and-log
+          // convention as ingest_ticker/ingest_feeds above.
+          try {
+            const result = await runIntradayBackfillTick(config, env.INPUTS_DB);
+            console.log("intraday_backfill_tick completed", { today: result.today, seededTickers: result.seededTickers, results: result.results });
+          } catch (err) {
+            console.error("intraday_backfill_tick job failed", { message: err.message });
+          }
+        } else if (job.type === "intraday_purge_tick") {
+          // Rolling retention purge (plan.md finding G step 6,
+          // ingestion/intraday_purge.js) -- produced by backend's
+          // scheduled() on a once-daily gate (see that Worker's own
+          // comment on the UTC-hour check), not every 15-minute tick.
+          // Reads env.SIM_DB (added to wrangler.ingest.toml alongside
+          // INPUTS_DB/LIVE_DB, same wider-grant-than-strictly-needed
+          // tradeoff those bindings' own comments already flag) only to
+          // check for an active backtest before deleting anything -- never
+          // writes to it.
+          try {
+            const result = await purgeOldIntradayBars(env.INPUTS_DB, env.SIM_DB, { retentionDays: config.intradayRetentionDays });
+            console.log("intraday_purge_tick completed", result);
+          } catch (err) {
+            console.error("intraday_purge_tick job failed", { message: err.message });
           }
         } else {
           console.error("ingest queue message with unrecognized type, acking without processing", { type: job?.type });

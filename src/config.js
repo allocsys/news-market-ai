@@ -278,6 +278,19 @@ export function loadConfig(env) {
     // shared/d1_rate_limiter.js).
     twelveDataMinRequestIntervalMs: Number(env.TWELVE_DATA_MIN_REQUEST_INTERVAL_MS) || 7600,
     twelveDataDailyRequestLimit: Number(env.TWELVE_DATA_DAILY_REQUEST_LIMIT) || 800,
+    // Gradual intraday backfill (ingestion/intraday_backfill.js, plan.md
+    // finding G step 6) -- how many days back a brand-new ticker's history
+    // is seeded into intraday_backfill_status the first time this job sees
+    // it. 90 matches the plan's own backtest-window sizing note ("Backtest
+    // window is 90 days, so 4-6 months is comfortable headroom" on the
+    // retention side); this is the backfill-depth side of that same sizing.
+    intradayBackfillLookbackDays: Number(env.INTRADAY_BACKFILL_LOOKBACK_DAYS) || 90,
+    // Rolling retention purge (ingestion/intraday_purge.js) -- rows older
+    // than this (by `ts`) are deleted on a schedule, gated on no active
+    // backtest (see that file's header). 180 (~6mo) is the upper end of the
+    // plan's "rolling 4-6 month window," generous headroom over the 90-day
+    // backfill/backtest window above.
+    intradayRetentionDays: Number(env.INTRADAY_RETENTION_DAYS) || 180,
     // Which vendor ingestion/ingest.js#backfillHistoricalPriceBars asks:
     // "tiingo" or "yfinance". Unset means Tiingo once a Tiingo key exists,
     // otherwise Yahoo (the original behaviour), so adding the secret is the
