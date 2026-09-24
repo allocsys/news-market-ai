@@ -23,7 +23,7 @@
 // test/ci_env_isolation.test.js).
 
 import { RunStore } from "../storage/run_store.js";
-import { getStaleTerminalBacktestRuns } from "../storage/sim_registry.js";
+import { getStaleTerminalBacktestRuns, getFailedOrCancelledBacktestRuns, deleteFailedOrCancelledBacktestRun } from "../storage/sim_registry.js";
 
 /**
  * @param {object} registryDb SIM_DB (the backtest_runs registry lives there).
@@ -127,6 +127,71 @@ export async function cleanupCancelledRun(registryDb, store, id, { limit = 500, 
 // call. A cut-short run's leftover rows just remain (`complete: false` in
 // that run's entry) -- calling this again later finishes it, exactly like
 // cleanupFailedRun's own re-call story.
+// ---------------------------------------------------------------------------
+// PURGE of FAILED / CANCELLED runs -- POST /backtest/purge (src/index.js),
+// operator-triggered from the dashboard's "Delete failed & cancelled runs"
+// button, never automatic. The one cleanup path that removes the registry row
+// too: everything the runs left behind is deleted (state tables, ALL
+// llm_calls including errored ones, job_progress, then the backtest_runs row),
+// so their error history is gone for good. Only 'failed' and 'cancelled' runs
+// are ever candidates: a 'complete' run is the deliverable and a 'running'
+// run must be cancelled first (it then becomes a candidate on a later call).
+//
+// Per run, the registry row is deleted LAST, and only when every state row is
+// gone (`complete`): a run cut short by maxChunksPerRun keeps its registry
+// row, so it stays listed and a later call finishes it -- no orphaned state
+// rows that nothing points at. The registry delete is itself guarded on
+// status (sim_registry.js#deleteFailedOrCancelledBacktestRun).
+//
+// BOUNDED and best-effort, same shape as cleanupOldRuns: maxRuns caps runs per
+// call, maxChunksPerRun caps the work per run, one run's error never stops the
+// rest, and nothing here throws.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} registryDb SIM_DB.
+ * @returns {Promise<{processed: Array, purged: number, totalDeleted: number, scanned: number, error?: string}>}
+ */
+export async function purgeFailedAndCancelledRuns(registryDb, { maxRuns = 20, limit = 500, maxChunksPerRun = 10 } = {}) {
+  const processed = [];
+  let totalDeleted = 0;
+  let purged = 0;
+  try {
+    const candidates = await getFailedOrCancelledBacktestRuns(registryDb, { limit: maxRuns });
+    for (const { id, status } of candidates) {
+      try {
+        if (!id || id === "live") {
+          processed.push({ id, status, deleted: 0, complete: false, purged: false, skipped: "refuses the live run" });
+          continue;
+        }
+        const store = new RunStore(registryDb, id);
+        let deleted = 0;
+        let complete = false;
+        for (let chunk = 0; chunk < maxChunksPerRun; chunk++) {
+          const n = await store.deleteRun({ limit });
+          deleted += n;
+          if (n === 0) {
+            complete = true;
+            break;
+          }
+        }
+        totalDeleted += deleted;
+        let rowDeleted = false;
+        if (complete) rowDeleted = await deleteFailedOrCancelledBacktestRun(registryDb, id);
+        if (rowDeleted) purged++;
+        processed.push({ id, status, deleted, complete, purged: rowDeleted });
+      } catch (err) {
+        console.warn("backtest purge: one run failed (best-effort, continuing with the rest)", { id, message: err?.message });
+        processed.push({ id, status, deleted: 0, complete: false, purged: false, skipped: `error: ${err?.message}` });
+      }
+    }
+    return { processed, purged, totalDeleted, scanned: candidates.length };
+  } catch (err) {
+    console.warn("backtest purge failed before it could list candidates (best-effort, ignored)", { message: err?.message });
+    return { processed, purged, totalDeleted, scanned: 0, error: err?.message };
+  }
+}
+
 export async function cleanupOldRuns(registryDb, { olderThanDays = 30, maxRuns = 5, limit = 500, maxChunksPerRun = 10 } = {}) {
   const processed = [];
   let totalDeleted = 0;
