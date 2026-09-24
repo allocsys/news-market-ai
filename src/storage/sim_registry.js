@@ -96,6 +96,34 @@ export async function getStaleTerminalBacktestRuns(db, { olderThanDays, limit = 
   return results;
 }
 
+/**
+ * Ids (+ status) of FAILED or CANCELLED runs, oldest first, up to `limit` --
+ * the candidate set for backtest/cleanup.js#purgeFailedAndCancelledRuns. Never
+ * returns a 'running' or 'complete' row: a complete run's result is the
+ * deliverable, and a running one needs an explicit cancel first.
+ */
+export async function getFailedOrCancelledBacktestRuns(db, { limit = 20 } = {}) {
+  const { results } = await db
+    .prepare(`SELECT id, status FROM backtest_runs WHERE status IN ('failed', 'cancelled') ORDER BY started_at ASC LIMIT ?`)
+    .bind(limit)
+    .all();
+  return results;
+}
+
+/**
+ * Deletes one registry row, atomically guarded on status (`failed`/`cancelled`
+ * in the same statement as the delete), so a row that somehow became
+ * 'running' or 'complete' since it was listed is never removed. Returns
+ * whether THIS call deleted it.
+ */
+export async function deleteFailedOrCancelledBacktestRun(db, id) {
+  const result = await db
+    .prepare(`DELETE FROM backtest_runs WHERE id = ? AND status IN ('failed', 'cancelled')`)
+    .bind(id)
+    .run();
+  return (result.meta?.changes ?? 0) > 0;
+}
+
 function rowToRun(r) {
   return {
     id: r.id,
