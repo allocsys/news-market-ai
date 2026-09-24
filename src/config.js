@@ -278,6 +278,17 @@ export function loadConfig(env) {
     // shared/d1_rate_limiter.js).
     twelveDataMinRequestIntervalMs: Number(env.TWELVE_DATA_MIN_REQUEST_INTERVAL_MS) || 7600,
     twelveDataDailyRequestLimit: Number(env.TWELVE_DATA_DAILY_REQUEST_LIMIT) || 800,
+    // Tiingo FX intraday (ingestion/sources/tiingo_fx_intraday.js) -- XAUUSD's
+    // vendor as of the plan.md finding G follow-up (2026-09-24), replacing
+    // Twelve Data. Same TIINGO_API_KEY as tiingo.js's daily bars, no separate
+    // key. 5min matches every other intraday vendor's bar width (the
+    // point-in-time reader assumes 5-minute bars). Pacing defaults to 0 (a
+    // true no-op): this adapter makes at most one request per ticker per
+    // backfill tick (five tickers, one tick per 15 min), nowhere near
+    // Tiingo's published 50/hour account-wide limit -- see that file's header
+    // for what's still unverified about the free-plan limits specifically.
+    tiingoFxIntradayResampleFreq: env.TIINGO_FX_INTRADAY_RESAMPLE_FREQ || "5min",
+    tiingoFxIntradayMinRequestIntervalMs: Number(env.TIINGO_FX_INTRADAY_MIN_REQUEST_INTERVAL_MS) || 0,
     // Gradual intraday backfill (ingestion/intraday_backfill.js, plan.md
     // finding G step 6) -- how many days back a brand-new ticker's history
     // is seeded into intraday_backfill_status the first time this job sees
