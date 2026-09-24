@@ -96,38 +96,6 @@ export async function cleanupCancelledRun(registryDb, store, id, { limit = 500, 
 }
 
 // ---------------------------------------------------------------------------
-// Bulk cleanup for OLD, already-TERMINAL runs -- POST /backtest/cleanup
-// (src/index.js), operator-triggered from the dashboard's "Clean up old
-// runs" button, never automatic. Deliberately distinct from the
-// cleanupFailedRun/cleanupCancelledRun policy documented in plan.md ("A
-// COMPLETE run is never deleted here -- its result and its data are the
-// deliverable... Complete runs are never auto-deleted"): that guarantee is
-// about the SYSTEM never silently deleting a completed run's data on its
-// own. This function only ever runs when an operator explicitly asks for it
-// (never from a cron/queue path), and only touches runs that are already
-// terminal ('complete' | 'failed' | 'cancelled') and older than
-// `olderThanDays` -- a still-'running' run is never a candidate (see
-// sim_registry.js#getStaleTerminalBacktestRuns).
-//
-// TRADEOFF, same one cleanupFailedRun already accepts: the backtest_runs
-// registry row (and, for a complete run, its `result` JSON summary --
-// what the dashboard's "Recent runs" list and its on/off metrics table
-// read) is KEPT; only the underlying per-trade state-table rows
-// (positions/trade_decisions/decision_memory/pipeline_checkpoints/
-// llm_calls) are deleted. That means the summary metrics survive but the
-// per-run "View trade timeline" detail page (which reads those state
-// tables directly) will show no positions afterward -- freeing D1 storage
-// costs the trade-by-trade detail, not the headline result. The dashboard
-// copy next to the button says so.
-//
-// BOUNDED per call, same reasoning as cleanupFailedRun: `maxRuns` caps how
-// many runs one invocation touches (a bulk sweep across many old runs could
-// otherwise blow past D1's per-invocation write limits), and
-// `maxChunksPerRun` caps how much of any single run's data comes out in one
-// call. A cut-short run's leftover rows just remain (`complete: false` in
-// that run's entry) -- calling this again later finishes it, exactly like
-// cleanupFailedRun's own re-call story.
-// ---------------------------------------------------------------------------
 // PURGE of FAILED / CANCELLED runs -- POST /backtest/purge (src/index.js),
 // operator-triggered from the dashboard's "Delete failed & cancelled runs"
 // button, never automatic. The one cleanup path that removes the registry row
@@ -192,6 +160,38 @@ export async function purgeFailedAndCancelledRuns(registryDb, { maxRuns = 20, li
   }
 }
 
+// ---------------------------------------------------------------------------
+// Bulk cleanup for OLD, already-TERMINAL runs -- POST /backtest/cleanup
+// (src/index.js), operator-triggered from the dashboard's "Clean up old
+// runs" button, never automatic. Deliberately distinct from the
+// cleanupFailedRun/cleanupCancelledRun policy documented in plan.md ("A
+// COMPLETE run is never deleted here -- its result and its data are the
+// deliverable... Complete runs are never auto-deleted"): that guarantee is
+// about the SYSTEM never silently deleting a completed run's data on its
+// own. This function only ever runs when an operator explicitly asks for it
+// (never from a cron/queue path), and only touches runs that are already
+// terminal ('complete' | 'failed' | 'cancelled') and older than
+// `olderThanDays` -- a still-'running' run is never a candidate (see
+// sim_registry.js#getStaleTerminalBacktestRuns).
+//
+// TRADEOFF, same one cleanupFailedRun already accepts: the backtest_runs
+// registry row (and, for a complete run, its `result` JSON summary --
+// what the dashboard's "Recent runs" list and its on/off metrics table
+// read) is KEPT; only the underlying per-trade state-table rows
+// (positions/trade_decisions/decision_memory/pipeline_checkpoints/
+// llm_calls) are deleted. That means the summary metrics survive but the
+// per-run "View trade timeline" detail page (which reads those state
+// tables directly) will show no positions afterward -- freeing D1 storage
+// costs the trade-by-trade detail, not the headline result. The dashboard
+// copy next to the button says so.
+//
+// BOUNDED per call, same reasoning as cleanupFailedRun: `maxRuns` caps how
+// many runs one invocation touches (a bulk sweep across many old runs could
+// otherwise blow past D1's per-invocation write limits), and
+// `maxChunksPerRun` caps how much of any single run's data comes out in one
+// call. A cut-short run's leftover rows just remain (`complete: false` in
+// that run's entry) -- calling this again later finishes it, exactly like
+// cleanupFailedRun's own re-call story.
 export async function cleanupOldRuns(registryDb, { olderThanDays = 30, maxRuns = 5, limit = 500, maxChunksPerRun = 10 } = {}) {
   const processed = [];
   let totalDeleted = 0;
