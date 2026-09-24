@@ -70,7 +70,7 @@ test("deleteFailedOrCancelledBacktestRun deletes only when status is failed/canc
   assert.ok(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'going'`).first());
 
   assert.equal(await deleteFailedOrCancelledBacktestRun(db, "bad-1"), true);
-  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bad-1'`).first(), undefined);
+  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bad-1'`).first(), null);
   assert.equal(await deleteFailedOrCancelledBacktestRun(db, "bad-1"), false, "already gone -- a second call changes nothing");
 });
 
@@ -88,7 +88,7 @@ test("purgeFailedAndCancelledRuns deletes a failed run's data, ALL its llm_calls
   for (const t of DATA_TABLES) assert.equal(await count(db, t, "bt-1"), 0, `${t} deleted`);
   assert.equal(await count(db, "llm_calls", "bt-1", "env_run_id"), 0, "errored llm_calls are ALSO gone, unlike cleanupFailedRun");
   assert.equal(await count(db, "job_progress", "bt-1"), 0);
-  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bt-1'`).first(), undefined, "registry row is gone too");
+  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bt-1'`).first(), null, "registry row is gone too");
 });
 
 test("purgeFailedAndCancelledRuns handles a cancelled run the same way as a failed one", async () => {
@@ -99,7 +99,7 @@ test("purgeFailedAndCancelledRuns handles a cancelled run the same way as a fail
   const out = await purgeFailedAndCancelledRuns(db);
   assert.equal(out.purged, 1);
   assert.equal(await count(db, "positions", "bt-1"), 0);
-  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bt-1'`).first(), undefined);
+  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bt-1'`).first(), null);
 });
 
 test("purgeFailedAndCancelledRuns NEVER touches a complete or running run, and refuses a 'live' row even if somehow marked failed/cancelled", async () => {
@@ -141,7 +141,7 @@ test("purgeFailedAndCancelledRuns is bounded by maxRuns and best-effort per run:
   const rest = await purgeFailedAndCancelledRuns(db);
   assert.equal(rest.scanned, 1);
   assert.equal(rest.purged, 1);
-  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bad-3'`).first(), undefined);
+  assert.equal(await db.prepare(`SELECT 1 FROM backtest_runs WHERE id = 'bad-3'`).first(), null);
 });
 
 test("purgeFailedAndCancelledRuns never throws: a listing failure is logged and reported with empty results", async (t) => {
