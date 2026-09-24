@@ -8,6 +8,14 @@ import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.j
 import { getRecentBacktestRuns, getBacktestRun, getActiveBacktestRunId } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
 import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT, STALE_INGESTION_HOURS, PIPELINE_STALE_HOURS } from "./helpers.js";
+import { STAGES } from "../graph/checkpointer.js";
+
+// The last stage a checkpoint can ever reach -- once here, checkpointer.js's
+// nextStage() returns null and the run's row is never written again by
+// design (see checkpointer.js header). Every completed run therefore
+// eventually crosses PIPELINE_STALE_HOURS just by sitting there, so it must
+// be excluded from the staleness check below rather than flagged as stuck.
+const TERMINAL_STAGE = STAGES[STAGES.length - 1];
 import { computeRealizedReturn } from "../shared/returns.js";
 
 /**
@@ -250,7 +258,7 @@ export async function getOverviewData(env, params) {
 
   const humanizeStage = (stage) => (stage ? String(stage).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Unknown");
   const checkpointsWithStatus = pipelineResult.checkpoints.map((c) => {
-    const stale = !c.updated_at || now - new Date(c.updated_at).getTime() > PIPELINE_STALE_HOURS * 3600 * 1000;
+    const stale = c.stage !== TERMINAL_STAGE && (!c.updated_at || now - new Date(c.updated_at).getTime() > PIPELINE_STALE_HOURS * 3600 * 1000);
     return { ...c, status: stale ? "stale" : "ok", lastStageLabel: humanizeStage(c.stage) };
   });
 
