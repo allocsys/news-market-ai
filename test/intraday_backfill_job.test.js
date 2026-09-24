@@ -284,11 +284,12 @@ test("claimNextBackfillBatch returns [] once nothing is claimable, and a stale i
 
 test("a batched tick (intradayBackfillBatchDays > 1) makes ONE vendor request for the whole claimed range and marks every claimed day done individually", async (t) => {
   const db = newDb();
-  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-01", toDate: "2026-01-03" });
+  // Mon-Wed weekdays on purpose: 2026-01-03 is a Saturday, which the write-time sanity gate (closed_window) would correctly reject.
+  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-12", toDate: "2026-01-14" });
   const calls = mockVendors(t, {
     alpacaByTicker: {
       AAPL: {
-        bars: [alpacaBar("2026-01-01T13:30:00Z", 100), alpacaBar("2026-01-02T13:30:00Z", 101), alpacaBar("2026-01-03T13:30:00Z", 102)],
+        bars: [alpacaBar("2026-01-12T13:30:00Z", 100), alpacaBar("2026-01-13T13:30:00Z", 101), alpacaBar("2026-01-14T13:30:00Z", 102)],
         next_page_token: null,
       },
     },
@@ -300,18 +301,18 @@ test("a batched tick (intradayBackfillBatchDays > 1) makes ONE vendor request fo
   const aapl = result.results.find((r) => r.ticker === "AAPL");
   assert.equal(aapl.claimed, true);
   assert.equal(aapl.ok, true);
-  assert.deepEqual(aapl.dates, ["2026-01-01", "2026-01-02", "2026-01-03"]);
+  assert.deepEqual(aapl.dates, ["2026-01-12", "2026-01-13", "2026-01-14"]);
   assert.equal(aapl.bars, 3);
   assert.equal(aapl.written, 3);
 
   const alpacaCalls = calls.filter((u) => u.hostname === "data.alpaca.markets");
   assert.equal(alpacaCalls.length, 1, "the whole 3-day claim is fetched in ONE request, not one per day");
 
-  const { results: rows } = await db.prepare("SELECT date, status FROM intraday_backfill_status WHERE ticker = 'AAPL' AND date IN ('2026-01-01','2026-01-02','2026-01-03') ORDER BY date").all();
+  const { results: rows } = await db.prepare("SELECT date, status FROM intraday_backfill_status WHERE ticker = 'AAPL' AND date IN ('2026-01-12','2026-01-13','2026-01-14') ORDER BY date").all();
   assert.deepEqual(rows.map((r) => r.status), ["done", "done", "done"]);
 
   const { results: barRows } = await db.prepare("SELECT ts FROM price_bars_intraday WHERE ticker = 'AAPL' ORDER BY ts").all();
-  assert.deepEqual(barRows.map((r) => r.ts), ["2026-01-01T13:30:00Z", "2026-01-02T13:30:00Z", "2026-01-03T13:30:00Z"]);
+  assert.deepEqual(barRows.map((r) => r.ts), ["2026-01-12T13:30:00Z", "2026-01-13T13:30:00Z", "2026-01-14T13:30:00Z"]);
 });
 
 test("a batched tick's vendor failure marks EVERY claimed day in the batch failed, not just one (accepted tradeoff vs the single-day path)", async (t) => {
@@ -326,7 +327,7 @@ test("a batched tick's vendor failure marks EVERY claimed day in the batch faile
   assert.equal(aapl.ok, false);
   assert.deepEqual(aapl.dates, ["2026-01-01", "2026-01-02"]);
 
-  const { results: rows } = await db.prepare("SELECT date, status, error FROM intraday_backfill_status WHERE ticker = 'AAPL' ORDER BY date").all();
+  const { results: rows } = await db.prepare("SELECT date, status, error FROM intraday_backfill_status WHERE ticker = 'AAPL' AND date IN ('2026-01-01','2026-01-02') ORDER BY date").all();
   assert.equal(rows.length, 2);
   assert.ok(rows.every((r) => r.status === "failed" && /500/.test(r.error)));
 });
