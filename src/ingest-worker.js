@@ -48,6 +48,7 @@ import { purgeOldIntradayBars } from "./ingestion/intraday_purge.js";
 import { sendInChunks } from "./ingestion/enqueue.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
+import { getPauseFlags } from "./storage/pause_flags.js";
 
 // Backfill self-continuation (see wrangler.ingest.toml's BACKFILL producer
 // binding). One invocation writes at most about this many NET-NEW articles
@@ -87,12 +88,20 @@ export const MAX_BACKFILL_PARTS = 50;
  * loudly with a count and the affected `ticker:runId` labels instead, because
  * this is the one place where stored-but-never-analyzed items can come from.
  */
-async function enqueueAnalyze(queue, { jobName, context, fetched, fresh }) {
+async function enqueueAnalyze(queue, { jobName, context, fetched, fresh, skipAnalyze = false }) {
   const messages = [];
   for (const { item, tickers } of fresh) {
     for (const ticker of tickers) {
       messages.push({ body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt } });
     }
+  }
+
+  // Trading / LLM-calls pause switch: the items are already stored, but no
+  // ANALYZE message is sent, so they are never analyzed (a later tick will not
+  // re-see them as fresh). Logged with a count so the gap is visible.
+  if (skipAnalyze) {
+    console.log(`${jobName} job completed with analysis paused -- items stored, ANALYZE not enqueued`, { ...context, fetched, freshItems: fresh.length, skippedAnalyzeMessages: messages.length });
+    return;
   }
 
   const { sent, failures } = await sendInChunks(queue, messages);
@@ -141,8 +150,18 @@ export default {
   // to dispatch on.
   async queue(batch, env) {
     const config = loadConfig(env);
+    // Operator pause switches (storage/pause_flags.js), read once per batch; fails open.
+    // Only ingest_ticker/ingest_feeds are ever skipped -- backfill, intraday
+    // backfill and purge messages always run.
+    const { flags } = await getPauseFlags(env.LIVE_DB);
+    const skipAnalyze = flags.trading || flags.llm;
     for (const message of batch.messages) {
       const job = message.body;
+      if (flags.ingestion && (job.type === "ingest_ticker" || job.type === "ingest_feeds")) {
+        console.log("ingest message skipped: ingestion is paused", { type: job.type, ticker: job.ticker });
+        message.ack();
+        continue;
+      }
       try {
         if (job.type === "ingest_ticker") {
           // Per-ticker branch (plan.md Step 4, moved here unchanged in
@@ -152,7 +171,7 @@ export default {
           const { ticker, asOf } = job;
           try {
             const { fetched, fresh } = await ingestTickerData(config, env.INPUTS_DB, env.CACHE_KV, { ticker, asOf });
-            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_ticker", context: { ticker }, fetched, fresh });
+            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_ticker", context: { ticker }, fetched, fresh, skipAnalyze });
           } catch (err) {
             console.error("ingest_ticker job failed", { ticker, message: err.message });
           }
@@ -163,7 +182,7 @@ export default {
           // same loop shape ingest_ticker's single-ticker case doesn't need.
           try {
             const { fetched, fresh } = await ingestFeedNews(config, env.INPUTS_DB, env.CACHE_KV);
-            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_feeds", context: {}, fetched, fresh });
+            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_feeds", context: {}, fetched, fresh, skipAnalyze });
           } catch (err) {
             console.error("ingest_feeds job failed", { message: err.message });
           }

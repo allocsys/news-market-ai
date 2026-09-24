@@ -47,6 +47,7 @@
 import { loadConfig } from "./config.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
+import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { SimClock } from "./backtest/simClock.js";
 import { cancelBacktestRun, getBacktestRun } from "./storage/sim_registry.js";
 import { cleanupCancelledRun, cleanupOldRuns } from "./backtest/cleanup.js";
@@ -112,6 +113,30 @@ export default {
     const url = new URL(request.url);
     const { pathname } = url;
     const config = loadConfig(env);
+
+    // Pause switches (dashboard /dashboard/controls). GET reads them; POST
+    // /controls/set?key=<ingestion|trading|llm|backtests|all>&paused=1|0[&by=]
+    // flips one or all four.
+    if (pathname === "/api/controls") return jsonResponse(await getPauseFlags(env.LIVE_DB));
+    if (pathname === "/controls/set" && request.method === "POST") {
+      const key = url.searchParams.get("key");
+      const pausedParam = url.searchParams.get("paused");
+      if (key !== "all" && !isPauseKey(key)) {
+        return jsonResponse({ error: `key must be one of: ${PAUSE_KEYS.join(", ")}, all` }, { status: 400 });
+      }
+      if (pausedParam !== "1" && pausedParam !== "0") {
+        return jsonResponse({ error: "paused must be 1 or 0" }, { status: 400 });
+      }
+      if (!env.LIVE_DB) return jsonResponse({ error: "LIVE_DB is not bound" }, { status: 500 });
+      try {
+        await setPauseFlags(env.LIVE_DB, key === "all" ? PAUSE_KEYS : [key], pausedParam === "1", { by: url.searchParams.get("by") });
+      } catch (err) {
+        console.error("pause flag update failed", { key, message: err.message });
+        return jsonResponse({ error: "pause flag update failed", message: err.message }, { status: 500 });
+      }
+      console.log("pause flag updated", { key, paused: pausedParam === "1", by: url.searchParams.get("by") });
+      return jsonResponse(await getPauseFlags(env.LIVE_DB));
+    }
 
     // JSON API layer (plan.md Step 1), unauthenticated at this layer since
     // Step 2: the only caller that can reach this Worker at all is
@@ -300,6 +325,14 @@ export default {
         return jsonResponse({ error: err.message }, { status: 400 });
       }
 
+      // Pause switches: a paused Backtests (or LLM calls) switch refuses new
+      // runs up front, before any job row exists. Runs already in flight finish
+      // (the backtest Worker deliberately has no LIVE_DB to read flags from).
+      const pause = await getPauseFlags(env.LIVE_DB);
+      if (pause.flags.backtests || pause.flags.llm) {
+        return jsonResponse({ error: `backtests are paused (${pause.flags.backtests ? "Backtests" : "LLM calls"} switch is on) -- resume it on /dashboard/controls` }, { status: 409 });
+      }
+
       const id = newJobId("backtest");
       // 'queued' row written before the message is even sent -- best-effort
       // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
@@ -418,6 +451,14 @@ export default {
     const asOf = new Date().toISOString();
     console.log("scheduled: fanning out cron tick", { cron: event.cron, tickers: config.watchlist.length });
 
+    // Operator pause switches (storage/pause_flags.js). Fails open: a missing
+    // LIVE_DB or a read error means nothing is paused. The intraday backfill
+    // and purge ticks below are never gated -- they are the point of pausing.
+    const { flags } = await getPauseFlags(env.LIVE_DB);
+    if (flags.ingestion || flags.trading || flags.llm) {
+      console.log("scheduled: pause switches active", { flags });
+    }
+
     // INGEST fan-out (plan.md Step 4): one message per watchlist ticker,
     // batched into a single sendBatch call (one subrequest instead of N --
     // matters for the Queues ops/day budget, see plan.md's estimate), plus
@@ -428,11 +469,13 @@ export default {
     // "could we even hand off the work" now instead of "did the work
     // succeed" (that question moved to the `ingest` Worker's queue()).
     try {
-      if (config.watchlist.length > 0) {
+      if (flags.ingestion) {
+        // paused: no INGEST messages at all (ticker or feeds)
+      } else if (config.watchlist.length > 0) {
         const tickerMessages = config.watchlist.map(({ ticker }) => ({ body: { type: "ingest_ticker", ticker, asOf } }));
         await env.INGEST.sendBatch(tickerMessages);
       }
-      await env.INGEST.send({ type: "ingest_feeds", asOf });
+      if (!flags.ingestion) await env.INGEST.send({ type: "ingest_feeds", asOf });
     } catch (err) {
       console.error("scheduled: INGEST fan-out failed", { message: err.message });
     }
@@ -446,7 +489,7 @@ export default {
     // exit-checking, now applied one layer earlier, at enqueue time instead
     // of at execution time.
     try {
-      await env.LLM_JOBS.send({ type: "exit_check", asOf });
+      if (!flags.trading && !flags.llm) await env.LLM_JOBS.send({ type: "exit_check", asOf });
     } catch (err) {
       console.error("scheduled: exit_check enqueue failed", { message: err.message });
     }

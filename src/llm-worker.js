@@ -48,6 +48,7 @@ import { checkOpenPositionExits } from "./graph/exit_check.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { withLlmLogContext } from "./storage/llm_calls.js";
+import { getPauseFlags } from "./storage/pause_flags.js";
 
 // Per-message engine context (M2). `inputs` is a read-only handle onto the
 // shared inputs DB (this Worker never writes news/price/fundamentals --
@@ -70,8 +71,19 @@ export default {
   // -- same approach as backend's queue() before Step 6.
   async queue(batch, env) {
     const config = loadConfig(env);
+    // Operator pause switches (storage/pause_flags.js), read once per batch; fails open.
+    // Trading or LLM calls paused: analyze and exit_check are acked without
+    // running, so already-queued messages stop spending Gemini quota. (A skipped
+    // analyze message is not retried; that news item is not analyzed later.)
+    const { flags } = await getPauseFlags(env.LIVE_DB);
+    const llmBlocked = flags.trading || flags.llm;
     for (const message of batch.messages) {
       const job = message.body;
+      if (llmBlocked && (job.type === "analyze" || job.type === "exit_check")) {
+        console.log("llm message skipped: trading/LLM calls paused", { type: job.type, ticker: job.ticker });
+        message.ack();
+        continue;
+      }
       try {
         if (job.type === "analyze") {
           // ANALYZE consumer (plan.md Step 4, moved here unchanged in Step

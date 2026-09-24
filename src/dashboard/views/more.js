@@ -11,7 +11,10 @@ const MORE_ICONS = {
   backtest: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6"/><path d="M10 3v6.5L5 19a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 19l-5-9.5V3"/><path d="M7 15h10"/></svg>`,
 };
 
+MORE_ICONS.controls = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+
 const MORE_SECTIONS = [
+  { id: "controls", title: "Pause switches", desc: "Pause ingestion, trading, LLM calls or backtests to free headroom for backfill.", icon: MORE_ICONS.controls },
   { id: "activity", title: "Activity", desc: "Trade decisions per UTC calendar day, stacked by status.", icon: MORE_ICONS.activity },
   { id: "charts", title: "Charts", desc: "Recent daily closes (unadjusted) for watchlist tickers.", icon: MORE_ICONS.charts },
   { id: "llm", title: "LLM calls", desc: "Every prompt sent to Gemini and what came back -- live pipeline; backtests aren't logged by default.", icon: MORE_ICONS.llm },

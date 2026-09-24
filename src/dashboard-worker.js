@@ -29,6 +29,8 @@ import { renderPositionsView } from "./dashboard/views/positions.js";
 import { renderPipelineView } from "./dashboard/views/pipeline.js";
 import { renderLlmView, renderLlmCallView } from "./dashboard/views/llm.js";
 import { renderMoreView } from "./dashboard/views/more.js";
+import { renderControlsView, renderPausedBanner } from "./dashboard/views/controls.js";
+import { PAUSE_KEYS } from "./storage/pause_flags.js";
 import { renderBackfillView, renderBackfillConfirmPage, renderPriceBackfillConfirmPage } from "./dashboard/views/backfill.js";
 import { renderBacktestView, renderBacktestConfirmPage } from "./dashboard/views/backtest.js";
 import { renderBacktestDetailView } from "./dashboard/views/backtest_detail.js";
@@ -172,7 +174,22 @@ async function requireSession(request, config) {
   return { sessionUsername };
 }
 
+/**
+ * HTML for the PAUSED banner (any pause switch on), or "". BEST-EFFORT, same as
+ * activeJobPanelFor: a failed lookup means no banner, never a broken page.
+ */
+async function pausedBannerFor(env) {
+  try {
+    const { flags } = await fetchBackendJson(env, "/api/controls");
+    return renderPausedBanner(flags);
+  } catch (err) {
+    console.warn("dashboard paused-banner lookup failed (non-fatal)", { message: err.message });
+    return "";
+  }
+}
+
 const SECTION_RENDERERS = {
+  controls: renderControlsView,
   overview: renderOverviewView,
   snapshot: renderSnapshotView,
   activity: renderActivityView,
@@ -186,6 +203,7 @@ const SECTION_RENDERERS = {
 };
 
 const SECTION_API_PATH = {
+  controls: "/api/controls",
   overview: "/api/overview",
   snapshot: "/api/snapshot",
   activity: "/api/activity",
@@ -233,7 +251,9 @@ async function renderSection(request, env, config, section) {
     const envBar = ENV_SECTIONS.includes(section)
       ? await envSelectorFor(env, { resolvedEnv, envError: data.envError ?? null, url })
       : "";
-    const bodyHtml = envBar + activePanel + render(props);
+    // The controls page shows switch state itself; every other section gets the PAUSED banner.
+    const pausedBanner = section === "controls" ? "" : await pausedBannerFor(env);
+    const bodyHtml = pausedBanner + envBar + activePanel + render(props);
     return htmlResponse(renderShell({ activeSection: section, sessionUsername: auth.sessionUsername, bodyHtml, refreshHref: currentPath(request), env: resolvedEnv, theme: getThemeCookie(request), exportData: data }));
   } catch (err) {
     // backend unreachable, or returned something unexpected -- rendered as
@@ -328,7 +348,7 @@ async function handleTriggerRoute(request, env, config, { backendPath, buildQuer
   const isFormSubmit = Boolean(form);
   const fromForm = (key) => (form ? form.get(key) : null);
 
-  const built = buildQuery(url.searchParams, fromForm);
+  const built = buildQuery(url.searchParams, fromForm, sessionUsername);
   if (built.error) return jsonResponse({ error: built.error }, { status: 400 });
 
   // Since plan.md Step 3, backend always enqueues onto JOBS and returns an
@@ -428,6 +448,7 @@ export default {
     if (pathname === "/dashboard/research") return redirect(`/dashboard/decisions${url.search}`);
     if (pathname === "/dashboard/operations") return redirect(`/dashboard/pipeline${url.search}`);
 
+    if (pathname === "/dashboard/controls") return renderSection(request, env, config, "controls");
     if (pathname === "/dashboard/overview") return renderSection(request, env, config, "overview");
     if (pathname === "/dashboard/snapshot") return renderSection(request, env, config, "snapshot");
     if (pathname === "/dashboard/activity") return renderSection(request, env, config, "activity");
@@ -613,6 +634,25 @@ export default {
           jobId: body.id,
           type: "backtest",
         }),
+      });
+    }
+
+    // POST /controls/set -- flip one pause switch (or all). Session-gated here,
+    // forwarded to backend's POST /controls/set with the operator's username as
+    // `by` for the audit column. Form posts 303 back to /dashboard/controls.
+    if (pathname === "/controls/set" && request.method === "POST") {
+      return handleTriggerRoute(request, env, config, {
+        backendPath: "/controls/set",
+        buildQuery: (searchParams, fromForm, sessionUsername) => {
+          const key = searchParams.get("key") ?? fromForm("key");
+          const paused = searchParams.get("paused") ?? fromForm("paused");
+          if (key !== "all" && !PAUSE_KEYS.includes(key)) return { error: `key must be one of: ${PAUSE_KEYS.join(", ")}, all` };
+          if (paused !== "1" && paused !== "0") return { error: "paused must be 1 or 0" };
+          const params = { key, paused };
+          if (sessionUsername) params.by = sessionUsername;
+          return { params, activeSection: "controls" };
+        },
+        formSubmitAccepted: () => ({}),
       });
     }
 
