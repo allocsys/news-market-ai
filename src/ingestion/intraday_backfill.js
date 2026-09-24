@@ -36,12 +36,11 @@
 // propagates.
 
 import { fetchIntradayBars as fetchAlpacaIntradayBars } from "./sources/alpaca.js";
-// twelvedata.js's TWELVE_DATA_SYMBOL_MAP is intentionally still imported here
-// even though 'twelvedata' is no longer a live route below (see
-// resolveIntradayVendor) -- it stays the reference for "which tickers used to
-// be twelvedata-routed", so step 4 (purging old twelvedata rows) and any
-// rollback know exactly what to touch, without a second drifting list.
-import { TWELVE_DATA_SYMBOL_MAP } from "./sources/twelvedata.js";
+// twelvedata.js itself is no longer imported here -- 'twelvedata' is not a
+// live route any ticker resolves to anymore (see resolveIntradayVendor). The
+// old TWELVE_DATA_SYMBOL_MAP list lives on in twelvedata.js's own file for
+// reference (step 4 -- purging old twelvedata rows -- and any rollback know
+// exactly what to touch there without this file needing to import it).
 import { fetchIntradayBars as fetchTiingoFxIntradayBars, TIINGO_FX_INTRADAY_TICKERS } from "./sources/tiingo_fx_intraday.js";
 import { insertPriceBarsIntraday } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
@@ -60,8 +59,7 @@ const BACKFILL_STATUS_INSERT_CHUNK_SIZE = 200;
  * follow-up vendor switch, 2026-09-24, replacing the untrustworthy Twelve
  * Data XAUUSD feed), 'alpaca' otherwise (every other watchlist entry --
  * AAPL/MSFT/TSLA/USO). 'twelvedata' is deliberately NOT a route any ticker
- * can resolve to anymore -- see the import comment above on why
- * TWELVE_DATA_SYMBOL_MAP is still imported (reference only, not routed).
+ * can resolve to anymore -- see the import comment above.
  */
 export function resolveIntradayVendor(ticker) {
   return TIINGO_FX_INTRADAY_TICKERS.has(String(ticker).toUpperCase()) ? "tiingo_fx_intraday" : "alpaca";
