@@ -93,7 +93,7 @@ test("finding G: two same-day, same-ticker theses replace at DISTINCT intraday p
 
 test("pipeline never opens a position off an intraday bar that has not fully closed at asOf", async () => {
   const ctx = makeCtx();
-  await seedBar(ctx.inputs, { inputs: ctx.inputs, ticker: "AAPL", date: "2026-01-14", close: 180 });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 180 });
   await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-15T13:30:00Z", close: 999 }); // would be a screaming leak if visible
 
   // asOf sits INSIDE the 13:30-13:34:59 bar's own window: not visible yet
