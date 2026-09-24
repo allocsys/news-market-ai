@@ -510,6 +510,38 @@ jobs:
             exit 0
           fi
           echo "$TIINGO_API_KEY" | npx wrangler secret put TIINGO_API_KEY --config wrangler.ingest.toml
+      - name: Set ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY on the ingest Worker
+        # Same idempotent, non-blocking shape as the FINNHUB_API_KEY/TIINGO_API_KEY
+        # steps above. Intraday bars for plan.md finding G (AAPL/MSFT/TSLA/USO,
+        # ingestion/sources/alpaca.js). Both must be set together -- config.js's
+        # alpacaApiKey/alpacaApiSecret have no defaults and the adapter throws
+        # once, up front, if either is missing. Only this Worker ever holds them.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+        run: |
+          if [ -z "$ALPACA_API_KEY_ID" ] || [ -z "$ALPACA_API_SECRET_KEY" ]; then
+            echo "ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY not both set -- skipping. The ingest Worker is deployed but Alpaca intraday fetches will fail until both are configured."
+            exit 0
+          fi
+          echo "$ALPACA_API_KEY_ID" | npx wrangler secret put ALPACA_API_KEY_ID --config wrangler.ingest.toml
+          echo "$ALPACA_API_SECRET_KEY" | npx wrangler secret put ALPACA_API_SECRET_KEY --config wrangler.ingest.toml
+      - name: Set TWELVE_DATA_API_KEY on the ingest Worker
+        # Same idempotent, non-blocking shape as above. Intraday bars for
+        # XAUUSD only (ingestion/sources/twelvedata.js). Only this Worker
+        # ever holds it.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+        run: |
+          if [ -z "$TWELVE_DATA_API_KEY" ]; then
+            echo "TWELVE_DATA_API_KEY repo secret not set -- skipping. The ingest Worker is deployed but XAUUSD intraday fetches will fail until this is configured."
+            exit 0
+          fi
+          echo "$TWELVE_DATA_API_KEY" | npx wrangler secret put TWELVE_DATA_API_KEY --config wrangler.ingest.toml
 
   # `llm` Worker (plan.md Step 6) -- own path-filtered job, own concurrency
   # group (same reasoning as deploy-dashboard/deploy-ingest above: an
