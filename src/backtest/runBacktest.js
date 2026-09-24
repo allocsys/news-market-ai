@@ -52,6 +52,7 @@
 import { walkOnSignalWindow, countSignalWalkSteps } from "./onSignalRunner.js";
 import { onEquityReturns, offEquityReturns, sliceSeriesByWindow, meanOf, DEFAULT_MAX_PRICE_GAP_DAYS } from "./equity.js";
 import { loadPriceGrid, assertPriceCoverage } from "./priceGrid.js";
+import { loadNewsCoverage, assertNewsCoverage } from "./newsCoverage.js";
 import { walkForwardWindows } from "./pointInTime.js";
 import { compareSignalOnOffByWindow } from "./signalCompare.js";
 import { insertBacktestRun, completeBacktestRun, failBacktestRun } from "../storage/sim_registry.js";
@@ -174,16 +175,23 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     const spanStart = windows[0].testStart;
     const spanEnd = windows[windows.length - 1].testEnd;
 
-    // PREFLIGHT (free): every ticker needs usable prices over the whole span
-    // before a single LLM call is made.
-    // Part 1 only (a continuation already passed it, and reloads the grid at
-    // scoring time). Unenforced: it is a fixed cost before any unit can run.
+    // PREFLIGHT (free): every ticker needs usable prices over the whole span,
+    // AND at least one backfilled news item somewhere in it, before a single
+    // LLM call is made -- the second check is what keeps a thin/empty "on"
+    // side (prices present, news absent) from ever quietly becoming a
+    // "complete" run (see newsCoverage.js's own header).
+    // Part 1 only (a continuation already passed both, and reloads the grid at
+    // scoring time). Unenforced: both are a fixed cost before any unit can run.
     let grid = null;
     if (!cursor) {
       grid = await unenf(async () => {
         const g = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
         assertPriceCoverage(g);
         return g;
+      });
+      await unenf(async () => {
+        const coverage = await loadNewsCoverage(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
+        assertNewsCoverage(coverage);
       });
     }
 
