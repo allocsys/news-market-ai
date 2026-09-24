@@ -116,11 +116,14 @@ async function fetchTickerBars(config, ticker, { from, to }, { throttle } = {}) 
     } catch (err) {
       throw new VendorError(VENDOR, `alpaca returned unparseable JSON for ${ticker}: ${err.message}`);
     }
-    if (!payload || !Array.isArray(payload.bars)) {
+    // Alpaca answers a range with no bars (weekend, holiday, no IEX trades) with `"bars": null`, not `[]` -- a valid empty result, not a malformed one.
+    // Treating it as a shape error marked every non-trading day `failed`, and the step-6 backfill's oldest-pending-or-failed claim then re-claimed that
+    // day on every tick, stalling the ticker. Any other non-array (key missing, wrong type) is still a shape error.
+    if (!payload || (payload.bars !== null && !Array.isArray(payload.bars))) {
       throw new VendorError(VENDOR, `alpaca returned an unexpected response shape for ${ticker} (expected {bars: [...]}): ${JSON.stringify(payload).slice(0, 200)}`);
     }
 
-    for (const row of payload.bars) {
+    for (const row of payload.bars ?? []) {
       // Stored in one canonical form (UTC, whole seconds, "Z") because getIntradayPriceAsOf compares ts as strings -- see shared/intraday_availability.js.
       const ts = canonicalIntradayTs(String(row?.t ?? ""));
       if (!ts) continue;
