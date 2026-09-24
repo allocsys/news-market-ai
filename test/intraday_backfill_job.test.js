@@ -39,6 +39,8 @@ function baseConfig(overrides = {}) {
     retryBaseDelayMs: 1,
     alpacaMinRequestIntervalMs: 0,
     tiingoFxIntradayMinRequestIntervalMs: 0,
+    // Pinned: the production default is 3, but the single-day tests below assume one day per tick. Batched tests override this explicitly.
+    intradayBackfillBatchDays: 1,
     ...overrides,
   };
 }
