@@ -47,6 +47,21 @@ function backtestCleanupForm() {
   </form>`;
 }
 
+/**
+ * "Delete failed & cancelled runs" form -- POST /backtest/purge (src/index.js).
+ * Unlike "Clean up old runs" this removes the registry row too, so the runs
+ * disappear from Recent runs and their error history is gone. Complete and
+ * running runs are never touched.
+ */
+function backtestPurgeForm() {
+  return `<form method="post" action="/backtest/purge" class="filter-bar" onsubmit="return confirm('Permanently delete ALL failed and cancelled runs, including their error history? They will disappear from Recent runs and can\u2019t be recovered. Complete and running runs are not touched.');">
+    <div class="filter-group">
+      <span class="filter-label">&nbsp;</span>
+      <button type="submit" class="btn btn-destructive">Delete failed &amp; cancelled runs</button>
+    </div>
+  </form>`;
+}
+
 export function renderBacktestView({ backtestRuns, error }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
@@ -64,6 +79,8 @@ export function renderBacktestView({ backtestRuns, error }) {
       <div class="panel-body">
         <p class="note">Frees D1 storage by deleting positions/decisions/LLM-call data for old finished runs. Each run's headline result and its "running"/"complete"/"failed"/"cancelled" status stay in the Recent runs list below -- only the per-trade timeline is removed, and only for runs that already finished. A currently-running run is never touched here; terminate it from its own entry below instead.</p>
         ${backtestCleanupForm()}
+        <p class="note" style="margin-top:1rem">To remove failed and cancelled runs completely -- their rows in Recent runs and their error history too -- use the button below. Complete and running runs are never touched.</p>
+        ${backtestPurgeForm()}
       </div>
     </div>
 

@@ -50,7 +50,7 @@ import { RunStore } from "./storage/run_store.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { SimClock } from "./backtest/simClock.js";
 import { cancelBacktestRun, getBacktestRun } from "./storage/sim_registry.js";
-import { cleanupCancelledRun, cleanupOldRuns } from "./backtest/cleanup.js";
+import { cleanupCancelledRun, cleanupOldRuns, purgeFailedAndCancelledRuns } from "./backtest/cleanup.js";
 import { BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import {
   handleApiSnapshotRoute,
@@ -426,6 +426,28 @@ export default {
       } catch (err) {
         console.error("backtest cleanup failed", { message: err.message });
         return jsonResponse({ error: "backtest cleanup failed", message: err.message }, { status: 500 });
+      }
+    }
+
+    // POST /backtest/purge?maxRuns= -- delete FAILED and CANCELLED runs
+    // entirely: their state-table rows, llm_calls (errored ones too),
+    // job_progress AND the backtest_runs registry row, so they vanish from the
+    // Recent runs list and their error history is gone. Complete and running
+    // runs are never candidates (a running one must be cancelled first).
+    // Operator-triggered only (the dashboard's "Delete failed & cancelled runs"
+    // button), bounded per call like /backtest/cleanup -- calling it again
+    // picks up any run it cut short.
+    if (pathname === "/backtest/purge" && request.method === "POST") {
+      const maxRunsRaw = Number(url.searchParams.get("maxRuns"));
+      const maxRuns = Number.isInteger(maxRunsRaw) && maxRunsRaw > 0 ? Math.min(maxRunsRaw, 50) : 20;
+
+      try {
+        const result = await purgeFailedAndCancelledRuns(env.SIM_DB, { maxRuns });
+        console.log("backtest purgeFailedAndCancelledRuns finished", { scanned: result.scanned, purged: result.purged, totalDeleted: result.totalDeleted });
+        return jsonResponse({ accepted: true, ...result });
+      } catch (err) {
+        console.error("backtest purge failed", { message: err.message });
+        return jsonResponse({ error: "backtest purge failed", message: err.message }, { status: 500 });
       }
     }
 
