@@ -42,8 +42,14 @@ import { SubrequestBudgetExhaustedError } from "../shared/errors.js";
 // What one unit is assumed to cost before one has been observed.
 // item/exits totals include Finding G step 4's resolveCurrentPrice (price_resolution.js), which adds one
 // extra D1 read (the intraday lookup) ahead of the pre-existing daily-close read on both call sites.
+// item.external is sized for the WORST case, not the happy path: ~7 Gemini
+// calls per item, each now capped at MAX_ATTEMPTS_UNDER_BUDGET (3) cascade
+// attempts (gemini/client.js) during a vendor outage, so 7*3=21 rounded up
+// with headroom. Before this cap existed a single call could retry unboundedly
+// and blow the whole invocation's budget by itself; canStart() using the old
+// flat 8 here understated that risk for the SECOND item of an invocation onward.
 const DEFAULT_ESTIMATES = {
-  item: { external: 8, total: 28 },
+  item: { external: 21, total: 41 },
   exits: { external: 2, total: 13 },
   score: { external: 0, total: 25 },
 };
