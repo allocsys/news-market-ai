@@ -301,12 +301,12 @@ export function loadConfig(env) {
     // intraday_backfill.js#claimNextBackfillBatch's header for the full
     // design writeup (2026-09-24 session: batching was motivated by backfill
     // SPEED, not rate-limit avoidance -- neither live vendor is anywhere
-    // near its published limit). Default 1 (== claimNextBackfillDay's
-    // original one-day-per-tick behaviour, byte-for-byte) so this is purely
-    // opt-in: an operator raises it (5-7, i.e. up to one trading week, is
-    // the suggested range) via env var once ready to trade some failure
-    // isolation/crash blast-radius for a faster backfill; unset changes
-    // nothing.
+    // near its published limit). Default 3 (a deliberate middle ground:
+    // ~3x faster backfill while a crashed tick or one VendorError costs at
+    // most 3 days, not a full week). Set INTRADAY_BACKFILL_BATCH_DAYS=1 to
+    // restore claimNextBackfillDay's original one-day-per-tick behaviour, or
+    // raise it (5-7, i.e. up to one trading week, is the upper end) to trade
+    // more failure isolation/crash blast-radius for an even faster backfill.
     intradayBackfillBatchDays: Number(env.INTRADAY_BACKFILL_BATCH_DAYS) || 3,
     // Rolling retention purge (ingestion/intraday_purge.js) -- rows older
     // than this (by `ts`) are deleted on a schedule, gated on no active
