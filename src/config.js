@@ -307,7 +307,7 @@ export function loadConfig(env) {
     // the suggested range) via env var once ready to trade some failure
     // isolation/crash blast-radius for a faster backfill; unset changes
     // nothing.
-    intradayBackfillBatchDays: Number(env.INTRADAY_BACKFILL_BATCH_DAYS) || 1,
+    intradayBackfillBatchDays: Number(env.INTRADAY_BACKFILL_BATCH_DAYS) || 3,
     // Rolling retention purge (ingestion/intraday_purge.js) -- rows older
     // than this (by `ts`) are deleted on a schedule, gated on no active
     // backtest (see that file's header). 180 (~6mo) is the upper end of the
