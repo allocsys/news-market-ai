@@ -40,6 +40,7 @@ import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
 import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 import { withRetry } from "../../shared/retry.js";
+import { INTRADAY_BAR_MS, canonicalIntradayTs } from "../../shared/intraday_availability.js";
 
 const VENDOR = "alpaca";
 const DEFAULT_API_BASE = "https://data.alpaca.markets";
@@ -63,6 +64,11 @@ async function readErrorDetail(res) {
 async function fetchTickerBars(config, ticker, { from, to }, { throttle } = {}) {
   const base = String(config.alpacaApiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
   const timeframe = config.alpacaIntradayTimeframe || "5Min";
+  // getIntradayPriceAsOf treats every stored bar as INTRADAY_BAR_MS long (shared/intraday_availability.js); a longer bar would be read as closed before it was.
+  const timeframeMatch = /^(\d+)min$/i.exec(String(timeframe));
+  if (!timeframeMatch || Number(timeframeMatch[1]) * 60_000 !== INTRADAY_BAR_MS) {
+    throw new VendorError(VENDOR, `unsupported alpacaIntradayTimeframe "${timeframe}" -- stored intraday bars must be exactly ${INTRADAY_BAR_MS / 60_000} minutes (shared/intraday_availability.js), or the point-in-time reader would show them before they close`);
+  }
   const feed = config.alpacaFeed || "iex";
 
   const bars = [];
@@ -115,7 +121,8 @@ async function fetchTickerBars(config, ticker, { from, to }, { throttle } = {}) 
     }
 
     for (const row of payload.bars) {
-      const ts = String(row?.t ?? "");
+      // Stored in one canonical form (UTC, whole seconds, "Z") because getIntradayPriceAsOf compares ts as strings -- see shared/intraday_availability.js.
+      const ts = canonicalIntradayTs(String(row?.t ?? ""));
       if (!ts) continue;
       // A null/missing OHLC field means the vendor could not compute the bar: skip it rather than store made-up numbers (same convention as tiingo.js).
       if (![row.o, row.h, row.l, row.c].every(isFiniteNumber)) continue;
