@@ -217,6 +217,8 @@ async function fetchTickerBars(config, ticker, { from, to }, { throttle, db } = 
     // Twelve Data's documented error shape (see header) -- guarded here too
     // in case a soft error ever rides along with an HTTP 200.
     if (payload && payload.status === "error") {
+      // The documented "Requested data could not be found" 404 is an empty window (see the 404 branch above and header note 3); if it ever rides along with an HTTP 200 it must not be a failure, or the backfill would re-claim that day forever.
+      if (Number(payload.code) === 404) break;
       throw new VendorError(VENDOR, `twelvedata returned an error for ${ticker}: ${payload.message ?? JSON.stringify(payload).slice(0, 200)}`, { status: payload.code });
     }
     if (!payload || !Array.isArray(payload.values)) {
