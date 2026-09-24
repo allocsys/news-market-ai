@@ -173,9 +173,11 @@ test("runManualBacktest fails a run whose testEnd is in the future, recording it
 
 test("runManualBacktest clamps the grace-period overshoot to the clock's now: progress totals are sized to the clamped walk", async () => {
   const ctx = makeBacktestCtx();
+  // One news item in the span: the news-coverage preflight refuses a ticker with none.
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-02T12:00:00.000Z" });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-03", close: 100 });
-  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 2, fakeModel: makeFakeModel() };
   const updates = [];
 
   const outcome = await runManualBacktest({}, config, ctx, {
@@ -415,10 +417,12 @@ test("runManualBacktest fails a backwards range and a range too short for any wa
 
 test("runManualBacktest with several walk-forward windows: per-window slices tile the whole curve, and the progress total sums every window's walk", async () => {
   const ctx = makeBacktestCtx();
+  // One news item somewhere in the span: the news-coverage preflight refuses a ticker with none.
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-02T12:00:00.000Z" });
   for (const [date, close] of [["2025-12-31", 100], ["2026-01-01", 100], ["2026-01-02", 110], ["2026-01-03", 110], ["2026-01-04", 99], ["2026-01-05", 99]]) {
     await seedBar(ctx.inputs, { ticker: "AAPL", date, close });
   }
-  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 2, fakeModel: makeFakeModel() };
   const updates = [];
 
   const outcome = await runManualBacktest({}, config, ctx, {
