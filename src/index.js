@@ -450,5 +450,39 @@ export default {
     } catch (err) {
       console.error("scheduled: exit_check enqueue failed", { message: err.message });
     }
+
+    // Gradual intraday backfill (plan.md finding G step 6,
+    // ingestion/intraday_backfill.js) -- one `intraday_backfill_tick`
+    // message every `*/15` cycle, same BACKFILL queue the `ingest` Worker
+    // already consumes for `backfill`/`backfill_prices` (see that Worker's
+    // queue() for the handler). Each tick is small and bounded (at most one
+    // HTTP request per intraday ticker), so riding the existing 15-minute
+    // cadence -- rather than provisioning a separate, slower schedule --
+    // is what makes the backfill "gradual, not a bulk loop" per the plan.
+    // Own try/catch, own message: an enqueue failure here must never be
+    // conflated with the INGEST/exit_check fan-out above, same isolation
+    // convention as this function's two other try/catch blocks.
+    try {
+      await env.BACKFILL.send({ type: "intraday_backfill_tick", asOf });
+    } catch (err) {
+      console.error("scheduled: intraday_backfill_tick enqueue failed", { message: err.message });
+    }
+
+    // Rolling retention purge (ingestion/intraday_purge.js) -- gated to
+    // roughly once a day rather than every 15-minute tick: a purge that
+    // finds nothing to delete (the common case, most ticks) is still a
+    // wasted DELETE-subquery round trip against SIM_DB (the active-backtest
+    // check) plus INPUTS_DB, and the plan's own "rolling 4-6 month window"
+    // has wide slack -- there is no reason to check ~96 times a day. Fires
+    // on the first tick of the 03:00 UTC hour only (minutes === 0, since
+    // the cron is */15 -- 03:00, not 03:15/03:30/03:45), an arbitrary
+    // low-traffic-hour choice, not tied to any specific market schedule.
+    if (now.getUTCHours() === 3 && now.getUTCMinutes() === 0) {
+      try {
+        await env.BACKFILL.send({ type: "intraday_purge_tick", asOf });
+      } catch (err) {
+        console.error("scheduled: intraday_purge_tick enqueue failed", { message: err.message });
+      }
+    }
   },
 };
