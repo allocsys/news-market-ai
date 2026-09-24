@@ -140,7 +140,7 @@ test("spike: a REAL gap that price then stays at is NOT rejected (only one side 
 
 test("spike: a bad FIRST bar does not poison the ones after it (no cascade), and edge bars are never spike-checked", () => {
   const { accepted, rejected } = gateIntradayBars([
-    bar("AAPL", "2026-01-15T14:00:00Z", 10), // bad, but only has one neighbour -> cannot be judged
+    bar("AAPL", "2026-01-15T14:00:00Z", 10, { open: 10, high: 10.1, low: 9.9 }), // wildly off, but only has one neighbour -> cannot be judged
     bar("AAPL", "2026-01-15T14:05:00Z", 100),
     bar("AAPL", "2026-01-15T14:10:00Z", 101),
   ]);
