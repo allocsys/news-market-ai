@@ -25,6 +25,20 @@ const DEFAULT_COOLDOWN_SECONDS = 60;
 // trouble.
 const MAX_CASCADE_MS = 90000;
 
+// When config.subrequestBudget is attached (backtest invocations only), no
+// single logical call may charge more than this many attempts against it.
+// WHY: without a cap, one call's model/key cascade can burn most or all of an
+// invocation's ~40-subrequest budget during a Gemini overload (each retry is
+// a real subrequest), leaving nothing for the rest of the item's pipeline
+// stages. Since canStart()'s progress guarantee always lets a fresh part
+// START an item, an uncapped cascade meant every part re-picked the same
+// item, blew the budget on this one call, recorded zero progress, and
+// repeated forever. Capping bounds the worst case to
+// MAX_ATTEMPTS_UNDER_BUDGET external subrequests per call so a vendor outage
+// degrades gracefully instead of starving progress accounting entirely.
+// Production calls (no subrequestBudget) are unaffected.
+const MAX_ATTEMPTS_UNDER_BUDGET = 3;
+
 /** One-line digest of a cascade's attempts, e.g. "m-a#0 error 429; m-b#0 skipped; m-c#0 error 503". */
 function summarizeAttempts(attempts) {
   return attempts.map((a) => `${a.model}#${a.keyIndex} ${a.outcome}${a.status ? ` ${a.status}` : ""}`).join("; ");
@@ -133,6 +147,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
 
   let lastErr; // whatever the loop touched last -- may be a synthetic cooldown skip
   let realErr; // the last error a real call produced (never a skip)
+  let budgetedAttempts = 0; // attempts charged against config.subrequestBudget in THIS call, capped at MAX_ATTEMPTS_UNDER_BUDGET
   const cascadeExhausted = () => cascadeExhaustedError({ realErr, lastErr, attempts, elapsedMs: Date.now() - cascadeStart, cooldownSeconds });
   for (let mi = 0; mi < models.length; mi++) {
     const model = models[mi];
@@ -153,6 +168,17 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         throw budgetErr;
       }
 
+      if (config.subrequestBudget && budgetedAttempts >= MAX_ATTEMPTS_UNDER_BUDGET) {
+        const cappedErr = new VendorError(
+          "gemini",
+          `Gemini cascade stopped after ${budgetedAttempts} attempt(s) to preserve backtest subrequest budget (would have tried model "${model}" key #${ki}) [${summarizeAttempts(attempts)}]; last error: ${(realErr ?? lastErr)?.message || "none"}`,
+          { transient: true, retryAfterSeconds: retryAfterFor(cooldownSeconds) }
+        );
+        console.log(`[gemini] cascade capped under subrequest budget: ${cappedErr.message}`);
+        note({ model, keyIndex: ki, outcome: "budget_capped", detail: cappedErr.message });
+        throw cappedErr;
+      }
+
       if (await isCoolingDown(kv, model, ki)) {
         console.log(`[gemini] model "${model}" key #${ki} skipped (cooldown active), elapsed=${elapsedMs}ms`);
         lastErr = new VendorError("gemini", `model "${model}" key #${ki} is in a recorded cooldown`, {
@@ -169,6 +195,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
       // as a pause signal instead of being treated as a vendor failure (which
       // would burn a cooldown write and fall through to the next model).
       config.subrequestBudget?.chargeExternal();
+      if (config.subrequestBudget) budgetedAttempts++;
 
       try {
         const data = await callOnce(config, model, apiKey, body, ki);
