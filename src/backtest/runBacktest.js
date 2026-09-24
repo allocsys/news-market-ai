@@ -245,7 +245,12 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
               detail: `Gemini unavailable (pause ${count}); retrying in part ${part + 1}`,
             });
           }
-          return await yieldPart({ phase: "walk", window: wi, walk: res.cursor }, res.reason);
+          // Carry any in-progress stall count forward even though this pause
+          // itself isn't "transient": if a budget/exhausted pause happens on the
+          // SAME item as an earlier Gemini stall, dropping it here would reset
+          // the giveup counter to 1 on the next transient pause and let outage +
+          // budget pauses interleave forever without ever reaching maxStalls.
+          return await yieldPart({ phase: "walk", window: wi, walk: res.cursor, stall: cursor?.stall }, res.reason);
         }
       }
     }
