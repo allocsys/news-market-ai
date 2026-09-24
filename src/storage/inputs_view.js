@@ -16,7 +16,7 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 import { assertNoPriceBarLookahead, priceBarCutoffDate } from "../shared/price_availability.js";
-import { INTRADAY_BAR_MS, assertNoIntradayLookahead, intradayBarAvailableAt, intradayCutoffTs } from "../shared/intraday_availability.js";
+import { assertNoIntradayLookahead, intradayBarAvailableAt, intradayCutoffTs } from "../shared/intraday_availability.js";
 
 /** Rows per D1 round trip in getNewsItemsInRange. A response-size bound only; the function pages until the range is exhausted. */
 export const NEWS_RANGE_PAGE_SIZE = 500;
