@@ -20,6 +20,7 @@ import {
   seedBackfillRows,
   ensureTodayBackfillRows,
   claimNextBackfillDay,
+  claimNextBackfillBatch,
   runIntradayBackfillTick,
 } from "../src/ingestion/intraday_backfill.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
@@ -216,6 +217,118 @@ test("a vendor failure on one ticker is isolated: that ticker's row is marked fa
   // A failed day is eligible for a later tick to re-claim (not stranded).
   const reclaimed = await claimNextBackfillDay(db, { ticker: "AAPL", now: "2026-01-16T00:00:00Z" });
   assert.equal(reclaimed.date, "2026-01-14");
+});
+
+// ---------------------------------------------------------------------------
+// batched claiming (claimNextBackfillBatch) + a batched tick
+// (config.intradayBackfillBatchDays > 1) -- 2026-09-24 session
+// ---------------------------------------------------------------------------
+
+test("claimNextBackfillBatch claims up to batchSize OLDEST contiguous pending/failed days and marks them all in_progress", async () => {
+  const db = newDb();
+  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-01", toDate: "2026-01-05" });
+
+  const claimed = await claimNextBackfillBatch(db, { ticker: "AAPL", batchSize: 3, now: "2026-01-10T00:00:00Z" });
+  assert.deepEqual(claimed, [
+    { ticker: "AAPL", date: "2026-01-01", vendor: "alpaca" },
+    { ticker: "AAPL", date: "2026-01-02", vendor: "alpaca" },
+    { ticker: "AAPL", date: "2026-01-03", vendor: "alpaca" },
+  ]);
+
+  const { results } = await db.prepare("SELECT date, status, last_attempt FROM intraday_backfill_status WHERE ticker = 'AAPL' ORDER BY date").all();
+  assert.deepEqual(
+    results.map((r) => [r.date, r.status]),
+    [
+      ["2026-01-01", "in_progress"],
+      ["2026-01-02", "in_progress"],
+      ["2026-01-03", "in_progress"],
+      ["2026-01-04", "pending"],
+      ["2026-01-05", "pending"],
+    ]
+  );
+  assert.ok(results.slice(0, 3).every((r) => r.last_attempt === "2026-01-10T00:00:00Z"));
+});
+
+test("claimNextBackfillBatch trims to the maximal CONTIGUOUS run: a 'done' day in the middle stops the batch there, not past it", async () => {
+  const db = newDb();
+  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-01", toDate: "2026-01-04" });
+  await db.prepare("UPDATE intraday_backfill_status SET status = 'done' WHERE ticker = 'AAPL' AND date = '2026-01-03'").run();
+
+  const claimed = await claimNextBackfillBatch(db, { ticker: "AAPL", batchSize: 4, now: "2026-01-10T00:00:00Z" });
+  assert.deepEqual(claimed.map((c) => c.date), ["2026-01-01", "2026-01-02"], "stops at the gap left by the already-done 2026-01-03, never jumps to 2026-01-04");
+
+  const day3 = await db.prepare("SELECT status FROM intraday_backfill_status WHERE ticker = 'AAPL' AND date = '2026-01-03'").first();
+  assert.equal(day3.status, "done", "the already-done day in the gap is left untouched");
+  const day4 = await db.prepare("SELECT status FROM intraday_backfill_status WHERE ticker = 'AAPL' AND date = '2026-01-04'").first();
+  assert.equal(day4.status, "pending", "a pending day past the gap is not claimed this batch");
+});
+
+test("claimNextBackfillBatch: batchSize 1 behaves exactly like claimNextBackfillDay", async () => {
+  const db = newDb();
+  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-01", toDate: "2026-01-02" });
+
+  const claimed = await claimNextBackfillBatch(db, { ticker: "AAPL", batchSize: 1, now: "2026-01-10T00:00:00Z" });
+  assert.deepEqual(claimed, [{ ticker: "AAPL", date: "2026-01-01", vendor: "alpaca" }]);
+});
+
+test("claimNextBackfillBatch returns [] once nothing is claimable, and a stale in_progress row IS reclaimed after staleAfterMs (same rule as claimNextBackfillDay)", async () => {
+  const db = newDb();
+  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-01", toDate: "2026-01-01" });
+  await claimNextBackfillBatch(db, { ticker: "AAPL", batchSize: 3, now: "2026-01-10T00:00:00Z" }); // -> in_progress
+
+  assert.deepEqual(await claimNextBackfillBatch(db, { ticker: "AAPL", batchSize: 3, now: "2026-01-10T00:10:00Z", staleAfterMs: 30 * 60_000 }), []);
+
+  const stale = await claimNextBackfillBatch(db, { ticker: "AAPL", batchSize: 3, now: "2026-01-10T00:31:00Z", staleAfterMs: 30 * 60_000 });
+  assert.deepEqual(stale, [{ ticker: "AAPL", date: "2026-01-01", vendor: "alpaca" }]);
+});
+
+test("a batched tick (intradayBackfillBatchDays > 1) makes ONE vendor request for the whole claimed range and marks every claimed day done individually", async (t) => {
+  const db = newDb();
+  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-01", toDate: "2026-01-03" });
+  const calls = mockVendors(t, {
+    alpacaByTicker: {
+      AAPL: {
+        bars: [alpacaBar("2026-01-01T13:30:00Z", 100), alpacaBar("2026-01-02T13:30:00Z", 101), alpacaBar("2026-01-03T13:30:00Z", 102)],
+        next_page_token: null,
+      },
+    },
+  });
+
+  const config = { ...baseConfig(), watchlist: [{ ticker: "AAPL", query: "AAPL" }], intradayBackfillBatchDays: 3 };
+  const result = await runIntradayBackfillTick(config, db, { now: new Date("2026-01-15T12:00:00Z") });
+
+  const aapl = result.results.find((r) => r.ticker === "AAPL");
+  assert.equal(aapl.claimed, true);
+  assert.equal(aapl.ok, true);
+  assert.deepEqual(aapl.dates, ["2026-01-01", "2026-01-02", "2026-01-03"]);
+  assert.equal(aapl.bars, 3);
+  assert.equal(aapl.written, 3);
+
+  const alpacaCalls = calls.filter((u) => u.hostname === "data.alpaca.markets");
+  assert.equal(alpacaCalls.length, 1, "the whole 3-day claim is fetched in ONE request, not one per day");
+
+  const { results: rows } = await db.prepare("SELECT date, status FROM intraday_backfill_status WHERE ticker = 'AAPL' AND date IN ('2026-01-01','2026-01-02','2026-01-03') ORDER BY date").all();
+  assert.deepEqual(rows.map((r) => r.status), ["done", "done", "done"]);
+
+  const { results: barRows } = await db.prepare("SELECT ts FROM price_bars_intraday WHERE ticker = 'AAPL' ORDER BY ts").all();
+  assert.deepEqual(barRows.map((r) => r.ts), ["2026-01-01T13:30:00Z", "2026-01-02T13:30:00Z", "2026-01-03T13:30:00Z"]);
+});
+
+test("a batched tick's vendor failure marks EVERY claimed day in the batch failed, not just one (accepted tradeoff vs the single-day path)", async (t) => {
+  const db = newDb();
+  await seedBackfillRows(db, { tickers: ["AAPL"], fromDate: "2026-01-01", toDate: "2026-01-02" });
+  mockVendors(t, { alpacaByTicker: { AAPL: 500 } });
+
+  const config = { ...baseConfig(), watchlist: [{ ticker: "AAPL", query: "AAPL" }], intradayBackfillBatchDays: 2 };
+  const result = await runIntradayBackfillTick(config, db, { now: new Date("2026-01-15T12:00:00Z") });
+
+  const aapl = result.results.find((r) => r.ticker === "AAPL");
+  assert.equal(aapl.ok, false);
+  assert.deepEqual(aapl.dates, ["2026-01-01", "2026-01-02"]);
+
+  const { results: rows } = await db.prepare("SELECT date, status, error FROM intraday_backfill_status WHERE ticker = 'AAPL' ORDER BY date").all();
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((r) => r.status === "failed" && /500/.test(r.error)));
 });
 
 test("a ticker with no claimable day (everything already done) is reported claimed:false, not an error", async (t) => {
