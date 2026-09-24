@@ -104,7 +104,7 @@ export async function getStaleTerminalBacktestRuns(db, { olderThanDays, limit = 
  */
 export async function getFailedOrCancelledBacktestRuns(db, { limit = 20 } = {}) {
   const { results } = await db
-    .prepare(`SELECT id, status FROM backtest_runs WHERE status IN ('failed', 'cancelled') ORDER BY started_at ASC LIMIT ?`)
+    .prepare(`SELECT id, status FROM backtest_runs WHERE status IN ('failed', 'cancelled') ORDER BY started_at ASC, id ASC LIMIT ?`)
     .bind(limit)
     .all();
   return results;
