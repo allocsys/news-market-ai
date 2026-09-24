@@ -36,7 +36,13 @@
 // propagates.
 
 import { fetchIntradayBars as fetchAlpacaIntradayBars } from "./sources/alpaca.js";
-import { fetchIntradayBars as fetchTwelveDataIntradayBars, TWELVE_DATA_SYMBOL_MAP } from "./sources/twelvedata.js";
+// twelvedata.js's TWELVE_DATA_SYMBOL_MAP is intentionally still imported here
+// even though 'twelvedata' is no longer a live route below (see
+// resolveIntradayVendor) -- it stays the reference for "which tickers used to
+// be twelvedata-routed", so step 4 (purging old twelvedata rows) and any
+// rollback know exactly what to touch, without a second drifting list.
+import { TWELVE_DATA_SYMBOL_MAP } from "./sources/twelvedata.js";
+import { fetchIntradayBars as fetchTiingoFxIntradayBars, TIINGO_FX_INTRADAY_TICKERS } from "./sources/tiingo_fx_intraday.js";
 import { insertPriceBarsIntraday } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
 import { toDayString, addDays } from "./date_windows.js";
@@ -49,15 +55,16 @@ import { toDayString, addDays } from "./date_windows.js";
 const BACKFILL_STATUS_INSERT_CHUNK_SIZE = 200;
 
 /**
- * Which vendor owns `ticker`'s intraday bars: 'twelvedata' if it has a
- * Twelve Data symbol mapping (today: XAUUSD only), 'alpaca' otherwise (every
- * other watchlist entry -- AAPL/MSFT/TSLA/USO). Deriving this from
- * TWELVE_DATA_SYMBOL_MAP (twelvedata.js) rather than hardcoding a second
- * ticker list here means the two files can never silently disagree about
- * which vendor a ticker belongs to.
+ * Which vendor owns `ticker`'s intraday bars: 'tiingo_fx_intraday' if it's
+ * in TIINGO_FX_INTRADAY_TICKERS (today: XAUUSD only -- the plan.md finding G
+ * follow-up vendor switch, 2026-09-24, replacing the untrustworthy Twelve
+ * Data XAUUSD feed), 'alpaca' otherwise (every other watchlist entry --
+ * AAPL/MSFT/TSLA/USO). 'twelvedata' is deliberately NOT a route any ticker
+ * can resolve to anymore -- see the import comment above on why
+ * TWELVE_DATA_SYMBOL_MAP is still imported (reference only, not routed).
  */
 export function resolveIntradayVendor(ticker) {
-  return TWELVE_DATA_SYMBOL_MAP[String(ticker).toUpperCase()] ? "twelvedata" : "alpaca";
+  return TIINGO_FX_INTRADAY_TICKERS.has(String(ticker).toUpperCase()) ? "tiingo_fx_intraday" : "alpaca";
 }
 
 /** config.watchlist's tickers, in order -- the fixed set this job backfills/keeps current. */
@@ -189,7 +196,7 @@ async function markBackfillFailed(db, { ticker, date, error, now = new Date().to
 async function fetchClaimedDay(config, db, { ticker, date, vendor }) {
   const from = `${date}T00:00:00Z`;
   const to = `${addDays(date, 1)}T00:00:00Z`;
-  const fetchBars = vendor === "twelvedata" ? (c, args) => fetchTwelveDataIntradayBars(c, args, { db }) : fetchAlpacaIntradayBars;
+  const fetchBars = vendor === "tiingo_fx_intraday" ? fetchTiingoFxIntradayBars : fetchAlpacaIntradayBars;
 
   const { bars, errors } = await fetchBars(config, { tickers: [ticker], from, to });
   if (errors.length > 0) {
