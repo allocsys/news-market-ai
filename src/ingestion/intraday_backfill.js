@@ -43,6 +43,7 @@ import { fetchIntradayBars as fetchAlpacaIntradayBars } from "./sources/alpaca.j
 // exactly what to touch there without this file needing to import it).
 import { fetchIntradayBars as fetchTiingoFxIntradayBars, TIINGO_FX_INTRADAY_TICKERS } from "./sources/tiingo_fx_intraday.js";
 import { insertPriceBarsIntraday } from "../storage/inputs_view.js";
+import { summarizeIntradayRejections } from "../shared/intraday_sanity.js";
 import { VendorError } from "../shared/errors.js";
 import { toDayString, addDays } from "./date_windows.js";
 
@@ -179,8 +180,13 @@ export async function claimNextBackfillDay(db, { ticker, now = new Date().toISOS
   return { ticker: row.ticker, date: row.date, vendor: row.vendor };
 }
 
-async function markBackfillDone(db, { ticker, date }) {
-  await db.prepare(`UPDATE intraday_backfill_status SET status = 'done', error = NULL WHERE ticker = ? AND date = ?`).bind(ticker, date).run();
+// `note` (normally null) is written to the row's `error` column so a day that
+// finished but had bars dropped by the write-time sanity gate
+// (shared/intraday_sanity.js) is distinguishable from a clean one when auditing
+// -- status stays 'done' (a re-claim would re-fetch the same bars and get the
+// same rejections, burning vendor quota), the note is how it stays visible.
+async function markBackfillDone(db, { ticker, date, note = null }) {
+  await db.prepare(`UPDATE intraday_backfill_status SET status = 'done', error = ? WHERE ticker = ? AND date = ?`).bind(note, ticker, date).run();
 }
 
 async function markBackfillFailed(db, { ticker, date, error, now = new Date().toISOString() }) {
@@ -243,9 +249,10 @@ export async function runIntradayBackfillTick(config, db, { now = new Date() } =
     }
     try {
       const bars = await fetchClaimedDay(config, db, claimed);
-      await insertPriceBarsIntraday(db, bars);
-      await markBackfillDone(db, claimed);
-      results.push({ ticker, claimed: true, date: claimed.date, vendor: claimed.vendor, bars: bars.length, ok: true });
+      const { written, rejected } = await insertPriceBarsIntraday(db, bars);
+      const note = rejected.length > 0 ? `write gate rejected ${rejected.length}/${bars.length} bar(s): ${JSON.stringify(summarizeIntradayRejections(rejected))}`.slice(0, 500) : null;
+      await markBackfillDone(db, { ...claimed, note });
+      results.push({ ticker, claimed: true, date: claimed.date, vendor: claimed.vendor, bars: bars.length, written, rejected: rejected.length, ok: true });
     } catch (err) {
       if (!(err instanceof VendorError)) throw err;
       await markBackfillFailed(db, { ...claimed, error: err.message });

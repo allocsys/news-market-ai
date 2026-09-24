@@ -17,6 +17,7 @@
 import { LookaheadViolationError } from "../shared/errors.js";
 import { assertNoPriceBarLookahead, priceBarCutoffDate } from "../shared/price_availability.js";
 import { assertNoIntradayLookahead, intradayBarAvailableAt, intradayCutoffTs } from "../shared/intraday_availability.js";
+import { gateIntradayBars, summarizeIntradayRejections } from "../shared/intraday_sanity.js";
 
 /** Rows per D1 round trip in getNewsItemsInRange. A response-size bound only; the function pages until the range is exhausted. */
 export const NEWS_RANGE_PAGE_SIZE = 500;
@@ -349,9 +350,26 @@ export async function insertPriceBars(db, bars) {
  * bars (24h) or ~78 (one US equity session), so callers do not need to chunk
  * this themselves the way NEWS_ITEM_INSERT_CHUNK_SIZE requires for news.
  * No-op on an empty array (mirrors insertPriceBars).
+ *
+ * WRITE-TIME SANITY GATE (shared/intraday_sanity.js): every batch, from every
+ * vendor, is checked before it is written -- ts canonicalised, price envelope,
+ * closed-market windows. A bad bar is DROPPED, not thrown on, and logged
+ * loudly (Adopted Pattern #11); the caller gets `{written, rejected}` so it can
+ * record what was dropped. `rejected` is `[{ticker, ts, code, reason}]`.
  */
 export async function insertPriceBarsIntraday(db, bars) {
-  if (bars.length === 0) return;
+  if (bars.length === 0) return { written: 0, rejected: [] };
+
+  const { accepted, rejected } = gateIntradayBars(bars);
+  if (rejected.length > 0) {
+    console.error("intraday write gate rejected bar(s); NOT written", {
+      submitted: bars.length,
+      rejected: rejected.length,
+      byCode: summarizeIntradayRejections(rejected),
+      sample: rejected.slice(0, 5),
+    });
+  }
+  if (accepted.length === 0) return { written: 0, rejected };
 
   const stmt = db.prepare(
     `INSERT INTO price_bars_intraday (ticker, ts, open, high, low, close, volume, source, ingested_at)
@@ -363,9 +381,10 @@ export async function insertPriceBarsIntraday(db, bars) {
   );
 
   const ingestedAt = new Date().toISOString();
-  const batch = bars.map((bar) => stmt.bind(bar.ticker, bar.ts, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source, ingestedAt));
+  const batch = accepted.map((bar) => stmt.bind(bar.ticker, bar.ts, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source, ingestedAt));
 
   await db.batch(batch);
+  return { written: accepted.length, rejected };
 }
 
 /**
