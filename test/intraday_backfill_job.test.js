@@ -1,12 +1,13 @@
 // Covers ingestion/intraday_backfill.js (plan.md finding G, step 6):
 // seeding intraday_backfill_status rows for a brand-new ticker, the
 // "ensure today" going-forward row, claiming the oldest pending/failed day
-// per ticker, vendor routing (Alpaca vs Twelve Data), a full tick writing
-// bars via insertPriceBarsIntraday and marking the row 'done', and failure
-// isolation (one ticker's vendor error never blocks another's).
+// per ticker, vendor routing (Alpaca vs Tiingo FX, XAUUSD only -- see
+// plan.md finding G follow-up, 2026-09-24, replacing Twelve Data), a full
+// tick writing bars via insertPriceBarsIntraday and marking the row 'done',
+// and failure isolation (one ticker's vendor error never blocks another's).
 //
 // Both vendors are mocked at global fetch (same style as
-// alpaca_intraday.test.js / twelvedata_intraday.test.js); nothing here
+// alpaca_intraday.test.js / tiingo_fx_intraday.test.js); nothing here
 // touches a real vendor API. Runs against a REAL sqlite inputs DB
 // (migrations/inputs/), which is where price_bars_intraday AND
 // intraday_backfill_status both live.
@@ -31,12 +32,12 @@ function baseConfig(overrides = {}) {
     ...loadConfig({
       ALPACA_API_KEY_ID: "alpaca-key",
       ALPACA_API_SECRET_KEY: "alpaca-secret",
-      TWELVE_DATA_API_KEY: "td-key",
+      TIINGO_API_KEY: "tiingo-key",
       WATCHLIST_TICKERS: "AAPL,XAUUSD",
     }),
     retryBaseDelayMs: 1,
     alpacaMinRequestIntervalMs: 0,
-    twelveDataMinRequestIntervalMs: 0,
+    tiingoFxIntradayMinRequestIntervalMs: 0,
     ...overrides,
   };
 }
@@ -45,17 +46,17 @@ function baseConfig(overrides = {}) {
 function alpacaBar(t, base = 100) {
   return { t, o: base, h: base + 1, l: base - 1, c: base + 0.5, v: 1000 };
 }
-function tdRow(datetime, base = 3500) {
-  return { datetime: datetime.slice(0, 19).replace("T", " "), open: String(base), high: String(base + 1), low: String(base - 1), close: String(base + 0.5), volume: "10" };
+function tiingoFxRow(dateIso, base = 3500) {
+  return { date: dateIso, open: base, high: base + 1, low: base - 1, close: base + 0.5 };
 }
 
 /**
- * Dispatches to Alpaca's /v2/stocks/{ticker}/bars or Twelve Data's
- * /time_series based on the URL, so one mock covers a mixed-vendor tick.
- * `alpacaByTicker`/`tdOk` control each vendor's response; a ticker/vendor
- * not listed gets an empty-but-ok response.
+ * Dispatches to Alpaca's /v2/stocks/{ticker}/bars or Tiingo's
+ * /tiingo/fx/{ticker}/prices based on the URL, so one mock covers a
+ * mixed-vendor tick. `alpacaByTicker`/`tiingoOk` control each vendor's
+ * response; a ticker/vendor not listed gets an empty-but-ok response.
  */
-function mockVendors(t, { alpacaByTicker = {}, tdOk = true } = {}) {
+function mockVendors(t, { alpacaByTicker = {}, tiingoOk = true } = {}) {
   const calls = [];
   t.mock.method(global, "fetch", async (url) => {
     const u = new URL(String(url));
@@ -67,13 +68,13 @@ function mockVendors(t, { alpacaByTicker = {}, tdOk = true } = {}) {
       if (typeof spec === "number") return { ok: false, status: spec, text: async () => "simulated error", json: async () => ({}) };
       return { ok: true, status: 200, json: async () => spec ?? { bars: [], next_page_token: null } };
     }
-    if (u.hostname === "api.twelvedata.com") {
-      if (!tdOk) return { ok: false, status: 500, text: async () => "simulated error", json: async () => ({}) };
-      const from = new Date(u.searchParams.get("start_date").replace(" ", "T") + "Z");
+    if (u.hostname === "api.tiingo.com") {
+      if (!tiingoOk) return { ok: false, status: 500, text: async () => "simulated error", json: async () => ({}) };
+      const from = new Date(u.searchParams.get("startDate"));
       return {
         ok: true,
         status: 200,
-        json: async () => ({ status: "ok", values: [tdRow(new Date(from.getTime() + 5 * 60_000).toISOString())] }),
+        json: async () => [tiingoFxRow(new Date(from.getTime() + 5 * 60_000).toISOString())],
       };
     }
     throw new Error(`unexpected host in test: ${u.hostname}`);
@@ -85,9 +86,9 @@ function mockVendors(t, { alpacaByTicker = {}, tdOk = true } = {}) {
 // vendor routing
 // ---------------------------------------------------------------------------
 
-test("resolveIntradayVendor: XAUUSD -> twelvedata, everything else -> alpaca", () => {
-  assert.equal(resolveIntradayVendor("XAUUSD"), "twelvedata");
-  assert.equal(resolveIntradayVendor("xauusd"), "twelvedata", "case-insensitive");
+test("resolveIntradayVendor: XAUUSD -> tiingo_fx_intraday, everything else -> alpaca", () => {
+  assert.equal(resolveIntradayVendor("XAUUSD"), "tiingo_fx_intraday");
+  assert.equal(resolveIntradayVendor("xauusd"), "tiingo_fx_intraday", "case-insensitive");
   for (const ticker of ["AAPL", "MSFT", "TSLA", "USO"]) {
     assert.equal(resolveIntradayVendor(ticker), "alpaca", ticker);
   }
@@ -181,7 +182,7 @@ test("a fresh tick seeds a brand-new watchlist, claims one day per ticker, write
 
   assert.equal(byTicker.XAUUSD.claimed, true);
   assert.equal(byTicker.XAUUSD.ok, true);
-  assert.equal(byTicker.XAUUSD.vendor, "twelvedata");
+  assert.equal(byTicker.XAUUSD.vendor, "tiingo_fx_intraday");
 
   const statusRow = await db.prepare("SELECT status FROM intraday_backfill_status WHERE ticker = 'AAPL' AND date = '2026-01-12'").first();
   assert.equal(statusRow.status, "done");
@@ -198,7 +199,7 @@ test("a fresh tick seeds a brand-new watchlist, claims one day per ticker, write
 test("a vendor failure on one ticker is isolated: that ticker's row is marked failed (with the error message) and the other ticker still succeeds", async (t) => {
   const db = newDb();
   await seedBackfillRows(db, { tickers: ["AAPL", "XAUUSD"], fromDate: "2026-01-14", toDate: "2026-01-14" });
-  mockVendors(t, { alpacaByTicker: { AAPL: 500 } }); // AAPL 500s, XAUUSD (twelvedata) succeeds via the default mock
+  mockVendors(t, { alpacaByTicker: { AAPL: 500 } }); // AAPL 500s, XAUUSD (tiingo_fx_intraday) succeeds via the default mock
 
   const config = baseConfig();
   const result = await runIntradayBackfillTick(config, db, { now: new Date("2026-01-15T12:00:00Z") });
