@@ -108,9 +108,13 @@ test("pipeline never opens a position off an intraday bar that has not fully clo
 
 test("exit-check never prices a stop-loss/take-profit off an intraday bar that has not fully closed at asOf", async () => {
   const ctx = makeCtx();
+  // openedAt is well within maxPositionHoldDays (10) of every asOf used below,
+  // so the (correctly lower-priority, see evaluateExit's own doc comment)
+  // time_based exit can never fire here -- this test is isolated to the
+  // price-based lookahead path only.
   await ctx.store.openPosition({
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
-    direction: "long", entryPrice: 100, stopLossPct: 0.03, takeProfitPct: 0.06, openedAt: "2026-01-01T00:00:00Z",
+    direction: "long", entryPrice: 100, stopLossPct: 0.03, takeProfitPct: 0.06, openedAt: "2026-01-14T00:00:00Z",
   });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 100 }); // flat -- would NOT trigger the stop
   // A not-yet-closed intraday bar deep past the stop -- must not leak in early.
