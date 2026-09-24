@@ -115,9 +115,20 @@ test("the symbol map wires XAUUSD only", () => {
 
 test("config.twelveDataApiBase and twelveDataIntradayInterval are honored", async (t) => {
   const calls = mockTwelveData(t, [page([])]);
-  await run({ config: { ...config, twelveDataApiBase: "https://example.test/", twelveDataIntradayInterval: "15min" } });
+  await run({ config: { ...config, twelveDataApiBase: "https://example.test/", twelveDataIntradayInterval: "5min" } });
   assert.equal(calls[0].url.origin, "https://example.test");
-  assert.equal(calls[0].url.searchParams.get("interval"), "15min");
+  assert.equal(calls[0].url.searchParams.get("interval"), "5min");
+});
+
+test("an interval other than 5 minutes is refused before any request or reservation: the point-in-time reader assumes every stored bar is 5 minutes long, so a longer bar would be shown before it closed", async (t) => {
+  const calls = mockTwelveData(t, [page([])]);
+  for (const interval of ["1min", "15min", "1h"]) {
+    const { bars, errors, db } = await run({ config: { ...config, twelveDataIntradayInterval: interval } });
+    assert.equal(bars.length, 0, interval);
+    assert.match(errors[0].error.message, /unsupported twelveDataIntradayInterval/, interval);
+    assert.equal(await currentCount(db, { vendor: "twelvedata" }), 0, interval);
+  }
+  assert.equal(calls.length, 0);
 });
 
 test("a row with a null/unparseable price, or no datetime, is skipped rather than stored; a missing volume becomes 0", async (t) => {

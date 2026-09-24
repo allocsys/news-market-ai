@@ -69,6 +69,7 @@ import { createThrottle } from "../../shared/throttle.js";
 import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 import { withRetry } from "../../shared/retry.js";
 import { reserve } from "../../shared/d1_rate_limiter.js";
+import { INTRADAY_BAR_MS } from "../../shared/intraday_availability.js";
 
 const VENDOR = "twelvedata";
 const DEFAULT_API_BASE = "https://api.twelvedata.com";
@@ -140,6 +141,10 @@ async function fetchTickerBars(config, ticker, { from, to }, { throttle, db } = 
   const intervalMs = INTERVAL_MS[interval];
   if (!intervalMs) {
     throw new VendorError(VENDOR, `unsupported twelveDataIntradayInterval "${interval}" -- add it to INTERVAL_MS after confirming Twelve Data supports it, so pagination can advance correctly`);
+  }
+  // getIntradayPriceAsOf treats every stored bar as INTRADAY_BAR_MS long (shared/intraday_availability.js); a longer bar would be read as closed before it was.
+  if (intervalMs !== INTRADAY_BAR_MS) {
+    throw new VendorError(VENDOR, `unsupported twelveDataIntradayInterval "${interval}" -- stored intraday bars must be exactly ${INTRADAY_BAR_MS / 60_000} minutes (shared/intraday_availability.js), or the point-in-time reader would show them before they close`);
   }
   const symbol = toTwelveDataSymbol(ticker);
   const dailyLimit = Number.isFinite(Number(config.twelveDataDailyRequestLimit)) ? Number(config.twelveDataDailyRequestLimit) : DEFAULT_DAILY_LIMIT;

@@ -98,10 +98,34 @@ test("every ticker gets its own request, in order, and all four watchlist equiti
 
 test("config.alpacaFeed, alpacaIntradayTimeframe and alpacaApiBase are honored", async (t) => {
   const calls = mockAlpaca(t, {});
-  await fetchIntradayBars({ ...config, alpacaFeed: "sip", alpacaIntradayTimeframe: "1Min", alpacaApiBase: "https://example.test/" }, { tickers: ["AAPL"], from: FROM, to: TO });
+  await fetchIntradayBars({ ...config, alpacaFeed: "sip", alpacaIntradayTimeframe: "5min", alpacaApiBase: "https://example.test/" }, { tickers: ["AAPL"], from: FROM, to: TO });
   assert.equal(calls[0].url.origin, "https://example.test");
   assert.equal(calls[0].url.searchParams.get("feed"), "sip");
-  assert.equal(calls[0].url.searchParams.get("timeframe"), "1Min");
+  assert.equal(calls[0].url.searchParams.get("timeframe"), "5min");
+});
+
+test("a timeframe other than 5 minutes is refused before any request: the point-in-time reader assumes every stored bar is 5 minutes long, so a longer bar would be shown before it closed", async (t) => {
+  const calls = mockAlpaca(t, {});
+  for (const timeframe of ["1Min", "15Min", "1Hour", "1Day", "garbage"]) {
+    const { bars, errors } = await fetchIntradayBars({ ...config, alpacaIntradayTimeframe: timeframe }, { tickers: ["AAPL"], from: FROM, to: TO });
+    assert.equal(bars.length, 0, timeframe);
+    assert.match(errors[0].error.message, /unsupported alpacaIntradayTimeframe/, timeframe);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("bar timestamps are stored in the one canonical form (UTC, whole seconds, Z) whatever form the vendor sends, because the reader compares ts as strings", async (t) => {
+  mockAlpaca(t, {
+    AAPL: {
+      bars: [bar("2025-09-02T13:30:00.000Z"), bar("2025-09-02T13:35:00Z", 101), bar("2025-09-02T09:40:00-04:00", 102)],
+      next_page_token: null,
+    },
+  });
+
+  const { bars, errors } = await fetchIntradayBars(config, { tickers: ["AAPL"], from: FROM, to: TO });
+
+  assert.equal(errors.length, 0);
+  assert.deepEqual(bars.map((b) => b.ts), ["2025-09-02T13:30:00Z", "2025-09-02T13:35:00Z", "2025-09-02T13:40:00Z"]);
 });
 
 test("an empty range is not an error: no bars, no errors", async (t) => {

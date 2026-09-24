@@ -18,7 +18,7 @@
 
 CREATE TABLE price_bars_intraday (
   ticker       TEXT NOT NULL,
-  ts           TEXT NOT NULL,   -- ISO 8601 UTC timestamp of the bar's own close, not a calendar day
+  ts           TEXT NOT NULL,   -- ISO 8601 UTC timestamp of the bar's OPEN (start) time, canonical YYYY-MM-DDTHH:MM:SSZ, not a calendar day; visible to readers only once the bar has closed (ts + 5 min), see shared/intraday_availability.js
   open         REAL NOT NULL,
   high         REAL NOT NULL,
   low          REAL NOT NULL,

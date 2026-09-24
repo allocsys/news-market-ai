@@ -16,6 +16,7 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 import { assertNoPriceBarLookahead, priceBarCutoffDate } from "../shared/price_availability.js";
+import { assertNoIntradayLookahead, intradayBarAvailableAt, intradayCutoffTs } from "../shared/intraday_availability.js";
 
 /** Rows per D1 round trip in getNewsItemsInRange. A response-size bound only; the function pages until the range is exhausted. */
 export const NEWS_RANGE_PAGE_SIZE = 500;
@@ -370,6 +371,69 @@ export async function getPriceBarsAsOf(db, { ticker, asOf, limit = 200 }) {
 
   assertNoPriceBarLookahead(results, asOf);
   return results;
+}
+
+/**
+ * Point-in-time read (plan.md finding G step 3): the most recent intraday bar
+ * for `ticker` that had FULLY CLOSED at `asOf`, or `null` when there is none.
+ * The finer-grained sibling of getPriceBarsAsOf, which cannot see anything
+ * newer than the previous UTC day's close: two decisions on the same day get
+ * the same daily price there, so a same-day replacement trade books 0 P&L.
+ * This is what lets them see different, real prices.
+ *
+ * Same required-asOf, no-"give me everything" convention as every read here
+ * (LookaheadViolationError on a missing or unparseable asOf). Visible means
+ * `ts + 5 minutes <= asOf`: `ts` is the bar's OPEN time, and its close does not
+ * exist until the interval ends (the rule and its rationale live in
+ * shared/intraday_availability.js). The row returned is re-checked against the
+ * same rule (assertNoIntradayLookahead) before it leaves this function.
+ *
+ * Returns `{ticker, ts, open, high, low, close, volume, source, availableAt}`;
+ * a fill at `asOf` is `close`, and `availableAt` (canonical ts + 5 minutes) is
+ * when that close became knowable, for logging.
+ *
+ * `maxAgeMs` (optional): return `null` instead of a bar whose close became
+ * visible more than this long before `asOf`. Without it the newest visible bar
+ * is returned however old it is (a weekend, an overnight gap, or data that has
+ * aged out of the rolling retention window would all surface a days-old price
+ * as if it were current); a caller that must not fill on a stale price passes
+ * a bound and falls back (Adopted Pattern #11: log the fallback loudly).
+ *
+ * `null` means "no usable intraday bar", never "price is zero" or "use the
+ * previous value": nothing is interpolated or invented (Pattern #9).
+ */
+export async function getIntradayPriceAsOf(db, { ticker, asOf, maxAgeMs } = {}) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getIntradayPriceAsOf requires an explicit asOf timestamp");
+  }
+  if (!ticker) {
+    throw new Error("getIntradayPriceAsOf requires a ticker");
+  }
+  if (maxAgeMs !== undefined && maxAgeMs !== null && !(Number.isFinite(maxAgeMs) && maxAgeMs >= 0)) {
+    throw new Error(`getIntradayPriceAsOf: maxAgeMs must be a non-negative finite number, got ${maxAgeMs}`);
+  }
+  const cutoff = intradayCutoffTs(asOf);
+
+  const row = await db
+    .prepare(
+      `SELECT ticker, ts, open, high, low, close, volume, source
+       FROM price_bars_intraday
+       WHERE ticker = ? AND ts <= ?
+       ORDER BY ts DESC
+       LIMIT 1`
+    )
+    .bind(ticker, cutoff)
+    .first();
+  if (!row) return null;
+
+  assertNoIntradayLookahead([row], asOf);
+
+  const availableAt = intradayBarAvailableAt(row.ts);
+  if (maxAgeMs !== undefined && maxAgeMs !== null) {
+    const ageMs = Date.parse(asOf) - Date.parse(availableAt);
+    if (ageMs > maxAgeMs) return null;
+  }
+  return { ...row, availableAt };
 }
 
 /**
