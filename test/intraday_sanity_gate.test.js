@@ -227,6 +227,8 @@ function tickConfig() {
     retryBaseDelayMs: 1,
     alpacaMinRequestIntervalMs: 0,
     intradayBackfillLookbackDays: 1,
+    // Pinned: default is now 3, but these tests read the single-day result shape (.date).
+    intradayBackfillBatchDays: 1,
   };
 }
 
