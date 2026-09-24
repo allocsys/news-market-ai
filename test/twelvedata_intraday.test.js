@@ -266,6 +266,28 @@ test("a 404 (no data in the window, e.g. a weekend) is an empty result, not an e
   assert.equal(await currentCount(db, { vendor: "twelvedata" }), 1);
 });
 
+test("a soft 404 ({status:\"error\", code:404}) riding along with an HTTP 200 is also an empty window, not a failure (a failed day is re-claimed every tick), and still costs its cap unit", async (t) => {
+  const calls = mockTwelveData(t, [{ status: 200, body: { code: 404, message: "Requested data could not be found.", status: "error" } }]);
+
+  const { bars, errors, db } = await run();
+
+  assert.equal(calls.length, 1, "not retried");
+  assert.equal(bars.length, 0);
+  assert.equal(errors.length, 0);
+  assert.equal(await currentCount(db, { vendor: "twelvedata" }), 1);
+});
+
+test("a soft 404 on a LATER page ends the walk and keeps the bars from the pages already fetched", async (t) => {
+  const start = "2025-09-01T00:00:00Z";
+  const calls = mockTwelveData(t, [page(tdRows(start, 5000)), { status: 200, body: { code: 404, message: "Requested data could not be found.", status: "error" } }]);
+
+  const { bars, errors } = await run({}, { from: start, to: "2025-10-01T00:00:00Z" });
+
+  assert.equal(calls.length, 2);
+  assert.equal(errors.length, 0);
+  assert.equal(bars.length, 5000);
+});
+
 test("an empty `values` array with a 200 is also just an empty result", async (t) => {
   mockTwelveData(t, [page([])]);
   const { bars, errors } = await run();
