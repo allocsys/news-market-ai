@@ -180,6 +180,68 @@ export async function claimNextBackfillDay(db, { ticker, now = new Date().toISOS
   return { ticker: row.ticker, date: row.date, vendor: row.vendor };
 }
 
+/**
+ * Batched sibling of claimNextBackfillDay (plan.md finding G follow-up,
+ * "batch date-range fetching to speed up backfill", deferred design from
+ * the 2026-09-24 session -- see plan.md/checkpoint for the full tradeoff
+ * writeup): claims up to `batchSize` eligible days for `ticker`, oldest
+ * first, same pending/failed/stale-in_progress eligibility rule as
+ * claimNextBackfillDay, and marks them all 'in_progress' in one batched
+ * UPDATE (one db.batch() call, not one .run() per claimed day).
+ *
+ * The claimed set is trimmed to the MAXIMAL CONTIGUOUS run of calendar days
+ * starting at the oldest eligible row (stops at the first gap) -- e.g. if
+ * 01-05 and 01-06 are pending but 01-07 is already 'done' and 01-08 is
+ * pending again, a batchSize=4 claim returns only [01-05, 01-06], not
+ * [01-05, 01-06, 01-08, ...]. This is what lets the caller (see
+ * runIntradayBackfillTick) fetch the WHOLE claimed range in one vendor
+ * request (fromDate 00:00Z to (lastDate+1) 00:00Z): a fetch spanning a gap
+ * would silently re-fetch/re-write an already-'done' day's bars for free
+ * (harmless -- writes are upserts) but would make "how many days did this
+ * request actually cover" ambiguous for logging/quota accounting, so
+ * contiguity is enforced instead of relying on the harmless case.
+ *
+ * `batchSize = 1` (config.js's default -- INTRADAY_BACKFILL_BATCH_DAYS
+ * unset) makes this claim exactly one day, functionally identical to
+ * claimNextBackfillDay; runIntradayBackfillTick special-cases a
+ * single-day claim to produce the exact pre-batching result shape (see its
+ * own comment), so existing callers/dashboards/logs are unaffected until an
+ * operator explicitly opts into a wider batch.
+ *
+ * TRADEOFF vs claimNextBackfillDay (accepted, see plan.md): a batch fetch
+ * failing (one VendorError) fails every day in the batch at once, not just
+ * one, and a crashed invocation mid-batch leaves up to batchSize days
+ * 'in_progress' instead of just one -- larger batchSize trades failure
+ * isolation and crash blast-radius for fewer, larger vendor requests and a
+ * faster backfill. Keep batchSize modest (5-7, roughly one trading week)
+ * rather than the full lookback window.
+ */
+export async function claimNextBackfillBatch(db, { ticker, batchSize = 1, now = new Date().toISOString(), staleAfterMs = 30 * 60_000 } = {}) {
+  const size = Number.isFinite(Number(batchSize)) && Number(batchSize) >= 1 ? Math.floor(Number(batchSize)) : 1;
+  const staleCutoff = new Date(Date.parse(now) - staleAfterMs).toISOString();
+  const { results: rows } = await db
+    .prepare(
+      `SELECT ticker, date, vendor, status FROM intraday_backfill_status
+       WHERE ticker = ?
+         AND (status IN ('pending', 'failed') OR (status = 'in_progress' AND last_attempt < ?))
+       ORDER BY date ASC LIMIT ?`
+    )
+    .bind(ticker, staleCutoff, size)
+    .all();
+  if (rows.length === 0) return [];
+
+  const claimed = [rows[0]];
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].date !== addDays(claimed[claimed.length - 1].date, 1)) break;
+    claimed.push(rows[i]);
+  }
+
+  const stmt = db.prepare(`UPDATE intraday_backfill_status SET status = 'in_progress', last_attempt = ?, error = NULL WHERE ticker = ? AND date = ?`);
+  await db.batch(claimed.map((row) => stmt.bind(now, row.ticker, row.date)));
+
+  return claimed.map((row) => ({ ticker: row.ticker, date: row.date, vendor: row.vendor }));
+}
+
 // `note` (normally null) is written to the row's `error` column so a day that
 // finished but had bars dropped by the write-time sanity gate
 // (shared/intraday_sanity.js) is distinguishable from a clean one when auditing
@@ -196,10 +258,17 @@ async function markBackfillFailed(db, { ticker, date, error, now = new Date().to
     .run();
 }
 
-/** Fetches one (ticker, date)'s bars from the row's own vendor, [date 00:00Z, date+1 00:00Z). Throws a VendorError on failure (propagated to the caller, which marks the row failed). */
-async function fetchClaimedDay(config, db, { ticker, date, vendor }) {
-  const from = `${date}T00:00:00Z`;
-  const to = `${addDays(date, 1)}T00:00:00Z`;
+/**
+ * Fetches one ticker's bars from `vendor` for [fromDate 00:00Z,
+ * (toDate+1) 00:00Z) -- fromDate === toDate for a single claimed day
+ * (fetchClaimedDay below), or a wider inclusive range for a batched claim
+ * (fetchClaimedBatch below, one vendor request for the whole contiguous
+ * batch instead of one per day). Throws a VendorError on failure
+ * (propagated to the caller, which marks the row(s) failed).
+ */
+async function fetchIntradayRange(config, { ticker, vendor, fromDate, toDate }) {
+  const from = `${fromDate}T00:00:00Z`;
+  const to = `${addDays(toDate, 1)}T00:00:00Z`;
   const fetchBars = vendor === "tiingo_fx_intraday" ? fetchTiingoFxIntradayBars : fetchAlpacaIntradayBars;
 
   const { bars, errors } = await fetchBars(config, { tickers: [ticker], from, to });
@@ -207,11 +276,32 @@ async function fetchClaimedDay(config, db, { ticker, date, vendor }) {
     // fetchIntradayBars' contract collects per-ticker errors rather than
     // throwing (same shape as tiingo.js/alpaca.js); with exactly one ticker
     // requested here, any entry in `errors` is THIS ticker's failure, so
-    // re-throw it to let the caller's try/catch mark the row failed the same
-    // way an actual thrown VendorError would.
+    // re-throw it to let the caller's try/catch mark the row(s) failed the
+    // same way an actual thrown VendorError would.
     throw errors[0].error;
   }
   return bars;
+}
+
+/** Single claimed day (claimNextBackfillDay) -- see fetchIntradayRange. */
+async function fetchClaimedDay(config, db, { ticker, date, vendor }) {
+  return fetchIntradayRange(config, { ticker, vendor, fromDate: date, toDate: date });
+}
+
+/** Batched claim (claimNextBackfillBatch) -- one request spanning `dates[0]` through `dates[dates.length - 1]` inclusive; see fetchIntradayRange. `dates` must be the contiguous, date-ascending array claimNextBackfillBatch returns. */
+async function fetchClaimedBatch(config, db, { ticker, vendor, dates }) {
+  return fetchIntradayRange(config, { ticker, vendor, fromDate: dates[0], toDate: dates[dates.length - 1] });
+}
+
+/** Groups bars or rejected-bar entries (both carry a `ts`) by UTC calendar date (`ts.slice(0, 10)`) -- used to split a batched fetch's combined bars/rejections back out per claimed day so each day still gets its own accurate 'done' note. */
+function groupByDate(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const day = row.ts.slice(0, 10);
+    if (!map.has(day)) map.set(day, []);
+    map.get(day).push(row);
+  }
+  return map;
 }
 
 /**
