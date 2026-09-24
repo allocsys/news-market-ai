@@ -477,7 +477,8 @@ export default {
     // on the first tick of the 03:00 UTC hour only (minutes === 0, since
     // the cron is */15 -- 03:00, not 03:15/03:30/03:45), an arbitrary
     // low-traffic-hour choice, not tied to any specific market schedule.
-    if (now.getUTCHours() === 3 && now.getUTCMinutes() === 0) {
+    const nowDate = new Date(asOf);
+    if (nowDate.getUTCHours() === 3 && nowDate.getUTCMinutes() === 0) {
       try {
         await env.BACKFILL.send({ type: "intraday_purge_tick", asOf });
       } catch (err) {
