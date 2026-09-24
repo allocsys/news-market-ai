@@ -448,7 +448,7 @@ original reasoning in git history:**
   same-day replacement — a real close, but a fabricated PnL of zero, not the
   position's actual economics.
 
-  **Proper fix (not yet started, needs an owner decision first — see
+  **Proper fix (IMPLEMENTED, steps 1–6 all merged 2026-09-24 — see STATUS below; it originally needed an owner decision, see
   blocker below):** replay REAL intraday fills instead of the previous day's
   daily close for entry/exit pricing, so a same-day replace prices both legs
   off what the market was actually doing at each news item's own timestamp,
@@ -547,8 +547,33 @@ original reasoning in git history:**
      real backtest run covers — cost/rate-limit sizing depends on the vendor
      chosen in the blocker above, so this step's scope isn't fixed yet.
 
-  Not started. Needs the owner's data-source decision before step 1's
-  migration is written.
+  **STATUS (2026-09-24): ALL 6 STEPS DONE, each its own PR, squash-merged.**
+  Steps 1–4 (schema, adapters, `getIntradayPriceAsOf`, pipeline/exit_check
+  wiring) landed in PRs #100–109 (schema live since #106/#107; see git
+  history for the per-PR mapping). Step 5 (`test/finding_g_intraday_pnl.test.js`:
+  same-day replacement PnL, lookahead leak-check, fallback-to-daily,
+  `SKIPPED_NO_PRICE_DATA` pin) is PR #110 (`b79269b`). Step 6 is PR #111
+  (`4c0af21`): `src/ingestion/intraday_backfill.js` (cron-driven, per-ticker
+  vendor routing, seeds `intradayBackfillLookbackDays` = 90 only for tickers
+  with no existing status rows, going-forward "today" row each tick, stale
+  `in_progress` reclaim after 30 min, per-ticker failure isolation),
+  `src/ingestion/intraday_purge.js` (retention `intradayRetentionDays` = 180;
+  the WHOLE purge is skipped while any backtest is queued/running rather
+  than guessing which rows are safe), `ingest` Worker BACKFILL-queue types
+  `intraday_backfill_tick`/`intraday_purge_tick`, `scheduled()` fan-out
+  (backfill tick every */15, purge tick once/day ~03:00 UTC), and a read-only
+  in practice `SIM_DB` binding on `wrangler.ingest.toml` for the backtest check.
+  Process note: `insertPriceBarsIntraday` (`inputs_view.js`, commit `7dbdc1e`)
+  was pushed directly to `main` by mistake, audited and left in place (additive,
+  no callers at the time), documented in PR #111.
+  **Still open after G:** no dashboard view of `intraday_backfill_status`; no
+  re-seed path if the lookback window is later widened for an already-seeded
+  ticker; the 03:00 UTC purge hour is arbitrary; first live backfill ticks and
+  the `ingest` Worker's live `SIM_DB` binding not yet verified in production;
+  step F's first clean backtest predates intraday pricing.
+  _(Original status when written: not started; needed the owner's data-source
+  decision before step 1's
+  migration was written.)_
 
 ### Other remaining work
 1. **Live verification** (not yet observed): a real ANALYZE crash-and-retry,
