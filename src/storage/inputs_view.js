@@ -338,6 +338,37 @@ export async function insertPriceBars(db, bars) {
 }
 
 /**
+ * Write path for intraday bars (ingestion/sources/alpaca.js,
+ * ingestion/sources/twelvedata.js -- plan.md finding G, step 6). Same
+ * batched-upsert shape as insertPriceBars, but keyed on (ticker, ts) rather
+ * than (ticker, date): a bar for a given 5-minute window should overwrite on
+ * a re-fetch (e.g. a retried backfill day), never duplicate. One db.batch()
+ * call for the whole array, same one-subrequest-per-call reasoning as every
+ * other batched insert in this file (insertPriceBars/insertNewsItems/
+ * insertFundamentalFacts) -- a single backfill day is at most ~288 5-minute
+ * bars (24h) or ~78 (one US equity session), so callers do not need to chunk
+ * this themselves the way NEWS_ITEM_INSERT_CHUNK_SIZE requires for news.
+ * No-op on an empty array (mirrors insertPriceBars).
+ */
+export async function insertPriceBarsIntraday(db, bars) {
+  if (bars.length === 0) return;
+
+  const stmt = db.prepare(
+    `INSERT INTO price_bars_intraday (ticker, ts, open, high, low, close, volume, source, ingested_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(ticker, ts) DO UPDATE SET
+       open = excluded.open, high = excluded.high, low = excluded.low,
+       close = excluded.close, volume = excluded.volume,
+       source = excluded.source, ingested_at = excluded.ingested_at`
+  );
+
+  const ingestedAt = new Date().toISOString();
+  const batch = bars.map((bar) => stmt.bind(bar.ticker, bar.ts, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source, ingestedAt));
+
+  await db.batch(batch);
+}
+
+/**
  * Point-in-time read: the most recent bars for `ticker` that are VISIBLE at
  * `asOf`, most recent first. Same required-asOf, no-"give me everything"
  * convention as getNewsAsOf and getDecisionMemoryAsOf (Backtesting Integrity,
