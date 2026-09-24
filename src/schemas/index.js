@@ -40,8 +40,10 @@ export const PriceBar = z.object({
 // Intraday OHLCV bar for migrations/inputs/0002_price_bars_intraday.sql,
 // produced by ingestion/sources/alpaca.js and ingestion/sources/twelvedata.js
 // and validated by market_data_validator.js#validatePriceBarIntraday. `ts` is
-// the bar's own close timestamp (ISO8601 UTC), NOT a calendar day -- that is
-// what distinguishes this from PriceBar above, which is daily-only. See
+// the bar's own OPEN (start) time (ISO8601 UTC, canonical `YYYY-MM-DDTHH:MM:SSZ`,
+// see shared/intraday_availability.js), NOT a calendar day -- that is what
+// distinguishes this from PriceBar above, which is daily-only. The bar is only
+// visible to a reader once it has fully closed (ts + 5 minutes). See
 // plan.md finding G: this exists so getIntradayPriceAsOf (step 3) can resolve
 // same-day replacement trades against a real fill instead of one shared daily
 // close.
