@@ -296,6 +296,18 @@ export function loadConfig(env) {
     // window is 90 days, so 4-6 months is comfortable headroom" on the
     // retention side); this is the backfill-depth side of that same sizing.
     intradayBackfillLookbackDays: Number(env.INTRADAY_BACKFILL_LOOKBACK_DAYS) || 90,
+    // How many consecutive days runIntradayBackfillTick claims (and fetches
+    // in ONE vendor request) per ticker per tick -- see
+    // intraday_backfill.js#claimNextBackfillBatch's header for the full
+    // design writeup (2026-09-24 session: batching was motivated by backfill
+    // SPEED, not rate-limit avoidance -- neither live vendor is anywhere
+    // near its published limit). Default 1 (== claimNextBackfillDay's
+    // original one-day-per-tick behaviour, byte-for-byte) so this is purely
+    // opt-in: an operator raises it (5-7, i.e. up to one trading week, is
+    // the suggested range) via env var once ready to trade some failure
+    // isolation/crash blast-radius for a faster backfill; unset changes
+    // nothing.
+    intradayBackfillBatchDays: Number(env.INTRADAY_BACKFILL_BATCH_DAYS) || 1,
     // Rolling retention purge (ingestion/intraday_purge.js) -- rows older
     // than this (by `ts`) are deleted on a schedule, gated on no active
     // backtest (see that file's header). 180 (~6mo) is the upper end of the
