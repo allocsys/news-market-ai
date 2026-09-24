@@ -41,6 +41,22 @@ export async function seedBar(inputs, { ticker, date, close, volume = 0 }) {
   await insertPriceBar(inputs, { ticker, date, open: close, high: close, low: close, close, volume, source: "test" });
 }
 
+/**
+ * Seeds one flat intraday bar (open=high=low=close) directly into
+ * price_bars_intraday -- there is no insertIntradayPriceBar in
+ * inputs_view.js yet (the writer is plan.md finding G step 6, not built),
+ * same raw-SQL convention test/intraday_pointintime.test.js's own `putBar`
+ * helper already uses. `ts` is the bar's OPEN time (canonical ISO, e.g.
+ * "2026-01-15T13:30:00Z"); the bar becomes visible at ts + 5 minutes (see
+ * shared/intraday_availability.js).
+ */
+export async function seedIntradayBar(inputs, { ticker, ts, close, volume = 0, source = "alpaca" }) {
+  await inputs
+    .prepare("INSERT INTO price_bars_intraday (ticker, ts, open, high, low, close, volume, source, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(ticker, ts, close, close, close, close, volume, source, "2026-01-01T00:00:00Z")
+    .run();
+}
+
 /** All rows of a table in the state DB, for assertions. */
 export async function stateRows(stateDb, table, orderBy = "rowid") {
   const { results } = await stateDb.prepare(`SELECT * FROM ${table} ORDER BY ${orderBy}`).all();

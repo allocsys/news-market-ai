@@ -40,9 +40,11 @@
 import { SubrequestBudgetExhaustedError } from "../shared/errors.js";
 
 // What one unit is assumed to cost before one has been observed.
+// item/exits totals include Finding G step 4's resolveCurrentPrice (price_resolution.js), which adds one
+// extra D1 read (the intraday lookup) ahead of the pre-existing daily-close read on both call sites.
 const DEFAULT_ESTIMATES = {
-  item: { external: 8, total: 27 },
-  exits: { external: 2, total: 12 },
+  item: { external: 8, total: 28 },
+  exits: { external: 2, total: 13 },
   score: { external: 0, total: 25 },
 };
 

@@ -11,16 +11,19 @@
 // IS NULL` guard already makes re-running this function harmless/idempotent
 // on a position that already closed).
 //
-// HONEST SCOPE: currentPrice comes from inputs_view.js#getPriceBarsAsOf,
-// which reads the price_bars table -- populated by Tiingo ingestion (plan.md
-// "Price data sources"; yfinance was dropped 2026-09-20 after Yahoo 429'd
-// every Workers-egress call, Tiingo has been the live bar source since
-// 2026-09-21). Stop-loss/take-profit exits can fire for any ticker Tiingo
-// has backfilled bars for; a ticker with no bars yet still falls back to
-// evaluateExit's null-price handling and only the time-based exit can
-// trigger for it -- an honest per-ticker degradation, not a blanket one.
+// HONEST SCOPE: currentPrice comes from graph/price_resolution.js#resolveCurrentPrice
+// (plan.md finding G step 4) -- the intraday reader (price_bars_intraday,
+// Alpaca/Twelve Data) when a bar is visible at `asOf`, else the previous UTC
+// day's daily close (price_bars, Tiingo-populated; yfinance was dropped
+// 2026-09-20 after Yahoo 429'd every Workers-egress call, Tiingo has been the
+// live daily bar source since 2026-09-21) -- logged whenever the daily
+// fallback is used (Adopted Pattern #11). Stop-loss/take-profit exits can
+// fire for any ticker either source has bars for; a ticker with neither
+// still falls back to evaluateExit's null-price handling and only the
+// time-based exit can trigger for it -- an honest per-ticker degradation,
+// not a blanket one.
 
-import { getPriceBarsAsOf } from "../storage/inputs_view.js";
+import { resolveCurrentPrice } from "./price_resolution.js";
 import { evaluateExit } from "../agents/risk_mgmt/exit.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
@@ -44,8 +47,12 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
   const closed = [];
 
   for (const position of openPositions) {
-    const bars = await getPriceBarsAsOf(inputs, { ticker: position.ticker, asOf, limit: 1 });
-    const currentPrice = bars[0]?.close ?? null;
+    // Finding G step 4: intraday-first, daily-close fallback (see
+    // graph/price_resolution.js) -- same swap as pipeline.js's
+    // portfolio_checked stage, so a stop-loss/take-profit check made later
+    // the same day a position opened sees a real, current price rather than
+    // the previous day's stale close.
+    const { price: currentPrice } = await resolveCurrentPrice(inputs, { ticker: position.ticker, asOf });
 
     const exit = evaluateExit(position, {
       currentPrice,
