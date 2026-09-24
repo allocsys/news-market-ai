@@ -99,6 +99,12 @@ function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/** A Twelve Data price field (a numeric string) as a number, or NaN when it is missing: Number(null) and Number("") are 0, which must never pass for a real price. */
+function priceField(value) {
+  if (value === null || value === undefined || value === "") return NaN;
+  return Number(value);
+}
+
 function toTwelveDataSymbol(ticker) {
   const symbol = TWELVE_DATA_SYMBOL_MAP[String(ticker).toUpperCase()];
   if (!symbol) {
@@ -217,10 +223,10 @@ async function fetchTickerBars(config, ticker, { from, to }, { throttle, db } = 
       const ts = row?.datetime ? fromTwelveDataDateTime(row.datetime) : "";
       if (!ts) continue;
 
-      const open = Number(row.open);
-      const high = Number(row.high);
-      const low = Number(row.low);
-      const close = Number(row.close);
+      const open = priceField(row.open);
+      const high = priceField(row.high);
+      const low = priceField(row.low);
+      const close = priceField(row.close);
       // Twelve Data returns OHLCV as strings; a null/unparseable field means
       // the vendor could not compute the bar: skip it rather than store
       // made-up numbers (same convention as alpaca.js/tiingo.js).
