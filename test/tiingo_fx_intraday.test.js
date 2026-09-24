@@ -127,7 +127,7 @@ test("a row with a null/unparseable price, or no date, is skipped rather than st
 });
 
 test("a row outside [from, to) is filtered out even though the vendor returned it", async (t) => {
-  mockTiingoFx(t, [{ body: [...fxRows("2025-09-01T23:55:00Z", 2), ...fxRows("2025-09-02T13:30:00Z", 1), ...fxRows("2025-09-03T00:00:00Z", 1)] }]);
+  mockTiingoFx(t, [{ body: [...fxRows("2025-09-01T23:50:00Z", 2), ...fxRows("2025-09-02T13:30:00Z", 1), ...fxRows("2025-09-03T00:00:00Z", 1)] }]);
   const { bars } = await run();
   assert.deepEqual(bars.map((b) => b.ts), ["2025-09-02T13:30:00Z"]);
 });
