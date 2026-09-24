@@ -1,6 +1,6 @@
 # News → Market Analysis → Trade Signal Pipeline
 
-_Trimmed 2026-09-24 (fourth pass; ~70% shorter). Per-PR narration, incident
+_Trimmed 2026-09-24 (fourth pass). Per-PR narration, incident
 logs and vendor research live in git history (`git log -p plan.md`). Labels
 that code comments reference are unchanged: "Adopted Pattern #N", "Backtesting
 Integrity point N", "Step N", "Design: environments", "Engine ports",
@@ -117,11 +117,11 @@ backtest-worker.js     # `backtest`: BACKTEST consumer
 ingestion/             # Finnhub, GDELT (unwired), EDGAR, RSS, scrape, Tiingo, Alpaca adapters
   intraday_backfill.js # cron-driven gradual intraday backfill
   intraday_purge.js    # retention purge (skipped while a backtest runs)
-  errors.js, date_window.js, market_data_validator.js
+  errors.js, date_windows.js, market_data_validator.js
 shared/                # price_availability.js, intraday_availability.js, intraday_sanity.js, errors.js
 storage/               # run_store.js, inputs_view.js, sim_registry.js
 llm/  agents/  graph/  backtest/  dashboard/
-migrations/            # inputs/, state/, sim/  (repo root)
+migrations/            # inputs/, state/, sim/
 config/  tests/
 ```
 
