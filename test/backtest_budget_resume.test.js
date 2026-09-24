@@ -79,7 +79,10 @@ test("a walk paused by the budget and resumed part after part leaves EXACTLY wha
   assert.ok(baseline.positions.length > 0);
 
   // Limits chosen to force pauses between units (large), inside a unit (small), and everything in between.
-  for (const totalLimit of [8, 15, 30, 60, 120]) {
+  // +1 vs. the original [8, 15, 30, 60, 120]: Finding G step 4's resolveCurrentPrice (price_resolution.js)
+  // adds one extra D1 read (intraday lookup before the daily-close fallback) to the portfolio_checked stage,
+  // so a limit that was an exact fit before now overflows by exactly one charge and can never complete.
+  for (const totalLimit of [9, 16, 31, 61, 121]) {
     const ctx = await seeded();
     const parts = await walkInParts(ctx, { totalLimit });
     assert.deepEqual(await outcomeOf(ctx), baseline, `limit ${totalLimit}: same positions and decisions as the uninterrupted walk`);
@@ -91,7 +94,7 @@ test("a small budget pauses INSIDE an item ('exhausted') and the next part resum
   const ctx = await seeded();
   const modelCalls = [];
   const cfg = { ...config(), fakeModel: async (prompt, opts) => { modelCalls.push(prompt.slice(0, 30)); return makeFakeModel()(prompt, opts); } };
-  const parts = await walkInParts(ctx, { totalLimit: 8, cfg });
+  const parts = await walkInParts(ctx, { totalLimit: 9, cfg }); // was 8 -- see the +1 note on the totalLimit sweep above
   assert.ok(parts.some((p) => p.reason === "exhausted"), "at least one mid-item pause");
 
   const baselineCalls = [];
@@ -102,7 +105,7 @@ test("a small budget pauses INSIDE an item ('exhausted') and the next part resum
 
 test("the exit check never throws mid-phase: a budget smaller than its estimate still completes the walk (exits run unenforced)", async () => {
   const ctx = await seeded();
-  const parts = await walkInParts(ctx, { totalLimit: 8 }); // the exits estimate is 12, so the gate defers them a part but never cuts them off
+  const parts = await walkInParts(ctx, { totalLimit: 9 }); // was 8 (see the +1 note above); the exits estimate is 13 post-step-4, so the gate defers them a part but never cuts them off
   assert.equal(parts.at(-1).complete, true);
   assert.ok(parts.every((p) => p.complete || p.cursor));
   const baselineCtx = await seeded();
@@ -112,7 +115,7 @@ test("the exit check never throws mid-phase: a budget smaller than its estimate 
 
 test("every part makes progress: each non-final part's cursor is strictly ahead of the previous one", async () => {
   const ctx = await seeded();
-  const parts = await walkInParts(ctx, { totalLimit: 15 });
+  const parts = await walkInParts(ctx, { totalLimit: 16 }); // was 15 -- see the +1 note on the totalLimit sweep above
   const key = (c) => JSON.stringify([c.day, c.exits ? 1 : 0, c.ticker, c.after?.publishedAt ?? "", c.after?.id ?? ""]);
   const keys = parts.filter((p) => !p.complete).map((p) => key(p.cursor));
   assert.equal(new Set(keys).size, keys.length, "no two parts paused at the same place");
