@@ -135,6 +135,34 @@ test("an empty range is not an error: no bars, no errors", async (t) => {
   assert.equal(errors.length, 0);
 });
 
+test("`{bars: null}` (Alpaca's answer for a weekend, holiday or no-IEX-trades day) is an empty day: no bars, NO error, so the backfill marks the day done instead of failed and re-claiming it forever", async (t) => {
+  mockAlpaca(t, { AAPL: { bars: null, next_page_token: null }, MSFT: { bars: [bar("2025-09-02T13:30:00Z")], next_page_token: null } });
+  const { bars, errors, requests } = await fetchIntradayBars(config, { tickers: ["AAPL", "MSFT"], from: FROM, to: TO });
+  assert.equal(errors.length, 0);
+  assert.equal(requests, 2);
+  assert.deepEqual(bars.map((b) => b.ticker), ["MSFT"]);
+});
+
+test("`{bars: null}` on a paginated response ends cleanly: bars from earlier pages are kept, no error", async (t) => {
+  mockAlpaca(t, {
+    AAPL: [
+      { bars: [bar("2025-09-02T13:30:00Z")], next_page_token: "tok-1" },
+      { bars: null, next_page_token: null },
+    ],
+  });
+  const { bars, errors } = await fetchIntradayBars(config, { tickers: ["AAPL"], from: FROM, to: TO });
+  assert.equal(errors.length, 0);
+  assert.deepEqual(bars.map((b) => b.ts), ["2025-09-02T13:30:00Z"]);
+});
+
+test("only an explicit `bars: null` is an empty day: a missing `bars` key or a non-array value is still a shape error", async (t) => {
+  mockAlpaca(t, { AAPL: { next_page_token: null }, MSFT: { bars: {}, next_page_token: null }, TSLA: { bars: "none", next_page_token: null } });
+  const { bars, errors } = await fetchIntradayBars(config, { tickers: ["AAPL", "MSFT", "TSLA"], from: FROM, to: TO });
+  assert.equal(bars.length, 0);
+  assert.deepEqual(errors.map((e) => e.ticker), ["AAPL", "MSFT", "TSLA"]);
+  for (const e of errors) assert.match(e.error.message, /unexpected response shape/);
+});
+
 test("a bar with a null OHLC field, or no timestamp, is skipped rather than stored; a missing volume becomes 0", async (t) => {
   mockAlpaca(t, {
     AAPL: {
