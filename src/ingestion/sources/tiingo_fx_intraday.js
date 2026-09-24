@@ -60,6 +60,7 @@ import { VendorError } from "../../shared/errors.js";
 import { createThrottle } from "../../shared/throttle.js";
 import { fetchWithTimeout } from "../../shared/fetch_with_timeout.js";
 import { withRetry } from "../../shared/retry.js";
+import { canonicalIntradayTs } from "../../shared/intraday_availability.js";
 
 const VENDOR = "tiingo_fx_intraday";
 const DEFAULT_API_BASE = "https://api.tiingo.com";
@@ -146,7 +147,8 @@ async function fetchTickerBars(config, ticker, { from, to }, { throttle } = {}) 
   const toMs = Date.parse(to);
   const bars = [];
   for (const row of rows) {
-    const ts = row?.date ? new Date(row.date).toISOString() : "";
+    // Stored in one canonical form (UTC, whole seconds, "Z") because getIntradayPriceAsOf compares ts as strings -- see shared/intraday_availability.js. Tiingo's own `date` field carries milliseconds ("...T13:30:00.000Z"); "...:00.000Z" sorts BEFORE "...:00Z", so leaving it un-canonicalized would silently misplace the boundary bar in every string comparison downstream.
+    const ts = row?.date ? canonicalIntradayTs(String(row.date)) : "";
     if (!ts) continue;
     const tsMs = Date.parse(ts);
     // Belt-and-suspenders window filter, same convention as tiingo.js's
