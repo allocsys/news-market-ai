@@ -1,11 +1,24 @@
 # News → Market Analysis → Trade Signal Pipeline
 
-_Trimmed 2026-09-24 (fourth pass). Per-PR narration, incident
+_Trimmed 2026-09-25 (fifth pass). Per-PR narration, incident
 logs and vendor research live in git history (`git log -p plan.md`). Labels
 that code comments reference are unchanged: "Adopted Pattern #N", "Backtesting
 Integrity point N", "Step N", "Design: environments", "Engine ports",
-"Decided (2026-09-19)", "Other remaining work #N". **Start with "Current
-Status".**_
+"Decided (2026-09-19)", "Other remaining work #N". **Start with "Next To-Dos",
+then "Current Status".**
+
+## Next To-Dos (2026-09-25)
+Priority order, code-verified against current `main` (3a3bb6a):
+1. **Decide fate of ~427 pre-fix news items never analyzed** — owner decision blocked, nothing else depends on it (Other remaining work #2).
+2. **Backfill path still never enqueues ANALYZE** (`ingest-worker.js`'s `backfill` branch calls `backfillHistoricalNews` only — no `enqueueAnalyze` call) — confirms Other remaining work #3 is real, not just unchecked; every backfilled item is stored but silently unanalyzed forever.
+3. **Investigate stalled equities intraday backfill** (bars stop 2026-07-01, ~84 days pending) — Open after Finding G, item 2.
+4. **Verify `SIM_DB` purge-guard actually fires in prod** — binding and guard code are in place (`ingest-worker.js`, `wrangler.ingest.toml`), just never confirmed against a real purge run.
+5. **First clean backtest (F)** — 2 complete / 11 failed / 3 cancelled in `sim.backtest_runs` as of 2026-09-24; still unreviewed whether either complete run counts.
+6. Build `BACKTEST_DAILY_WRITE_BUDGET` (proposed 40K, not approved) if the owner signs off.
+7. Portfolio correlation/cross-asset-exposure check — still just a flat risk-budget check (`portfolio_manager.js`).
+8. Wire `debates` table write path, or drop `trade_decisions.debate_id` for real (currently always null, table already dropped).
+
+**Done since last pass, removed from backlog:** dashboard `?env=` selector (built — `src/dashboard/views/env_selector.js`, `parseEnvParam`/`resolveEnv`); #125/#126 merged 2026-09-25 (Gemini 3.5-flash fallback added, D1 news-scan bounded by date instead of ticker history, job-progress polling cut 1.5s→5s, `deleteRun` batched).
 
 ## Goal
 AI pipeline: ingest financial news → summarize → second LLM reasons about
