@@ -19,7 +19,6 @@ CREATE TABLE backtest_runs (
   status       TEXT NOT NULL,        -- 'running' | 'complete' | 'failed'
   result       TEXT,
   error        TEXT,
-  rows_written INTEGER NOT NULL DEFAULT 0,  -- meta.rows_written per run, for BACKTEST_DAILY_WRITE_BUDGET (plan.md)
   started_at   TEXT NOT NULL,
   finished_at  TEXT
 );
