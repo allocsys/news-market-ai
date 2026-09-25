@@ -12,7 +12,9 @@
 // text that client-side JS keeps live by polling
 // /dashboard/jobs/:id (src/dashboard-worker.js, which proxies backend's
 // GET /api/jobs/:id -> src/storage/jobs.js's job_progress table) every
-// 1.5s. No `jobId` (shouldn't happen from the two callers in
+// 5s (backs off to 8s on a transient fetch failure) -- kept slow on purpose
+// to bound D1 reads on the free tier for a job someone leaves the tab open
+// on. No `jobId` (shouldn't happen from the two callers in
 // src/dashboard-worker.js, but kept as a safe fallback rather than crashing
 // on a missing prop) falls back to the old static message with no polling.
 //
