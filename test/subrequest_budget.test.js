@@ -118,7 +118,7 @@ test("snapshot reports counters, the d1/kv split, limits and per-kind unit count
   b.chargeInternal("kv");
   b.chargeExternal();
   b.recordUnit("item", before);
-  assert.deepEqual(b.snapshot(), { external: 1, total: 3, kv: 1, d1: 1, externalLimit: 40, totalLimit: 60, units: { item: 1 } });
+  assert.deepEqual(b.snapshot(), { external: 1, total: 3, kv: 1, d1: 1, rowsWritten: 0, externalLimit: 40, totalLimit: 60, units: { item: 1 } });
 });
 
 // ---------------------------------------------------------------------------
