@@ -280,7 +280,6 @@ export class RunStore {
     takeProfitPct = null,
     asOf,
     exitPrice = null,
-    debateId = null,
     thesis,
     riskDecision,
     portfolioDecision = null,
@@ -344,8 +343,8 @@ export class RunStore {
 
     const insertDecision = this.db
       .prepare(
-        `INSERT INTO trade_decisions (run_id, id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, opinions, debate, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+        `INSERT INTO trade_decisions (run_id, id, ticker, as_of, thesis, risk_decision, portfolio_decision, status, opinions, debate, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?,
            (CASE
              WHEN EXISTS (
                SELECT 1 FROM positions p2
@@ -361,7 +360,7 @@ export class RunStore {
          ON CONFLICT(run_id, id) DO NOTHING`
       )
       .bind(
-        this.runId, id, ticker, asOf, debateId,
+        this.runId, id, ticker, asOf,
         JSON.stringify(thesis), JSON.stringify(riskDecision), portfolioDecision != null ? JSON.stringify(portfolioDecision) : null,
         this.runId, ticker, asOf,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
@@ -378,15 +377,15 @@ export class RunStore {
   // -------------------------------------------------------------------
 
   /** Direct insert, no risk/replace logic -- same shape as d1.js#insertTradeDecision, run_id-scoped. Prefer commitThesis for the live write path once wired in M2. */
-  async insertTradeDecision({ id, ticker, asOf, debateId = null, thesis, riskDecision, portfolioDecision, status, createdAt, opinions = null, debate = null }) {
+  async insertTradeDecision({ id, ticker, asOf, thesis, riskDecision, portfolioDecision, status, createdAt, opinions = null, debate = null }) {
     await this.db
       .prepare(
-        `INSERT INTO trade_decisions (run_id, id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO trade_decisions (run_id, id, ticker, as_of, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id, id) DO NOTHING`
       )
       .bind(
-        this.runId, id, ticker, asOf, debateId,
+        this.runId, id, ticker, asOf,
         JSON.stringify(thesis), JSON.stringify(riskDecision), portfolioDecision != null ? JSON.stringify(portfolioDecision) : null,
         status, createdAt,
         opinions != null ? JSON.stringify(opinions) : null,
@@ -653,7 +652,7 @@ export class RunStore {
 
   /** Most recent trade_decisions rows, newest first. `status`, if given, filters to that exact status ("approved"/"rejected"/...). */
   async listRecentTradeDecisions({ limit = 20, status } = {}) {
-    const cols = `id, ticker, as_of, debate_id, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate`;
+    const cols = `id, ticker, as_of, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate`;
     const { results } = status
       ? await this.db
           .prepare(`SELECT ${cols} FROM trade_decisions WHERE run_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?`)
@@ -668,7 +667,6 @@ export class RunStore {
       id: r.id,
       ticker: r.ticker,
       asOf: r.as_of,
-      debateId: r.debate_id,
       thesis: JSON.parse(r.thesis),
       riskDecision: JSON.parse(r.risk_decision),
       portfolioDecision: r.portfolio_decision ? JSON.parse(r.portfolio_decision) : null,
