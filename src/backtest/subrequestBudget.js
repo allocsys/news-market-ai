@@ -65,6 +65,14 @@ export class SubrequestBudget {
     this.total = 0;
     this.kv = 0;
     this.d1 = 0;
+    // Cumulative D1 rows actually written this invocation (SUM of every
+    // write statement's meta.changes -- run()/batch() only, never first()/
+    // all()/raw()), tracked here but NOT enforced by this class: it feeds
+    // BACKTEST_DAILY_WRITE_BUDGET (config.js), a cross-invocation, cross-run
+    // DAILY cap checked once per part by backtest-worker.js against
+    // storage/sim_registry.js#getBacktestRowsWrittenToday, not a per-
+    // invocation limit this budget itself refuses against.
+    this.rowsWritten = 0;
     this.halted = false;
     this.suspendDepth = 0;
     this.unitsCompleted = 0;
@@ -105,6 +113,15 @@ export class SubrequestBudget {
     this.total++;
     if (kind === "kv") this.kv++;
     else if (kind === "d1") this.d1++;
+  }
+
+  /**
+   * Adds `changes` (a write statement's meta.changes, may be 0) to this
+   * invocation's running rowsWritten total. Never refuses/throws -- see the
+   * rowsWritten field comment for why this counter isn't enforced here.
+   */
+  chargeRowsWritten(changes) {
+    if (Number.isFinite(changes) && changes > 0) this.rowsWritten += changes;
   }
 
   suspend() {
@@ -164,6 +181,7 @@ export class SubrequestBudget {
       total: this.total,
       kv: this.kv,
       d1: this.d1,
+      rowsWritten: this.rowsWritten,
       externalLimit: this.externalLimit,
       totalLimit: this.totalLimit,
       units: { ...this.unitCounts },
@@ -198,7 +216,10 @@ export function countedD1(db, budget) {
       },
       run: (...args) => {
         budget.chargeInternal("d1");
-        return stmt.run(...args);
+        return Promise.resolve(stmt.run(...args)).then((result) => {
+          budget.chargeRowsWritten(result?.meta?.changes ?? 0);
+          return result;
+        });
       },
       raw: (...args) => {
         budget.chargeInternal("d1");
@@ -213,7 +234,10 @@ export function countedD1(db, budget) {
     prepare: (sql) => wrapStatement(db.prepare(sql)),
     batch: (statements) => {
       budget.chargeInternal("d1");
-      return db.batch(statements.map((s) => inner.get(s) ?? s));
+      return Promise.resolve(db.batch(statements.map((s) => inner.get(s) ?? s))).then((results) => {
+        for (const r of results) budget.chargeRowsWritten(r?.meta?.changes ?? 0);
+        return results;
+      });
     },
     exec: (sql) => {
       budget.chargeInternal("d1");

@@ -47,6 +47,23 @@ import { createJobReporter } from "./storage/jobs.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
 import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
 import { SubrequestBudget, countedD1, countedKv, cooldownMemoKv } from "./backtest/subrequestBudget.js";
+import { addBacktestRunRowsWritten, getBacktestRowsWrittenToday, failBacktestRun } from "./storage/sim_registry.js";
+
+/**
+ * Whether today's cross-run D1 write total (backtest_runs.rows_written,
+ * summed by storage/sim_registry.js#getBacktestRowsWrittenToday) has already
+ * reached config.backtestDailyWriteBudget. `0` disables the check (same
+ * convention as the subrequest budget's own externalLimit/totalLimit).
+ * Unlike SubrequestBudget (per-invocation, refuses mid-work), this is a
+ * cross-invocation, cross-run DAILY cap, so it is checked at part
+ * boundaries, not per-statement -- see the two call sites below for why
+ * each exists.
+ */
+async function dailyWriteBudgetExhausted(db, config) {
+  if (!(config.backtestDailyWriteBudget > 0)) return false;
+  const writtenToday = await getBacktestRowsWrittenToday(db);
+  return writtenToday >= config.backtestDailyWriteBudget;
+}
 
 /** Per-message backtest context: SIM_DB read/write under this run's own id, INPUTS_DB read-only. Mirrors llm-worker.js's buildLiveContext shape. */
 function buildBacktestContext(env, runId) {
@@ -127,6 +144,22 @@ export default {
             message.ack();
             continue;
           }
+          // BACKTEST_DAILY_WRITE_BUDGET, continuation check (part > 1 only): a
+          // brand-new run's part 1 always gets to run (progress guarantee,
+          // same reasoning as SubrequestBudget#canStart -- there is no
+          // registry row yet to fail against, see commit message for why a
+          // pre-check there would have to duplicate runManualBacktest's own
+          // trainDays/testDays defaulting). A CONTINUATION always has an
+          // existing row (checked just above), so it is safe to refuse here
+          // before spending any more of today's write budget on it.
+          if (part > 1 && (await unenf(() => dailyWriteBudgetExhausted(runEnv.SIM_DB, config)))) {
+            const message_ = `Daily backtest write budget exhausted (BACKTEST_DAILY_WRITE_BUDGET=${config.backtestDailyWriteBudget}); resume after the next UTC day reset`;
+            console.error("backtest part refused: daily write budget exhausted", { id, part, budget: config.backtestDailyWriteBudget });
+            await failBacktestRun(runEnv.SIM_DB, { id, error: message_, finishedAt: new Date().toISOString() });
+            await createJobReporter(new RunStore(runEnv.SIM_DB, id), { id, type: "backtest" }).fail(message_);
+            message.ack();
+            continue;
+          }
           // job_progress (storage/jobs.js) is the dashboard's live percent/
           // phase display -- a SEPARATE, finer-grained record from the
           // backtest_runs registry, which runManualBacktest itself writes
@@ -154,6 +187,29 @@ export default {
             }
           );
           if (budget) console.log("backtest part finished", { id, part, status: outcome.status, reason: outcome.reason, ...budget.snapshot() });
+          // Persist this part's D1 write-row count to the registry regardless
+          // of outcome (continue/complete/failed all wrote something) -- see
+          // sim_registry.js#addBacktestRunRowsWritten. Unenforced: must not be
+          // cut in half by an already-near-limit subrequest budget, same
+          // convention as reporter.complete()/fail() below.
+          if (budget && budget.rowsWritten > 0) {
+            await unenf(() => addBacktestRunRowsWritten(runEnv.SIM_DB, { id, rows: budget.rowsWritten }));
+          }
+          if (outcome.status === "continue" && (await unenf(() => dailyWriteBudgetExhausted(runEnv.SIM_DB, config)))) {
+            // Caught right AFTER this part's own writes landed (the check above
+            // just persisted them), so a run that tips the daily total over
+            // the cap mid-part still finishes that part cleanly -- it just
+            // never gets a continuation message. Same "stop cleanly instead of
+            // looping" spirit as MAX_BACKFILL_PARTS (ingest-worker.js).
+            const message_ = `Daily backtest write budget exhausted (BACKTEST_DAILY_WRITE_BUDGET=${config.backtestDailyWriteBudget}) after part ${part}; resume after the next UTC day reset`;
+            console.error("backtest continuation refused: daily write budget exhausted", { id, part, budget: config.backtestDailyWriteBudget });
+            await unenf(() => failBacktestRun(runEnv.SIM_DB, { id, error: message_, finishedAt: new Date().toISOString() }));
+            await unenf(() => reporter.fail(message_));
+            const cleanup = await unenf(() => cleanupFailedRun(runEnv.SIM_DB, ctx.store, id));
+            console.log("backtest job finished", { id, status: "failed", reason: "daily_write_budget", tickers, part, cleanup });
+            message.ack();
+            continue;
+          }
           if (outcome.status === "continue") {
             // LAST step, after runManualBacktest's forced progress update: if
             // the send throws, the outer catch retries THIS part (checkpoints

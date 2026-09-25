@@ -124,6 +124,39 @@ export async function deleteFailedOrCancelledBacktestRun(db, id) {
   return (result.meta?.changes ?? 0) > 0;
 }
 
+/**
+ * Adds `rows` to a run's running rows_written total (BACKTEST_DAILY_WRITE_BUDGET,
+ * plan.md/config.js#backtestDailyWriteBudget) -- called once per part/
+ * invocation from backtest-worker.js with that part's observed D1 write-row
+ * count (subrequestBudget.js's rowsWritten counter), not once per statement,
+ * same batching-cost reasoning as everywhere else in this file. A no-op
+ * (`rows <= 0`) is skipped rather than issuing a pointless UPDATE.
+ */
+export async function addBacktestRunRowsWritten(db, { id, rows }) {
+  if (!(rows > 0)) return;
+  await db.prepare(`UPDATE backtest_runs SET rows_written = rows_written + ? WHERE id = ?`).bind(rows, id).run();
+}
+
+/**
+ * Sum of rows_written across every backtest_runs row STARTED on the given
+ * UTC calendar day (default: today), regardless of status -- a 'running' run
+ * already in flight counts its writes-so-far too, not just terminal runs.
+ * This is the whole-day total backtest-worker.js checks against
+ * config.backtestDailyWriteBudget before starting/continuing a part; started_at
+ * (not finished_at) is the bucket so a run that started today but finishes
+ * tomorrow is still charged to today, matching when the writes actually
+ * happened.
+ */
+export async function getBacktestRowsWrittenToday(db, { now = new Date() } = {}) {
+  const dayStart = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const dayEnd = `${now.toISOString().slice(0, 10)}T23:59:59.999Z`;
+  const row = await db
+    .prepare(`SELECT COALESCE(SUM(rows_written), 0) AS total FROM backtest_runs WHERE started_at >= ? AND started_at <= ?`)
+    .bind(dayStart, dayEnd)
+    .first();
+  return row?.total ?? 0;
+}
+
 function rowToRun(r) {
   return {
     id: r.id,

@@ -1,0 +1,12 @@
+-- Adds rows_written to the ALREADY-APPLIED backtest_runs table (0001), for
+-- BACKTEST_DAILY_WRITE_BUDGET (plan.md #6 / config.js#backtestDailyWriteBudget).
+-- Sim-only, same as 0001 -- never applied to LIVE_DB.
+--
+-- Additive ALTER, not an edit to 0001: sim.backtest_runs already holds real
+-- run history in prod (2 complete / 11 failed / 3 cancelled as of
+-- 2026-09-24, per plan.md), so 0001 has already run there. Editing 0001's
+-- CREATE TABLE in place would never reach the already-migrated prod copy --
+-- D1's migration runner tracks applied migrations by filename, it does not
+-- re-diff or re-apply a file it already ran. A DEFAULT is required so the
+-- ALTER backfills existing rows without a separate UPDATE.
+ALTER TABLE backtest_runs ADD COLUMN rows_written INTEGER NOT NULL DEFAULT 0;

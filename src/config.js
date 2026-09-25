@@ -62,6 +62,16 @@ export function loadConfig(env) {
     // continuation chain with it).
     backtestMaxExternalSubrequests: intOrDefault(env.BACKTEST_MAX_EXTERNAL_SUBREQUESTS, 40),
     backtestMaxTotalSubrequests: intOrDefault(env.BACKTEST_MAX_TOTAL_SUBREQUESTS, 40),
+    // Cross-invocation, cross-run daily cap on D1 rows written by ALL
+    // backtests combined (plan.md "BACKTEST_DAILY_WRITE_BUDGET"), separate
+    // from the per-invocation SubrequestBudget above: that one resets every
+    // part/invocation, this one accumulates across an entire UTC day via
+    // backtest_runs.rows_written (storage/sim_registry.js). Default 40000 is
+    // a self-imposed sub-limit, not the platform cap -- D1 free tier is
+    // 100K writes/day across ALL DBs (Free-plan budgets), so this leaves
+    // ~60K/day headroom for live ingestion/trading on the same shared cap.
+    // '0' disables the check (same convention as the subrequest budget).
+    backtestDailyWriteBudget: intOrDefault(env.BACKTEST_DAILY_WRITE_BUDGET, 40000),
     // Delay before a continuation part runs, and the cap on parts per run (a
     // runaway chain fails the run instead of looping forever).
     backtestContinuationDelaySeconds: intOrDefault(env.BACKTEST_CONTINUATION_DELAY_SECONDS, 15),
