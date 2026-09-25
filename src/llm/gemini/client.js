@@ -5,12 +5,25 @@
 // (KV-backed cooldown instead of Redis; env/config passed explicitly instead
 // of module-level imports, since Workers have no persistent process env).
 //
-// Cascade shape: for a requested `model`, try every key in
-// config.geminiApiKeys before ever stepping down to a configured fallback
-// model. A 429/503 is usually a per-model, per-key quota signal, so this
-// maximizes use of the requested (better) model before downgrading.
+// Cascade shape: for a requested `model`, try every model (primary then
+// configured fallbacks) once with the first key before cycling to the next
+// key. Originally this was model-outer/key-inner (exhaust every key on the
+// primary model before ever trying a fallback), on the theory that a 429/503
+// is usually a per-model, per-key quota signal worth maximizing use of the
+// requested (better) model before downgrading. That held for transient
+// per-minute rate limits, but broke down for the Gemini free tier's DAILY
+// quota: when the primary model is exhausted for the day, it's exhausted on
+// EVERY key identically, so model-outer just re-fails the same dead model
+// N times (N = number of keys) before ever reaching a fallback. Under
+// MAX_ATTEMPTS_UNDER_BUDGET, that meant the whole budget was spent on a
+// model that was never going to succeed, and fallbacks -- which routinely do
+// work, see the "succeeded on fallback model" log path below -- were never
+// reached. Key-outer/model-inner tries the primary model first (still
+// honored as the preferred model) but reaches a fallback after just one
+// failure instead of after (keys.length) failures, so a capped budget
+// actually gets to a model that might work.
 
-import { isCoolingDown, setCooldown, parseRetryDelaySeconds } from "../../shared/cooldown.js";
+import { isCoolingDown, setCooldown, parseRetryDelaySeconds, isDailyQuotaError, dailyQuotaCooldownSeconds } from "../../shared/cooldown.js";
 import { VendorError } from "../../shared/errors.js";
 
 const DEFAULT_COOLDOWN_SECONDS = 60;
@@ -149,12 +162,18 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
   let realErr; // the last error a real call produced (never a skip)
   let budgetedAttempts = 0; // attempts charged against config.subrequestBudget in THIS call, capped at MAX_ATTEMPTS_UNDER_BUDGET
   const cascadeExhausted = () => cascadeExhaustedError({ realErr, lastErr, attempts, elapsedMs: Date.now() - cascadeStart, cooldownSeconds });
-  for (let mi = 0; mi < models.length; mi++) {
-    const model = models[mi];
+  // Models that 404'd (retired / unavailable to this project) on some earlier
+  // key: every key fails identically for that reason, so once we've learned
+  // it, skip it for the remaining keys instead of re-discovering the same
+  // 404 once per key.
+  const deadModels = new Set();
+  for (let ki = 0; ki < config.geminiApiKeys.length; ki++) {
+    const apiKey = config.geminiApiKeys[ki];
 
-    for (let ki = 0; ki < config.geminiApiKeys.length; ki++) {
-      const apiKey = config.geminiApiKeys[ki];
-      const isLastCombination = mi === models.length - 1 && ki === config.geminiApiKeys.length - 1;
+    for (let mi = 0; mi < models.length; mi++) {
+      const model = models[mi];
+      if (deadModels.has(model)) continue;
+      const isLastCombination = ki === config.geminiApiKeys.length - 1 && mi === models.length - 1;
 
       const elapsedMs = Date.now() - cascadeStart;
       if (elapsedMs >= MAX_CASCADE_MS) {
@@ -223,24 +242,29 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
           `[gemini] attempt failed: model="${model}" key=#${ki} status=${err.status || "n/a"} transient=${!!err.transient} elapsed=${Date.now() - cascadeStart}ms message=${err.message}`
         );
 
-        // Bad/revoked key: skip to the next key on this SAME model. Must not
-        // `break`, or we'd abandon the remaining keys entirely.
-        if (isBadKey) continue;
+        // Bad/revoked key: every model will fail identically on this key, so
+        // abandon the rest of the models for this key and move to the NEXT
+        // key (outer loop) instead of wasting attempts re-discovering the
+        // same 401/403 once per model.
+        if (isBadKey) break;
         // 404: the model was retired / is unavailable to this project (Google:
         // "no longer available to new users"). Every key fails identically, so
-        // skip this model's remaining keys and try the NEXT model instead of
-        // killing the whole run. Nothing left to try -> surface it.
+        // remember it and skip it for the rest of the cascade instead of
+        // re-discovering the same 404 on every remaining key.
         if (err.status === 404) {
-          if (mi === models.length - 1) throw err;
-          break;
+          deadModels.add(model);
+          if (deadModels.size === models.length) throw err;
+          continue;
         }
         if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
 
-        const seconds = isRateLimited ? parseRetryDelaySeconds(err.message) ?? DEFAULT_COOLDOWN_SECONDS : DEFAULT_COOLDOWN_SECONDS;
+        const seconds = isRateLimited
+          ? (isDailyQuotaError(err.message) ? dailyQuotaCooldownSeconds() : parseRetryDelaySeconds(err.message) ?? DEFAULT_COOLDOWN_SECONDS)
+          : DEFAULT_COOLDOWN_SECONDS;
         cooldownSeconds.push(seconds);
         await setCooldown(kv, model, ki, seconds);
         if (isLastCombination) throw cascadeExhausted();
-        // otherwise fall through to next key, or (via outer loop) next model
+        // otherwise fall through to next model, or (via outer loop) next key
       }
     }
   }
