@@ -200,14 +200,19 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
             })
             .then(function (job) {
               render(job);
-              if (!stopped) setTimeout(poll, 1500);
+              // 5s, not 1.5s (was tuned for snappy UX, but each tick is a D1
+              // read against job_progress -- on the free tier's daily row-read
+              // cap, a long-running backfill/backtest polled the whole time
+              // adds up across many runs/operators). 5s is still responsive
+              // enough for a progress bar; see status.js's header for context.
+              if (!stopped) setTimeout(poll, 5000);
             })
             .catch(function () {
               // A transient fetch failure just retries on a longer interval --
               // never surface a scary error for a momentary network blip; the
               // job's own status/error field (once reachable again) is the
               // real source of truth.
-              if (!stopped) setTimeout(poll, 3000);
+              if (!stopped) setTimeout(poll, 8000);
             });
         }
 
