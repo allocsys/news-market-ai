@@ -115,6 +115,15 @@ export class SubrequestBudget {
     else if (kind === "d1") this.d1++;
   }
 
+  /**
+   * Adds `changes` (a write statement's meta.changes, may be 0) to this
+   * invocation's running rowsWritten total. Never refuses/throws -- see the
+   * rowsWritten field comment for why this counter isn't enforced here.
+   */
+  chargeRowsWritten(changes) {
+    if (Number.isFinite(changes) && changes > 0) this.rowsWritten += changes;
+  }
+
   suspend() {
     this.suspendDepth++;
   }
@@ -206,7 +215,10 @@ export function countedD1(db, budget) {
       },
       run: (...args) => {
         budget.chargeInternal("d1");
-        return stmt.run(...args);
+        return Promise.resolve(stmt.run(...args)).then((result) => {
+          budget.chargeRowsWritten(result?.meta?.changes ?? 0);
+          return result;
+        });
       },
       raw: (...args) => {
         budget.chargeInternal("d1");
@@ -221,7 +233,10 @@ export function countedD1(db, budget) {
     prepare: (sql) => wrapStatement(db.prepare(sql)),
     batch: (statements) => {
       budget.chargeInternal("d1");
-      return db.batch(statements.map((s) => inner.get(s) ?? s));
+      return Promise.resolve(db.batch(statements.map((s) => inner.get(s) ?? s))).then((results) => {
+        for (const r of results) budget.chargeRowsWritten(r?.meta?.changes ?? 0);
+        return results;
+      });
     },
     exec: (sql) => {
       budget.chargeInternal("d1");
