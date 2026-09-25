@@ -108,9 +108,9 @@ Every queue has a DLQ (`max_retries` 3). CI: `test` → `migrate` (gated on `mig
 **LLM call log** (`/dashboard/llm`): every prompt/response incl. failures → `llm_calls`, via `agents/utils/structured.js#callStructured`. Best-effort; `LLM_LOG_ENABLED=false` disables; ~4 D1 rows/call; pruned after 14 days; clipped at 60,000 chars.
 
 ## Live incidents (fixed; lessons)
-- **No analysis after M4 cutover (2026-09-20):** `ANALYZE.sendBatch` exceeded Cloudflare's 100-message cap and the handler silently acked. Fixed with chunked sending and `insertNewsItem` returning only new items. **Open:** ~427 items ingested pre-fix were never analyzed.
-- **First price backfill (2026-09-20):** yfinance 429'd on every Workers call, and the D1 write cap made `job_progress` writes fail, leaving the job `queued` forever. Resolved by switching to Tiingo and waiting for the UTC reset.
-- **Service split (2026-09-19, PRs #27–#33):** one Worker had been hitting CPU limits on nearly every tick.
+- **No analysis after M4 cutover (2026-09-20):** `ANALYZE.sendBatch` exceeded Cloudflare's 100-message cap and acked silently; fixed via chunked sending. **Open:** ~427 pre-fix items never analyzed (see Next To-Dos #1).
+- **First price backfill (2026-09-20):** yfinance 429s + D1 write cap stuck a job `queued` forever; resolved via Tiingo switch.
+- **Service split (2026-09-19, PRs #27–#33):** one Worker was hitting CPU limits nearly every tick; fixed by splitting Workers.
 
 ## Historical news backfill
 `POST /backfill?from=&to=` → `BACKFILL` queue → `ingest` in self-continuing parts (caps: 40 requests/500 items/invocation, 50 parts/job). Verified 2026-09-20: 90 days = 10,025 items in 13 parts, 0 errors; reruns dedupe; Finnhub `to` is inclusive. ~29 MB/10K articles, so run ~90-day slices up to a year.
