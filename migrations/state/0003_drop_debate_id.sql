@@ -1,0 +1,13 @@
+-- Drops the dead trade_decisions.debate_id column (plan.md #8).
+-- Additive-style migration, not an edit to 0001: 0001 has already been
+-- applied to LIVE_DB (and to SIM_DB, which shares migrations/state/), so
+-- per this repo's convention (see migrations/sim/0002's header), a change
+-- to an already-applied table goes in a new file, never an edit in place.
+--
+-- Safe to drop outright: debate_id has never been SET anywhere in the
+-- pipeline (only read back by run_store.js, and declared optional in
+-- schemas/index.js's TradeThesis) -- verified 2026-09-25. The actual debate
+-- content already lives inline as JSON in trade_decisions.debate/.opinions;
+-- debate_id pointed at a `debates` table that was never built, so there is
+-- no FK, no real data, and no behavior change here.
+ALTER TABLE trade_decisions DROP COLUMN debate_id;

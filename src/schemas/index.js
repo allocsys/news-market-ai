@@ -121,7 +121,6 @@ export const TradeThesis = z.object({
   direction: z.enum(["long", "short", "flat"]),
   instrument: z.string(),
   rationale: z.string(),
-  debateId: z.string().optional(),
 });
 
 // Deliberately has NO `justification` requirement tied to LLM reasoning --
