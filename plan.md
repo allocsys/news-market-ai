@@ -11,7 +11,8 @@ then "Current Status".**
 Priority order, code-verified against current `main` (3a3bb6a):
 1. ~~Decide fate of ~427 pre-fix news items never analyzed~~ — DECIDED (owner, 2026-09-25): leave them be, no re-enqueue.
 2. ~~**Backfill path still never enqueues ANALYZE**~~ — BY DESIGN (owner, 2026-09-25): backfill and analysis are intentionally separate; not a gap to fix.
-3. **Investigate stalled equities intraday backfill** (bars stop 2026-07-01, ~84 days pending) — Open after Finding G, item 2.
+3. ~~**Investigate stalled equities intraday backfill**~~ — RESOLVED 2026-09-25: verified via direct D1 query, `intraday_backfill_status` shows all 5 tickers (AAPL/MSFT/TSLA/USO/XAUUSD) `done`, 92/92 days each, range 2026-06-26→2026-09-25. Plan.md's "stalled at 2026-07-01" note was itself stale; the gradual per-day cron (deployed 2026-09-24) caught up.
+3b. **NEW (2026-09-25): D1 free-tier daily row-read limit hit again** (`INPUTS_DB`) — a live query against `price_bars_intraday` failed with "exceeded D1's free tier daily row read limit"; same cap noted as hit once before on 2026-09-20 (see Free-plan budgets). Blocks further reads/writes on that DB until UTC midnight reset, or a plan upgrade.
 4. **Verify `SIM_DB` purge-guard actually fires in prod** — binding and guard code are in place (`ingest-worker.js`, `wrangler.ingest.toml`), just never confirmed against a real purge run.
 5. **First clean backtest (F)** — 2 complete / 11 failed / 3 cancelled in `sim.backtest_runs` as of 2026-09-24; still unreviewed whether either complete run counts.
 6. Build `BACKTEST_DAILY_WRITE_BUDGET` (proposed 40K, not approved) if the owner signs off.
@@ -161,7 +162,7 @@ Fixed: (A/A2) real Tiingo price history; (B, PR #72) silent 500-row caps removed
 
 **Open after G:**
 - Verify the first live Tiingo XAUUSD ticks (bars written, gate rejections in `status.error`). **Unverified:** whether Tiingo FX intraday reaches 90 days back or is subject to the same 2,000-point cap.
-- **Equities intraday bars stop at 2026-07-01** with ~84 days pending: backfill progress looks stalled; not investigated.
+- ~~Equities intraday bars stop at 2026-07-01~~ RESOLVED 2026-09-25: fully caught up, see Next To-Dos #3.
 - The `ingest` Worker's live `SIM_DB` binding (purge guard) is unverified in production; purge-run check on a real run still to do.
 - No dashboard view of `intraday_backfill_status`; no re-seed path if the lookback is widened; the 03:00 UTC purge hour is arbitrary.
 
