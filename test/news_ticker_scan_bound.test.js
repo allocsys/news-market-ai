@@ -41,7 +41,7 @@ async function seedNoisyFixture(inputs) {
   }
   // One item carrying BOTH AAPL and MSFT tickers, inside the window -- must appear for an AAPL read.
   await seedNews(inputs, { id: "aapl-msft-both", tickers: ["AAPL", "MSFT"], publishedAt: isoAt(20) });
-  aaplInWindow.splice(20, 0, "aapl-msft-both"); // same published_at as aapl-in-020; id sorts after it lexically? verified below via actual output, not assumed here.
+  aaplInWindow.push("aapl-msft-both"); // exact position isn't asserted; the tests below check membership/count/sort, not a hardcoded order for this item.
 
   // AAPL history AFTER the window -- must never come back either.
   for (let i = 0; i < 50; i++) {
@@ -84,7 +84,7 @@ test("getNewsAsOf returns the newest in-window AAPL items only, ignoring same-ti
   const ctx = makeCtx();
   await seedNoisyFixture(ctx.inputs);
 
-  const results = await getNewsAsOf(ctx.inputs, { ticker: "AAPL", asOf: isoAt(39), limit = undefined ?? 10 });
+  const results = await getNewsAsOf(ctx.inputs, { ticker: "AAPL", asOf: isoAt(39), limit: 10 });
   const ids = results.map((r) => r.id);
 
   assert.equal(ids.length, 10, "limit is respected");
