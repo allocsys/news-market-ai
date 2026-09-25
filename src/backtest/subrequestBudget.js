@@ -65,6 +65,14 @@ export class SubrequestBudget {
     this.total = 0;
     this.kv = 0;
     this.d1 = 0;
+    // Cumulative D1 rows actually written this invocation (SUM of every
+    // write statement's meta.changes -- run()/batch() only, never first()/
+    // all()/raw()), tracked here but NOT enforced by this class: it feeds
+    // BACKTEST_DAILY_WRITE_BUDGET (config.js), a cross-invocation, cross-run
+    // DAILY cap checked once per part by backtest-worker.js against
+    // storage/sim_registry.js#getBacktestRowsWrittenToday, not a per-
+    // invocation limit this budget itself refuses against.
+    this.rowsWritten = 0;
     this.halted = false;
     this.suspendDepth = 0;
     this.unitsCompleted = 0;
