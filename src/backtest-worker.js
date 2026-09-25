@@ -118,7 +118,7 @@ export default {
           // would fall through to runManualBacktest and resume a run whose
           // registry entry no longer exists, writing fresh pipeline_checkpoints
           // (and other state) rows that nothing will ever clean up again.
-          if (!existing || existing.status === "complete" || existing.status === "failed" || existing.status === "cancelled") {
+          if ((part > 1 && !existing) || existing?.status === "complete" || existing?.status === "failed" || existing?.status === "cancelled") {
             console.log("backtest job already finished/cancelled/deleted, acking without re-running", { id, status: existing?.status ?? "deleted" });
             if (existing?.status === "cancelled") {
               const cleanup = await cleanupCancelledRun(runEnv.SIM_DB, ctx.store, id);
