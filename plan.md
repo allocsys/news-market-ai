@@ -171,7 +171,7 @@ Fixed: (A/A2) real Tiingo price history; (B, PR #72) silent 500-row caps removed
 3. **Check whether the backfill path enqueues ANALYZE** given the Queues cap.
 4. **`BACKTEST_DAILY_WRITE_BUDGET`** proposed (40K), not approved, not built.
 5. **Optional:** owner runs remaining news backfill in ~90-day slices up to ~1 year.
-6. **Dashboard environment selector** (`?env=`), left over from M4.
+6. ~~Dashboard environment selector (`?env=`)~~ — DONE (`src/dashboard/views/env_selector.js`, `parseEnvParam`/`resolveEnv`).
 7. **D1 daily write cap**: after any future hit, confirm `*/15` ingest/ANALYZE recovered post-reset.
 8. **Job stuck `queued` when the terminal progress write fails**: needs a dashboard-side stale/timeout state.
 9. **New instruments (gold, oil, forex):** sourcing decided; wider FX/commodity design not started.
