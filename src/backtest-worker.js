@@ -108,9 +108,19 @@ export default {
           // depth against that first pass having been cut short by its own
           // maxChunks.
           const existing = await runEnv.SIM_DB.prepare(`SELECT status FROM backtest_runs WHERE id = ?`).bind(id).first();
-          if (existing?.status === "complete" || existing?.status === "failed" || existing?.status === "cancelled") {
-            console.log("backtest job already finished/cancelled, acking without re-running", { id, status: existing.status });
-            if (existing.status === "cancelled") {
+          // A MISSING row (not just an explicit terminal status) is also
+          // terminal: purgeFailedAndCancelledRuns (POST /backtest/purge) and
+          // deleteFailedOrCancelledBacktestRun delete the registry row itself
+          // once a failed/cancelled run's state is fully cleaned up, so a
+          // continuation message already queued for that run arrives here
+          // with no row at all -- `existing` is null/undefined rather than
+          // carrying a status string. Without this check that redelivery
+          // would fall through to runManualBacktest and resume a run whose
+          // registry entry no longer exists, writing fresh pipeline_checkpoints
+          // (and other state) rows that nothing will ever clean up again.
+          if (!existing || existing.status === "complete" || existing.status === "failed" || existing.status === "cancelled") {
+            console.log("backtest job already finished/cancelled/deleted, acking without re-running", { id, status: existing?.status ?? "deleted" });
+            if (existing?.status === "cancelled") {
               const cleanup = await cleanupCancelledRun(runEnv.SIM_DB, ctx.store, id);
               console.log("backtest cancelled-run cleanup retry on redelivery", { id, cleanup });
             }
