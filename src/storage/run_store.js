@@ -993,25 +993,31 @@ export class RunStore {
       throw new Error("deleteRun refuses to delete the 'live' run_id");
     }
 
+    // All per-table deletes for this chunk go out as ONE db.batch() call
+    // instead of one .run() per table: D1 (and the free-tier write/subrequest
+    // caps it runs under) charges each unbatched .run() as its own
+    // subrequest, so 6 sequential calls here becomes 1. batch() still runs
+    // each statement as its own DELETE (this is not a transaction-atomicity
+    // requirement, just a round-trip reduction), and each statement's own
+    // `result.meta.changes` is summed exactly as the old sequential loop did.
     const tables = ["positions", "trade_decisions", "decision_memory", "pipeline_checkpoints"];
     if (!keepJobProgress) tables.push("job_progress");
-    let totalChanges = 0;
-    for (const table of tables) {
-      const result = await this.db
+
+    const statements = tables.map((table) =>
+      this.db
         .prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE run_id = ? LIMIT ?)`)
         .bind(this.runId, limit)
-        .run();
-      totalChanges += result.meta?.changes ?? 0;
-    }
+    );
     // llm_calls uses env_run_id, not run_id -- see migrations/state/0001_init.sql's header.
-    const llmResult = await this.db
-      .prepare(
-        `DELETE FROM llm_calls WHERE rowid IN (SELECT rowid FROM llm_calls WHERE env_run_id = ?${keepErroredLlmCalls ? " AND status <> 'error'" : ""} LIMIT ?)`
-      )
-      .bind(this.runId, limit)
-      .run();
-    totalChanges += llmResult.meta?.changes ?? 0;
+    statements.push(
+      this.db
+        .prepare(
+          `DELETE FROM llm_calls WHERE rowid IN (SELECT rowid FROM llm_calls WHERE env_run_id = ?${keepErroredLlmCalls ? " AND status <> 'error'" : ""} LIMIT ?)`
+        )
+        .bind(this.runId, limit)
+    );
 
-    return totalChanges;
+    const results = await this.db.batch(statements);
+    return results.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
   }
 }
