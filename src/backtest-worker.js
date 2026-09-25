@@ -152,7 +152,7 @@ export default {
           // trainDays/testDays defaulting). A CONTINUATION always has an
           // existing row (checked just above), so it is safe to refuse here
           // before spending any more of today's write budget on it.
-          if (part > 1 && (await dailyWriteBudgetExhausted(runEnv.SIM_DB, config))) {
+          if (part > 1 && (await unenf(() => dailyWriteBudgetExhausted(runEnv.SIM_DB, config)))) {
             const message_ = `Daily backtest write budget exhausted (BACKTEST_DAILY_WRITE_BUDGET=${config.backtestDailyWriteBudget}); resume after the next UTC day reset`;
             console.error("backtest part refused: daily write budget exhausted", { id, part, budget: config.backtestDailyWriteBudget });
             await failBacktestRun(runEnv.SIM_DB, { id, error: message_, finishedAt: new Date().toISOString() });
@@ -195,7 +195,7 @@ export default {
           if (budget && budget.rowsWritten > 0) {
             await unenf(() => addBacktestRunRowsWritten(runEnv.SIM_DB, { id, rows: budget.rowsWritten }));
           }
-          if (outcome.status === "continue" && (await dailyWriteBudgetExhausted(runEnv.SIM_DB, config))) {
+          if (outcome.status === "continue" && (await unenf(() => dailyWriteBudgetExhausted(runEnv.SIM_DB, config)))) {
             // Caught right AFTER this part's own writes landed (the check above
             // just persisted them), so a run that tips the daily total over
             // the cap mid-part still finishes that part cleanly -- it just
