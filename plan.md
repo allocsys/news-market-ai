@@ -17,7 +17,7 @@ Priority order, code-verified against current `main` (3a3bb6a):
 5. **First clean backtest (F)** — 2 complete / 11 failed / 3 cancelled in `sim.backtest_runs` as of 2026-09-24; still unreviewed whether either complete run counts. BLOCKED by 3b until D1 read-limit resets.
 6. Build `BACKTEST_DAILY_WRITE_BUDGET` (proposed 40K, not approved) if the owner signs off.
 7. Portfolio correlation/cross-asset-exposure check — still just a flat risk-budget check (`portfolio_manager.js`).
-8. Wire `debates` table write path, or drop `trade_decisions.debate_id` for real (currently always null, table already dropped).
+8. **Drop dead `debate_id` column/field** (not wire it up) — verified 2026-09-25: `debateId` is never *set* anywhere in the pipeline (only read back in `run_store.js`, and declared optional in `schemas/index.js`); the actual debate content is already stored inline as JSON in `trade_decisions.debate`/`.opinions`. A separate `debates` table would be redundant, not a missing feature.
 
 **Done since last pass, removed from backlog:** dashboard `?env=` selector (built — `src/dashboard/views/env_selector.js`, `parseEnvParam`/`resolveEnv`); #125/#126 merged 2026-09-25 (Gemini 3.5-flash fallback added, D1 news-scan bounded by date instead of ticker history, job-progress polling cut 1.5s→5s, `deleteRun` batched).
 
