@@ -132,7 +132,9 @@ async function callOnce(config, model, apiKey, body, keyIndex) {
  * Low-level cascade. `opts.model` becomes the PRIMARY model tried (honored
  * exactly -- if the caller asked for the deep model, we don't silently
  * upgrade or downgrade it), with config.geminiFallbackModels tried after it
- * only if every key on the primary model is exhausted.
+ * on the SAME key before moving to the next key, so a model that's
+ * exhausted on every key (e.g. a daily quota) doesn't consume the whole
+ * cascade before a fallback gets a chance.
  *
  * `opts.trace`, if given, is filled in as the cascade runs (by reference, so
  * it is populated even when this throws): `attempts` -- every model/key tried
