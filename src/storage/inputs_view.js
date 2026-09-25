@@ -185,13 +185,18 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
     throw new LookaheadViolationError("getNewsAsOf requires an explicit asOf timestamp");
   }
 
+  // Bounded by published_at (idx_revisions_published_at) first, ticker checked
+  // via an EXISTS point lookup on news_item_tickers' PK (news_item_id, ticker)
+  // -- see this file's header note on the 2026-09-25 D1 read-limit incident. A
+  // JOIN starting from news_item_tickers instead (t.ticker = ? first) has no
+  // date to bound it and walks the ticker's ENTIRE history before this filter
+  // or LIMIT ever applies.
   const { results } = await db
     .prepare(
       `SELECT r.news_item_id AS id, r.revision, r.published_at AS published_at, r.title, r.body
        FROM news_item_revisions r
-       JOIN news_item_tickers t ON t.news_item_id = r.news_item_id
-       WHERE t.ticker = ?
-         AND r.published_at <= ?
+       WHERE r.published_at <= ?
+         AND EXISTS (SELECT 1 FROM news_item_tickers t WHERE t.news_item_id = r.news_item_id AND t.ticker = ?)
          AND r.revision = (
            SELECT MAX(r2.revision) FROM news_item_revisions r2
            WHERE r2.news_item_id = r.news_item_id AND r2.published_at <= ?
@@ -199,7 +204,7 @@ export async function getNewsAsOf(db, { ticker, asOf, limit = 50 }) {
        ORDER BY r.published_at DESC
        LIMIT ?`
     )
-    .bind(ticker, asOf, asOf, limit)
+    .bind(asOf, ticker, asOf, limit)
     .all();
 
   return results;
@@ -262,18 +267,23 @@ export async function getNewsItemsInRange(db, { ticker, from, to, pageSize = NEW
  */
 async function getNewsItemsPage(db, { ticker, from, to, cursor, pageSize }) {
   const cursorClause = cursor ? `AND (r.published_at > ? OR (r.published_at = ? AND r.news_item_id > ?))` : "";
+  // published_at range first (idx_revisions_published_at bounds the scan to
+  // this page's window across ALL tickers), ticker checked via an indexed
+  // EXISTS on news_item_tickers' PK -- see getNewsAsOf's comment above and
+  // this file's header note on the 2026-09-25 D1 read-limit incident. The old
+  // JOIN-from-news_item_tickers shape re-scanned a ticker's whole history on
+  // every one of onSignalRunner.js's per-(ticker,day) calls.
   const binds = cursor
-    ? [ticker, cursor.publishedAt, to, cursor.publishedAt, cursor.publishedAt, cursor.id, pageSize]
-    : [ticker, from, to, pageSize];
+    ? [from, to, cursor.publishedAt, cursor.publishedAt, cursor.id, ticker, pageSize]
+    : [from, to, ticker, pageSize];
 
   const { results } = await db
     .prepare(
       `SELECT r.news_item_id AS id, r.revision, r.published_at AS published_at, r.title, r.body
        FROM news_item_revisions r
-       JOIN news_item_tickers t ON t.news_item_id = r.news_item_id
-       WHERE t.ticker = ?
-         AND r.published_at >= ? AND r.published_at < ?
+       WHERE r.published_at >= ? AND r.published_at < ?
          ${cursorClause}
+         AND EXISTS (SELECT 1 FROM news_item_tickers t WHERE t.news_item_id = r.news_item_id AND t.ticker = ?)
          AND r.revision = (
            SELECT MAX(r2.revision) FROM news_item_revisions r2
            WHERE r2.news_item_id = r.news_item_id AND r2.published_at <= r.published_at
