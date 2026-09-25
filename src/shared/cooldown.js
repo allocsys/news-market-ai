@@ -83,3 +83,46 @@ export function parseRetryDelaySeconds(message) {
   const match = /retry in ([\d.]+)\s*s/i.exec(message || "");
   return match ? Math.ceil(parseFloat(match[1])) : null;
 }
+
+// A 429 can mean either a transient per-minute rate limit (recovers within
+// the DEFAULT_COOLDOWN_SECONDS floor) or a DAILY free-tier quota exhaustion
+// (generate_content_free_tier_requests / *PerDay* quotaId), which won't
+// recover for up to a day. Added after a live incident where the cascade
+// kept retrying a daily-exhausted model every ~90-100s all day: the 60s KV
+// cooldown floor had already expired by the time the next retry fired, so
+// every retry made a real HTTP call that immediately re-failed with the
+// same 429, burning subrequests for nothing. Google's own error messages
+// name the quota metric, so we can tell the two apart and cool down for the
+// right duration instead of guessing.
+const DAILY_QUOTA_PATTERN = /free_tier_requests|PerDayPerProjectPerModel|RequestsPerDay/i;
+
+export function isDailyQuotaError(message) {
+  return DAILY_QUOTA_PATTERN.test(message || "");
+}
+
+// Gemini RPD quotas reset at midnight Pacific time (per ai.google.dev/gemini-api/docs/rate-limits).
+// Returns seconds from `now` until the next Pacific midnight, plus a small
+// buffer to absorb clock skew between our clock and Google's reset.
+const DAILY_QUOTA_RESET_BUFFER_SECONDS = 5 * 60;
+
+function secondsUntilNextPacificMidnight(now = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+      .formatToParts(now)
+      .map((p) => [p.type, p.value])
+  );
+  // Intl can report hour "24" for midnight itself; treat that as 0.
+  const hour = parts.hour === "24" ? 0 : Number(parts.hour);
+  const secondsSinceMidnight = hour * 3600 + Number(parts.minute) * 60 + Number(parts.second);
+  return 24 * 3600 - secondsSinceMidnight;
+}
+
+export function dailyQuotaCooldownSeconds(now) {
+  return secondsUntilNextPacificMidnight(now) + DAILY_QUOTA_RESET_BUFFER_SECONDS;
+}
