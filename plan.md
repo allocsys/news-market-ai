@@ -1,6 +1,6 @@
 # News → Market Analysis → Trade Signal Pipeline
 
-_Trimmed 2026-09-25 (fifth pass). Per-PR narration, incident
+_Trimmed 2026-09-25 (sixth pass). Per-PR narration, incident
 logs and vendor research live in git history (`git log -p plan.md`). Labels
 that code comments reference are unchanged: "Adopted Pattern #N", "Backtesting
 Integrity point N", "Step N", "Design: environments", "Engine ports",
@@ -9,13 +9,11 @@ then "Current Status".**
 
 ## Next To-Dos (2026-09-25)
 Priority order, code-verified against current `main` (3a3bb6a):
-1. ~~Decide fate of ~427 pre-fix news items never analyzed~~ — DECIDED (owner, 2026-09-25): leave them be, no re-enqueue.
-2. ~~**Backfill path still never enqueues ANALYZE**~~ — BY DESIGN (owner, 2026-09-25): backfill and analysis are intentionally separate; not a gap to fix.
-3. ~~**Investigate stalled equities intraday backfill**~~ — RESOLVED 2026-09-25: verified via direct D1 query, `intraday_backfill_status` shows all 5 tickers (AAPL/MSFT/TSLA/USO/XAUUSD) `done`, 92/92 days each, range 2026-06-26→2026-09-25. Plan.md's "stalled at 2026-07-01" note was itself stale; the gradual per-day cron (deployed 2026-09-24) caught up.
+1. ~~Pre-fix news backlog, backfill/ANALYZE separation, stalled intraday backfill~~ — all resolved/decided 2026-09-25 (owner); detail in git log.
 3b. **D1 free-tier daily row-read limit hit again (2026-09-25)** (account-wide, confirmed against both `INPUTS_DB` and `SIM_DB`) — a live query against `price_bars_intraday` failed with "exceeded D1's free tier daily row read limit"; same cap noted as hit once before on 2026-09-20 (see Free-plan budgets). Blocks all further live-DB verification (including #4 and #5 below) until UTC midnight reset, or a plan upgrade.
 4. **Verify `SIM_DB` purge-guard actually fires in prod** — binding and guard code are in place (`ingest-worker.js`, `wrangler.ingest.toml`), just never confirmed against a real purge run. BLOCKED by 3b until D1 read-limit resets.
 5. **First clean backtest (F)** — 2 complete / 11 failed / 3 cancelled in `sim.backtest_runs` as of 2026-09-24; still unreviewed whether either complete run counts. BLOCKED by 3b until D1 read-limit resets.
-6. `BACKTEST_DAILY_WRITE_BUDGET` proposed (40K), not approved, not built. **Confirmed 2026-09-25 (owner):** 40K is a self-imposed sub-limit, not the platform cap — actual D1 free-tier limit is 100K writes/day across all DBs (Free-plan budgets, below), leaving ~60K/day headroom for live ingestion/trading on the same shared cap. **Deferred:** logged, not building yet.
+6. ~~`BACKTEST_DAILY_WRITE_BUDGET`~~ — BUILT 2026-09-25 on `feature/backtest-daily-write-budget`: `config.js` (`BACKTEST_DAILY_WRITE_BUDGET`, default 40000, 0 disables), `sim_registry.js` accumulator/reader, `subrequestBudget.js` rows-written tracking, `backtest-worker.js` enforcement (refuses a continuation once today's cross-run total is at/over budget; part 1 of a new run is never refused), migration `sim/0002`, full test coverage. 40K confirmed (owner, 2026-09-25) as a self-imposed sub-limit within the 100K/day platform cap (Free-plan budgets, below). **PR #127 open, awaiting owner merge go-ahead.**
 7. **Portfolio correlation/cross-asset-exposure check** — still just a flat risk-budget check (`portfolio_manager.js`). **DECIDED 2026-09-25 (owner): build the computed price-return correlation matrix, not a static sector map.** Rationale: the static map would misclassify exactly the cases that matter (XAUUSD/USO both macro-risk-off-correlated despite "different" buckets; AAPL/MSFT/TSLA not always correlated despite "same" bucket), and a manually-asserted grouping conflicts with Adopted Pattern #9 (grounded data claims, nothing from memory/assertion). Scoping: buildable on existing plumbing, no new adapters needed --
     - Data source: `storage/inputs_view.js#getPriceBarsAsOf(db, {ticker, asOf, limit})` already returns point-in-time-safe daily bars (default 200-bar window) for any watchlist ticker; same no-lookahead guarantee Backtesting Integrity already enforces elsewhere, so a correlation calc off this stays leak-free for backtests for free.
     - Compute: rolling N-day Pearson correlation of daily returns, pairwise across the 5-ticker watchlist (5x5, cheap -- no scaling concern at this watchlist size). N (window length, e.g. 30/60/90 days) and the block/reduce threshold are open design choices, TBD.
@@ -172,15 +170,11 @@ Fixed: (A/A2) real Tiingo price history; (B, PR #72) silent 500-row caps removed
 
 ### Other remaining work
 1. **Live verification** (not yet observed): an ANALYZE crash-and-retry, Queues/D1 ops/day vs. real Observability numbers, fresh `pipeline_checkpoints` on the `*/15` cron.
-2. ~~**~427 pre-fix news items never analyzed**~~: DECIDED 2026-09-25 (owner) — leave as-is, no re-enqueue.
-3. ~~**Check whether the backfill path enqueues ANALYZE** given the Queues cap.~~ BY DESIGN (owner, 2026-09-25): backfill and analysis are intentionally separate concerns, not a gap.
-4. **`BACKTEST_DAILY_WRITE_BUDGET`** proposed (40K), not approved, not built.
-5. **Optional:** owner runs remaining news backfill in ~90-day slices up to ~1 year.
-6. ~~Dashboard environment selector (`?env=`)~~ — DONE (`src/dashboard/views/env_selector.js`, `parseEnvParam`/`resolveEnv`).
-7. **D1 daily write cap**: after any future hit, confirm `*/15` ingest/ANALYZE recovered post-reset.
-8. **Job stuck `queued` when the terminal progress write fails**: needs a dashboard-side stale/timeout state.
-9. **New instruments (gold, oil, forex):** sourcing decided; wider FX/commodity design not started.
-10. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the live dashboard Worker: unverified.
+2. **Optional:** owner runs remaining news backfill in ~90-day slices up to ~1 year.
+3. **D1 daily write cap**: after any future hit, confirm `*/15` ingest/ANALYZE recovered post-reset.
+4. **Job stuck `queued` when the terminal progress write fails**: needs a dashboard-side stale/timeout state.
+5. **New instruments (gold, oil, forex):** sourcing decided; wider FX/commodity design not started.
+6. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the live dashboard Worker: unverified.
 
 ## Dashboard (all DONE)
 **UX adoption (2026-09-22):** ported the `prototype-ui-overhaul` ideas into the existing edge-native SSR dashboard (`src/dashboard/*`: `helpers.js` renderers, `data.js` reads, `api.js` routes): theme toggle, auto-refresh, CSV/JSON export, mobile bottom-sheet nav (#89), Overview command center (#90), global ticker search (#91). The Next.js prototype was a design reference only and was **removed from the repo 2026-09-24**; Next.js would need its own hosting and an extra hop per fetch.
