@@ -9,7 +9,7 @@ then "Current Status".**
 
 ## Next To-Dos (2026-09-25)
 Priority order, code-verified against current `main` (3a3bb6a):
-1. **Decide fate of ~427 pre-fix news items never analyzed** — owner decision blocked, nothing else depends on it (Other remaining work #2).
+1. ~~Decide fate of ~427 pre-fix news items never analyzed~~ — DECIDED (owner, 2026-09-25): leave them be, no re-enqueue.
 2. **Backfill path still never enqueues ANALYZE** (`ingest-worker.js`'s `backfill` branch calls `backfillHistoricalNews` only — no `enqueueAnalyze` call) — confirms Other remaining work #3 is real, not just unchecked; every backfilled item is stored but silently unanalyzed forever.
 3. **Investigate stalled equities intraday backfill** (bars stop 2026-07-01, ~84 days pending) — Open after Finding G, item 2.
 4. **Verify `SIM_DB` purge-guard actually fires in prod** — binding and guard code are in place (`ingest-worker.js`, `wrangler.ingest.toml`), just never confirmed against a real purge run.
@@ -167,7 +167,7 @@ Fixed: (A/A2) real Tiingo price history; (B, PR #72) silent 500-row caps removed
 
 ### Other remaining work
 1. **Live verification** (not yet observed): an ANALYZE crash-and-retry, Queues/D1 ops/day vs. real Observability numbers, fresh `pipeline_checkpoints` on the `*/15` cron.
-2. **~427 pre-fix news items never analyzed**: leave or re-enqueue (owner hasn't answered).
+2. ~~**~427 pre-fix news items never analyzed**~~: DECIDED 2026-09-25 (owner) — leave as-is, no re-enqueue.
 3. **Check whether the backfill path enqueues ANALYZE** given the Queues cap.
 4. **`BACKTEST_DAILY_WRITE_BUDGET`** proposed (40K), not approved, not built.
 5. **Optional:** owner runs remaining news backfill in ~90-day slices up to ~1 year.
