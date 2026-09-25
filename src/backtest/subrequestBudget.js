@@ -181,6 +181,7 @@ export class SubrequestBudget {
       total: this.total,
       kv: this.kv,
       d1: this.d1,
+      rowsWritten: this.rowsWritten,
       externalLimit: this.externalLimit,
       totalLimit: this.totalLimit,
       units: { ...this.unitCounts },
