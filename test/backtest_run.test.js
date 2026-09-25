@@ -292,7 +292,7 @@ test("a failure BETWEEN ticker-days is not blamed on the last day that finished:
     prepare(sql) {
       const stmt = realInputs.prepare(sql);
       if (!/FROM news_item_revisions r/.test(sql)) return stmt;
-      return { bind: (...args) => { if (args[0] === "MSFT") throw new Error("MSFT news read failed"); return stmt.bind(...args); } };
+      return { bind: (...args) => { if (args.includes("MSFT")) throw new Error("MSFT news read failed"); return stmt.bind(...args); } };
     },
   };
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
