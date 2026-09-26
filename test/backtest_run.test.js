@@ -379,6 +379,11 @@ test("runManualBacktest refuses a price hole inside the span (a hole is not a ho
   for (const date of ["2025-12-31", "2026-01-01", "2026-01-20", "2026-01-30"]) await seedBar(ctx.inputs, { ticker: "AAPL", date, close: 100 });
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
+  // graceDays: 0 -- grace now extends the price-coverage requirement past testEnd
+  // too (the preflight has to cover whatever the walk will actually score), so a
+  // nonzero default grace would fail this run on the TAIL gap (no bars near the
+  // grace-extended end) before ever reaching the mid-span hole this test targets.
+
   const outcome = await runManualBacktest({}, config, ctx, {
     id: "run-hole", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-31T00:00:00.000Z", graceDays: 0,
   });
