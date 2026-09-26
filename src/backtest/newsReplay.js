@@ -209,14 +209,30 @@ function summarize(result) {
   };
 }
 
+/** null if either side is missing the field -- never coerced to 0, so a real 0 delta stays distinguishable from "can't compare". */
+function pctDelta(pVal, bVal) {
+  return pVal != null && bVal != null ? Number((bVal - pVal).toFixed(4)) : null;
+}
+
 function diffOf(parallel, batched) {
   const p = summarize(parallel);
   const b = summarize(batched);
   return {
     directionMatch: p.direction === b.direction,
     approvedMatch: p.approvedForExecution === b.approvedForExecution,
-    positionSizePctDelta: p.positionSizePct != null && b.positionSizePct != null ? Number((b.positionSizePct - p.positionSizePct).toFixed(4)) : null,
-    confidenceDelta: p.confidence != null && b.confidence != null ? Number((b.confidence - p.confidence).toFixed(4)) : null,
+    positionSizePctDelta: pctDelta(p.positionSizePct, b.positionSizePct),
+    confidenceDelta: pctDelta(p.confidence, b.confidence),
+    // Added alongside ATR-based sizing (PR #137): stop/target -- and
+    // therefore realized pnl -- can now genuinely diverge between modes
+    // even when direction and confidence match, since each mode's own
+    // evaluateRisk call sees whatever bars/verdict IT independently produced.
+    stopLossPctDelta: pctDelta(p.stopLossPct, b.stopLossPct),
+    takeProfitPctDelta: pctDelta(p.takeProfitPct, b.takeProfitPct),
+    realizedReturnPctDelta: pctDelta(p.realizedReturnPct, b.realizedReturnPct),
+    positionPnlPctDelta: pctDelta(p.positionPnlPct, b.positionPnlPct),
+    maxDrawdownPctDelta: pctDelta(p.maxDrawdownPct, b.maxDrawdownPct),
+    exitReasonMatch: p.exitReason === b.exitReason,
+    holdDaysDelta: p.holdDays != null && b.holdDays != null ? b.holdDays - p.holdDays : null,
   };
 }
 
