@@ -56,8 +56,9 @@ test("computeATR: a gap up between sessions is captured even with a tight high-l
   const bars = flatBars(16, 100);
   bars[0] = bar("2026-01-16", { open: 111, high: 111.5, low: 110.5, close: 111 });
   const atr = computeATR(bars, 14);
-  // Window covers indices 0..13: one bar with true range ~11, thirteen bars with true range 1.
-  const expected = (11 + 13 * 1) / 14;
+  // Bar 0: high=111.5, low=110.5, prevClose (bar 1's close)=100 -> true range = max(1, |111.5-100|, |110.5-100|) = 11.5.
+  // Bars 1..13: flat, no gap -> true range = high-low = 1 each.
+  const expected = (11.5 + 13 * 1) / 14;
   assert.ok(Math.abs(atr - expected) < 1e-9, `expected ~${expected}, got ${atr}`);
 });
 
