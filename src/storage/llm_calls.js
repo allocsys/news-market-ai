@@ -32,7 +32,7 @@
 // `run_id`; the ENVIRONMENT ('live' or a backtest id) is the store's runId and
 // maps to `env_run_id`. Same split as the state schema header explains.
 
-export const LLM_SOURCES = ["pipeline", "backtest", "exit_check"];
+export const LLM_SOURCES = ["pipeline", "backtest", "exit_check", "replay"];
 export const LLM_STATUSES = ["ok", "error"];
 
 export const DEFAULT_MAX_CHARS = 60000;

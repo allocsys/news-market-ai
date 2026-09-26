@@ -91,7 +91,7 @@ export function parseDashboardParams(searchParams) {
 // URLs. Every param is validated here -- llmTicker/llmJob/llmRun end up in
 // SQL bind values (never interpolated), but bounding them keeps junk out of
 // the query and the rendered links.
-export const LLM_SOURCE_OPTIONS = ["all", "pipeline", "backtest", "exit_check"];
+export const LLM_SOURCE_OPTIONS = ["all", "pipeline", "backtest", "exit_check", "replay"];
 export const LLM_STATUS_OPTIONS = ["all", "ok", "error"];
 export const LLM_LIMIT_OPTIONS = [25, 50, 100];
 const LLM_DEFAULTS = { llmSource: "all", llmStatus: "all", llmLimit: 50, env: "live" };
