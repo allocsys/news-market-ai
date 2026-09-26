@@ -309,6 +309,97 @@ export function backtestResultTable(result) {
 
 export const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed", cancelled: "cancelled" };
 
+// ---------------------------------------------------------------------------
+// News replay comparison (backtest/newsReplay.js) -- "Recent replay
+// comparisons" panel on /dashboard/backtest. Unlike a backtest_runs row, a
+// replay job is a plain job_progress row (sim_registry.js#getRecentReplayJobs)
+// with no registry table of its own -- see that function's header.
+// ---------------------------------------------------------------------------
+
+export const REPLAY_STATUS_LABEL = { queued: "queued…", running: "running…", complete: "complete", failed: "failed" };
+
+function replayPct(value, digits = 1) {
+  return value != null && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "\u2014";
+}
+
+/** One mode's (parallel or batched) trade-decision summary line -- newsReplay.js#summarize's shape: {direction, confidence, approvedForExecution, positionSizePct, stopLossPct, takeProfitPct}. */
+function replayModeSummary(label, summary) {
+  if (!summary) return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>\u2014</div>`;
+  const approved = summary.approvedForExecution ? "approved for execution" : "not approved";
+  return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(summary.direction ?? "\u2014")}, ${replayPct(summary.confidence, 0)} confidence, ${approved}, size ${replayPct(summary.positionSizePct)}</div>`;
+}
+
+/** newsReplay.js#diffOf's shape: {directionMatch, approvedMatch, positionSizePctDelta, confidenceDelta}. Deltas are batched − parallel, same sign convention diffOf itself uses. */
+function replayDiffSummary(diff) {
+  if (!diff) return "";
+  const sizeDelta = diff.positionSizePctDelta != null ? `${diff.positionSizePctDelta > 0 ? "+" : ""}${(diff.positionSizePctDelta * 100).toFixed(1)}pp` : "\u2014";
+  const confDelta = diff.confidenceDelta != null ? `${diff.confidenceDelta > 0 ? "+" : ""}${(diff.confidenceDelta * 100).toFixed(0)}pp` : "\u2014";
+  return miniStats(
+    [
+      { value: diff.directionMatch ? "Match" : "Differ", label: "Direction", color: diff.directionMatch ? "var(--color-success-text)" : "var(--color-danger-text)" },
+      { value: diff.approvedMatch ? "Match" : "Differ", label: "Approved for execution", color: diff.approvedMatch ? "var(--color-success-text)" : "var(--color-danger-text)" },
+      { value: sizeDelta, label: "Size delta (batched \u2212 parallel)" },
+      { value: confDelta, label: "Confidence delta" },
+    ],
+    { cols: 4 }
+  );
+}
+
+/** One news item's parallel-vs-batched comparison (newsReplay.js#replayNewsItem's return shape), collapsed by default -- a replay job can cover several items, so each gets its own row rather than one long panel. */
+export function replayItemCard(item) {
+  if (!item) return "";
+  return `<details class="llm-answer">
+    <summary>News item ${escapeHtml(item.newsItemId)} \u2014 as of ${fmtTime(item.asOf)}</summary>
+    <div class="llm-answer-body" style="max-width:none">
+      ${replayModeSummary("Parallel (pre-#132)", item.parallel?.summary)}
+      ${replayModeSummary("Batched (current)", item.batched?.summary)}
+      ${replayDiffSummary(item.diff)}
+    </div>
+  </details>`;
+}
+
+/**
+ * "Recent replay comparisons" list -- one row per job_progress row of type
+ * 'replay' (sim_registry.js#getRecentReplayJobs's shape, via storage/jobs.js#
+ * jobFromRow: id/status/params/result/error/createdAt/...). `params` is
+ * {ticker, newsItemIds, asOf}; a complete job's `result` is
+ * {results: [newsReplay.js#replayNewsItem's return, ...], missingNewsItemIds}.
+ * Same collapsed-row-with-details shape as backtestRunsList, so the two
+ * panels on /dashboard/backtest read as siblings rather than two different
+ * UI languages.
+ */
+export function replayJobsList(replayJobs) {
+  if (!replayJobs || replayJobs.length === 0) {
+    return `<p class="empty">No replay comparisons yet -- use the form above to compare parallel vs. batched analyst calls on a real historical news item.</p>`;
+  }
+  return replayJobs
+    .map((job) => {
+      const p = job.params || {};
+      const itemCount = Array.isArray(p.newsItemIds) ? p.newsItemIds.length : 0;
+      const semanticStatus = job.status === "complete" ? "approved" : job.status === "failed" ? "rejected" : "neutral";
+      const summaryLine = `<span class="ticker">${escapeHtml(p.ticker ?? "?")}</span> &middot; ${itemCount} item${itemCount === 1 ? "" : "s"} &middot; ${fmtTime(job.createdAt)} &middot; ${statusBadge(semanticStatus, REPLAY_STATUS_LABEL[job.status] ?? job.status)}`;
+      let body;
+      if (job.status === "failed") {
+        body = `<p class="empty">${escapeHtml(job.error ?? "failed with no recorded error message")}</p>`;
+      } else if (job.status === "complete") {
+        const results = job.result?.results ?? [];
+        const missing = job.result?.missingNewsItemIds ?? [];
+        const items = results.map(replayItemCard).join("\n");
+        const missingNote =
+          missing.length > 0
+            ? `<p class="note">${missing.length} requested news item${missing.length === 1 ? "" : "s"} could not be found and ${missing.length === 1 ? "was" : "were"} skipped: ${escapeHtml(missing.join(", "))}</p>`
+            : "";
+        body = (items || `<p class="empty">No results recorded.</p>`) + missingNote;
+      } else {
+        body = `<p class="empty">Still running as of last page load -- reload to check.</p>`;
+      }
+      const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery({ ...parseLlmParams(null), env: job.id }, { llmJob: job.id })}">View every LLM call this comparison made &rarr;</a></p>`;
+      const open = job.status === "running" || job.status === "queued" ? " open" : "";
+      return `<details class="llm-answer"${open}><summary>${summaryLine}</summary><div class="llm-answer-body" style="max-width:none">${llmLink}${body}</div></details>`;
+    })
+    .join("\n");
+}
+
 /** "Terminate run" form for a running backtest row -- POST /backtest/:id/cancel (src/index.js via dashboard-worker.js), confirmed client-side since it deletes the run's partial data. Used by backtestRunsList below and by status.js's active-job panels. */
 export function terminateRunForm(id) {
   return `<form method="post" action="/backtest/${escapeHtml(encodeURIComponent(id))}/cancel" onsubmit="return confirm('Terminate this backtest run? Its partial progress and data will be deleted; this can\u2019t be undone.');">
