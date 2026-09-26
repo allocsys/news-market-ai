@@ -101,7 +101,20 @@ function eachDayIso(startIso, endIso) {
  * lives, so countSignalWalkSteps, runOnSignalForTicker, and runBacktest.js's
  * own grace-extended price-grid load (see equity.js/priceGrid.js) can't drift.
  */
-export function computeWalkEnd(config, { testEnd, graceDays, clock }) {
+export function computeWalkEnd(config, { testEnd, graceDays, clock, isLastWindow = true }) {
+  // A non-last walk-forward window's OWN testEnd day belongs to the NEXT
+  // window (walkForwardWindows sets the next window's testStart to exactly
+  // this testEnd) -- that window's walk processes it as its own first day,
+  // news then exit-check, same as any other day. So a non-last window's walk
+  // stops the day BEFORE its testEnd, never reaching (and never re-running
+  // the exit check on) the shared boundary day; no grace period applies
+  // here either, since only the run's real last window has no "next window"
+  // to hand its tail off to (plan.md item 9, corrected again 2026-09-27 --
+  // the first correction only removed the grace-DAYS overlap and missed this
+  // single boundary-DAY overlap, which the original per-window progress-total
+  // test couldn't catch since it only checked a step COUNT, not which
+  // ticker-days made it up).
+  if (!isLastWindow) return new Date(new Date(testEnd).getTime() - DAY_MS).toISOString();
   const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
   const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
   return clock ? clock.clampEnd(walkEnd) : walkEnd;
@@ -114,8 +127,8 @@ export function computeWalkEnd(config, { testEnd, graceDays, clock }) {
  * Pass the same `clock` the walk itself gets, so a clamped walk is sized
  * as the clamped walk.
  */
-export function countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays, clock }) {
-  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
+export function countSignalWalkSteps(config, { tickers, testStart, testEnd, graceDays, clock, isLastWindow = true }) {
+  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock, isLastWindow });
   return tickers.length * eachDayIso(testStart, walkEnd).length;
 }
 
@@ -167,8 +180,8 @@ function isAfterCursorKey(item, after) {
  * is the window's own testStart, which is unique per window by
  * construction (walkForwardWindows never repeats a testStart).
  */
-export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock }) {
-  const walkEnd = await walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock });
+export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock, isLastWindow = true }) {
+  const walkEnd = await walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock, isLastWindow });
   return ctx.store.getRealizedReturnsInRange({ ticker, from: testStart, to: walkEnd });
 }
 
@@ -178,8 +191,8 @@ export async function runOnSignalForTicker(env, config, ctx, { ticker, testStart
  * and returns the walk's end (testEnd + grace, clamped). runBacktest.js scores
  * the run from those positions (equity.js), not from realized returns.
  */
-export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock }) {
-  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
+export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStart, testEnd, graceDays, runIdPrefix, onStep, clock, isLastWindow = true }) {
+  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock, isLastWindow });
   const prefix = runIdPrefix ?? testStart;
 
   // Every item in [testStart, testEnd), however many: getNewsItemsInRange pages
@@ -280,8 +293,8 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
  * one also carries `error` and `retryAfterSeconds`).
  */
 
-export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock, cursor = null, budget = null }) {
-  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock });
+export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock, cursor = null, budget = null, isLastWindow = true }) {
+  const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock, isLastWindow });
   const days = eachDayIso(testStart, walkEnd);
 
   let dayIndex = 0;

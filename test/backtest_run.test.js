@@ -414,7 +414,7 @@ test("runManualBacktest fails a backwards range and a range too short for any wa
   assert.match(noWindow.error, /No walk-forward window fits/);
 });
 
-test("runManualBacktest with several walk-forward windows: per-window slices tile the whole curve, and the progress total sums every window's walk", async () => {
+test("runManualBacktest with several walk-forward windows: per-window slices tile the whole curve, only the LAST window's walk gets a grace period, and the progress total reflects that", async () => {
   const ctx = makeBacktestCtx();
   for (const [date, close] of [["2025-12-31", 100], ["2026-01-01", 100], ["2026-01-02", 110], ["2026-01-03", 110], ["2026-01-04", 99], ["2026-01-05", 99]]) {
     await seedBar(ctx.inputs, { ticker: "AAPL", date, close });
@@ -433,6 +433,8 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   // Window 2 is the LAST window: its own slice is widened by its 1 grace day (Jan 5),
   // which has a real bar here, so it scores 3 days (Jan 3-5) instead of 2 -- the whole
   // point of the grace-period scoring fix. Window 1 isn't last, so it's untouched.
+  // (Scoring is unaffected by the walk-dedupe fix below -- it was never driven by
+  // window 1's own grace walk, only by the grid/scoringEnd arithmetic in runBacktest.js.)
   assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 3]);
   assert.equal(overall.off.n, 5);
   assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]);
@@ -441,8 +443,43 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   assert.ok(Math.abs(overall.off.cumulativeReturn - chained) < 1e-9);
   assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99 (Jan 5 is flat vs Jan 4, same ending value)
 
-  // Window 1 walks Jan 1..Jan 4 (through testEnd + 1 grace day), window 2 Jan 3..Jan 6: 8 ticker-days, not the 6 a single walk of the whole range would be.
+  // Grace-window-exit-dedupe fix (plan.md item 9, corrected again 2026-09-27):
+  // window 1 is NOT the last window, so it now stops the day BEFORE its own
+  // testEnd -- Jan 1..Jan 2 (2 ticker-days) -- leaving its own testEnd day
+  // (Jan 3) to window 2 alone, and gets no grace day of its own either.
+  // Window 2 IS the last window, so it keeps its real range plus its real
+  // grace period: Jan 3..Jan 6 (4 ticker-days). Total 2 + 4 = 6 -- exactly
+  // the 6 distinct calendar days in [Jan 1, Jan 6], each walked exactly once
+  // (see the "never processes the same (ticker, day) twice" test below for
+  // the per-day proof; this test only checks the aggregate count).
   const simulating = updates.filter((u) => u.phase === "simulating");
-  assert.equal(simulating.at(-1).total, 8);
-  assert.equal(simulating.at(-1).done, 8);
+  assert.equal(simulating.at(-1).total, 6);
+  assert.equal(simulating.at(-1).done, 6);
+});
+
+test("runManualBacktest with several walk-forward windows never processes the same (ticker, day) twice -- the exact redundancy the grace-window fix removes", async () => {
+  const ctx = makeBacktestCtx();
+  for (const [date, close] of [["2025-12-31", 100], ["2026-01-01", 100], ["2026-01-02", 110], ["2026-01-03", 110], ["2026-01-04", 99], ["2026-01-05", 99]]) {
+    await seedBar(ctx.inputs, { ticker: "AAPL", date, close });
+  }
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  const finishedTicks = []; // every onStep({done: true}) tick, in order
+
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-windows-nodupe", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-05T00:00:00.000Z", trainDays: 0, testDays: 2, graceDays: 1,
+    onProgress: async (u) => { if (u.phase === "simulating" && u.detail) finishedTicks.push(u.detail); },
+  });
+
+  assert.equal(outcome.status, "complete", outcome.error);
+  // Before the fix, Jan 4 was walked twice for AAPL: once as window 1's grace
+  // day (2026-01-01..2026-01-05 window), once as window 2's real day -- so
+  // "AAPL 2026-01-04" would appear here twice. After the fix it appears once,
+  // and every other ticker-day in [Jan 1, Jan 6] (window 2's real grace end)
+  // also appears exactly once -- nothing is skipped, nothing is doubled.
+  const days = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05", "2026-01-06"];
+  for (const day of days) {
+    const count = finishedTicks.filter((d) => d === `AAPL ${day}`).length;
+    assert.equal(count, 1, `AAPL ${day} should be processed exactly once, was processed ${count} times`);
+  }
+  assert.equal(finishedTicks.length, days.length); // no other ticker-days snuck in either
 });
