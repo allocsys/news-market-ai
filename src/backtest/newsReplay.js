@@ -53,7 +53,7 @@ async function runParallelAnalysts(env, config, { ticker, newsItem, bars }) {
  * simulated PnL reflects the SAME exit logic the live system would actually apply,
  * not an invented one.
  */
-async function simulateForward(inputs, config, { ticker, asOf, decision }) {
+export async function simulateForward(inputs, config, { ticker, asOf, decision }) {
   const emptyPnl = {
     entryPrice: null,
     exitPrice: null,
