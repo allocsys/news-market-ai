@@ -1,0 +1,54 @@
+<svg width="900" height="620" viewBox="0 0 900 620" xmlns="http://www.w3.org/2000/svg" role="img"><title>Worker, queue and D1 topology</title><desc>Five Cloudflare Workers (dashboard, backend, ingest, llm, backtest) connected by queues, with each Worker's D1 database bindings noted below its box.</desc><defs><marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#73726c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs><style>text{font-family:sans-serif;fill:#2c2c2a}.ts{font-size:11px}.th{font-size:14px;font-weight:600}.tl{font-size:10.5px;fill:#5F5E5A}.arr{stroke:#73726c;stroke-width:1;fill:none}.condarr{stroke:#73726c;stroke-width:1;fill:none;stroke-dasharray:4 3}</style>
+
+<rect x="350" y="15" width="200" height="46" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="450" y="33" text-anchor="middle" dominant-baseline="central" fill="#444441">dashboard</text>
+<text class="ts" x="450" y="50" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">public; no D1/KV of its own</text>
+
+<line x1="450" y1="61" x2="450" y2="100" class="arr" marker-end="url(#arrow2)"/>
+<text class="tl" x="454" y="80">service binding (BACKEND)</text>
+
+<rect x="350" y="100" width="200" height="46" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="450" y="118" text-anchor="middle" dominant-baseline="central" fill="#444441">backend (index.js)</text>
+<text class="ts" x="450" y="135" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">private; runs all D1 migrations</text>
+<text class="tl" x="450" y="160" text-anchor="middle">INPUTS_DB · LIVE_DB · SIM_DB (all rw)</text>
+
+<path d="M400 146 L120 146 L120 220" class="arr" marker-end="url(#arrow2)"/>
+<text class="tl" x="130" y="185">INGEST</text>
+<path d="M420 146 L120 146 L120 220" class="arr"/>
+<text class="tl" x="130" y="200">BACKFILL</text>
+<line x1="450" y1="146" x2="450" y2="220" class="arr" marker-end="url(#arrow2)"/>
+<text class="tl" x="454" y="185">LLM_JOBS</text>
+<path d="M480 146 L760 146 L760 220" class="arr" marker-end="url(#arrow2)"/>
+<text class="tl" x="700" y="185">BACKTEST</text>
+
+<rect x="20" y="220" width="200" height="66" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="120" y="238" text-anchor="middle" dominant-baseline="central" fill="#444441">ingest</text>
+<text class="ts" x="120" y="255" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">consumes INGEST + BACKFILL</text>
+<text class="tl" x="120" y="278" text-anchor="middle">INPUTS_DB rw · LIVE_DB (job_progress only) · SIM_DB ro</text>
+
+<path d="M20 253 L0 253 L0 286 L20 286" class="condarr" marker-end="url(#arrow2)"/>
+<text class="ts" x="8" y="300">BACKFILL continuation (self)</text>
+
+<line x1="220" y1="253" x2="350" y2="253" class="arr" marker-end="url(#arrow2)"/>
+<text class="tl" x="245" y="245">ANALYZE</text>
+
+<rect x="350" y="220" width="200" height="66" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text class="th" x="450" y="238" text-anchor="middle" dominant-baseline="central" fill="#3C3489">llm</text>
+<text class="ts" x="450" y="255" text-anchor="middle" dominant-baseline="central" fill="#534AB7">consumes ANALYZE (conc. 2) + LLM_JOBS (conc. 1)</text>
+<text class="tl" x="450" y="278" text-anchor="middle">LIVE_DB rw · INPUTS_DB ro · own GEMINI_API_KEYS</text>
+
+<rect x="660" y="220" width="200" height="66" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text class="th" x="760" y="238" text-anchor="middle" dominant-baseline="central" fill="#3C3489">backtest</text>
+<text class="ts" x="760" y="255" text-anchor="middle" dominant-baseline="central" fill="#534AB7">consumes + produces BACKTEST (conc. 1)</text>
+<text class="tl" x="760" y="278" text-anchor="middle">SIM_DB rw · INPUTS_DB ro · NO LIVE_DB binding</text>
+
+<path d="M860 253 L880 253 L880 286 L860 286" class="condarr" marker-end="url(#arrow2)"/>
+<text class="ts" x="780" y="300" text-anchor="end">BACKTEST continuation (self, one part per invocation)</text>
+
+<rect x="20" y="340" width="840" height="110" rx="8" fill="none" stroke="#73726c" stroke-width="0.5" stroke-dasharray="4 3"/>
+<text class="th" x="40" y="362" fill="#444441">Isolation guarantee</text>
+<text class="ts" x="40" y="384">CI (test/ci_env_isolation.test.js) asserts wrangler.backtest.toml has no LIVE_DB binding and no producer</text>
+<text class="ts" x="40" y="402">besides its own BACKTEST queue -- a backtest cannot reach live state or a live queue even by mistake,</text>
+<text class="ts" x="40" y="420">enforced at the config level, not just in application code. Each Worker's GEMINI_API_KEYS secret is the</text>
+<text class="ts" x="40" y="438">same key values, copied per-config -- not a functionally separate key pool.</text>
+</svg>
