@@ -33,6 +33,7 @@ import { renderControlsView, renderPausedBanner } from "./dashboard/views/contro
 import { PAUSE_KEYS } from "./storage/pause_flags.js";
 import { renderBackfillView, renderBackfillConfirmPage, renderPriceBackfillConfirmPage } from "./dashboard/views/backfill.js";
 import { renderBacktestView, renderBacktestConfirmPage } from "./dashboard/views/backtest.js";
+import { renderReplayPickerPage } from "./dashboard/views/replay.js";
 import { renderBacktestDetailView } from "./dashboard/views/backtest_detail.js";
 import { renderEnvSelector } from "./dashboard/views/env_selector.js";
 import { parseDashboardParams, parseLlmParams, parseEnvParam, envSuffix, errorState, ENV_SECTIONS, BACKTEST_ID_RE } from "./dashboard/helpers.js";
@@ -247,7 +248,13 @@ async function renderSection(request, env, config, section) {
     // `?env=` those links heal to live instead of re-asking for it (and
     // re-showing the same "not found" note) on every click.
     const props = parseParams ? { ...data, params: { ...parseParams(url.searchParams), env: resolvedEnv } } : data;
-    const activePanel = section === "backtest" ? await activeJobPanelFor(env, "backtest") : "";
+    // Backtest page shows progress for BOTH job types that live under their
+    // own SIM_DB run id (a plain backtest and a news-replay comparison) --
+    // at most one of the two is ever actually in flight for a given operator
+    // in practice, but concatenating both panels (each "" when nothing's
+    // running) is simpler than picking one and matches how /dashboard/backfill
+    // already shows two possible panels (news vs. price backfill) above.
+    const activePanel = section === "backtest" ? (await activeJobPanelFor(env, "backtest")) + (await activeJobPanelFor(env, "replay")) : "";
     const envBar = ENV_SECTIONS.includes(section)
       ? await envSelectorFor(env, { resolvedEnv, envError: data.envError ?? null, url })
       : "";
@@ -494,6 +501,32 @@ export default {
         return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, theme: getThemeCookie(request) }));
       }
       return htmlResponse(renderShell({ activeSection: "more", sessionUsername: auth.sessionUsername, bodyHtml: renderMoreView(), theme: getThemeCookie(request) }));
+    }
+
+    // GET /dashboard/backtest/replay/news?ticker=&date= -- step 2 of the news-replay
+    // trigger flow (step 1 is replayTriggerForm on /dashboard/backtest itself,
+    // src/dashboard/views/backtest.js): lists that ticker's news items on that
+    // day (backend's GET /backtest/replay/news) so the operator can pick 1-5
+    // to replay. Needs real backend data, unlike the pure-UI confirm pages
+    // above, so it gets its own handler rather than living in that block.
+    // MUST come before the /dashboard/backtest/ prefix match just below, or
+    // "replay" would be parsed as a backtest run id there instead.
+    if (pathname === "/dashboard/backtest/replay/news") {
+      const auth = await requireSession(request, config);
+      if (auth.redirect === "__disabled__") return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
+      if (auth.redirect) return redirect(auth.redirect);
+
+      const ticker = (url.searchParams.get("ticker") || "").trim().toUpperCase();
+      const date = url.searchParams.get("date") || "";
+      let bodyHtml;
+      try {
+        const { items } = await fetchBackendJson(env, `/backtest/replay/news?ticker=${encodeURIComponent(ticker)}&date=${encodeURIComponent(date)}`);
+        bodyHtml = renderReplayPickerPage({ ticker, date, items });
+      } catch (err) {
+        console.error("dashboard replay news lookup failed", { ticker, date, message: err.message });
+        bodyHtml = renderReplayPickerPage({ ticker, date, error: err.message });
+      }
+      return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, theme: getThemeCookie(request) }));
     }
 
     // AFTER the pure-UI block above, which returns for /dashboard/backtest/confirm -- this prefix match must never see it.
