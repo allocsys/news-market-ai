@@ -414,7 +414,7 @@ test("runManualBacktest fails a backwards range and a range too short for any wa
   assert.match(noWindow.error, /No walk-forward window fits/);
 });
 
-test("runManualBacktest with several walk-forward windows: per-window slices tile the whole curve, and the progress total sums every window's walk", async () => {
+test("runManualBacktest with several walk-forward windows: per-window slices tile the whole curve, only the LAST window's walk gets a grace period, and the progress total reflects that", async () => {
   const ctx = makeBacktestCtx();
   for (const [date, close] of [["2025-12-31", 100], ["2026-01-01", 100], ["2026-01-02", 110], ["2026-01-03", 110], ["2026-01-04", 99], ["2026-01-05", 99]]) {
     await seedBar(ctx.inputs, { ticker: "AAPL", date, close });
@@ -433,6 +433,8 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   // Window 2 is the LAST window: its own slice is widened by its 1 grace day (Jan 5),
   // which has a real bar here, so it scores 3 days (Jan 3-5) instead of 2 -- the whole
   // point of the grace-period scoring fix. Window 1 isn't last, so it's untouched.
+  // (Scoring is unaffected by the walk-dedupe fix below -- it was never driven by
+  // window 1's own grace walk, only by the grid/scoringEnd arithmetic in runBacktest.js.)
   assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 3]);
   assert.equal(overall.off.n, 5);
   assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]);
@@ -441,8 +443,13 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   assert.ok(Math.abs(overall.off.cumulativeReturn - chained) < 1e-9);
   assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99 (Jan 5 is flat vs Jan 4, same ending value)
 
-  // Window 1 walks Jan 1..Jan 4 (through testEnd + 1 grace day), window 2 Jan 3..Jan 6: 8 ticker-days, not the 6 a single walk of the whole range would be.
+  // Grace-window-exit-dedupe fix (plan.md item 9): window 1 is NOT the last window, so
+  // it now walks only its own real range, Jan 1..Jan 3 (3 ticker-days) -- no grace day of
+  // its own. Jan 4 is walked exactly once, as window 2's real day, not a second time as
+  // window 1's grace day. Window 2 IS the last window, so it keeps its real grace period:
+  // Jan 3..Jan 6 (4 ticker-days). Total 3 + 4 = 7, not the 8 it would be if every window
+  // got its own grace walk (and not the 6 a single walk of the whole range would be).
   const simulating = updates.filter((u) => u.phase === "simulating");
-  assert.equal(simulating.at(-1).total, 8);
-  assert.equal(simulating.at(-1).done, 8);
+  assert.equal(simulating.at(-1).total, 7);
+  assert.equal(simulating.at(-1).done, 7);
 });
