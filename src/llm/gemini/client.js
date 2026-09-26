@@ -167,13 +167,23 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
   // it, skip it for the remaining keys instead of re-discovering the same
   // 404 once per key.
   const deadModels = new Set();
-  for (let ki = 0; ki < config.geminiApiKeys.length; ki++) {
+  const keyCount = config.geminiApiKeys.length;
+  // Proactive spreading: each call starts at the NEXT key in rotation rather
+  // than always key 0, so happy-path traffic distributes across keys instead
+  // of concentrating on #0 until it errors/cools down. `step` still walks
+  // every key exactly once, in order, starting from `startIndex` -- cooldown
+  // skip, bad-key break, dead-model skip and the exhaustion/budget checks
+  // below are all unchanged, they just see a rotated `ki` each call.
+  const startIndex = nextKeyStartIndex % keyCount;
+  nextKeyStartIndex = (nextKeyStartIndex + 1) % keyCount;
+  for (let step = 0; step < keyCount; step++) {
+    const ki = (startIndex + step) % keyCount;
     const apiKey = config.geminiApiKeys[ki];
 
     for (let mi = 0; mi < models.length; mi++) {
       const model = models[mi];
       if (deadModels.has(model)) continue;
-      const isLastCombination = ki === config.geminiApiKeys.length - 1 && mi === models.length - 1;
+      const isLastCombination = step === keyCount - 1 && mi === models.length - 1;
 
       const elapsedMs = Date.now() - cascadeStart;
       if (elapsedMs >= MAX_CASCADE_MS) {
