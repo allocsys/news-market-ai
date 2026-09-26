@@ -13,14 +13,17 @@ import { runManualBacktest } from "../src/backtest/runBacktest.js";
 import { loadConfig } from "../src/config.js";
 import { withLlmLogContext } from "../src/storage/llm_calls.js";
 import { z } from "zod";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { makeCtx, seedNews, seedBar, stateRows, SIM_DIR } from "./helpers/engine_ctx.js";
 
 // The happy-path scenario below makes exactly 8 LLM calls: 3 analysts + bull +
 // bear + judge + trader = 7 in the pipeline, then 1 reflection when the
 // position closes (the LAST call, made inside settle.js's try/catch).
-const HAPPY_PATH_CALLS = 8;
+// 1 batched analyst-team call (news_event/sentiment/technical combined, see
+// analystTeam.js) + 2 debate sides + 1 verdict + 1 thesis + 1 reflection.
+// Was 8 (3 separate analyst calls) before the analyst batching change.
+const HAPPY_PATH_CALLS = 6;
 
 // Same shape as agents/utils/memory.js's (unexported) reflection schema.
 const Reflection = z.object({ reflection: z.string() });
@@ -83,10 +86,12 @@ function makeFakeModel(counter) {
   return async (prompt, opts) => {
     counter.n++;
     if (prompt.startsWith("A trade decision for")) return JSON.stringify({ reflection: "the thesis played out as expected" });
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") return JSON.stringify({ eventType: "earnings_beat", entities: [], summary: "beat on EPS", justification: "guidance raised" });
-      if (opts.extraFields.agent === "sentiment") return JSON.stringify({ sentiment: "positive", summary: "positive reaction", justification: "beat + raised guidance" });
-      return JSON.stringify({ summary: "flat, single data point", justification: "not enough bars for a real trend read" });
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: [], summary: "beat on EPS", justification: "guidance raised" },
+        sentiment: { sentiment: "positive", summary: "positive reaction", justification: "beat + raised guidance" },
+        technical: { summary: "flat, single data point", justification: "not enough bars for a real trend read" },
+      });
     }
     if (opts.schema === DebateSide) return JSON.stringify({ argument: "an argument", justification: "a reason" });
     if (opts.schema === DebateVerdict) return JSON.stringify({ direction: "long", confidence: 0.8, timeHorizon: "days", justification: "bull case outweighs bear case" });
@@ -145,7 +150,7 @@ test("a cap hit on the LAST call -- the reflection inside settle.js's try/catch 
   const { counter, promise } = run(ctx, { backtestMaxLlmCalls: String(HAPPY_PATH_CALLS - 1) }, "bt-last");
   const outcome = await promise;
   assert.equal(outcome.status, "failed", "settlePositionOutcome must not swallow the budget error");
-  assert.match(outcome.error, /capped at 7 calls/);
+  assert.match(outcome.error, /capped at 5 calls/);
   assert.equal(counter.n, HAPPY_PATH_CALLS - 1);
 });
 

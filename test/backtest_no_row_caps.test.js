@@ -13,7 +13,7 @@ import { getNewsItemsInRange, NEWS_RANGE_PAGE_SIZE } from "../src/storage/inputs
 import { readOnly } from "../src/storage/run_store.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 import { runOnSignalForTicker } from "../src/backtest/onSignalRunner.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
 
 const BASE_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
@@ -100,11 +100,12 @@ function makeFakeModel({ onCall } = {}) {
     if (prompt.startsWith("A trade decision for")) {
       return JSON.stringify({ reflection: "the long thesis played out as expected" });
     }
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") return JSON.stringify({ eventType: "earnings_beat", entities: [], summary: "beat on EPS", justification: "guidance raised" });
-      if (opts.extraFields.agent === "sentiment") return JSON.stringify({ sentiment: "positive", summary: "positive reaction", justification: "beat + raised guidance" });
-      if (opts.extraFields.agent === "technical") return JSON.stringify({ summary: "flat", justification: "not enough bars for a real trend read" });
-      throw new Error(`unexpected AnalystOpinion agent: ${opts.extraFields.agent}`);
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: [], summary: "beat on EPS", justification: "guidance raised" },
+        sentiment: { sentiment: "positive", summary: "positive reaction", justification: "beat + raised guidance" },
+        technical: { summary: "flat", justification: "not enough bars for a real trend read" },
+      });
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"

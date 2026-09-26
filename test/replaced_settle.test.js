@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { TRADE_DECISION_STATUS } from "../src/shared/constants.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
 
 function thesisArgs({ id, asOf, ticker = "AAPL", positionSizePct = 0.05 }) {
@@ -77,10 +77,12 @@ function makeModel() {
     if (prompt.startsWith("A trade decision for")) {
       return JSON.stringify({ reflection: "settled on retry" });
     }
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") return JSON.stringify({ eventType: "earnings_beat", entities: [], summary: "beat", justification: "j" });
-      if (opts.extraFields.agent === "sentiment") return JSON.stringify({ sentiment: "positive", summary: "positive", justification: "j" });
-      return JSON.stringify({ summary: "flat", justification: "j" });
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: [], summary: "beat", justification: "j" },
+        sentiment: { sentiment: "positive", summary: "positive", justification: "j" },
+        technical: { summary: "flat", justification: "j" },
+      });
     }
     if (opts.schema === DebateSide) return JSON.stringify({ argument: "a", justification: "j" });
     if (opts.schema === DebateVerdict) return JSON.stringify({ direction: "long", confidence: 0.8, timeHorizon: "days", justification: "j" });

@@ -8,16 +8,18 @@ import assert from "node:assert/strict";
 import { walkOnSignalWindow } from "../src/backtest/onSignalRunner.js";
 import { SubrequestBudget, countedD1 } from "../src/backtest/subrequestBudget.js";
 import { RunStore } from "../src/storage/run_store.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
 
 function makeFakeModel() {
   return async (prompt, opts) => {
     if (prompt.startsWith("A trade decision for")) return JSON.stringify({ reflection: "the long thesis played out" });
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") return JSON.stringify({ eventType: "earnings_beat", entities: [], summary: "beat", justification: "guidance" });
-      if (opts.extraFields.agent === "sentiment") return JSON.stringify({ sentiment: "positive", summary: "positive", justification: "beat" });
-      return JSON.stringify({ summary: "flat", justification: "few bars" });
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: [], summary: "beat", justification: "guidance" },
+        sentiment: { sentiment: "positive", summary: "positive", justification: "beat" },
+        technical: { summary: "flat", justification: "few bars" },
+      });
     }
     if (opts.schema === DebateSide) return JSON.stringify({ argument: "a", justification: "j" });
     if (opts.schema === DebateVerdict) return JSON.stringify({ direction: "long", confidence: 0.8, timeHorizon: "days", justification: "j" });

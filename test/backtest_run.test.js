@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { runManualBacktest } from "../src/backtest/runBacktest.js";
 import { SimClock } from "../src/backtest/simClock.js";
 import { insertBacktestRun } from "../src/storage/sim_registry.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { makeCtx, seedNews, seedBar, stateRows, SIM_DIR } from "./helpers/engine_ctx.js";
 
@@ -45,11 +45,12 @@ function makeFakeModel() {
     if (prompt.startsWith("A trade decision for")) {
       return JSON.stringify({ reflection: "the thesis played out as expected" });
     }
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") return JSON.stringify({ eventType: "earnings_beat", entities: [], summary: "beat on EPS", justification: "guidance raised" });
-      if (opts.extraFields.agent === "sentiment") return JSON.stringify({ sentiment: "positive", summary: "positive reaction", justification: "beat + raised guidance" });
-      if (opts.extraFields.agent === "technical") return JSON.stringify({ summary: "flat, single data point", justification: "not enough bars for a real trend read" });
-      throw new Error(`unexpected AnalystOpinion agent: ${opts.extraFields.agent}`);
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: [], summary: "beat on EPS", justification: "guidance raised" },
+        sentiment: { sentiment: "positive", summary: "positive reaction", justification: "beat + raised guidance" },
+        technical: { summary: "flat, single data point", justification: "not enough bars for a real trend read" },
+      });
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"
