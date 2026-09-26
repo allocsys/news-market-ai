@@ -47,7 +47,7 @@
 import { loadConfig } from "./config.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
-import { getNewsItemsInRange, getNewsItemsByIds } from "./storage/inputs_view.js";
+import { getNewsItemsInRange } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { SimClock } from "./backtest/simClock.js";
 import { cancelBacktestRun, getBacktestRun } from "./storage/sim_registry.js";
