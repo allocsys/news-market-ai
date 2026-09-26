@@ -390,7 +390,7 @@ test("GET /api/jobs/:id returns the job by id from LIVE_DB, and 404 for an unkno
 // --------------------------------------------------------------------
 
 test("GET /api/backtest-runs lists registry rows from SIM_DB, newest first, JSON-parsed", async () => {
-  const simDb = createTestD1([SIM_DIR]);
+  const simDb = createTestD1([STATE_DIR, SIM_DIR]); // STATE_DIR too: getRecentReplayJobs reads job_progress, which lives in the state schema
   await insertBacktestRun(simDb, { id: "bt-old", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", trainDays: 0, testDays: 5, startedAt: "2026-02-01T00:00:00.000Z" });
   await insertBacktestRun(simDb, { id: "bt-new", tickers: ["AAPL", "MSFT"], testStart: "2026-03-01T00:00:00.000Z", testEnd: "2026-03-06T00:00:00.000Z", trainDays: 0, testDays: 5, graceDays: 3, startedAt: "2026-04-01T00:00:00.000Z" });
   await completeBacktestRun(simDb, { id: "bt-new", result: { overall: { on: 1 } }, finishedAt: "2026-04-01T01:00:00.000Z" });
