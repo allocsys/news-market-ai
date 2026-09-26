@@ -17,7 +17,7 @@
 // the exact same (empty) state, so the comparison is apples to apples and
 // never reflects some other run's actual open positions.
 
-import { getPriceBarsAsOf } from "../storage/inputs_view.js";
+import { getPriceBarsAsOf, getPriceBarsInRange } from "../storage/inputs_view.js";
 import { runAnalystTeam } from "../agents/analysts/analystTeam.js";
 import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
 import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
@@ -28,6 +28,9 @@ import { runResearchManager } from "../agents/managers/research_manager.js";
 import { runTrader } from "../agents/trader/trader.js";
 import { evaluateRisk } from "../agents/risk_mgmt/risk.js";
 import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
+import { evaluateExit } from "../agents/risk_mgmt/exit.js";
+import { computeRealizedReturn } from "../shared/returns.js";
+import { resolveCurrentPrice } from "../graph/price_resolution.js";
 import { shouldContinueDebate } from "../graph/conditional_logic.js";
 import { loadLessonsForDebate } from "../graph/reflection.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
@@ -43,12 +46,122 @@ async function runParallelAnalysts(env, config, { ticker, newsItem, bars }) {
 }
 
 /**
+ * Simulates forward price action and exit conditions for an approved trade decision.
+ * READ-ONLY BY DESIGN: uses getPriceBarsInRange and resolveCurrentPrice (both
+ * already-safe read-only functions used elsewhere for backtest scoring / real-pipeline
+ * entry pricing respectively) and mirrors evaluateExit's real exit rules so the
+ * simulated PnL reflects the SAME exit logic the live system would actually apply,
+ * not an invented one.
+ */
+export async function simulateForward(inputs, config, { ticker, asOf, decision }) {
+  const emptyPnl = {
+    entryPrice: null,
+    exitPrice: null,
+    exitReason: null,
+    exitAsOf: null,
+    realizedReturnPct: null,
+    positionPnlPct: null,
+    maxDrawdownPct: null,
+    holdDays: null,
+  };
+
+  const { thesis, riskDecision, portfolioDecision } = decision;
+  if (!portfolioDecision?.approvedForExecution || (thesis?.direction !== "long" && thesis?.direction !== "short")) {
+    return emptyPnl;
+  }
+
+  const resolved = await resolveCurrentPrice(inputs, { ticker, asOf });
+  const entryPrice = resolved.price;
+  if (entryPrice == null) {
+    return emptyPnl;
+  }
+
+  const asOfDateStr = String(asOf).slice(0, 10);
+  const maxHoldDays = config.maxPositionHoldDays ?? 10;
+  const asOfDate = new Date(asOfDateStr + "T00:00:00Z");
+  if (Number.isNaN(asOfDate.getTime())) {
+    return emptyPnl;
+  }
+
+  const toDateObj = new Date(asOfDate.getTime());
+  toDateObj.setUTCDate(toDateObj.getUTCDate() + maxHoldDays + 2);
+  const toDateStr = toDateObj.toISOString().slice(0, 10);
+
+  const bars = await getPriceBarsInRange(inputs, { ticker, fromDate: asOfDateStr, toDate: toDateStr });
+  if (!bars || bars.length === 0) {
+    return {
+      ...emptyPnl,
+      entryPrice,
+    };
+  }
+
+  const direction = thesis.direction;
+  const stopLossPct = riskDecision?.stopLossPct ?? null;
+  const takeProfitPct = riskDecision?.takeProfitPct ?? null;
+
+  let peak = 0;
+  let maxDrawdownPct = 0;
+  let exitPrice = null;
+  let exitReason = null;
+  let exitAsOf = null;
+
+  for (const bar of bars) {
+    const changePct =
+      direction === "long" ? (bar.close - entryPrice) / entryPrice : (entryPrice - bar.close) / entryPrice;
+
+    if (changePct > peak) {
+      peak = changePct;
+    }
+    const drawdown = peak - changePct;
+    if (drawdown > maxDrawdownPct) {
+      maxDrawdownPct = drawdown;
+    }
+
+    const exitEval = evaluateExit(
+      { direction, entryPrice, stopLossPct, takeProfitPct, openedAt: asOf },
+      { currentPrice: bar.close, asOf: bar.date, maxHoldDays }
+    );
+
+    if (exitEval) {
+      exitPrice = bar.close;
+      exitReason = exitEval.reason;
+      exitAsOf = bar.date;
+      break;
+    }
+  }
+
+  if (exitReason == null) {
+    const lastBar = bars[bars.length - 1];
+    exitPrice = lastBar.close;
+    exitReason = "still_open_at_horizon";
+    exitAsOf = lastBar.date;
+  }
+
+  const realizedReturnPct = computeRealizedReturn({ direction, entryPrice, exitPrice });
+  const positionSizePct = portfolioDecision?.finalPositionSizePct ?? 0;
+  const positionPnlPct = realizedReturnPct != null ? realizedReturnPct * positionSizePct : null;
+
+  const holdDays = exitAsOf != null ? Math.round((new Date(exitAsOf).getTime() - asOfDate.getTime()) / 86400000) : null;
+
+  return {
+    entryPrice,
+    exitPrice,
+    exitReason,
+    exitAsOf,
+    realizedReturnPct,
+    positionPnlPct,
+    maxDrawdownPct,
+    holdDays,
+  };
+}
+
+/**
  * Stages 2 onward of graph/pipeline.js#runPipelineForTicker (debate -> trader
  * -> risk -> portfolio) for ONE mode's `opinions` -- everything after the
  * analyst stage, minus checkpointing and minus the final commit/
  * insertTradeDecision branch. `store` is read-only here (see header).
  */
-async function runDecisionForOpinions(env, config, { store }, { ticker, asOf, opinions }) {
+async function runDecisionForOpinions(env, config, { inputs, store }, { ticker, asOf, opinions }) {
   const priorLessons = await loadLessonsForDebate(store, { ticker, asOf });
   let verdict;
   let rounds = 0;
@@ -70,7 +183,13 @@ async function runDecisionForOpinions(env, config, { store }, { ticker, asOf, op
     isReplacingPosition: existingPosition !== null && existingPosition.id !== riskDecision.tradeThesisId,
   });
 
-  return { opinions, verdict, thesis, riskDecision, portfolioDecision };
+  const pnl = await simulateForward(inputs, config, {
+    ticker,
+    asOf,
+    decision: { thesis, riskDecision, portfolioDecision },
+  });
+
+  return { opinions, verdict, thesis, riskDecision, portfolioDecision, pnl };
 }
 
 /** The handful of fields worth comparing at a glance -- the rest of each mode's full result is still returned alongside this. */
@@ -82,6 +201,11 @@ function summarize(result) {
     positionSizePct: result.portfolioDecision?.finalPositionSizePct ?? null,
     stopLossPct: result.riskDecision?.stopLossPct ?? null,
     takeProfitPct: result.riskDecision?.takeProfitPct ?? null,
+    realizedReturnPct: result.pnl?.realizedReturnPct ?? null,
+    positionPnlPct: result.pnl?.positionPnlPct ?? null,
+    maxDrawdownPct: result.pnl?.maxDrawdownPct ?? null,
+    exitReason: result.pnl?.exitReason ?? null,
+    holdDays: result.pnl?.holdDays ?? null,
   };
 }
 
@@ -117,8 +241,8 @@ export async function replayNewsItem(env, config, ctx, { ticker, newsItem, asOf 
   ]);
 
   const [parallel, batched] = await Promise.all([
-    runDecisionForOpinions(env, runConfig, { store }, { ticker, asOf, opinions: parallelOpinions }),
-    runDecisionForOpinions(env, runConfig, { store }, { ticker, asOf, opinions: batchedOpinions }),
+    runDecisionForOpinions(env, runConfig, { inputs, store }, { ticker, asOf, opinions: parallelOpinions }),
+    runDecisionForOpinions(env, runConfig, { inputs, store }, { ticker, asOf, opinions: batchedOpinions }),
   ]);
 
   return {

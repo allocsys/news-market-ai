@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { replayNewsItem, replayNewsItems } from "../src/backtest/newsReplay.js";
+import { replayNewsItem, replayNewsItems, simulateForward } from "../src/backtest/newsReplay.js";
 import { getNewsItemsByIds } from "../src/storage/inputs_view.js";
 import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
 import { AnalystOpinion, AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
@@ -152,4 +152,64 @@ test("getNewsItemsByIds: returns the latest revision for known ids and silently 
 test("getNewsItemsByIds: empty ids array returns empty without querying", async () => {
   const { inputs } = makeCtx({ runId: "replay-test-6" });
   assert.deepEqual(await getNewsItemsByIds(inputs, { ids: [] }), []);
+});
+
+test("simulateForward: approved long position hits take-profit within horizon", async () => {
+  const { inputs } = makeCtx({ runId: "replay-test-7" });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-10", close: 115 });
+
+  const pnl = await simulateForward(inputs, {}, {
+    ticker: "AAPL",
+    asOf: "2026-01-10T14:00:00.000Z",
+    decision: {
+      thesis: { direction: "long" },
+      riskDecision: { stopLossPct: 0.05, takeProfitPct: 0.10 },
+      portfolioDecision: { approvedForExecution: true, finalPositionSizePct: 0.5 }
+    }
+  });
+
+  assert.equal(pnl.entryPrice, 100);
+  assert.equal(pnl.exitPrice, 115);
+  assert.equal(pnl.exitReason, "take_profit");
+  assert.equal(pnl.realizedReturnPct, 0.15);
+  assert.equal(pnl.positionPnlPct, 0.15 * 0.5);
+});
+
+test("simulateForward: unapproved position produces all-null pnl shape", async () => {
+  const { inputs } = makeCtx({ runId: "replay-test-8" });
+  const pnl = await simulateForward(inputs, {}, {
+    ticker: "AAPL",
+    asOf: "2026-01-10T14:00:00.000Z",
+    decision: {
+      thesis: { direction: "long" },
+      riskDecision: {},
+      portfolioDecision: { approvedForExecution: false }
+    }
+  });
+
+  assert.strictEqual(pnl.entryPrice, null);
+  assert.strictEqual(pnl.exitReason, null);
+});
+
+test("simulateForward: maxDrawdownPct correctly tracked peak-to-trough", async () => {
+  const { inputs } = makeCtx({ runId: "replay-test-9" });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-10", close: 110 });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-11", close: 95 });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-12", close: 105 });
+
+  const pnl = await simulateForward(inputs, {}, {
+    ticker: "AAPL",
+    asOf: "2026-01-10T14:00:00.000Z",
+    decision: {
+      thesis: { direction: "long" },
+      riskDecision: {},
+      portfolioDecision: { approvedForExecution: true }
+    }
+  });
+
+  // Entry 100, Peak at day 1 (110, +10%), dip at day 2 (95, -5% from entry).
+  // Drawdown from peak: (110-95)/100 = 15% = 0.15.
+  assert.ok(Math.abs(pnl.maxDrawdownPct - 0.15) < 0.001);
 });
