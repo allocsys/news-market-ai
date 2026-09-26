@@ -294,7 +294,7 @@ test("runPipelineForTicker returns null-confidence rejection without opening a p
 // back out of the ctx's state DB; env is not involved at all.
 // ---------------------------------------------------------------------------
 
-const EXPECTED_LABELS = ["analyst:news_event", "analyst:sentiment", "analyst:technical", "debate:bear", "debate:bull", "debate:judge", "trader"];
+const EXPECTED_LABELS = ["analyst:team", "debate:bear", "debate:bull", "debate:judge", "trader"];
 
 const llmRows = (ctx) => stateRows(ctx.stateDb, "llm_calls", "id");
 
@@ -319,7 +319,7 @@ test("runPipelineForTicker logs every LLM call it makes, tagged with its runId a
   assert.match(trader.prompt, /You are a trader/);
   assert.match(trader.response, /ride the post-earnings momentum/);
   assert.equal(trader.requested_model, "deep");
-  assert.equal(rows.find((r) => r.label === "analyst:sentiment").requested_model, "quick");
+  assert.equal(rows.find((r) => r.label === "analyst:team").requested_model, "quick");
 });
 
 test("a pipeline run in a backtest environment logs under that environment's env_run_id", async () => {
@@ -330,9 +330,9 @@ test("a pipeline run in a backtest environment logs under that environment's env
   await runPipelineForTicker({}, config, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
   const rows = await llmRows(ctx);
-  assert.equal(rows.length, 7);
+  assert.equal(rows.length, 5);
   assert.ok(rows.every((r) => r.env_run_id === "bt-1"));
-  assert.equal((await ctx.store.getRecentLlmCalls()).calls.length, 7);
+  assert.equal((await ctx.store.getRecentLlmCalls()).calls.length, 5);
   assert.equal((await new RunStore(ctx.stateDb, "live").getRecentLlmCalls()).calls.length, 0, "the live environment sees none of it");
 });
 
@@ -344,7 +344,7 @@ test("runPipelineForTicker keeps a source/jobId the caller set (a backtest), and
   await runPipelineForTicker({}, config, ctx, { pipelineRunId: "2026-01-01|AAPL|news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
   const rows = await llmRows(ctx);
-  assert.equal(rows.length, 7);
+  assert.equal(rows.length, 5);
   for (const row of rows) {
     assert.equal(row.source, "backtest");
     assert.equal(row.job_id, "backtest-42");
@@ -365,7 +365,7 @@ test("a resumed pipeline run doesn't log the stages it skips (no LLM call was ma
   };
   await assert.rejects(runPipelineForTicker({}, { ...base, fakeModel: crashModel }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" }));
   const afterCrash = await llmRows(ctx);
-  assert.equal(afterCrash.filter((r) => r.label.startsWith("analyst:")).length, 3);
+  assert.equal(afterCrash.filter((r) => r.label.startsWith("analyst:")).length, 1);
   const lastId = afterCrash[afterCrash.length - 1].id;
 
   // Retry: resumes at the debate stage, so the analysts must not be called (or logged) again.
