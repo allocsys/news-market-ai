@@ -1,9 +1,7 @@
 // Gemini API client with a two-axis cascade: model-first, key-rotation as
-// the inner loop. Ported from allocsys/madmcp's connectors/gemini/client.js
-// -- see that file for the original, more heavily-annotated version and
-// prior-art reasoning. This is a trimmed port adapted to Cloudflare Workers
-// (KV-backed cooldown instead of Redis; env/config passed explicitly instead
-// of module-level imports, since Workers have no persistent process env).
+// the inner loop. Built for Cloudflare Workers (KV-backed cooldown instead
+// of Redis; env/config passed explicitly instead of module-level imports,
+// since Workers have no persistent process env).
 //
 // Cascade shape: for a requested `model`, try every model (primary then
 // configured fallbacks) once with the first key before cycling to the next
