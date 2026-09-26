@@ -1,8 +1,6 @@
 // Per-(model, key) rate-limit cooldown tracking, backed by Cloudflare KV.
 //
-// Ported from allocsys/madmcp's connectors/shared/cooldown.js, which backs
-// this with Upstash Redis (their infra is Vercel-based). KV is the more
-// natural fit here: same "expires itself" TTL semantics, no external
+// KV is a natural fit here: same "expires itself" TTL semantics, no external
 // dependency, and the write pattern (only on a rate-limit event, never per
 // request) sits comfortably inside KV's 1K writes/day free-tier cap.
 //
