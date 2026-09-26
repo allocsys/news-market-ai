@@ -330,9 +330,11 @@ function replayModeSummary(label, summary) {
   const maxDrawdown = replayPct(summary.maxDrawdownPct);
   const exitReason = summary.exitReason != null ? escapeHtml(summary.exitReason.replace(/_/g, " ")) : "no simulated exit";
   const holdDays = summary.holdDays != null ? `${summary.holdDays}d` : "\u2014";
+  const stopLoss = replayPct(summary.stopLossPct);
+  const takeProfit = replayPct(summary.takeProfitPct);
   return `<div class="llm-block">
     <span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(summary.direction ?? "\u2014")}, ${replayPct(summary.confidence, 0)} confidence, ${approved}, size ${replayPct(summary.positionSizePct)}
-    <div class="llm-justification">PnL ${realizedPnl} &middot; drawdown ${maxDrawdown} &middot; exit: ${exitReason} &middot; hold ${holdDays}</div>
+    <div class="llm-justification">Stop ${stopLoss} &middot; target ${takeProfit} &middot; PnL ${realizedPnl} &middot; drawdown ${maxDrawdown} &middot; exit: ${exitReason} &middot; hold ${holdDays}</div>
   </div>`;
 }
 
