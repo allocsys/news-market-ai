@@ -80,7 +80,7 @@ test("runManualBacktest persists a 'complete' run with the real compareSignalOnO
   assert.equal(outcome.result.perWindow.length, 1); // trainDays=0, one implicit test window covering the whole range
   // Scored as daily equity curves over one shared grid (plan.md step D), not per-trade returns.
   const { portfolio } = outcome.result;
-  assert.equal(portfolio.method, "daily-equity-curve-v1");
+  assert.equal(portfolio.method, "daily-equity-curve-v2");
   assert.deepEqual(portfolio.tickers, ["AAPL"]);
   assert.deepEqual(portfolio.series.dates, ["2026-01-05"]); // the only bar inside [Jan 1, Jan 6)
   assert.equal(portfolio.series.on.length, portfolio.series.dates.length);
