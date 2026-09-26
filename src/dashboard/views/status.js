@@ -29,14 +29,14 @@ import { escapeHtml, terminateRunForm } from "../helpers.js";
 
 /**
  * `type` matters because of where the job_progress row actually lives:
- * a backfill job is always `RunStore(LIVE_DB, 'live')`, but a backtest job is
- * `RunStore(SIM_DB, <this backtest's own id>)` (src/index.js) -- the job's id
- * IS its environment, so polling it needs `?env=<jobId>` or the lookup misses
- * (backend defaults env to 'live', where a backtest job never lives).
+ * a backfill job is always `RunStore(LIVE_DB, 'live')`, but a backtest OR
+ * replay job is `RunStore(SIM_DB, <the job's own id>)` (src/index.js) -- the
+ * job's id IS its environment, so polling it needs `?env=<jobId>` or the
+ * lookup misses (backend defaults env to 'live', where neither ever lives).
  */
 function jobPollUrl(jobId, type) {
   const base = `/dashboard/jobs/${encodeURIComponent(jobId)}`;
-  return type === "backtest" ? `${base}?env=${encodeURIComponent(jobId)}` : base;
+  return type === "backtest" || type === "replay" ? `${base}?env=${encodeURIComponent(jobId)}` : base;
 }
 
 const PULSE_STYLE = `<style>
@@ -247,6 +247,10 @@ export function describeJob(job) {
     const range = p.testStart && p.testEnd ? ` from ${p.testStart} to ${p.testEnd}` : "";
     return `Running a backtest for ${tickers || "the full watchlist"}${range}.`;
   }
+  if (job?.type === "replay") {
+    const count = Array.isArray(p.newsItemIds) ? p.newsItemIds.length : 0;
+    return `Replaying ${count || "a few"} news item${count === 1 ? "" : "s"} for ${p.ticker || "?"} (parallel vs. batched analyst calls).`;
+  }
   const range = p.from && p.to ? ` from ${p.from} to ${p.to}` : "";
   if (job?.type === "backfill_prices") {
     const tickers = Array.isArray(p.tickers) && p.tickers.length > 0 ? ` for ${p.tickers.length > MAX_TICKERS_LISTED ? `${p.tickers.length} tickers` : p.tickers.join(", ")}` : " for the whole watchlist";
@@ -264,12 +268,14 @@ export function describeJob(job) {
 export function renderActiveJobPanel(job) {
   if (!job || !job.id) return "";
   const pollUrl = jobPollUrl(job.id, job.type);
-  const label = job.type === "backtest" ? "Backtest" : job.type === "backfill_prices" ? "Price backfill" : "Backfill";
-  const backLink = job.type === "backtest" ? "/dashboard/backtest" : "/dashboard/backfill";
+  const label = job.type === "backtest" ? "Backtest" : job.type === "replay" ? "News replay" : job.type === "backfill_prices" ? "Price backfill" : "Backfill";
+  const backLink = job.type === "backtest" || job.type === "replay" ? "/dashboard/backtest" : "/dashboard/backfill";
   // Only a backtest can be terminated this way (POST /backtest/:id/cancel) --
-  // a backfill has no equivalent endpoint. job.id IS the backtest's run id
-  // (see src/index.js's POST /backtest/run, which enqueues the job under its
-  // own newly-generated id).
+  // a backfill has no equivalent endpoint, and neither does a replay job (it's
+  // small and quick by design, see newsReplay.js's own header -- a few LLM
+  // calls, not a multi-part walk). job.id IS the backtest's run id (see
+  // src/index.js's POST /backtest/run, which enqueues the job under its own
+  // newly-generated id).
   const terminate = job.type === "backtest" ? `<div style="margin-top:0.9rem">${terminateRunForm(job.id)}</div>` : "";
 
   return `<section id="active-job" data-job-id="${escapeHtml(job.id)}">
