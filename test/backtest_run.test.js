@@ -112,7 +112,7 @@ test("runManualBacktest persists a 'failed' run with the error message, still re
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-fail", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-fail", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
@@ -132,7 +132,7 @@ test("runManualBacktest with no backfilled news for the window still completes, 
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-empty", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-empty", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "complete");
@@ -251,7 +251,7 @@ test("a run that dies mid-walk records WHICH ticker-day it died on, in both the 
     const id = `run-mid-${withProgress}`;
 
     const outcome = await runManualBacktest({}, config, ctx, {
-      id, tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+      id, tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
       ...(withProgress ? { onProgress: async () => {} } : {}),
     });
 
@@ -278,7 +278,7 @@ test("a run that fails BEFORE the walk starts gets no 'while processing' suffix"
   const realInputs = ctx2.inputs;
   ctx2.inputs = { prepare(sql) { if (/FROM news_item_revisions r/.test(sql)) throw new Error("simulated D1 read failure"); return realInputs.prepare(sql); } };
   const read = await runManualBacktest({}, config, ctx2, {
-    id: "run-pre-2", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-pre-2", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
   assert.equal(read.status, "failed");
   assert.match(read.error, /simulated D1 read failure/);
@@ -299,7 +299,7 @@ test("a failure BETWEEN ticker-days is not blamed on the last day that finished:
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-between", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-04T00:00:00.000Z",
+    id: "run-between", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-04T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
@@ -359,7 +359,7 @@ test("runManualBacktest refuses a ticker with no usable prices BEFORE any LLM ca
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: async (...args) => { calls++; return model(...args); } };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-nocoverage", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-nocoverage", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
