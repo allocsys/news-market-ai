@@ -443,15 +443,18 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   assert.ok(Math.abs(overall.off.cumulativeReturn - chained) < 1e-9);
   assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99 (Jan 5 is flat vs Jan 4, same ending value)
 
-  // Grace-window-exit-dedupe fix (plan.md item 9): window 1 is NOT the last window, so
-  // it now walks only its own real range, Jan 1..Jan 3 (3 ticker-days) -- no grace day of
-  // its own. Jan 4 is walked exactly once, as window 2's real day, not a second time as
-  // window 1's grace day. Window 2 IS the last window, so it keeps its real grace period:
-  // Jan 3..Jan 6 (4 ticker-days). Total 3 + 4 = 7, not the 8 it would be if every window
-  // got its own grace walk (and not the 6 a single walk of the whole range would be).
+  // Grace-window-exit-dedupe fix (plan.md item 9, corrected again 2026-09-27):
+  // window 1 is NOT the last window, so it now stops the day BEFORE its own
+  // testEnd -- Jan 1..Jan 2 (2 ticker-days) -- leaving its own testEnd day
+  // (Jan 3) to window 2 alone, and gets no grace day of its own either.
+  // Window 2 IS the last window, so it keeps its real range plus its real
+  // grace period: Jan 3..Jan 6 (4 ticker-days). Total 2 + 4 = 6 -- exactly
+  // the 6 distinct calendar days in [Jan 1, Jan 6], each walked exactly once
+  // (see the "never processes the same (ticker, day) twice" test below for
+  // the per-day proof; this test only checks the aggregate count).
   const simulating = updates.filter((u) => u.phase === "simulating");
-  assert.equal(simulating.at(-1).total, 7);
-  assert.equal(simulating.at(-1).done, 7);
+  assert.equal(simulating.at(-1).total, 6);
+  assert.equal(simulating.at(-1).done, 6);
 });
 
 test("runManualBacktest with several walk-forward windows never processes the same (ticker, day) twice -- the exact redundancy the grace-window fix removes", async () => {
