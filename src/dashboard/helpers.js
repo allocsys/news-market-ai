@@ -322,11 +322,16 @@ function replayPct(value, digits = 1) {
   return value != null && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "\u2014";
 }
 
-/** One mode's (parallel or batched) trade-decision summary line -- newsReplay.js#summarize's shape: {direction, confidence, approvedForExecution, positionSizePct, stopLossPct, takeProfitPct}. */
+/** One mode's (parallel or batched) trade-decision summary line -- newsReplay.js#summarize's shape: {direction, confidence, approvedForExecution, positionSizePct, stopLossPct, takeProfitPct, realizedReturnPct, positionPnlPct, maxDrawdownPct, exitReason, holdDays}. */
 function replayModeSummary(label, summary) {
   if (!summary) return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>\u2014</div>`;
   const approved = summary.approvedForExecution ? "approved for execution" : "not approved";
-  return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(summary.direction ?? "\u2014")}, ${replayPct(summary.confidence, 0)} confidence, ${approved}, size ${replayPct(summary.positionSizePct)}</div>`;
+  const realizedPnl = summary.realizedReturnPct != null ? `${summary.realizedReturnPct > 0 ? "+" : ""}${(summary.realizedReturnPct * 100).toFixed(1)}%` : "\u2014";
+  const maxDrawdown = replayPct(summary.maxDrawdownPct);
+  const exitReason = summary.exitReason != null ? escapeHtml(summary.exitReason.replace(/_/g, " ")) : "no simulated exit";
+  const holdDays = summary.holdDays != null ? `${summary.holdDays}d` : "\u2014";
+  return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(summary.direction ?? "\u2014")}, ${replayPct(summary.confidence, 0)} confidence, ${approved}, size ${replayPct(summary.positionSizePct)}</div>
+    <div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>realized PnL: ${realizedPnl} &middot; max drawdown: ${maxDrawdown} &middot; exit: ${exitReason} &middot; hold: ${holdDays}</div>`;
 }
 
 /** newsReplay.js#diffOf's shape: {directionMatch, approvedMatch, positionSizePctDelta, confidenceDelta}. Deltas are batched − parallel, same sign convention diffOf itself uses. */
