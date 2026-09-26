@@ -31,7 +31,12 @@ async function getRun(registryDb, id) {
   return registryDb.prepare("SELECT * FROM backtest_runs WHERE id = ?").bind(id).first();
 }
 
-/** Flat daily bars 2025-12-31 .. 2026-01-05 for each ticker, so a run over 2026-01-01 .. 2026-01-06 (or any shorter span inside it) passes the price-coverage preflight. */
+/** Flat daily bars 2025-12-31 .. 2026-01-05 for each ticker, so a run over 2026-01-01 .. 2026-01-06 (or any shorter span inside it) passes the price-coverage preflight.
+ * NOTE: the preflight now also requires coverage through testEnd + graceDays (the
+ * grace-period scoring fix), so a caller that doesn't explicitly pass graceDays: 0
+ * needs bars reaching the DEFAULT grace (config.maxPositionHoldDays ?? 10) past
+ * whatever testEnd it uses -- well beyond this helper's fixed 6-day range. Tests
+ * below that aren't actually testing grace pass graceDays: 0 for exactly this reason. */
 async function seedCoverage(inputs, tickers) {
   for (const ticker of tickers) {
     for (const date of ["2025-12-31", "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]) {
@@ -80,7 +85,7 @@ test("runManualBacktest persists a 'complete' run with the real compareSignalOnO
   assert.equal(outcome.result.perWindow.length, 1); // trainDays=0, one implicit test window covering the whole range
   // Scored as daily equity curves over one shared grid (plan.md step D), not per-trade returns.
   const { portfolio } = outcome.result;
-  assert.equal(portfolio.method, "daily-equity-curve-v1");
+  assert.equal(portfolio.method, "daily-equity-curve-v2");
   assert.deepEqual(portfolio.tickers, ["AAPL"]);
   assert.deepEqual(portfolio.series.dates, ["2026-01-05"]); // the only bar inside [Jan 1, Jan 6)
   assert.equal(portfolio.series.on.length, portfolio.series.dates.length);
@@ -112,7 +117,7 @@ test("runManualBacktest persists a 'failed' run with the error message, still re
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-fail", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-fail", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
@@ -132,7 +137,7 @@ test("runManualBacktest with no backfilled news for the window still completes, 
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-empty", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-empty", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "complete");
@@ -251,7 +256,7 @@ test("a run that dies mid-walk records WHICH ticker-day it died on, in both the 
     const id = `run-mid-${withProgress}`;
 
     const outcome = await runManualBacktest({}, config, ctx, {
-      id, tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+      id, tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
       ...(withProgress ? { onProgress: async () => {} } : {}),
     });
 
@@ -278,7 +283,7 @@ test("a run that fails BEFORE the walk starts gets no 'while processing' suffix"
   const realInputs = ctx2.inputs;
   ctx2.inputs = { prepare(sql) { if (/FROM news_item_revisions r/.test(sql)) throw new Error("simulated D1 read failure"); return realInputs.prepare(sql); } };
   const read = await runManualBacktest({}, config, ctx2, {
-    id: "run-pre-2", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-pre-2", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
   assert.equal(read.status, "failed");
   assert.match(read.error, /simulated D1 read failure/);
@@ -299,7 +304,7 @@ test("a failure BETWEEN ticker-days is not blamed on the last day that finished:
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-between", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-04T00:00:00.000Z",
+    id: "run-between", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-04T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
@@ -359,7 +364,7 @@ test("runManualBacktest refuses a ticker with no usable prices BEFORE any LLM ca
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: async (...args) => { calls++; return model(...args); } };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-nocoverage", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z",
+    id: "run-nocoverage", tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
@@ -379,8 +384,13 @@ test("runManualBacktest refuses a price hole inside the span (a hole is not a ho
   for (const date of ["2025-12-31", "2026-01-01", "2026-01-20", "2026-01-30"]) await seedBar(ctx.inputs, { ticker: "AAPL", date, close: 100 });
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
+  // graceDays: 0 -- grace now extends the price-coverage requirement past testEnd
+  // too (the preflight has to cover whatever the walk will actually score), so a
+  // nonzero default grace would fail this run on the TAIL gap (no bars near the
+  // grace-extended end) before ever reaching the mid-span hole this test targets.
+
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-hole", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-31T00:00:00.000Z",
+    id: "run-hole", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-31T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
@@ -420,13 +430,16 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   assert.equal(outcome.status, "complete", outcome.error);
   const { perWindow, overall, portfolio } = outcome.result;
   assert.equal(perWindow.length, 2); // [Jan 1, Jan 3) and [Jan 3, Jan 5)
-  assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 2]); // Jan 1-2 and Jan 3-4
-  assert.equal(overall.off.n, 4);
-  assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]);
+  // Window 2 is the LAST window: its own slice is widened by its 1 grace day (Jan 5),
+  // which has a real bar here, so it scores 3 days (Jan 3-5) instead of 2 -- the whole
+  // point of the grace-period scoring fix. Window 1 isn't last, so it's untouched.
+  assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 3]);
+  assert.equal(overall.off.n, 5);
+  assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]);
   // The pooled curve is exactly the windows chained: (1 + w1) * (1 + w2) - 1.
   const chained = (1 + perWindow[0].comparison.off.cumulativeReturn) * (1 + perWindow[1].comparison.off.cumulativeReturn) - 1;
   assert.ok(Math.abs(overall.off.cumulativeReturn - chained) < 1e-9);
-  assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99
+  assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99 (Jan 5 is flat vs Jan 4, same ending value)
 
   // Window 1 walks Jan 1..Jan 4 (through testEnd + 1 grace day), window 2 Jan 3..Jan 6: 8 ticker-days, not the 6 a single walk of the whole range would be.
   const simulating = updates.filter((u) => u.phase === "simulating");

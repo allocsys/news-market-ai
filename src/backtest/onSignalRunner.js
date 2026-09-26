@@ -60,7 +60,11 @@
 // opened from a news item just before testStart that happens to close
 // during this window IS counted. (Only runOnSignalReturns reads this; the
 // equity-curve scoring in runBacktest.js is by calendar day over the span,
-// see equity.js, and is not affected by which window a trade closed in.)
+// see equity.js, and is not affected by which window a trade closed in --
+// though that span itself is now extended past the LAST window's testEnd by
+// this same computeWalkEnd arithmetic, so a position closing during the
+// final grace period is priced through its real close instead of being
+// scored as still-open at spanEnd. See runBacktest.js.)
 
 import { getNewsItemsInRange } from "../storage/inputs_view.js";
 import { runPipelineForTicker } from "../graph/pipeline.js";
@@ -94,9 +98,10 @@ function eachDayIso(startIso, endIso) {
  * on -- a grace period that rolls past "now" just means the walk ends today
  * (plan.md "Engine ports": "end clamped to real now"). No clock, no clamp
  * (unit tests with fixed historical dates). The single place this arithmetic
- * lives, so countSignalWalkSteps and runOnSignalForTicker can't drift.
+ * lives, so countSignalWalkSteps, runOnSignalForTicker, and runBacktest.js's
+ * own grace-extended price-grid load (see equity.js/priceGrid.js) can't drift.
  */
-function computeWalkEnd(config, { testEnd, graceDays, clock }) {
+export function computeWalkEnd(config, { testEnd, graceDays, clock }) {
   const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
   const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
   return clock ? clock.clampEnd(walkEnd) : walkEnd;

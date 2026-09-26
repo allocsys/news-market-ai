@@ -49,7 +49,7 @@
 // no walk-forward opinion can pass trainDays=0 for one single test window
 // spanning the whole [testStart, testEnd) range.
 
-import { walkOnSignalWindow, countSignalWalkSteps } from "./onSignalRunner.js";
+import { walkOnSignalWindow, countSignalWalkSteps, computeWalkEnd } from "./onSignalRunner.js";
 import { onEquityReturns, offEquityReturns, sliceSeriesByWindow, meanOf, DEFAULT_MAX_PRICE_GAP_DAYS } from "./equity.js";
 import { loadPriceGrid, assertPriceCoverage } from "./priceGrid.js";
 import { walkForwardWindows } from "./pointInTime.js";
@@ -173,15 +173,26 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     }
     const spanStart = windows[0].testStart;
     const spanEnd = windows[windows.length - 1].testEnd;
+    // The LAST window's grace period extends past spanEnd (earlier windows'
+    // grace periods overlap the NEXT window's own real test range, already
+    // covered by [spanStart, spanEnd) since walkForwardWindows produces
+    // contiguous windows -- only the final window has no "next window" to
+    // fall into). Extending the grid/scoring span by this same amount is what
+    // lets a position opened near the end of the run get priced through its
+    // real grace-period close instead of being scored as still-open at
+    // spanEnd regardless of what really happened (onSignalRunner.js's own
+    // computeWalkEnd -- same function, same graceDays/clock -- so this can't
+    // drift from the walk's own grace end).
+    const graceExtendedSpanEnd = computeWalkEnd(config, { testEnd: spanEnd, graceDays, clock });
 
-    // PREFLIGHT (free): every ticker needs usable prices over the whole span
-    // before a single LLM call is made.
+    // PREFLIGHT (free): every ticker needs usable prices over the whole span,
+    // including the final grace extension, before a single LLM call is made.
     // Part 1 only (a continuation already passed it, and reloads the grid at
     // scoring time). Unenforced: it is a fixed cost before any unit can run.
     let grid = null;
     if (!cursor) {
       grid = await unenf(async () => {
-        const g = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
+        const g = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: graceExtendedSpanEnd });
         assertPriceCoverage(g);
         return g;
       });
@@ -262,24 +273,33 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       if (!budget.canStart("score")) return await yieldPart({ phase: "score", window: windows.length, walk: null }, "budget");
     }
     return await unenf(async () => {
-      grid ??= await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
+      grid ??= await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: graceExtendedSpanEnd });
 
-      // SCORE: both sides as daily equity curves over the same grid, then sliced
-      // per window (their pooled series is the whole-span curve).
-      const positions = await store.getPositionsInRange({ from: spanStart, to: spanEnd });
+      // SCORE: both sides as daily equity curves over the same (grace-extended)
+      // grid, then sliced per window (their pooled series is the whole-span
+      // curve). Earlier windows' grace periods already fall inside
+      // [spanStart, spanEnd) -- they overlap the NEXT window's own real test
+      // range, since walkForwardWindows produces contiguous windows -- so
+      // their slice needs no adjustment. Only the LAST window has grace days
+      // past spanEnd with no later window to be sliced into, so only its own
+      // slice is widened to graceExtendedSpanEnd; the window objects
+      // themselves (and therefore perWindow's reported testStart/testEnd)
+      // are untouched, so the reported window boundaries stay the real ones.
+      const positions = await store.getPositionsInRange({ from: spanStart, to: graceExtendedSpanEnd });
       const on = onEquityReturns(grid, positions);
       const off = offEquityReturns(grid);
+      const scoringEnd = (window) => (window.testEnd === spanEnd ? graceExtendedSpanEnd : window.testEnd);
 
       const result = await compareSignalOnOffByWindow({
         startDate: testStart,
         endDate: testEnd,
         trainDays,
         testDays: resolvedTestDays,
-        getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, window),
-        getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, window),
+        getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, { testStart: window.testStart, testEnd: scoringEnd(window) }),
+        getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, { testStart: window.testStart, testEnd: scoringEnd(window) }),
     });
     result.portfolio = {
-      method: "daily-equity-curve-v1",
+      method: "daily-equity-curve-v2",
       from: grid.from,
       to: grid.to,
       days: grid.dates.length,
