@@ -66,7 +66,12 @@ const API_ROUTES = [
   { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct", "resolvedEnv", "envError"] },
   { path: "/api/pipeline", keys: ["checkpoints", "error", "resolvedEnv", "envError"] },
   { path: "/api/tickers", keys: ["tickers", "error", "resolvedEnv", "envError"] },
-  { path: "/api/backtest-runs", keys: ["backtestRuns", "error"] },
+  // getBacktestRunsData (data.js) also composes recent news-replay comparisons
+  // (replayJobs/replayError) alongside the plain backtest_runs registry list --
+  // a separate job_progress-backed query, its own independent error, not folded
+  // into backtestRuns/error. Keep this list in sync with that function's return
+  // shape, or this loop can't tell a genuinely missing key from an intentional one.
+  { path: "/api/backtest-runs", keys: ["backtestRuns", "error", "replayJobs", "replayError"] },
 ];
 
 // --------------------------------------------------------------------
@@ -385,7 +390,7 @@ test("GET /api/jobs/:id returns the job by id from LIVE_DB, and 404 for an unkno
 // --------------------------------------------------------------------
 
 test("GET /api/backtest-runs lists registry rows from SIM_DB, newest first, JSON-parsed", async () => {
-  const simDb = createTestD1([SIM_DIR]);
+  const simDb = createTestD1([STATE_DIR, SIM_DIR]); // STATE_DIR too: getRecentReplayJobs reads job_progress, which lives in the state schema
   await insertBacktestRun(simDb, { id: "bt-old", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-06T00:00:00.000Z", trainDays: 0, testDays: 5, startedAt: "2026-02-01T00:00:00.000Z" });
   await insertBacktestRun(simDb, { id: "bt-new", tickers: ["AAPL", "MSFT"], testStart: "2026-03-01T00:00:00.000Z", testEnd: "2026-03-06T00:00:00.000Z", trainDays: 0, testDays: 5, graceDays: 3, startedAt: "2026-04-01T00:00:00.000Z" });
   await completeBacktestRun(simDb, { id: "bt-new", result: { overall: { on: 1 } }, finishedAt: "2026-04-01T01:00:00.000Z" });
@@ -400,6 +405,8 @@ test("GET /api/backtest-runs lists registry rows from SIM_DB, newest first, JSON
   assert.deepEqual(body.backtestRuns[0].tickers, ["AAPL", "MSFT"]);
   assert.deepEqual(body.backtestRuns[0].result, { overall: { on: 1 } });
   assert.equal(body.backtestRuns[1].status, "running");
+  assert.deepEqual(body.replayJobs, [], "no replay jobs seeded for this run's SIM_DB");
+  assert.equal(body.replayError, null);
 });
 
 test("GET /api/backtest-runs goes through a read-only SIM_DB handle: a write attempt can't happen from the dashboard path", async () => {
