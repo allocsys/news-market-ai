@@ -110,7 +110,16 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
   }
 
   if (stage === "risk_checked") {
-    state.riskDecision = evaluateRisk(state.thesis, state.verdict);
+    // Re-fetched here rather than reused from the "ingested" stage's local
+    // `priceBars` above -- that variable isn't carried in `state`, so a
+    // checkpoint-resumed run can enter this stage directly without ever
+    // running the "ingested" block in this process. Same reasoning as
+    // resolveCurrentPrice being re-fetched fresh in the portfolio_checked
+    // stage below rather than carried across stages. evaluateRisk uses these
+    // bars to scale stop-loss/take-profit to the ticker's own volatility
+    // (ATR) instead of a flat distance -- see risk_mgmt/risk.js.
+    const riskBars = await getPriceBarsAsOf(inputs, { ticker, asOf });
+    state.riskDecision = evaluateRisk(state.thesis, state.verdict, riskBars);
     await checkpoint(store, { pipelineRunId, ticker, stage: "risk_checked", state });
     stage = "portfolio_checked"; // next-needed after "risk_checked" is written
   }
