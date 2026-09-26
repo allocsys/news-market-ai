@@ -31,7 +31,12 @@ async function getRun(registryDb, id) {
   return registryDb.prepare("SELECT * FROM backtest_runs WHERE id = ?").bind(id).first();
 }
 
-/** Flat daily bars 2025-12-31 .. 2026-01-05 for each ticker, so a run over 2026-01-01 .. 2026-01-06 (or any shorter span inside it) passes the price-coverage preflight. */
+/** Flat daily bars 2025-12-31 .. 2026-01-05 for each ticker, so a run over 2026-01-01 .. 2026-01-06 (or any shorter span inside it) passes the price-coverage preflight.
+ * NOTE: the preflight now also requires coverage through testEnd + graceDays (the
+ * grace-period scoring fix), so a caller that doesn't explicitly pass graceDays: 0
+ * needs bars reaching the DEFAULT grace (config.maxPositionHoldDays ?? 10) past
+ * whatever testEnd it uses -- well beyond this helper's fixed 6-day range. Tests
+ * below that aren't actually testing grace pass graceDays: 0 for exactly this reason. */
 async function seedCoverage(inputs, tickers) {
   for (const ticker of tickers) {
     for (const date of ["2025-12-31", "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]) {
