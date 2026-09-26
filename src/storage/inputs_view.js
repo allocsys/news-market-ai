@@ -298,6 +298,31 @@ async function getNewsItemsPage(db, { ticker, from, to, cursor, pageSize }) {
 }
 
 /**
+ * Fetch specific news items by id, LATEST revision each -- for the
+ * backtest/newsReplay.js operator tool: the caller already knows exactly
+ * which ids it wants (picked from a prior getNewsItemsInRange listing), so
+ * this is a plain lookup, not a point-in-time read (no asOf gating -- an
+ * operator deliberately replaying an old item is not an agent that could
+ * leak lookahead). Returns rows in no particular order; missing ids are
+ * silently omitted rather than erroring, same "tell the caller what you
+ * found" convention as insertNewsItems' insertedIds.
+ */
+export async function getNewsItemsByIds(db, { ids }) {
+  if (!ids || ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const { results } = await db
+    .prepare(
+      `SELECT r.news_item_id AS id, r.revision, r.published_at AS published_at, r.title, r.body
+       FROM news_item_revisions r
+       WHERE r.news_item_id IN (${placeholders})
+         AND r.revision = (SELECT MAX(r2.revision) FROM news_item_revisions r2 WHERE r2.news_item_id = r.news_item_id)`
+    )
+    .bind(...ids)
+    .all();
+  return results;
+}
+
+/**
  * Write path for daily OHLCV bars (ingestion/sources/yfinance.js). Upsert on
  * (ticker, date) since re-ingesting the same trading day should overwrite
  * rather than duplicate -- unlike news, a price bar has no meaningful
