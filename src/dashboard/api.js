@@ -156,7 +156,8 @@ export async function handleApiLlmCallRoute(request, env, config, id) {
 }
 
 // `backfill_prices` is the historical price-bar backfill (POST /backfill-prices), a live-environment job like `backfill`.
-const ACTIVE_JOB_TYPES = new Set(["backfill", "backfill_prices", "backtest"]);
+// `replay` (backtest/newsReplay.js) lives under its own SIM_DB run_id, same as `backtest` -- see data.js#getActiveJob's replay branch.
+const ACTIVE_JOB_TYPES = new Set(["backfill", "backfill_prices", "backtest", "replay"]);
 // Finished-job lookups are backfill-only (a backtest's result is the backtest run itself, see handleApiLatestJobRoute).
 const LATEST_JOB_TYPES = new Set(["backfill", "backfill_prices"]);
 
@@ -177,7 +178,7 @@ export async function handleApiActiveJobRoute(request, env, config) {
   if (auth.redirect) return unauthorized();
   const searchParams = new URL(request.url).searchParams;
   const type = searchParams.get("type");
-  if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backfill_prices, backtest" }, { status: 400 });
+  if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backfill_prices, backtest, replay" }, { status: 400 });
   return jsonResponse({ job: await getActiveJob(env, type, parseEnvParam(searchParams)) });
 }
 
