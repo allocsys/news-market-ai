@@ -21,9 +21,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { STAGES, nextStage, checkpoint, resumeFrom } from "../src/graph/checkpointer.js";
 import { runPipelineForTicker } from "../src/graph/pipeline.js";
-import { runNewsEventAnalyst } from "../src/agents/analysts/newsEventAnalyst.js";
-import { runSentimentAnalyst } from "../src/agents/analysts/sentimentAnalyst.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { runAnalystTeam } from "../src/agents/analysts/analystTeam.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
 import { withLlmLogContext } from "../src/storage/llm_calls.js";
 import { RunStore } from "../src/storage/run_store.js";
@@ -121,17 +120,14 @@ async function ctxWithEntryBar() {
 function makeFakeModel({ onCall } = {}) {
   return async (prompt, opts) => {
     onCall?.(opts);
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") {
-        return JSON.stringify({ eventType: "earnings_beat", entities: ["AAPL"], summary: "AAPL beat on EPS", justification: "guidance raised too" });
-      }
-      if (opts.extraFields.agent === "sentiment") {
-        return JSON.stringify({ sentiment: "positive", summary: "market reaction positive", justification: "beat + raised guidance" });
-      }
-      if (opts.extraFields.agent === "technical") {
-        return JSON.stringify({ summary: "one bar only, flat", justification: "not enough history for a trend read" });
-      }
-      throw new Error(`unexpected AnalystOpinion agent in test fake model: ${opts.extraFields.agent}`);
+    if (opts.schema === AnalystTeamOpinion) {
+      // ONE call now standing in for what used to be 3 separate AnalystOpinion
+      // calls (news_event/sentiment/technical) -- see analystTeam.js.
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: ["AAPL"], summary: "AAPL beat on EPS", justification: "guidance raised too" },
+        sentiment: { sentiment: "positive", summary: "market reaction positive", justification: "beat + raised guidance" },
+        technical: { summary: "one bar only, flat", justification: "not enough history for a trend read" },
+      });
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"
@@ -182,11 +178,11 @@ test("runPipelineForTicker runs the FULL pipeline end-to-end via config.fakeMode
   assert.equal(decisions.length, 1);
   assert.equal(decisions[0].status, "opened");
 
-  // Exactly one call per LLM-backed agent: 3 analysts (the technical analyst
-  // runs now: the real inputs DB returns the seeded entry bar to it too) +
-  // bull + bear + judge + trader = 7, single debate round since confidence
-  // 0.8 already clears shouldContinueDebate's threshold.
-  assert.equal(calls.length, 7);
+  // Exactly one call per LLM-backed step: 1 batched analyst-team call (the
+  // real inputs DB returns the seeded entry bar to it too, so technical is
+  // included) + bull + bear + judge + trader = 5, single debate round since
+  // confidence 0.8 already clears shouldContinueDebate's threshold.
+  assert.equal(calls.length, 5);
 });
 
 test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT re-invoking already-completed stages' LLM calls", async () => {
