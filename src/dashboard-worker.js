@@ -682,6 +682,42 @@ export default {
       });
     }
 
+    // POST /backtest/replay/run -- the news-replay picker's form submit
+    // (src/dashboard/views/replay.js#renderReplayPickerPage), same
+    // handleTriggerRoute shape as POST /backtest/run just above: session
+    // check here, forward to backend's POST /backtest/replay/run (query
+    // string, same convention as every other trigger route). `newsItemIds`
+    // arrives as one or more same-named checkbox fields -- form.getAll, not
+    // form.get, is what collects all of them; searchParams (the scripted-
+    // caller path) already supports repeated keys the same way via
+    // getAll, kept consistent with fromForm's shape below rather than
+    // requiring callers to pre-join a comma list.
+    if (pathname === "/backtest/replay/run" && request.method === "POST") {
+      return handleTriggerRoute(request, env, config, {
+        backendPath: "/backtest/replay/run",
+        buildQuery: (searchParams, fromForm, sessionUsername, form) => {
+          const ticker = searchParams.get("ticker") ?? fromForm("ticker");
+          const newsItemIds = searchParams.getAll("newsItemIds");
+          const newsItemIdsFromForm = form ? form.getAll("newsItemIds") : [];
+          const ids = (newsItemIds.length > 0 ? newsItemIds : newsItemIdsFromForm).filter(Boolean);
+          const asOf = searchParams.get("asOf") ?? fromForm("asOf");
+          if (!ticker) return { error: "ticker query param is required" };
+          if (ids.length === 0) return { error: "newsItemIds: pick at least one news item to replay" };
+          const params = { ticker, newsItemIds: ids.join(",") };
+          if (asOf) params.asOf = asOf;
+          return { params, activeSection: "backtest" };
+        },
+        formSubmitAccepted: ({ ticker }, body) => ({
+          title: "News replay",
+          detail: `Replaying ${body.newsItemIds?.length ?? "a few"} news item(s) for ${ticker} (parallel vs. batched analyst calls).`,
+          backLink: "/dashboard/backtest",
+          backLabel: "Backtest",
+          jobId: body.id,
+          type: "replay",
+        }),
+      });
+    }
+
     // POST /controls/set -- flip one pause switch (or all). Session-gated here,
     // forwarded to backend's POST /controls/set with the operator's username as
     // `by` for the audit column. Form posts 303 back to /dashboard/controls.
