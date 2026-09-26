@@ -453,3 +453,30 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   assert.equal(simulating.at(-1).total, 7);
   assert.equal(simulating.at(-1).done, 7);
 });
+
+test("runManualBacktest with several walk-forward windows never processes the same (ticker, day) twice -- the exact redundancy the grace-window fix removes", async () => {
+  const ctx = makeBacktestCtx();
+  for (const [date, close] of [["2025-12-31", 100], ["2026-01-01", 100], ["2026-01-02", 110], ["2026-01-03", 110], ["2026-01-04", 99], ["2026-01-05", 99]]) {
+    await seedBar(ctx.inputs, { ticker: "AAPL", date, close });
+  }
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
+  const finishedTicks = []; // every onStep({done: true}) tick, in order
+
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-windows-nodupe", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-05T00:00:00.000Z", trainDays: 0, testDays: 2, graceDays: 1,
+    onProgress: async (u) => { if (u.done !== undefined && u.detail) finishedTicks.push(u.detail); },
+  });
+
+  assert.equal(outcome.status, "complete", outcome.error);
+  // Before the fix, Jan 4 was walked twice for AAPL: once as window 1's grace
+  // day (2026-01-01..2026-01-05 window), once as window 2's real day -- so
+  // "AAPL 2026-01-04" would appear here twice. After the fix it appears once,
+  // and every other ticker-day in [Jan 1, Jan 6] (window 2's real grace end)
+  // also appears exactly once -- nothing is skipped, nothing is doubled.
+  const days = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05", "2026-01-06"];
+  for (const day of days) {
+    const count = finishedTicks.filter((d) => d === `AAPL ${day}`).length;
+    assert.equal(count, 1, `AAPL ${day} should be processed exactly once, was processed ${count} times`);
+  }
+  assert.equal(finishedTicks.length, days.length); // no other ticker-days snuck in either
+});
