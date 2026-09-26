@@ -49,7 +49,7 @@
 // no walk-forward opinion can pass trainDays=0 for one single test window
 // spanning the whole [testStart, testEnd) range.
 
-import { walkOnSignalWindow, countSignalWalkSteps } from "./onSignalRunner.js";
+import { walkOnSignalWindow, countSignalWalkSteps, computeWalkEnd } from "./onSignalRunner.js";
 import { onEquityReturns, offEquityReturns, sliceSeriesByWindow, meanOf, DEFAULT_MAX_PRICE_GAP_DAYS } from "./equity.js";
 import { loadPriceGrid, assertPriceCoverage } from "./priceGrid.js";
 import { walkForwardWindows } from "./pointInTime.js";
