@@ -204,7 +204,10 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       // re-walked correctly (news first, then the exit check) as the NEXT
       // window's own real days, so giving every window its own grace walk
       // was pure redundant work (plan.md item 9, corrected 2026-09-26).
-      totalSteps = windows.reduce((sum, w, wi) => sum + countSignalWalkSteps(config, { tickers, testStart: w.testStart, testEnd: w.testEnd, graceDays: wi === windows.length - 1 ? graceDays : 0, clock }), 0);
+      totalSteps = windows.reduce((sum, w, wi) => {
+        const isLastWindow = wi === windows.length - 1;
+        return sum + countSignalWalkSteps(config, { tickers, testStart: w.testStart, testEnd: w.testEnd, graceDays: isLastWindow ? graceDays : 0, clock, isLastWindow });
+      }, 0);
     }
 
     // Ends this part and hands back where to pick up. Only ever RETURNS a
@@ -243,8 +246,17 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
         // testEnd), then run it again, correctly, once the next window's real
         // walk reaches the same day. Zeroing grace here removes that redundant
         // and premature pass rather than just deduping it after the fact.
-        const windowGraceDays = wi === windows.length - 1 ? graceDays : 0;
-        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays: windowGraceDays, onStep, clock, cursor: resume, budget });
+        // `isLastWindow` additionally stops a non-last window's OWN walk one
+        // day short of its testEnd: that boundary day is exactly the NEXT
+        // window's testStart, so without this a non-last window would still
+        // walk (and exit-check) that one shared day itself, then the next
+        // window would walk it again as its own first day -- the same
+        // double-processing this whole fix exists to remove, just narrowed
+        // from N grace days down to this one boundary day (plan.md item 9,
+        // corrected again 2026-09-27).
+        const isLastWindow = wi === windows.length - 1;
+        const windowGraceDays = isLastWindow ? graceDays : 0;
+        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays: windowGraceDays, onStep, clock, cursor: resume, budget, isLastWindow });
         if (!res.complete) {
           if (res.reason === "transient") {
             // Gemini was unavailable inside a news item (the client's whole cascade came
