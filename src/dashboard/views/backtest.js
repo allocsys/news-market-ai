@@ -1,4 +1,5 @@
-import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE, backtestRunsList, errorState } from "../helpers.js";
+import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE, backtestRunsList, replayJobsList, errorState } from "../helpers.js";
+import { replayTriggerForm } from "./replay.js";
 
 export function backtestTriggerForm() {
   const today = new Date().toISOString().slice(0, 10);
@@ -62,7 +63,7 @@ function backtestPurgeForm() {
   </form>`;
 }
 
-export function renderBacktestView({ backtestRuns, error }) {
+export function renderBacktestView({ backtestRuns, error, replayJobs, replayError }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
     <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
@@ -88,6 +89,21 @@ export function renderBacktestView({ backtestRuns, error }) {
       <div class="panel-header"><span class="panel-title">Recent runs</span></div>
       <div class="panel-body">
         ${error ? errorState(error) : backtestRunsList(backtestRuns)}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:1.5rem">
+      <div class="panel-header"><span class="panel-title">News replay comparison</span></div>
+      <div class="panel-body">
+        <p class="note">Pick one or a few already-ingested news items and see, side by side, what the pre-#132 parallel analyst calls versus the current batched call would each have decided for the resulting trade -- a way to check #132's cost/quality trade-off against real historical items instead of only the test suite. Read-only: no position or trade decision is ever written.</p>
+        ${replayTriggerForm()}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:1.5rem">
+      <div class="panel-header"><span class="panel-title">Recent replay comparisons</span></div>
+      <div class="panel-body">
+        ${replayError ? errorState(replayError) : replayJobsList(replayJobs)}
       </div>
     </div>
   </section>`;
