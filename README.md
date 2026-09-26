@@ -17,7 +17,7 @@ implemented. See plan.md's "Open questions / next steps".
   cooldown state) -- all free tier. See plan.md's Deployment section for the
   exact limits this is designed around.
 - Gemini, called through a multi-key model-cascade client
-  (`src/llm/gemini/client.js`), ported from our `madmcp` repo.
+  (`src/llm/gemini/client.js`).
 
 ## Directory layout
 
