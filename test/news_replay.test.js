@@ -103,6 +103,29 @@ test("replayNewsItem: both modes land on the same trade decision when given iden
   assert.equal(result.batched.summary.direction, "long");
 });
 
+test("replayNewsItem: diff also compares stop/target and pnl fields, not just direction/approval/sizing/confidence", async () => {
+  const { inputs, store } = makeCtx({ runId: "replay-test-2b" });
+  await seedNews(inputs, { id: "news1", tickers: ["AAPL"], publishedAt: "2026-01-10T14:00:00.000Z", title: "AAPL beats", body: "b" });
+
+  const { fakeModel } = makeFakeModel();
+  const config = baseConfig(fakeModel);
+  const newsItem = { id: "news1", title: "AAPL beats", body: "b" };
+
+  const result = await replayNewsItem({}, config, { inputs, store }, { ticker: "AAPL", newsItem, asOf: "2026-01-10T14:00:00.000Z" });
+
+  // Both modes get identical fixed downstream answers (same fake model) and
+  // no price bars are seeded, so both fall back to the same flat 3%/6%
+  // thresholds and the same (all-null, unapproved-pnl-shape) simulateForward
+  // result -- every new diff field should show "identical", not "missing".
+  assert.equal(result.diff.stopLossPctDelta, 0);
+  assert.equal(result.diff.takeProfitPctDelta, 0);
+  assert.equal(result.diff.exitReasonMatch, true);
+  assert.equal(result.diff.realizedReturnPctDelta, null, "both sides null (unapproved pnl shape) -> can't-compare null, not a false 0");
+  assert.equal(result.diff.positionPnlPctDelta, null);
+  assert.equal(result.diff.maxDrawdownPctDelta, null);
+  assert.equal(result.diff.holdDaysDelta, null);
+});
+
 test("replayNewsItem never writes positions, trade_decisions, or pipeline_checkpoints", async () => {
   const { inputs, store, stateDb } = makeCtx({ runId: "replay-test-3" });
   await seedNews(inputs, { id: "news1", tickers: ["AAPL"], publishedAt: "2026-01-10T14:00:00.000Z", title: "AAPL beats", body: "b" });
