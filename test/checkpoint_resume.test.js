@@ -193,10 +193,12 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
   // simply never calling the function again -- state.opinions is checkpointed
   // for real, same write graph/pipeline.js itself uses.
   const analystOnlyModel = async (prompt, opts) => {
-    if (opts.schema !== AnalystOpinion) throw new Error("only analysts should run before the simulated crash");
-    return opts.extraFields.agent === "news_event"
-      ? JSON.stringify({ eventType: "earnings_beat", entities: ["AAPL"], summary: "beat", justification: "guidance raised" })
-      : JSON.stringify({ sentiment: "positive", summary: "positive reaction", justification: "beat + guidance" });
+    if (opts.schema !== AnalystTeamOpinion) throw new Error("only the analyst team should run before the simulated crash");
+    return JSON.stringify({
+      news_event: { eventType: "earnings_beat", entities: ["AAPL"], summary: "beat", justification: "guidance raised" },
+      sentiment: { sentiment: "positive", summary: "positive reaction", justification: "beat + guidance" },
+      technical: { summary: "one bar only, flat", justification: "not enough history for a trend read" },
+    });
   };
   const configForFirstHalf = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: analystOnlyModel };
 
@@ -205,22 +207,19 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
   // db ends up in exactly the state a real crash-after-"analyzed" run would
   // leave it in, without having to partially execute runPipelineForTicker
   // itself (which has no built-in way to stop early on command).
-  const [newsOpinion, sentimentOpinion] = await Promise.all([
-    runNewsEventAnalyst({}, configForFirstHalf, NEWS_ITEM),
-    runSentimentAnalyst({}, configForFirstHalf, NEWS_ITEM),
-  ]);
-  await checkpoint(ctx.store, { pipelineRunId: "news-1", ticker: "AAPL", stage: "analyzed", state: { opinions: [newsOpinion, sentimentOpinion] } });
+  const opinions = await runAnalystTeam({}, configForFirstHalf, { ticker: "AAPL", newsItem: NEWS_ITEM, bars: [{ ticker: "AAPL", date: "2026-01-14", close: 181, volume: 1000 }] });
+  await checkpoint(ctx.store, { pipelineRunId: "news-1", ticker: "AAPL", stage: "analyzed", state: { opinions } });
 
   // "Resume": a fresh call to runPipelineForTicker for the same (pipelineRunId,
-  // ticker) -- a fake model that THROWS if an analyst (AnalystOpinion) is
-  // ever called again is the actual resume assertion: if resumeFrom's
+  // ticker) -- a fake model that THROWS if the analyst team (AnalystTeamOpinion)
+  // is ever called again is the actual resume assertion: if resumeFrom's
   // stage-skipping logic were broken, this test would fail on that throw,
   // not on an assertion after the fact.
   const calls = [];
   const resumeModel = async (prompt, opts) => {
     calls.push(opts);
-    if (opts.schema === AnalystOpinion) {
-      throw new Error("resume must NOT re-invoke the analyst stage -- it was already checkpointed");
+    if (opts.schema === AnalystTeamOpinion) {
+      throw new Error("resume must NOT re-invoke the analyst-team stage -- it was already checkpointed");
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"
@@ -256,10 +255,12 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
 test("runPipelineForTicker returns null-confidence rejection without opening a position when the debate verdict has low confidence", async () => {
   const ctx = await ctxWithEntryBar();
   const lowConfidenceModel = async (prompt, opts) => {
-    if (opts.schema === AnalystOpinion) {
-      return opts.extraFields.agent === "news_event"
-        ? JSON.stringify({ eventType: "minor_update", entities: ["AAPL"], summary: "minor update", justification: "nothing material" })
-        : JSON.stringify({ sentiment: "neutral", summary: "no strong reaction", justification: "unclear signal" });
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "minor_update", entities: ["AAPL"], summary: "minor update", justification: "nothing material" },
+        sentiment: { sentiment: "neutral", summary: "no strong reaction", justification: "unclear signal" },
+        technical: { summary: "flat", justification: "one bar only" },
+      });
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"
