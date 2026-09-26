@@ -425,13 +425,16 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   assert.equal(outcome.status, "complete", outcome.error);
   const { perWindow, overall, portfolio } = outcome.result;
   assert.equal(perWindow.length, 2); // [Jan 1, Jan 3) and [Jan 3, Jan 5)
-  assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 2]); // Jan 1-2 and Jan 3-4
-  assert.equal(overall.off.n, 4);
-  assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]);
+  // Window 2 is the LAST window: its own slice is widened by its 1 grace day (Jan 5),
+  // which has a real bar here, so it scores 3 days (Jan 3-5) instead of 2 -- the whole
+  // point of the grace-period scoring fix. Window 1 isn't last, so it's untouched.
+  assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 3]);
+  assert.equal(overall.off.n, 5);
+  assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]);
   // The pooled curve is exactly the windows chained: (1 + w1) * (1 + w2) - 1.
   const chained = (1 + perWindow[0].comparison.off.cumulativeReturn) * (1 + perWindow[1].comparison.off.cumulativeReturn) - 1;
   assert.ok(Math.abs(overall.off.cumulativeReturn - chained) < 1e-9);
-  assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99
+  assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99 (Jan 5 is flat vs Jan 4, same ending value)
 
   // Window 1 walks Jan 1..Jan 4 (through testEnd + 1 grace day), window 2 Jan 3..Jan 6: 8 ticker-days, not the 6 a single walk of the whole range would be.
   const simulating = updates.filter((u) => u.phase === "simulating");
