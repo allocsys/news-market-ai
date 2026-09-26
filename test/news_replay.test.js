@@ -109,7 +109,7 @@ test("replayNewsItem never writes positions, trade_decisions, or pipeline_checkp
 
   const { fakeModel } = makeFakeModel();
   const config = baseConfig(fakeModel);
-  const newsItem = { id: "news1", title: "AAPL beats", body: "b" });
+  const newsItem = { id: "news1", title: "AAPL beats", body: "b" };
 
   await replayNewsItem({}, config, { inputs, store }, { ticker: "AAPL", newsItem, asOf: "2026-01-10T14:00:00.000Z" });
 
