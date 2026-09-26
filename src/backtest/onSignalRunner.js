@@ -94,9 +94,10 @@ function eachDayIso(startIso, endIso) {
  * on -- a grace period that rolls past "now" just means the walk ends today
  * (plan.md "Engine ports": "end clamped to real now"). No clock, no clamp
  * (unit tests with fixed historical dates). The single place this arithmetic
- * lives, so countSignalWalkSteps and runOnSignalForTicker can't drift.
+ * lives, so countSignalWalkSteps, runOnSignalForTicker, and runBacktest.js's
+ * own grace-extended price-grid load (see equity.js/priceGrid.js) can't drift.
  */
-function computeWalkEnd(config, { testEnd, graceDays, clock }) {
+export function computeWalkEnd(config, { testEnd, graceDays, clock }) {
   const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
   const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
   return clock ? clock.clampEnd(walkEnd) : walkEnd;
