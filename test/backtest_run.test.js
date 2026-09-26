@@ -464,7 +464,7 @@ test("runManualBacktest with several walk-forward windows never processes the sa
 
   const outcome = await runManualBacktest({}, config, ctx, {
     id: "run-windows-nodupe", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-05T00:00:00.000Z", trainDays: 0, testDays: 2, graceDays: 1,
-    onProgress: async (u) => { if (u.done !== undefined && u.detail) finishedTicks.push(u.detail); },
+    onProgress: async (u) => { if (u.phase === "simulating" && u.detail) finishedTicks.push(u.detail); },
   });
 
   assert.equal(outcome.status, "complete", outcome.error);
