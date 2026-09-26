@@ -46,7 +46,8 @@
 
 import { loadConfig } from "./config.js";
 import { createJobReporter } from "./storage/jobs.js";
-import { RunStore } from "./storage/run_store.js";
+import { RunStore, readOnly } from "./storage/run_store.js";
+import { getNewsItemsInRange, getNewsItemsByIds } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { SimClock } from "./backtest/simClock.js";
 import { cancelBacktestRun, getBacktestRun } from "./storage/sim_registry.js";
@@ -103,6 +104,10 @@ function isRealDate(value) {
 // POST /backfill-prices ticker list: Yahoo-style symbols (BRK-B, ^GSPC, EURUSD=X), bounded.
 const MAX_PRICE_BACKFILL_TICKERS = 10;
 const PRICE_TICKER_PATTERN = /^[A-Z0-9^.=-]{1,12}$/;
+// POST /backtest/replay/run newsItemIds: "one or a few" -- bounded the same
+// way MAX_PRICE_BACKFILL_TICKERS bounds a comma-separated list, small enough
+// that a run stays quick (2 pipeline passes x up to this many items).
+const MAX_REPLAY_NEWS_ITEMS = 5;
 
 function newJobId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -348,7 +353,92 @@ export default {
       }
     }
 
-    // POST /backtest/:id/cancel -- terminate a RUNNING backtest. Cooperative,
+    // GET /backtest/replay/news?ticker=X&date=YYYY-MM-DD -- lists already-
+// ingested news items for `ticker` on that UTC calendar day (id, title,
+// publishedAt), so an operator can pick one or a few to replay below.
+// Read-only against INPUTS_DB (readOnly wrapper, same convention as every
+// non-ingestion caller of inputs_view.js); reuses getNewsItemsInRange's
+// existing revision-aware range read rather than a new query.
+if (pathname === "/backtest/replay/news" && request.method === "GET") {
+  const ticker = (url.searchParams.get("ticker") || "").trim().toUpperCase();
+  const date = url.searchParams.get("date");
+  if (!PRICE_TICKER_PATTERN.test(ticker)) {
+    return jsonResponse({ error: "ticker query param is required (letters, digits, . - ^ =)" }, { status: 400 });
+  }
+  if (!isRealDate(date)) {
+    return jsonResponse({ error: "date query param is required, as a real YYYY-MM-DD calendar date" }, { status: 400 });
+  }
+  const from = `${date}T00:00:00.000Z`;
+  const to = new Date(Date.parse(from) + 24 * 3600 * 1000).toISOString();
+  try {
+    const items = await getNewsItemsInRange(readOnly(env.INPUTS_DB), { ticker, from, to });
+    return jsonResponse({
+      ticker,
+      date,
+      items: items.map((it) => ({ id: it.id, publishedAt: it.published_at, title: it.title })),
+    });
+  } catch (err) {
+    console.error("replay news listing failed", { ticker, date, message: err.message });
+    return jsonResponse({ error: "replay news listing failed", message: err.message }, { status: 500 });
+  }
+}
+
+// POST /backtest/replay/run?ticker=X&newsItemIds=id1,id2[&asOf=ISO] --
+// enqueues a "replay" job (backtest-worker.js#queue, backtest/newsReplay.js):
+// runs the FULL pipeline stages TWICE per selected news item -- once with the
+// pre-#132 parallel 3-analyst-call path, once with the current batched
+// runAnalystTeam call -- and returns both resulting trade decisions side by
+// side, so the two can be compared on real historical items. Read-only: no
+// position or decision row is ever written by this (see newsReplay.js's own
+// header) -- only this job's own job_progress row, same as every other job
+// type. `asOf`, if given, overrides EVERY selected item's own published_at
+// (uniform point-in-time cutoff across the comparison); omitted, each item
+// uses its own published_at, same convention onSignalRunner.js's walk uses.
+if (pathname === "/backtest/replay/run" && request.method === "POST") {
+  const ticker = (url.searchParams.get("ticker") || "").trim().toUpperCase();
+  const newsItemIdsParam = url.searchParams.get("newsItemIds");
+  const asOfParam = url.searchParams.get("asOf");
+
+  if (!PRICE_TICKER_PATTERN.test(ticker)) {
+    return jsonResponse({ error: "ticker query param is required (letters, digits, . - ^ =)" }, { status: 400 });
+  }
+  const newsItemIds = (newsItemIdsParam || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (newsItemIds.length === 0 || newsItemIds.length > MAX_REPLAY_NEWS_ITEMS) {
+    return jsonResponse({ error: `newsItemIds must be 1-${MAX_REPLAY_NEWS_ITEMS} comma-separated news item ids` }, { status: 400 });
+  }
+  let asOf;
+  if (asOfParam) {
+    if (Number.isNaN(Date.parse(asOfParam))) {
+      return jsonResponse({ error: "asOf, if given, must be a parseable ISO timestamp" }, { status: 400 });
+    }
+    try {
+      new SimClock().assertNotFuture(asOfParam, "asOf");
+    } catch (err) {
+      return jsonResponse({ error: err.message }, { status: 400 });
+    }
+    asOf = asOfParam;
+  }
+
+  // Same pause gate as POST /backtest/run: this drives real Gemini calls
+  // through the backtest Worker's own key, so a paused Backtests or LLM
+  // switch refuses up front, before any job row exists.
+  const pause = await getPauseFlags(env.LIVE_DB);
+  if (pause.flags.backtests || pause.flags.llm) {
+    return jsonResponse({ error: `backtests are paused (${pause.flags.backtests ? "Backtests" : "LLM calls"} switch is on) -- resume it on /dashboard/controls` }, { status: 409 });
+  }
+
+  const id = newJobId("replay");
+  await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "replay", params: { ticker, newsItemIds, asOf } }).queued();
+  try {
+    await env.BACKTEST.send({ type: "replay", id, ticker, newsItemIds, asOf });
+    return jsonResponse({ accepted: true, id, ticker, newsItemIds });
+  } catch (err) {
+    console.error("replay enqueue failed", { id, ticker, newsItemIds, message: err.message });
+    return jsonResponse({ error: "replay enqueue failed", message: err.message }, { status: 500 });
+  }
+}
+
+// POST /backtest/:id/cancel -- terminate a RUNNING backtest. Cooperative,
     // not preemptive: the backtest Worker's own invocation (if one is active
     // right now, mid-part) keeps running until it next checks in -- there is
     // no way to kill a live Workers invocation from here. What this DOES do,
