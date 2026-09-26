@@ -122,12 +122,15 @@ WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO"
 # never committed:
 #   GEMINI_API_KEYS = comma-separated list of Gemini API keys (cascade
 #     rotates through all of them). Moved here from backend (Step 6) -- this
-#     is the ONLY Worker that should hold it. Nothing else in the repo calls
-#     Gemini: runPipelineForTicker (ANALYZE), runManualBacktest (`backtest`)
-#     and checkOpenPositionExits -> settlePositionOutcome -> closeTheLoop
-#     (`exit_check`) all run here, and runManualBacktest never touches
-#     Finnhub (it only reads news already in D1), so this Worker needs no
-#     vendor data key at all.
+#     Worker's own copy. UPDATE (M3): runManualBacktest (`backtest`) no
+#     longer runs here -- it moved to its own `backtest` Worker
+#     (wrangler.backtest.toml) with its own SIM_DB binding, SimClock, and
+#     its own copy of this same secret, so a backtest never shares this
+#     Worker's LIVE_DB access or Gemini concurrency budget. This Worker now
+#     only runs runPipelineForTicker (ANALYZE) and checkOpenPositionExits ->
+#     settlePositionOutcome -> closeTheLoop (`exit_check`) via the LLM_JOBS
+#     consumer above. Neither needs Finnhub, so this Worker needs no vendor
+#     data key at all.
 #   NOTE: `wrangler secret put` on THIS config does not remove the copy
 #   backend already has on Cloudflare from before this step -- that stale
 #   secret must be deleted from `news-market-ai` separately
