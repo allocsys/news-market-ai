@@ -45,6 +45,8 @@ import { loadConfig } from "./config.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
+import { replayNewsItems } from "./backtest/newsReplay.js";
+import { getNewsItemsByIds } from "./storage/inputs_view.js";
 import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
 import { SubrequestBudget, countedD1, countedKv, cooldownMemoKv } from "./backtest/subrequestBudget.js";
 import { addBacktestRunRowsWritten, getBacktestRowsWrittenToday, failBacktestRun } from "./storage/sim_registry.js";
@@ -235,6 +237,30 @@ export default {
             cleanup = await unenf(() => cleanupFailedRun(runEnv.SIM_DB, ctx.store, id));
           }
           console.log("backtest job finished", { id, status: outcome.status, tickers, part, ...(cleanup ? { cleanup } : {}) });
+        } else if (job.type === "replay") {
+          // Operator tool (backtest/newsReplay.js): compare the pre-#132
+          // parallel 3-call analyst path against the current batched
+          // runAnalystTeam call for a FEW operator-picked historical news
+          // items. Small and quick (a handful of items, a few LLM calls each)
+          // -- no SubrequestBudget/parts chain, no daily-write-budget check;
+          // it writes nothing to backtest_runs and makes no position/decision
+          // rows (see newsReplay.js's own header), only this job's own
+          // job_progress row, same as every other job type here.
+          const { id, ticker, newsItemIds, asOf } = job;
+          const ctx = buildBacktestContext(env, id);
+          const reporter = createJobReporter(ctx.store, { id, type: "replay", params: { ticker, newsItemIds, asOf } });
+          await reporter.start();
+          try {
+            const newsItems = await getNewsItemsByIds(ctx.inputs, { ids: newsItemIds });
+            const found = new Set(newsItems.map((n) => n.id));
+            const missing = newsItemIds.filter((nid) => !found.has(nid));
+            const results = await replayNewsItems(env, config, ctx, { ticker, newsItems, asOf });
+            await reporter.complete({ results, missingNewsItemIds: missing }, "Replay comparison complete");
+            console.log("replay job finished", { id, ticker, requested: newsItemIds.length, found: newsItems.length, missing: missing.length });
+          } catch (err) {
+            console.error("replay job failed", { id, ticker, message: err.message });
+            await reporter.fail(err.message);
+          }
         } else {
           console.error("backtest queue message with unrecognized type, acking without processing", { type: job?.type, id: job?.id });
         }
