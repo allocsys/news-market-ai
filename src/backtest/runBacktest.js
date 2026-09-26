@@ -173,15 +173,26 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     }
     const spanStart = windows[0].testStart;
     const spanEnd = windows[windows.length - 1].testEnd;
+    // The LAST window's grace period extends past spanEnd (earlier windows'
+    // grace periods overlap the NEXT window's own real test range, already
+    // covered by [spanStart, spanEnd) since walkForwardWindows produces
+    // contiguous windows -- only the final window has no "next window" to
+    // fall into). Extending the grid/scoring span by this same amount is what
+    // lets a position opened near the end of the run get priced through its
+    // real grace-period close instead of being scored as still-open at
+    // spanEnd regardless of what really happened (onSignalRunner.js's own
+    // computeWalkEnd -- same function, same graceDays/clock -- so this can't
+    // drift from the walk's own grace end).
+    const graceExtendedSpanEnd = computeWalkEnd(config, { testEnd: spanEnd, graceDays, clock });
 
-    // PREFLIGHT (free): every ticker needs usable prices over the whole span
-    // before a single LLM call is made.
+    // PREFLIGHT (free): every ticker needs usable prices over the whole span,
+    // including the final grace extension, before a single LLM call is made.
     // Part 1 only (a continuation already passed it, and reloads the grid at
     // scoring time). Unenforced: it is a fixed cost before any unit can run.
     let grid = null;
     if (!cursor) {
       grid = await unenf(async () => {
-        const g = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
+        const g = await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: graceExtendedSpanEnd });
         assertPriceCoverage(g);
         return g;
       });
