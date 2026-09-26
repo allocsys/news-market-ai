@@ -81,6 +81,16 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
     // nothing.
     const priceBars = await getPriceBarsAsOf(inputs, { ticker, asOf });
     state.opinions = await runAnalystTeam(env, config, { ticker, newsItem, bars: priceBars });
+    // Carried forward in `state` (not re-fetched later) so the risk_checked
+    // stage's ATR sizing (risk_mgmt/risk.js) gets these same bars WITHOUT an
+    // extra D1 read -- subrequestBudget-paced walks (see
+    // test/backtest_budget_resume.test.js) hardcode exact D1-call counts per
+    // stage, so adding a fresh getPriceBarsAsOf call at risk_checked instead
+    // of reusing this one broke those budget-pause assertions. A checkpoint
+    // written before this field existed simply has state.priceBars
+    // undefined on resume, which evaluateRisk already treats as "fall back
+    // to the flat thresholds" -- safe, not a crash.
+    state.priceBars = priceBars;
     await checkpoint(store, { pipelineRunId, ticker, stage: "analyzed", state });
     stage = "debated"; // next-needed after "analyzed" is written, per resumeFrom's own convention
   }
@@ -110,16 +120,13 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
   }
 
   if (stage === "risk_checked") {
-    // Re-fetched here rather than reused from the "ingested" stage's local
-    // `priceBars` above -- that variable isn't carried in `state`, so a
-    // checkpoint-resumed run can enter this stage directly without ever
-    // running the "ingested" block in this process. Same reasoning as
-    // resolveCurrentPrice being re-fetched fresh in the portfolio_checked
-    // stage below rather than carried across stages. evaluateRisk uses these
-    // bars to scale stop-loss/take-profit to the ticker's own volatility
-    // (ATR) instead of a flat distance -- see risk_mgmt/risk.js.
-    const riskBars = await getPriceBarsAsOf(inputs, { ticker, asOf });
-    state.riskDecision = evaluateRisk(state.thesis, state.verdict, riskBars);
+    // Uses state.priceBars, set in the "ingested" stage above -- NOT a fresh
+    // getPriceBarsAsOf call, to avoid adding a D1 subrequest that would
+    // throw off subrequestBudget's hardcoded per-stage call counts (see the
+    // comment on state.priceBars above). evaluateRisk uses these bars to
+    // scale stop-loss/take-profit to the ticker's own volatility (ATR)
+    // instead of a flat distance -- see risk_mgmt/risk.js.
+    state.riskDecision = evaluateRisk(state.thesis, state.verdict, state.priceBars);
     await checkpoint(store, { pipelineRunId, ticker, stage: "risk_checked", state });
     stage = "portfolio_checked"; // next-needed after "risk_checked" is written
   }
