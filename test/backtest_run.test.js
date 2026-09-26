@@ -380,7 +380,7 @@ test("runManualBacktest refuses a price hole inside the span (a hole is not a ho
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {
-    id: "run-hole", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-31T00:00:00.000Z",
+    id: "run-hole", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-31T00:00:00.000Z", graceDays: 0,
   });
 
   assert.equal(outcome.status, "failed");
