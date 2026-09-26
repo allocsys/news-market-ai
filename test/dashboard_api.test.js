@@ -66,7 +66,12 @@ const API_ROUTES = [
   { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct", "resolvedEnv", "envError"] },
   { path: "/api/pipeline", keys: ["checkpoints", "error", "resolvedEnv", "envError"] },
   { path: "/api/tickers", keys: ["tickers", "error", "resolvedEnv", "envError"] },
-  { path: "/api/backtest-runs", keys: ["backtestRuns", "error"] },
+  // getBacktestRunsData (data.js) also composes recent news-replay comparisons
+  // (replayJobs/replayError) alongside the plain backtest_runs registry list --
+  // a separate job_progress-backed query, its own independent error, not folded
+  // into backtestRuns/error. Keep this list in sync with that function's return
+  // shape, or this loop can't tell a genuinely missing key from an intentional one.
+  { path: "/api/backtest-runs", keys: ["backtestRuns", "error", "replayJobs", "replayError"] },
 ];
 
 // --------------------------------------------------------------------
@@ -400,6 +405,8 @@ test("GET /api/backtest-runs lists registry rows from SIM_DB, newest first, JSON
   assert.deepEqual(body.backtestRuns[0].tickers, ["AAPL", "MSFT"]);
   assert.deepEqual(body.backtestRuns[0].result, { overall: { on: 1 } });
   assert.equal(body.backtestRuns[1].status, "running");
+  assert.deepEqual(body.replayJobs, [], "no replay jobs seeded for this run's SIM_DB");
+  assert.equal(body.replayError, null);
 });
 
 test("GET /api/backtest-runs goes through a read-only SIM_DB handle: a write attempt can't happen from the dashboard path", async () => {
