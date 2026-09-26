@@ -355,7 +355,7 @@ async function handleTriggerRoute(request, env, config, { backendPath, buildQuer
   const isFormSubmit = Boolean(form);
   const fromForm = (key) => (form ? form.get(key) : null);
 
-  const built = buildQuery(url.searchParams, fromForm, sessionUsername);
+  const built = buildQuery(url.searchParams, fromForm, sessionUsername, form);
   if (built.error) return jsonResponse({ error: built.error }, { status: 400 });
 
   // Since plan.md Step 3, backend always enqueues onto JOBS and returns an
