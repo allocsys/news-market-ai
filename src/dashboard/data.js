@@ -5,7 +5,7 @@
 // is exactly one place each section's D1 reads happen, not two copies that
 // could drift.
 import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.js";
-import { getRecentBacktestRuns, getBacktestRun, getActiveBacktestRunId } from "../storage/sim_registry.js";
+import { getRecentBacktestRuns, getBacktestRun, getActiveBacktestRunId, getActiveReplayRunId, getRecentReplayJobs } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
 import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT, STALE_INGESTION_HOURS, PIPELINE_STALE_HOURS } from "./helpers.js";
 import { STAGES } from "../graph/checkpointer.js";
@@ -86,6 +86,18 @@ export async function getActiveJob(env, type, envParam) {
     const db = readOnly(env.SIM_DB);
     const runId = await getActiveBacktestRunId(db);
     return runId ? new RunStore(db, runId).getActiveJob("backtest") : null;
+  }
+  // Same reasoning as the "backtest" branch just above: a replay job's
+  // job_progress row lives under the replay's OWN run_id (id === run_id, see
+  // backtest-worker.js's "replay" branch), never under 'live', so with no
+  // specific `?env=` (the case right after the replay form's 303 redirect
+  // lands back on /dashboard/backtest) this has to search SIM_DB for the
+  // newest in-flight replay rather than ask the live store, where one never
+  // exists.
+  if (type === "replay" && (!envParam || envParam === "live")) {
+    const db = readOnly(env.SIM_DB);
+    const runId = await getActiveReplayRunId(db);
+    return runId ? new RunStore(db, runId).getActiveJob("replay") : null;
   }
   const { store } = await resolveEnv(env, envParam);
   return store.getActiveJob(type);
@@ -294,8 +306,23 @@ export async function getTickersData(env, params) {
 
 export async function getBacktestRunsData(env) {
   // The registry lives on SIM_DB (M3); the dashboard API never writes, so the handle is read-only.
-  const backtestRunsResult = await safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 10 }));
-  return { backtestRuns: backtestRunsResult.data ?? [], error: backtestRunsResult.error };
+  const [backtestRunsResult, replayJobsResult] = await Promise.all([
+    safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 10 })),
+    // Recent news-replay comparisons (backtest/newsReplay.js) -- a SEPARATE
+    // query, not a registry row like backtest_runs: a replay job only ever
+    // writes its own job_progress row (see backtest-worker.js's "replay"
+    // branch and sim_registry.js#getRecentReplayJobs's own header). Its own
+    // error, not folded into backtestRunsResult's, so one list failing
+    // doesn't blank the other -- they render as two independent panels on
+    // /dashboard/backtest.
+    safe(getRecentReplayJobs(readOnly(env.SIM_DB), { limit: 10 })),
+  ]);
+  return {
+    backtestRuns: backtestRunsResult.data ?? [],
+    error: backtestRunsResult.error,
+    replayJobs: replayJobsResult.data ?? [],
+    replayError: replayJobsResult.error,
+  };
 }
 
 /**
