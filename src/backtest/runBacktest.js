@@ -199,7 +199,12 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     }
 
     if (onProgress) {
-      totalSteps = windows.reduce((sum, w) => sum + countSignalWalkSteps(config, { tickers, testStart: w.testStart, testEnd: w.testEnd, graceDays, clock }), 0);
+      // Only the LAST window's grace period feeds the score (see equity.js's
+      // graceExtendedSpanEnd below); earlier windows' grace days are always
+      // re-walked correctly (news first, then the exit check) as the NEXT
+      // window's own real days, so giving every window its own grace walk
+      // was pure redundant work (plan.md item 9, corrected 2026-09-26).
+      totalSteps = windows.reduce((sum, w, wi) => sum + countSignalWalkSteps(config, { tickers, testStart: w.testStart, testEnd: w.testEnd, graceDays: wi === windows.length - 1 ? graceDays : 0, clock }), 0);
     }
 
     // Ends this part and hands back where to pick up. Only ever RETURNS a
@@ -230,7 +235,16 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       for (let wi = cursor?.window ?? 0; wi < windows.length; wi++) {
         const window = windows[wi];
         const resume = cursor && wi === cursor.window ? cursor.walk ?? null : null;
-        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays, onStep, clock, cursor: resume, budget });
+        // Same reasoning as the totalSteps calc above: only the last window
+        // gets a real grace period. An earlier window's would-be grace days
+        // are the next window's own real test days -- walking them here too
+        // would run checkOpenPositionExits on them BEFORE that day's news has
+        // even been processed (getDayNewsItems clips to this window's own
+        // testEnd), then run it again, correctly, once the next window's real
+        // walk reaches the same day. Zeroing grace here removes that redundant
+        // and premature pass rather than just deduping it after the fact.
+        const windowGraceDays = wi === windows.length - 1 ? graceDays : 0;
+        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays: windowGraceDays, onStep, clock, cursor: resume, budget });
         if (!res.complete) {
           if (res.reason === "transient") {
             // Gemini was unavailable inside a news item (the client's whole cascade came
