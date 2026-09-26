@@ -7,11 +7,16 @@
 // trade outcomes -- that would require live Gemini calls through the full
 // agent graph (analysts -> researchers -> trader -> risk -> portfolio) for
 // "signal on", and a comparable no-signal baseline strategy for "signal
-// off", against REAL closed-trade returns. Closed-trade data isn't
-// available yet either: storage/run_store.js#RunStore.closePosition has no caller (see
-// plan.md's positions known-gaps), so there is no realized-return series to
-// plug in today. That end-to-end wiring is explicitly listed in plan.md as
-// a separate, bigger/riskier item, not attempted here.
+// off", against REAL closed-trade returns. UPDATE: storage/run_store.js#RunStore.closePosition
+// now HAS a caller -- graph/exit_check.js#checkOpenPositionExits, called
+// from both the live cron path (src/index.js#scheduled) and the backtest
+// walk (backtest/onSignalRunner.js) -- so realized per-trade returns do
+// exist via RunStore#getRealizedReturnsInRange. That end-to-end wiring is
+// not used by THIS harness, though: runBacktest.js scores by daily equity
+// curve (equity.js) over calendar days, not by pooling realized per-trade
+// returns through this module's getOnReturns/getOffReturns seam. A caller
+// that wants the per-trade-return comparison this module was written for
+// can still plug onSignalRunner.js#makeOnSignalReturns in as getOnReturns.
 //
 // What this module DOES provide, and what actually unblocks that later
 // work: the walk-forward iteration + metrics-comparison machinery itself,
