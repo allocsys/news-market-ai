@@ -322,16 +322,18 @@ function replayPct(value, digits = 1) {
   return value != null && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "\u2014";
 }
 
-/** One mode's (parallel or batched) trade-decision summary line -- newsReplay.js#summarize's shape: {direction, confidence, approvedForExecution, positionSizePct, stopLossPct, takeProfitPct, realizedReturnPct, positionPnlPct, maxDrawdownPct, exitReason, holdDays}. */
+/** One mode's (parallel or batched) trade-decision summary card -- newsReplay.js#summarize's shape: {direction, confidence, approvedForExecution, positionSizePct, stopLossPct, takeProfitPct, realizedReturnPct, positionPnlPct, maxDrawdownPct, exitReason, holdDays}. Single card per mode (label shown once) with the decision on one line and the simulated outcome on a second, quieter line beneath -- previously these were two separate `.llm-block`s that each repeated the mode label, which is what made the comparison read as 4 near-duplicate rows instead of 2. */
 function replayModeSummary(label, summary) {
   if (!summary) return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>\u2014</div>`;
-  const approved = summary.approvedForExecution ? "approved for execution" : "not approved";
+  const approved = summary.approvedForExecution ? "approved" : "not approved";
   const realizedPnl = summary.realizedReturnPct != null ? `${summary.realizedReturnPct > 0 ? "+" : ""}${(summary.realizedReturnPct * 100).toFixed(1)}%` : "\u2014";
   const maxDrawdown = replayPct(summary.maxDrawdownPct);
   const exitReason = summary.exitReason != null ? escapeHtml(summary.exitReason.replace(/_/g, " ")) : "no simulated exit";
   const holdDays = summary.holdDays != null ? `${summary.holdDays}d` : "\u2014";
-  return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(summary.direction ?? "\u2014")}, ${replayPct(summary.confidence, 0)} confidence, ${approved}, size ${replayPct(summary.positionSizePct)}</div>
-    <div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>realized PnL: ${realizedPnl} &middot; max drawdown: ${maxDrawdown} &middot; exit: ${exitReason} &middot; hold: ${holdDays}</div>`;
+  return `<div class="llm-block">
+    <span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(summary.direction ?? "\u2014")}, ${replayPct(summary.confidence, 0)} confidence, ${approved}, size ${replayPct(summary.positionSizePct)}
+    <div class="llm-justification">PnL ${realizedPnl} &middot; drawdown ${maxDrawdown} &middot; exit: ${exitReason} &middot; hold ${holdDays}</div>
+  </div>`;
 }
 
 /** newsReplay.js#diffOf's shape: {directionMatch, approvedMatch, positionSizePctDelta, confidenceDelta}. Deltas are batched − parallel, same sign convention diffOf itself uses. */
@@ -339,14 +341,19 @@ function replayDiffSummary(diff) {
   if (!diff) return "";
   const sizeDelta = diff.positionSizePctDelta != null ? `${diff.positionSizePctDelta > 0 ? "+" : ""}${(diff.positionSizePctDelta * 100).toFixed(1)}pp` : "\u2014";
   const confDelta = diff.confidenceDelta != null ? `${diff.confidenceDelta > 0 ? "+" : ""}${(diff.confidenceDelta * 100).toFixed(0)}pp` : "\u2014";
+  // Short labels on purpose: the original long labels ("Approved for execution",
+  // "Size delta (batched \u2212 parallel)") wrapped across 3-4 lines on a phone-width
+  // mini-stats grid, which is what made this row look cluttered. The batched-minus-
+  // parallel sign convention still applies to sizeDelta/confDelta; it's just not spelled
+  // out in the label anymore -- callers wanting the detail can check diffOf's doc comment.
   return miniStats(
     [
       { value: diff.directionMatch ? "Match" : "Differ", label: "Direction", color: diff.directionMatch ? "var(--color-success-text)" : "var(--color-danger-text)" },
-      { value: diff.approvedMatch ? "Match" : "Differ", label: "Approved for execution", color: diff.approvedMatch ? "var(--color-success-text)" : "var(--color-danger-text)" },
-      { value: sizeDelta, label: "Size delta (batched \u2212 parallel)" },
-      { value: confDelta, label: "Confidence delta" },
+      { value: diff.approvedMatch ? "Match" : "Differ", label: "Approved", color: diff.approvedMatch ? "var(--color-success-text)" : "var(--color-danger-text)" },
+      { value: sizeDelta, label: "Size \u0394" },
+      { value: confDelta, label: "Confidence \u0394" },
     ],
-    { cols: 4 }
+    { cols: 2 }
   );
 }
 
