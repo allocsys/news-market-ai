@@ -299,7 +299,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
         getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, { testStart: window.testStart, testEnd: scoringEnd(window) }),
     });
     result.portfolio = {
-      method: "daily-equity-curve-v1",
+      method: "daily-equity-curve-v2",
       from: grid.from,
       to: grid.to,
       days: grid.dates.length,
