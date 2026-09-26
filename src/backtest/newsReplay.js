@@ -161,7 +161,7 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
  * analyst stage, minus checkpointing and minus the final commit/
  * insertTradeDecision branch. `store` is read-only here (see header).
  */
-async function runDecisionForOpinions(env, config, { inputs, store }, { ticker, asOf, opinions }) {
+async function runDecisionForOpinions(env, config, { inputs, store }, { ticker, asOf, opinions, bars }) {
   const priorLessons = await loadLessonsForDebate(store, { ticker, asOf });
   let verdict;
   let rounds = 0;
@@ -175,7 +175,7 @@ async function runDecisionForOpinions(env, config, { inputs, store }, { ticker, 
   } while (shouldContinueDebate(verdict, rounds, config));
 
   const thesis = await runTrader(env, config, verdict);
-  const riskDecision = evaluateRisk(thesis, verdict);
+  const riskDecision = evaluateRisk(thesis, verdict, bars);
   const existingPosition = await store.getOpenPositionForTickerAsOf({ ticker, asOf });
   const openPositionsRiskPct = await store.getOpenPositionsRiskPctAsOf({ asOf, excludeTicker: ticker });
   const portfolioDecision = evaluatePortfolio(riskDecision, {
@@ -241,8 +241,8 @@ export async function replayNewsItem(env, config, ctx, { ticker, newsItem, asOf 
   ]);
 
   const [parallel, batched] = await Promise.all([
-    runDecisionForOpinions(env, runConfig, { inputs, store }, { ticker, asOf, opinions: parallelOpinions }),
-    runDecisionForOpinions(env, runConfig, { inputs, store }, { ticker, asOf, opinions: batchedOpinions }),
+    runDecisionForOpinions(env, runConfig, { inputs, store }, { ticker, asOf, opinions: parallelOpinions, bars }),
+    runDecisionForOpinions(env, runConfig, { inputs, store }, { ticker, asOf, opinions: batchedOpinions, bars }),
   ]);
 
   return {

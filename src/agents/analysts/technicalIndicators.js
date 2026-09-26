@@ -39,6 +39,35 @@ export function computeVolumeRatio(bars, window) {
 }
 
 /**
+ * Average True Range over the `window` most recent bars, or null if there
+ * isn't one extra bar beyond the window to anchor the first bar's previous
+ * close (same "need one extra anchor bar" convention as computePriceChangePct
+ * above). True range for a bar = max(high-low, |high-prevClose|,
+ * |low-prevClose|) -- the classic Wilder definition, gap-aware rather than
+ * just high-low, since a gap up/down between sessions is real volatility a
+ * plain high-low range would understate.
+ *
+ * Used by risk_mgmt/risk.js to scale stop-loss/take-profit distances to a
+ * ticker's OWN recent volatility instead of one flat % for every ticker --
+ * kept here rather than in risk.js so it stays a pure, DB/LLM-free
+ * calculation over bars already fetched for the technical analyst, same
+ * separation of concerns as every other function in this file.
+ */
+export function computeATR(bars, window) {
+  if (!bars || bars.length < window + 1) return null;
+  let sum = 0;
+  for (let i = 0; i < window; i++) {
+    const bar = bars[i];
+    const prevClose = bars[i + 1].close;
+    const highLow = bar.high - bar.low;
+    const highPrevClose = Math.abs(bar.high - prevClose);
+    const lowPrevClose = Math.abs(bar.low - prevClose);
+    sum += Math.max(highLow, highPrevClose, lowPrevClose);
+  }
+  return sum / window;
+}
+
+/**
  * Bundles the above into one grounded snapshot for a prompt.
  *
  * Returns `{ hasData: false }` when there are no bars at all --
