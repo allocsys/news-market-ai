@@ -50,6 +50,16 @@ const MAX_CASCADE_MS = 90000;
 // Production calls (no subrequestBudget) are unaffected.
 const MAX_ATTEMPTS_UNDER_BUDGET = 3;
 
+// Round-robin starting key index (Workers isolates are single-threaded for
+// sync code, so a plain module-level counter is safe -- no lock needed).
+// Persistence across invocations (warm isolates) is a nice-to-have, not a
+// requirement -- this resets to 0 on a cold start, same as today's behavior.
+let nextKeyStartIndex = 0;
+/** Test-only: resets the rotation counter so tests can assert an exact starting key. */
+export function _resetKeyRotationForTests() {
+  nextKeyStartIndex = 0;
+}
+
 /** One-line digest of a cascade's attempts, e.g. "m-a#0 error 429; m-b#0 skipped; m-c#0 error 503". */
 function summarizeAttempts(attempts) {
   return attempts.map((a) => `${a.model}#${a.keyIndex} ${a.outcome}${a.status ? ` ${a.status}` : ""}`).join("; ");
@@ -167,13 +177,23 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
   // it, skip it for the remaining keys instead of re-discovering the same
   // 404 once per key.
   const deadModels = new Set();
-  for (let ki = 0; ki < config.geminiApiKeys.length; ki++) {
+  const keyCount = config.geminiApiKeys.length;
+  // Proactive spreading: each call starts at the NEXT key in rotation rather
+  // than always key 0, so happy-path traffic distributes across keys instead
+  // of concentrating on #0 until it errors/cools down. `step` still walks
+  // every key exactly once, in order, starting from `startIndex` -- cooldown
+  // skip, bad-key break, dead-model skip and the exhaustion/budget checks
+  // below are all unchanged, they just see a rotated `ki` each call.
+  const startIndex = nextKeyStartIndex % keyCount;
+  nextKeyStartIndex = (nextKeyStartIndex + 1) % keyCount;
+  for (let step = 0; step < keyCount; step++) {
+    const ki = (startIndex + step) % keyCount;
     const apiKey = config.geminiApiKeys[ki];
 
     for (let mi = 0; mi < models.length; mi++) {
       const model = models[mi];
       if (deadModels.has(model)) continue;
-      const isLastCombination = ki === config.geminiApiKeys.length - 1 && mi === models.length - 1;
+      const isLastCombination = step === keyCount - 1 && mi === models.length - 1;
 
       const elapsedMs = Date.now() - cascadeStart;
       if (elapsedMs >= MAX_CASCADE_MS) {

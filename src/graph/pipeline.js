@@ -27,9 +27,7 @@
 
 import { getPriceBarsAsOf } from "../storage/inputs_view.js";
 import { resolveCurrentPrice } from "./price_resolution.js";
-import { runNewsEventAnalyst } from "../agents/analysts/newsEventAnalyst.js";
-import { runSentimentAnalyst } from "../agents/analysts/sentimentAnalyst.js";
-import { runTechnicalAnalyst } from "../agents/analysts/technicalAnalyst.js";
+import { runAnalystTeam } from "../agents/analysts/analystTeam.js";
 import { runBullResearcher } from "../agents/researchers/bull.js";
 import { runBearResearcher } from "../agents/researchers/bear.js";
 import { runResearchManager } from "../agents/managers/research_manager.js";
@@ -82,12 +80,7 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
     // sources") makes it return null rather than asking the LLM to analyze
     // nothing.
     const priceBars = await getPriceBarsAsOf(inputs, { ticker, asOf });
-    const [newsOpinion, sentimentOpinion, technicalOpinion] = await Promise.all([
-      runNewsEventAnalyst(env, config, newsItem),
-      runSentimentAnalyst(env, config, newsItem),
-      runTechnicalAnalyst(env, config, { ticker, newsItem, bars: priceBars }),
-    ]);
-    state.opinions = [newsOpinion, sentimentOpinion, technicalOpinion].filter(Boolean);
+    state.opinions = await runAnalystTeam(env, config, { ticker, newsItem, bars: priceBars });
     await checkpoint(store, { pipelineRunId, ticker, stage: "analyzed", state });
     stage = "debated"; // next-needed after "analyzed" is written, per resumeFrom's own convention
   }

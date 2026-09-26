@@ -98,6 +98,32 @@ export const AnalystOpinion = z.object({
   modelUsed: z.string().optional(),
 });
 
+// The per-agent content an AnalystOpinion needs from the MODEL -- everything
+// except `agent`/`newsItemId`/`modelUsed`, which the caller already knows and
+// fills in itself (same split callStructured's `extraFields` normally does,
+// but done by hand here since three nested objects share one call instead of
+// one flat schema per call).
+const AnalystContent = z.object({
+  eventType: z.string().optional(),
+  entities: z.array(z.string()).default([]),
+  sentiment: SentimentBand.optional(),
+  summary: z.string(),
+  justification: z.string(),
+});
+
+// One Gemini call standing in for what used to be three (news_event +
+// sentiment + technical), since agents/analysts/analystTeam.js#runAnalystTeam
+// batches them (plan.md issue: Gemini call volume). `technical` is a genuinely
+// optional KEY -- the model is only asked for it when there's price-bar data
+// to analyze (technicalAnalyst.js's existing no-bars-data early return, now
+// expressed at the schema level instead of via a separate call returning
+// null), so a batched response missing `technical` is valid, not an error.
+export const AnalystTeamOpinion = z.object({
+  news_event: AnalystContent,
+  sentiment: AnalystContent,
+  technical: AnalystContent.optional(),
+});
+
 export const DebateSide = z.object({
   stance: z.enum(["bull", "bear"]),
   argument: z.string(),

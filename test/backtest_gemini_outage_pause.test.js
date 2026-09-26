@@ -14,7 +14,7 @@ import { SimClock } from "../src/backtest/simClock.js";
 import { SubrequestBudget, countedD1 } from "../src/backtest/subrequestBudget.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { VendorError } from "../src/shared/errors.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { makeCtx, seedNews, seedBar, SIM_DIR } from "./helpers/engine_ctx.js";
 
@@ -28,10 +28,12 @@ const outage = (retryAfterSeconds = 60) => new VendorError("gemini", OUTAGE_MESS
 function healthyModel() {
   return async (prompt, opts) => {
     if (prompt.startsWith("A trade decision for")) return JSON.stringify({ reflection: "played out" });
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") return JSON.stringify({ eventType: "earnings_beat", entities: [], summary: "beat", justification: "guidance" });
-      if (opts.extraFields.agent === "sentiment") return JSON.stringify({ sentiment: "positive", summary: "pos", justification: "beat" });
-      return JSON.stringify({ summary: "flat", justification: "few bars" });
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: [], summary: "beat", justification: "guidance" },
+        sentiment: { sentiment: "positive", summary: "pos", justification: "beat" },
+        technical: { summary: "flat", justification: "few bars" },
+      });
     }
     if (opts.schema === DebateSide) return JSON.stringify({ argument: "a", justification: "j" });
     if (opts.schema === DebateVerdict) return JSON.stringify({ direction: "long", confidence: 0.8, timeHorizon: "days", justification: "j" });

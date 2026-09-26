@@ -21,9 +21,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { STAGES, nextStage, checkpoint, resumeFrom } from "../src/graph/checkpointer.js";
 import { runPipelineForTicker } from "../src/graph/pipeline.js";
-import { runNewsEventAnalyst } from "../src/agents/analysts/newsEventAnalyst.js";
-import { runSentimentAnalyst } from "../src/agents/analysts/sentimentAnalyst.js";
-import { AnalystOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
+import { runAnalystTeam } from "../src/agents/analysts/analystTeam.js";
+import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
 import { withLlmLogContext } from "../src/storage/llm_calls.js";
 import { RunStore } from "../src/storage/run_store.js";
@@ -121,17 +120,14 @@ async function ctxWithEntryBar() {
 function makeFakeModel({ onCall } = {}) {
   return async (prompt, opts) => {
     onCall?.(opts);
-    if (opts.schema === AnalystOpinion) {
-      if (opts.extraFields.agent === "news_event") {
-        return JSON.stringify({ eventType: "earnings_beat", entities: ["AAPL"], summary: "AAPL beat on EPS", justification: "guidance raised too" });
-      }
-      if (opts.extraFields.agent === "sentiment") {
-        return JSON.stringify({ sentiment: "positive", summary: "market reaction positive", justification: "beat + raised guidance" });
-      }
-      if (opts.extraFields.agent === "technical") {
-        return JSON.stringify({ summary: "one bar only, flat", justification: "not enough history for a trend read" });
-      }
-      throw new Error(`unexpected AnalystOpinion agent in test fake model: ${opts.extraFields.agent}`);
+    if (opts.schema === AnalystTeamOpinion) {
+      // ONE call now standing in for what used to be 3 separate AnalystOpinion
+      // calls (news_event/sentiment/technical) -- see analystTeam.js.
+      return JSON.stringify({
+        news_event: { eventType: "earnings_beat", entities: ["AAPL"], summary: "AAPL beat on EPS", justification: "guidance raised too" },
+        sentiment: { sentiment: "positive", summary: "market reaction positive", justification: "beat + raised guidance" },
+        technical: { summary: "one bar only, flat", justification: "not enough history for a trend read" },
+      });
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"
@@ -182,11 +178,11 @@ test("runPipelineForTicker runs the FULL pipeline end-to-end via config.fakeMode
   assert.equal(decisions.length, 1);
   assert.equal(decisions[0].status, "opened");
 
-  // Exactly one call per LLM-backed agent: 3 analysts (the technical analyst
-  // runs now: the real inputs DB returns the seeded entry bar to it too) +
-  // bull + bear + judge + trader = 7, single debate round since confidence
-  // 0.8 already clears shouldContinueDebate's threshold.
-  assert.equal(calls.length, 7);
+  // Exactly one call per LLM-backed step: 1 batched analyst-team call (the
+  // real inputs DB returns the seeded entry bar to it too, so technical is
+  // included) + bull + bear + judge + trader = 5, single debate round since
+  // confidence 0.8 already clears shouldContinueDebate's threshold.
+  assert.equal(calls.length, 5);
 });
 
 test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT re-invoking already-completed stages' LLM calls", async () => {
@@ -197,10 +193,12 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
   // simply never calling the function again -- state.opinions is checkpointed
   // for real, same write graph/pipeline.js itself uses.
   const analystOnlyModel = async (prompt, opts) => {
-    if (opts.schema !== AnalystOpinion) throw new Error("only analysts should run before the simulated crash");
-    return opts.extraFields.agent === "news_event"
-      ? JSON.stringify({ eventType: "earnings_beat", entities: ["AAPL"], summary: "beat", justification: "guidance raised" })
-      : JSON.stringify({ sentiment: "positive", summary: "positive reaction", justification: "beat + guidance" });
+    if (opts.schema !== AnalystTeamOpinion) throw new Error("only the analyst team should run before the simulated crash");
+    return JSON.stringify({
+      news_event: { eventType: "earnings_beat", entities: ["AAPL"], summary: "beat", justification: "guidance raised" },
+      sentiment: { sentiment: "positive", summary: "positive reaction", justification: "beat + guidance" },
+      technical: { summary: "one bar only, flat", justification: "not enough history for a trend read" },
+    });
   };
   const configForFirstHalf = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, fakeModel: analystOnlyModel };
 
@@ -209,22 +207,19 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
   // db ends up in exactly the state a real crash-after-"analyzed" run would
   // leave it in, without having to partially execute runPipelineForTicker
   // itself (which has no built-in way to stop early on command).
-  const [newsOpinion, sentimentOpinion] = await Promise.all([
-    runNewsEventAnalyst({}, configForFirstHalf, NEWS_ITEM),
-    runSentimentAnalyst({}, configForFirstHalf, NEWS_ITEM),
-  ]);
-  await checkpoint(ctx.store, { pipelineRunId: "news-1", ticker: "AAPL", stage: "analyzed", state: { opinions: [newsOpinion, sentimentOpinion] } });
+  const opinions = await runAnalystTeam({}, configForFirstHalf, { ticker: "AAPL", newsItem: NEWS_ITEM, bars: [{ ticker: "AAPL", date: "2026-01-14", close: 181, volume: 1000 }] });
+  await checkpoint(ctx.store, { pipelineRunId: "news-1", ticker: "AAPL", stage: "analyzed", state: { opinions } });
 
   // "Resume": a fresh call to runPipelineForTicker for the same (pipelineRunId,
-  // ticker) -- a fake model that THROWS if an analyst (AnalystOpinion) is
-  // ever called again is the actual resume assertion: if resumeFrom's
+  // ticker) -- a fake model that THROWS if the analyst team (AnalystTeamOpinion)
+  // is ever called again is the actual resume assertion: if resumeFrom's
   // stage-skipping logic were broken, this test would fail on that throw,
   // not on an assertion after the fact.
   const calls = [];
   const resumeModel = async (prompt, opts) => {
     calls.push(opts);
-    if (opts.schema === AnalystOpinion) {
-      throw new Error("resume must NOT re-invoke the analyst stage -- it was already checkpointed");
+    if (opts.schema === AnalystTeamOpinion) {
+      throw new Error("resume must NOT re-invoke the analyst-team stage -- it was already checkpointed");
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"
@@ -260,10 +255,12 @@ test("runPipelineForTicker resumes after a simulated crash mid-pipeline WITHOUT 
 test("runPipelineForTicker returns null-confidence rejection without opening a position when the debate verdict has low confidence", async () => {
   const ctx = await ctxWithEntryBar();
   const lowConfidenceModel = async (prompt, opts) => {
-    if (opts.schema === AnalystOpinion) {
-      return opts.extraFields.agent === "news_event"
-        ? JSON.stringify({ eventType: "minor_update", entities: ["AAPL"], summary: "minor update", justification: "nothing material" })
-        : JSON.stringify({ sentiment: "neutral", summary: "no strong reaction", justification: "unclear signal" });
+    if (opts.schema === AnalystTeamOpinion) {
+      return JSON.stringify({
+        news_event: { eventType: "minor_update", entities: ["AAPL"], summary: "minor update", justification: "nothing material" },
+        sentiment: { sentiment: "neutral", summary: "no strong reaction", justification: "unclear signal" },
+        technical: { summary: "flat", justification: "one bar only" },
+      });
     }
     if (opts.schema === DebateSide) {
       return opts.extraFields.stance === "bull"
@@ -297,7 +294,7 @@ test("runPipelineForTicker returns null-confidence rejection without opening a p
 // back out of the ctx's state DB; env is not involved at all.
 // ---------------------------------------------------------------------------
 
-const EXPECTED_LABELS = ["analyst:news_event", "analyst:sentiment", "analyst:technical", "debate:bear", "debate:bull", "debate:judge", "trader"];
+const EXPECTED_LABELS = ["analyst:team", "debate:bear", "debate:bull", "debate:judge", "trader"];
 
 const llmRows = (ctx) => stateRows(ctx.stateDb, "llm_calls", "id");
 
@@ -322,7 +319,7 @@ test("runPipelineForTicker logs every LLM call it makes, tagged with its runId a
   assert.match(trader.prompt, /You are a trader/);
   assert.match(trader.response, /ride the post-earnings momentum/);
   assert.equal(trader.requested_model, "deep");
-  assert.equal(rows.find((r) => r.label === "analyst:sentiment").requested_model, "quick");
+  assert.equal(rows.find((r) => r.label === "analyst:team").requested_model, "quick");
 });
 
 test("a pipeline run in a backtest environment logs under that environment's env_run_id", async () => {
@@ -333,9 +330,9 @@ test("a pipeline run in a backtest environment logs under that environment's env
   await runPipelineForTicker({}, config, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
   const rows = await llmRows(ctx);
-  assert.equal(rows.length, 7);
+  assert.equal(rows.length, 5);
   assert.ok(rows.every((r) => r.env_run_id === "bt-1"));
-  assert.equal((await ctx.store.getRecentLlmCalls()).calls.length, 7);
+  assert.equal((await ctx.store.getRecentLlmCalls()).calls.length, 5);
   assert.equal((await new RunStore(ctx.stateDb, "live").getRecentLlmCalls()).calls.length, 0, "the live environment sees none of it");
 });
 
@@ -347,7 +344,7 @@ test("runPipelineForTicker keeps a source/jobId the caller set (a backtest), and
   await runPipelineForTicker({}, config, ctx, { pipelineRunId: "2026-01-01|AAPL|news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" });
 
   const rows = await llmRows(ctx);
-  assert.equal(rows.length, 7);
+  assert.equal(rows.length, 5);
   for (const row of rows) {
     assert.equal(row.source, "backtest");
     assert.equal(row.job_id, "backtest-42");
@@ -368,7 +365,7 @@ test("a resumed pipeline run doesn't log the stages it skips (no LLM call was ma
   };
   await assert.rejects(runPipelineForTicker({}, { ...base, fakeModel: crashModel }, ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: NEWS_ITEM, asOf: "2026-01-15T00:00:00Z" }));
   const afterCrash = await llmRows(ctx);
-  assert.equal(afterCrash.filter((r) => r.label.startsWith("analyst:")).length, 3);
+  assert.equal(afterCrash.filter((r) => r.label.startsWith("analyst:")).length, 1);
   const lastId = afterCrash[afterCrash.length - 1].id;
 
   // Retry: resumes at the debate stage, so the analysts must not be called (or logged) again.

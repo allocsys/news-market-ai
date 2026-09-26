@@ -16,6 +16,7 @@ import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { checkOpenPositionExits } from "../src/graph/exit_check.js";
 import { makeCtx, seedBar, seedNews, stateRows } from "./helpers/engine_ctx.js";
 import { makeFakeLongModel } from "./helpers/fake_long_model.js";
+import { AnalystTeamOpinion } from "../src/schemas/index.js";
 
 test("priceBarCutoffDate is the UTC calendar date of asOf, whatever the time of day or offset", () => {
   for (const asOf of ["2026-01-05T00:00:00.000Z", "2026-01-05T09:35:00Z", "2026-01-05T23:59:59.999Z", "2026-01-05"]) {
@@ -94,7 +95,8 @@ test("the pipeline opens a position at the PRIOR close and shows the technical a
   let technicalPrompt = null;
   const config = {
     geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10,
-    fakeModel: makeFakeLongModel({ onCall: (opts, prompt) => { if (opts.extraFields?.agent === "technical") technicalPrompt = prompt; } }),
+    // One batched analyst call now carries the technical section inline (analystTeam.js) rather than a separate call.
+    fakeModel: makeFakeLongModel({ onCall: (opts, prompt) => { if (opts.schema === AnalystTeamOpinion) technicalPrompt = prompt; } }),
   };
 
   await runPipelineForTicker({}, config, ctx, {
