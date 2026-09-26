@@ -15,7 +15,7 @@
 // `db` is SIM_DB. The read (getRecentBacktestRuns) is safe to call through
 // run_store.js#readOnly(env.SIM_DB), which is what the dashboard does.
 
-import { ACTIVE_JOB_MAX_IDLE_MS } from "./jobs.js";
+import { ACTIVE_JOB_MAX_IDLE_MS, jobFromRow } from "./jobs.js";
 
 /**
  * Inserts the 'running' row for a just-started backtest run, before the
@@ -220,4 +220,52 @@ export async function getActiveBacktestRunId(db, { maxIdleMs = ACTIVE_JOB_MAX_ID
     .bind(cutoff)
     .first();
   return row ? row.run_id : null;
+}
+
+/**
+ * Run id of the newest in-flight ('queued' or 'running') REPLAY job in SIM_DB,
+ * or null -- identical shape and reasoning to getActiveBacktestRunId just
+ * above (a replay job's job_progress row lives under the replay's OWN run_id,
+ * id === run_id, see backtest-worker.js's "replay" branch), just filtered on
+ * type = 'replay' instead of 'backtest'. Lets the Backtest page's news-replay
+ * panel show live progress for a replay submitted from an earlier page load,
+ * the same way it already does for a plain backtest.
+ */
+export async function getActiveReplayRunId(db, { maxIdleMs = ACTIVE_JOB_MAX_IDLE_MS, now = new Date().toISOString() } = {}) {
+  const cutoff = new Date(Date.parse(now) - maxIdleMs).toISOString();
+  const row = await db
+    .prepare(
+      `SELECT run_id FROM job_progress
+       WHERE type = 'replay' AND status IN ('queued', 'running') AND updated_at >= ?
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .bind(cutoff)
+    .first();
+  return row ? row.run_id : null;
+}
+
+/**
+ * Most recent REPLAY job_progress rows, newest first, up to `limit` -- the
+ * "Recent replay comparisons" list on /dashboard/backtest. Unlike a backtest
+ * run, a replay job has NO backtest_runs registry row (see newsReplay.js /
+ * backtest-worker.js's "replay" branch: it writes only its own job_progress
+ * row) -- job_progress is a single shared table on SIM_DB with a `run_id`
+ * column (not one table per run), so this can list every replay job
+ * directly, the same way getActiveReplayRunId above finds the newest
+ * in-flight one, without needing a second registry table. Rows are mapped
+ * through storage/jobs.js#jobFromRow, the same JSON-column-parsing/
+ * camelCasing every other job read (RunStore#getJob/getActiveJob) already
+ * uses, so a replay job's shape (id, status, params: {ticker,
+ * newsItemIds, asOf}, result: {results, missingNewsItemIds}, error,
+ * createdAt, ...) matches what helpers.js's render functions expect.
+ */
+export async function getRecentReplayJobs(db, { limit = 10 } = {}) {
+  const { results } = await db
+    .prepare(
+      `SELECT id, type, status, phase, percent, done, total, detail, params, result, error, created_at, started_at, updated_at, finished_at
+       FROM job_progress WHERE type = 'replay' ORDER BY created_at DESC LIMIT ?`
+    )
+    .bind(limit)
+    .all();
+  return results.map(jobFromRow);
 }
