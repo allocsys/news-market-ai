@@ -34,7 +34,7 @@
 // source) is written directly from Finnhub's published API docs, not yet
 // checked against a real, successful response from the live endpoint --
 // see plan.md's GDELT correction for why an unconfirmed shape should never
-// be written up as confirmed. Live-verify via mcp__Madmcp__web_fetch once a
+// be written up as confirmed. Live-verify against the real endpoint once a
 // real FINNHUB_API_KEY exists, before trusting this in production.
 //
 // PER-REQUEST ARTICLE CAP (found 2026-09-20, INFERRED from stored data, not
