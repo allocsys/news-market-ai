@@ -273,21 +273,30 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       if (!budget.canStart("score")) return await yieldPart({ phase: "score", window: windows.length, walk: null }, "budget");
     }
     return await unenf(async () => {
-      grid ??= await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: spanEnd });
+      grid ??= await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: graceExtendedSpanEnd });
 
-      // SCORE: both sides as daily equity curves over the same grid, then sliced
-      // per window (their pooled series is the whole-span curve).
-      const positions = await store.getPositionsInRange({ from: spanStart, to: spanEnd });
+      // SCORE: both sides as daily equity curves over the same (grace-extended)
+      // grid, then sliced per window (their pooled series is the whole-span
+      // curve). Earlier windows' grace periods already fall inside
+      // [spanStart, spanEnd) -- they overlap the NEXT window's own real test
+      // range, since walkForwardWindows produces contiguous windows -- so
+      // their slice needs no adjustment. Only the LAST window has grace days
+      // past spanEnd with no later window to be sliced into, so only its own
+      // slice is widened to graceExtendedSpanEnd; the window objects
+      // themselves (and therefore perWindow's reported testStart/testEnd)
+      // are untouched, so the reported window boundaries stay the real ones.
+      const positions = await store.getPositionsInRange({ from: spanStart, to: graceExtendedSpanEnd });
       const on = onEquityReturns(grid, positions);
       const off = offEquityReturns(grid);
+      const scoringEnd = (window) => (window.testEnd === spanEnd ? graceExtendedSpanEnd : window.testEnd);
 
       const result = await compareSignalOnOffByWindow({
         startDate: testStart,
         endDate: testEnd,
         trainDays,
         testDays: resolvedTestDays,
-        getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, window),
-        getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, window),
+        getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, { testStart: window.testStart, testEnd: scoringEnd(window) }),
+        getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, { testStart: window.testStart, testEnd: scoringEnd(window) }),
     });
     result.portfolio = {
       method: "daily-equity-curve-v1",
