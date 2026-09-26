@@ -50,6 +50,16 @@ const MAX_CASCADE_MS = 90000;
 // Production calls (no subrequestBudget) are unaffected.
 const MAX_ATTEMPTS_UNDER_BUDGET = 3;
 
+// Round-robin starting key index (Workers isolates are single-threaded for
+// sync code, so a plain module-level counter is safe -- no lock needed).
+// Persistence across invocations (warm isolates) is a nice-to-have, not a
+// requirement -- this resets to 0 on a cold start, same as today's behavior.
+let nextKeyStartIndex = 0;
+/** Test-only: resets the rotation counter so tests can assert an exact starting key. */
+export function _resetKeyRotationForTests() {
+  nextKeyStartIndex = 0;
+}
+
 /** One-line digest of a cascade's attempts, e.g. "m-a#0 error 429; m-b#0 skipped; m-c#0 error 503". */
 function summarizeAttempts(attempts) {
   return attempts.map((a) => `${a.model}#${a.keyIndex} ${a.outcome}${a.status ? ` ${a.status}` : ""}`).join("; ");
