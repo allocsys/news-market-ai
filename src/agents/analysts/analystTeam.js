@@ -49,7 +49,9 @@ independently on the SAME article, in ONE response. Every one of the "summary"/"
 fields below is mandatory -- never omit them.
 
 1. NEWS/EVENT: identify the event type, entities/tickers involved, and a short factual summary.
-2. SENTIMENT: score the sentiment on this 5-band scale: ${SentimentBand.options.join(", ")}.${technicalSection}
+2. SENTIMENT: score the sentiment on this 5-band scale: ${SentimentBand.options.join(", ")}. \
+The "sentiment" field must be EXACTLY one of those five words and nothing else -- never a \
+sentence or explanation. Put all reasoning in "justification" instead.${technicalSection}
 
 Respond as JSON only, matching exactly:
 {
