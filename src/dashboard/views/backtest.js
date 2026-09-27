@@ -120,11 +120,15 @@ export function renderBacktestConfirmPage({ testStart, testEnd, tickers, graceDa
       ${graceDays ? `<div class="llm-block"><span class="llm-agent">Grace Days</span> <span class="num">${escapeHtml(graceDays)}</span></div>` : ""}
     </div>
     <p class="note" style="color: var(--color-danger-text); font-weight: 600;">Cost warning: This action makes real Gemini API calls and spends model quota.</p>
-    <form method="post" action="/backtest/run" class="filter-bar">
+    <form method="post" action="/backtest/run" class="filter-bar" style="flex-direction:column;align-items:flex-start;gap:0.9rem">
       <input type="hidden" name="testStart" value="${escapeHtml(testStart)}">
       <input type="hidden" name="testEnd" value="${escapeHtml(testEnd)}">
       ${tickers ? `<input type="hidden" name="tickers" value="${escapeHtml(tickers)}">` : ""}
       ${graceDays ? `<input type="hidden" name="graceDays" value="${escapeHtml(graceDays)}">` : ""}
+      <label class="filter-group" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+        <input type="checkbox" name="enableLlmLog" value="1">
+        <span>Enable LLM call logging for this run <span class="chart-axis-label">(off by default to save D1 write budget -- turns on the "LLM calls" page for just this run)</span></span>
+      </label>
       <div class="filter-group">
         <button type="submit" class="btn">Confirm and run backtest</button>
       </div>
