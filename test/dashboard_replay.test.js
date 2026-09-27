@@ -50,5 +50,6 @@ test("renderReplayPickerPage's picker hint stays capped at 1-5 regardless of how
   const items = Array.from({ length: 8 }, (_, i) => ({ id: `n${i}`, title: `Item ${i}`, publishedAt: "2026-01-15T09:00:00.000Z" }));
   const html = renderReplayPickerPage({ ticker: "AAPL", date: "2026-01-15", items });
   assert.match(html, /Pick 1-5/);
-  assert.equal((html.match(/type="checkbox"/g) || []).length, 8);
+  // +1 for the "enable LLM call logging" checkbox alongside the per-item ones.
+  assert.equal((html.match(/type="checkbox"/g) || []).length, 8 + 1);
 });
