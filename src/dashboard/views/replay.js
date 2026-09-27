@@ -81,6 +81,10 @@ export function renderReplayPickerPage({ ticker, date, items, error }) {
         <span class="filter-label">asOf override (optional, ISO timestamp -- blank uses each item's own publish time)</span>
         <input class="filter-form" type="text" name="asOf" placeholder="2026-01-15T14:30:00.000Z">
       </div>
+      <label class="filter-group" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+        <input type="checkbox" name="enableLlmLog" value="1">
+        <span>Enable LLM call logging for this run <span class="chart-axis-label">(off by default -- turn this on to inspect the raw prompts/responses via "View every LLM call this comparison made")</span></span>
+      </label>
       <div class="filter-group">
         <button type="submit" class="btn">Run replay comparison</button>
       </div>
