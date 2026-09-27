@@ -108,7 +108,12 @@ export default {
           const { id, tickers, testStart, testEnd, graceDays } = job;
           const part = job.part ?? 1;
           const cursor = job.cursor ?? null;
-          const { budget, runEnv } = buildBudgetedEnv(env, config);
+          // Per-run opt-in override (src/index.js's POST /backtest/run) of this
+          // Worker's LLM_LOG_ENABLED=false default -- config is loaded once per
+          // batch and shared across messages, so this must be a fresh object per
+          // job, never a mutation of the shared `config`.
+          const jobConfig = job.enableLlmLog ? { ...config, llmLogEnabled: true } : config;
+          const { budget, runEnv } = buildBudgetedEnv(env, jobConfig);
           // Bookkeeping that must not be cut in half by the budget: counted, never refused.
           const unenf = (fn) => (budget ? budget.unenforced(fn) : fn());
           // (ctx first: RunStore's constructor is what rejects a message with no id.)
@@ -173,7 +178,7 @@ export default {
           if (part === 1) await unenf(() => reporter.start());
           const outcome = await runManualBacktest(
             runEnv,
-            config,
+            jobConfig,
             { inputs: ctx.inputs, store: ctx.store, registryDb: runEnv.SIM_DB },
             {
               id,
@@ -185,7 +190,7 @@ export default {
               cursor,
               budget,
               part,
-              maxParts: config.backtestMaxParts > 0 ? config.backtestMaxParts : Infinity,
+              maxParts: jobConfig.backtestMaxParts > 0 ? jobConfig.backtestMaxParts : Infinity,
             }
           );
           if (budget) console.log("backtest part finished", { id, part, status: outcome.status, reason: outcome.reason, ...budget.snapshot() });
@@ -248,13 +253,19 @@ export default {
           // job_progress row, same as every other job type here.
           const { id, ticker, newsItemIds, asOf } = job;
           const ctx = buildBacktestContext(env, id);
-          const reporter = createJobReporter(ctx.store, { id, type: "replay", params: { ticker, newsItemIds, asOf } });
+          // Same per-run override as the "backtest" branch above -- especially
+          // relevant for replay, whose whole point is inspecting the analyst
+          // calls the dashboard's "View every LLM call this comparison made"
+          // link otherwise has nothing to show for (LLM_LOG_ENABLED=false by
+          // default writes zero llm_calls rows for every replay/backtest run).
+          const jobConfig = job.enableLlmLog ? { ...config, llmLogEnabled: true } : config;
+          const reporter = createJobReporter(ctx.store, { id, type: "replay", params: { ticker, newsItemIds, asOf, enableLlmLog: Boolean(job.enableLlmLog) } });
           await reporter.start();
           try {
             const newsItems = await getNewsItemsByIds(ctx.inputs, { ids: newsItemIds });
             const found = new Set(newsItems.map((n) => n.id));
             const missing = newsItemIds.filter((nid) => !found.has(nid));
-            const results = await replayNewsItems(env, config, ctx, { ticker, newsItems, asOf });
+            const results = await replayNewsItems(env, jobConfig, ctx, { ticker, newsItems, asOf });
             await reporter.complete({ results, missingNewsItemIds: missing }, "Replay comparison complete");
             console.log("replay job finished", { id, ticker, requested: newsItemIds.length, found: newsItems.length, missing: missing.length });
           } catch (err) {

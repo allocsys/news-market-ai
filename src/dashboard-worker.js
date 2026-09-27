@@ -669,6 +669,9 @@ export default {
           const params = { testStart, testEnd };
           if (tickers) params.tickers = tickers;
           if (graceDays) params.graceDays = graceDays;
+          // Unchecked checkboxes aren't submitted at all, so presence (of
+          // either source) means checked -- there's no "0" value to read.
+          if (searchParams.get("enableLlmLog") === "1" || fromForm("enableLlmLog")) params.enableLlmLog = "1";
           return { params, activeSection: "backtest" };
         },
         formSubmitAccepted: ({ testStart, testEnd, tickers }, body) => ({
@@ -705,6 +708,8 @@ export default {
           if (ids.length === 0) return { error: "newsItemIds: pick at least one news item to replay" };
           const params = { ticker, newsItemIds: ids.join(",") };
           if (asOf) params.asOf = asOf;
+          // Same convention as POST /backtest/run above: presence means checked.
+          if (searchParams.get("enableLlmLog") === "1" || fromForm("enableLlmLog")) params.enableLlmLog = "1";
           return { params, activeSection: "backtest" };
         },
         formSubmitAccepted: ({ ticker }, body) => ({
