@@ -131,13 +131,14 @@ test("POST /backtest/run with a valid request enqueues onto BACKTEST and returns
     testStart: "2024-01-01T00:00:00.000Z",
     testEnd: "2024-01-31T00:00:00.000Z",
     graceDays: 5,
+    enableLlmLog: false,
   });
 
   // The 'queued' row lives in SIM_DB, under THIS backtest's own run id -- not 'live'.
   const job = await new RunStore(env.SIM_DB, body.id).getJob(body.id);
   assert.equal(job.status, "queued");
   assert.equal(job.type, "backtest");
-  assert.deepEqual(job.params, { tickers: ["AAPL", "MSFT"], testStart: "2024-01-01", testEnd: "2024-01-31", graceDays: 5 });
+  assert.deepEqual(job.params, { tickers: ["AAPL", "MSFT"], testStart: "2024-01-01", testEnd: "2024-01-31", graceDays: 5, enableLlmLog: false });
 });
 
 test("POST /backtest/run with no tickers param falls back to config.watchlist", async () => {
