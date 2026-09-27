@@ -308,6 +308,13 @@ export default {
         return jsonResponse({ error: "graceDays must be a number" }, { status: 400 });
       }
       const graceDays = graceDaysRaw;
+      // Per-run opt-in override of the backtest Worker's LLM_LOG_ENABLED=false
+      // default (wrangler.backtest.toml -- off by default to save D1 free-tier
+      // write budget, ~4 rows/call). "1" is the only truthy value; anything
+      // else (including absent) leaves the Worker-wide default in place.
+      // Carried on the queue message; backtest-worker.js applies it to just
+      // this run's config, not globally.
+      const enableLlmLog = url.searchParams.get("enableLlmLog") === "1";
 
       // Point-in-time date strings (YYYY-MM-DD) become UTC-midnight ISO
       // timestamps -- onSignalRunner.js and the equity scoring (equity.js) both
@@ -343,9 +350,9 @@ export default {
       // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
       // progress-write hiccup here can never block the real enqueue below.
       // env_run_id/run_id = this backtest's own id, in SIM_DB.
-      await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } }).queued();
+      await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, enableLlmLog } }).queued();
       try {
-        await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays });
+        await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays, enableLlmLog });
         return jsonResponse({ accepted: true, id, tickers, testStart, testEnd });
       } catch (err) {
         console.error("backtest enqueue failed", { id, tickers, message: err.message });
@@ -427,10 +434,18 @@ if (pathname === "/backtest/replay/run" && request.method === "POST") {
     return jsonResponse({ error: `backtests are paused (${pause.flags.backtests ? "Backtests" : "LLM calls"} switch is on) -- resume it on /dashboard/controls` }, { status: 409 });
   }
 
+  // Same per-run LLM-log opt-in as POST /backtest/run above -- especially
+  // relevant here: a replay's whole POINT is inspecting the analyst calls,
+  // and the backtest Worker's LLM_LOG_ENABLED=false default otherwise makes
+  // the dashboard's "View every LLM call this comparison made" link resolve
+  // to nothing (confirmed empty SIM_DB llm_calls table for a real failed
+  // replay while debugging this).
+  const enableLlmLog = url.searchParams.get("enableLlmLog") === "1";
+
   const id = newJobId("replay");
-  await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "replay", params: { ticker, newsItemIds, asOf } }).queued();
+  await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "replay", params: { ticker, newsItemIds, asOf, enableLlmLog } }).queued();
   try {
-    await env.BACKTEST.send({ type: "replay", id, ticker, newsItemIds, asOf });
+    await env.BACKTEST.send({ type: "replay", id, ticker, newsItemIds, asOf, enableLlmLog });
     return jsonResponse({ accepted: true, id, ticker, newsItemIds });
   } catch (err) {
     console.error("replay enqueue failed", { id, ticker, newsItemIds, message: err.message });
