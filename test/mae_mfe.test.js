@@ -44,6 +44,30 @@ test("recordPositionExcursion keeps the running min/max across samples", async (
   assert.equal(row.mfe_pct, 0.03);
 });
 
+test("recordPositionExcursion only writes when a sample extends an extreme (no-op samples return false)", async () => {
+  const ctx = makeCtx();
+  await ctx.store.openPosition(openArgs("AAPL", 100));
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: -0.02 }), true); // first sample: mae=-0.02, mfe=0
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: 0.03 }), true); // new mfe
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: -0.01 }), false); // inside [-0.02, 0.03]
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: 0.03 }), false); // equal to mfe, not an extension
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: -0.02 }), false); // equal to mae
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: -0.05 }), true); // new mae
+  const row = await positionRow(ctx, "AAPL|t1");
+  assert.equal(row.mae_pct, -0.05);
+  assert.equal(row.mfe_pct, 0.03);
+});
+
+test("recordPositionExcursion: a first sample of exactly 0 still records the 0/0 baseline (sampled, not NULL)", async () => {
+  const ctx = makeCtx();
+  await ctx.store.openPosition(openArgs("AAPL", 100));
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: 0 }), true);
+  const row = await positionRow(ctx, "AAPL|t1");
+  assert.equal(row.mae_pct, 0);
+  assert.equal(row.mfe_pct, 0);
+  assert.equal(await ctx.store.recordPositionExcursion({ id: "AAPL|t1", returnPct: 0 }), false); // now a no-op
+});
+
 test("recordPositionExcursion ignores non-finite samples and never overwrites real extremes", async () => {
   const ctx = makeCtx();
   await ctx.store.openPosition(openArgs("AAPL", 100));
