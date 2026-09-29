@@ -75,15 +75,16 @@ test("runOnSignalForTicker opens a position from backfilled news, closes it on a
     ticker: "AAPL",
     testStart: "2026-01-01T00:00:00.000Z",
     testEnd: "2026-01-02T00:00:00.000Z",
-    graceDays: 3,
+    graceDays: 5, // walk to Jan 7: Thu Jan 1 + 2 trading days = Mon Jan 5, which must fall inside the grace window
   });
 
   // Position opened from the news item, then closed time_based once
-  // daysBetween(openedAt, asOf) >= maxPositionHoldDays (2 days).
+  // tradingDaysBetween(openedAt, asOf) >= maxPositionHoldDays (2 trading days:
+  // Fri Jan 2 and Mon Jan 5).
   const positions = await stateRows(ctx.stateDb, "positions");
   assert.equal(positions.length, 1);
   assert.equal(positions[0].close_reason, "time_based");
-  assert.equal(positions[0].closed_at, "2026-01-03T00:00:00.000Z");
+  assert.equal(positions[0].closed_at, "2026-01-05T00:00:00.000Z");
 
   // A trade_decision + a decision_memory (reflection) row both exist.
   const decisions = await stateRows(ctx.stateDb, "trade_decisions");

@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateExit, CLOSE_REASON } from "../src/agents/risk_mgmt/exit.js";
+import { evaluateExit, tradingDaysBetween, CLOSE_REASON } from "../src/agents/risk_mgmt/exit.js";
 import { checkOpenPositionExits } from "../src/graph/exit_check.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
@@ -67,18 +67,42 @@ test("evaluateExit: stop_loss takes priority over take_profit when both are cros
   assert.deepEqual(result, { reason: CLOSE_REASON.STOP_LOSS });
 });
 
-test("evaluateExit: time_based fires once maxHoldDays has elapsed with no price threshold crossed", () => {
-  const result = evaluateExit(BASE_LONG, { currentPrice: 101, asOf: "2026-01-11T00:00:00Z", maxHoldDays: 10 });
+// BASE_LONG opens Thu 2026-01-01. maxHoldDays counts trading days (Mon-Fri):
+// Thu 2026-01-15 is exactly the 10th (Jan 2, 5-9, 12-15).
+test("evaluateExit: time_based fires once maxHoldDays trading days have elapsed with no price threshold crossed", () => {
+  const result = evaluateExit(BASE_LONG, { currentPrice: 101, asOf: "2026-01-15T00:00:00Z", maxHoldDays: 10 });
   assert.deepEqual(result, { reason: CLOSE_REASON.TIME_BASED });
 });
 
-test("evaluateExit: time_based does not fire before maxHoldDays has elapsed", () => {
-  const result = evaluateExit(BASE_LONG, { currentPrice: 101, asOf: "2026-01-09T00:00:00Z", maxHoldDays: 10 });
+test("evaluateExit: time_based does NOT fire on 10 calendar days when weekends leave only 6 trading days", () => {
+  // Sun 2026-01-11 is 10 calendar days after Thu 2026-01-01, but only 6 trading days.
+  const result = evaluateExit(BASE_LONG, { currentPrice: 101, asOf: "2026-01-11T00:00:00Z", maxHoldDays: 10 });
+  assert.equal(result, null);
+});
+
+test("tradingDaysBetween: skips weekends, excludes the opening day, includes the end day", () => {
+  assert.equal(tradingDaysBetween("2026-01-01T00:00:00Z", "2026-01-01T23:00:00Z"), 0); // same UTC day
+  assert.equal(tradingDaysBetween("2026-01-02T15:00:00Z", "2026-01-05T00:00:00Z"), 1); // Fri -> Mon
+  assert.equal(tradingDaysBetween("2026-01-02T15:00:00Z", "2026-01-04T00:00:00Z"), 0); // Fri -> Sun
+  assert.equal(tradingDaysBetween("2026-01-03T00:00:00Z", "2026-01-05T00:00:00Z"), 1); // Sat -> Mon
+  assert.equal(tradingDaysBetween("2026-01-01T00:00:00Z", "2026-01-15T00:00:00Z"), 10);
+  assert.equal(tradingDaysBetween("2026-01-05T00:00:00Z", "2026-01-12T00:00:00Z"), 5); // one full week
+});
+
+test("tradingDaysBetween: an asOf before openedAt is 0, an unparseable date is NaN (time exit never fires)", () => {
+  assert.equal(tradingDaysBetween("2026-01-10T00:00:00Z", "2026-01-05T00:00:00Z"), 0);
+  assert.ok(Number.isNaN(tradingDaysBetween("not-a-date", "2026-01-05T00:00:00Z")));
+  const result = evaluateExit({ ...BASE_LONG, openedAt: "not-a-date" }, { currentPrice: 101, asOf: "2026-03-01T00:00:00Z", maxHoldDays: 10 });
+  assert.equal(result, null);
+});
+
+test("evaluateExit: time_based does not fire before maxHoldDays trading days have elapsed", () => {
+  const result = evaluateExit(BASE_LONG, { currentPrice: 101, asOf: "2026-01-14T00:00:00Z", maxHoldDays: 10 }); // 9th trading day
   assert.equal(result, null);
 });
 
 test("evaluateExit: a price threshold win still beats time_based even right at the hold-day boundary", () => {
-  const result = evaluateExit(BASE_LONG, { currentPrice: 107, asOf: "2026-01-11T00:00:00Z", maxHoldDays: 10 });
+  const result = evaluateExit(BASE_LONG, { currentPrice: 107, asOf: "2026-01-15T00:00:00Z", maxHoldDays: 10 });
   assert.deepEqual(result, { reason: CLOSE_REASON.TAKE_PROFIT });
 });
 
@@ -87,7 +111,7 @@ test("evaluateExit: null entryPrice skips price-based exits entirely but time_ba
   const stillOpen = evaluateExit(noPrice, { currentPrice: 50, asOf: "2026-01-02T00:00:00Z", maxHoldDays: 10 });
   assert.equal(stillOpen, null); // would have been stop_loss if entryPrice were set -- must NOT fabricate one
 
-  const timeBased = evaluateExit(noPrice, { currentPrice: 50, asOf: "2026-01-11T00:00:00Z", maxHoldDays: 10 });
+  const timeBased = evaluateExit(noPrice, { currentPrice: 50, asOf: "2026-01-15T00:00:00Z", maxHoldDays: 10 });
   assert.deepEqual(timeBased, { reason: CLOSE_REASON.TIME_BASED });
 });
 
@@ -197,7 +221,7 @@ test("checkOpenPositionExits closes a position on a time-based exit even with no
   // No price bars seeded for TSLA at all -- this is the "yfinance not wired
   // in yet" case documented in exit_check.js's header.
 
-  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-08T00:00:00Z" }); // 7 days later
+  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-08T00:00:00Z" }); // 7 calendar days = 5 trading days later (Jan 2, 5, 6, 7, 8)
   assert.deepEqual(closed, [{ id: "TSLA|t1", ticker: "TSLA", reason: "time_based" }]);
 
   // No entryPrice AND no exitPrice -- settlePositionOutcome must skip

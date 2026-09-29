@@ -28,7 +28,7 @@ import { runResearchManager } from "../agents/managers/research_manager.js";
 import { runTrader } from "../agents/trader/trader.js";
 import { evaluateRisk } from "../agents/risk_mgmt/risk.js";
 import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
-import { evaluateExit } from "../agents/risk_mgmt/exit.js";
+import { evaluateExit, calendarDaysCoveringTradingDays } from "../agents/risk_mgmt/exit.js";
 import { computeRealizedReturn } from "../shared/returns.js";
 import { resolveCurrentPrice } from "../graph/price_resolution.js";
 import { shouldContinueDebate } from "../graph/conditional_logic.js";
@@ -84,7 +84,10 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
   }
 
   const toDateObj = new Date(asOfDate.getTime());
-  toDateObj.setUTCDate(toDateObj.getUTCDate() + maxHoldDays + 2);
+  // maxHoldDays counts trading days (exit.js#tradingDaysBetween), so the
+  // calendar window must cover whole weeks, plus 2 days of slack for
+  // bar-visibility timing and holidays.
+  toDateObj.setUTCDate(toDateObj.getUTCDate() + calendarDaysCoveringTradingDays(maxHoldDays) + 2);
   const toDateStr = toDateObj.toISOString().slice(0, 10);
 
   const bars = await getPriceBarsInRange(inputs, { ticker, fromDate: asOfDateStr, toDate: toDateStr });
