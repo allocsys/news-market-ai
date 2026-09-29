@@ -64,7 +64,10 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
       // currentPrice IS the exit price -- it's the same bar that triggered
       // this exit decision (or null for a time_based exit with no price
       // data, same honest-gap convention evaluateExit already follows).
-      await store.closePosition({ id: position.id, closedAt: asOf, closeReason: exit.reason, exitPrice: currentPrice });
+      const didClose = await store.closePosition({ id: position.id, closedAt: asOf, closeReason: exit.reason, exitPrice: currentPrice });
+      // Lost a race (commitThesis replaced it after our read): the replaced path
+      // settles it with the right reason/price, so settling here would double-record.
+      if (!didClose) continue;
       await settlePositionOutcome(env, config, store, { position, exitPrice: currentPrice, closedAt: asOf, closeReason: exit.reason });
       closed.push({ id: position.id, ticker: position.ticker, reason: exit.reason });
     }
