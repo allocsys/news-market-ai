@@ -29,6 +29,16 @@ export const DEFAULT_FLIP_MIN_CONFIDENCE = 0.75;
 // nothing, so only config.js#loadConfig applies this default.
 export const DEFAULT_TRADE_COST_BPS = 5;
 
+// Stock-split guard (shared/split_guard.js): stored bars are RAW/unadjusted, so
+// a split shows up as a price step that looks like a crash (or, for a reverse
+// split, a surge). A position whose current/entry price ratio lands within this
+// RELATIVE tolerance of a common split ratio (1/2, 1/3, ... or 2, 3, ...) is
+// treated as split-suspected. Untuned placeholder: wide enough to absorb a
+// few percent of market move on top of the split, narrow enough that a real
+// large move rarely matches. config.splitGuardTolerance (SPLIT_GUARD_TOLERANCE)
+// overrides it; 0 disables the guard.
+export const DEFAULT_SPLIT_GUARD_TOLERANCE = 0.05;
+
 // trade_decisions.status values. RunStore#commitThesis derives the first
 // four in SQL; the pipeline writes 'rejected' and 'skipped_no_price_data'
 // itself when no commit happens. The dashboard (M4) should import this rather

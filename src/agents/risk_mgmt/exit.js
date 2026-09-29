@@ -80,11 +80,15 @@ export function calendarDaysCoveringTradingDays(tradingDays) {
  * case price-based exits are skipped
  * entirely and only the time-based exit can fire; this function never
  * fabricates a price to force a stop-loss/take-profit decision.
+ *
+ * `skipPriceExits: true` does the same on purpose: the caller distrusts the
+ * price (graph/exit_check.js sets it when shared/split_guard.js suspects a
+ * stock split in the raw bars), so only the time-based exit can fire.
  */
-export function evaluateExit(position, { currentPrice, asOf, maxHoldDays }) {
+export function evaluateExit(position, { currentPrice, asOf, maxHoldDays, skipPriceExits = false }) {
   const { direction, entryPrice, stopLossPct, takeProfitPct, openedAt } = position;
 
-  if (entryPrice != null && currentPrice != null && (direction === "long" || direction === "short")) {
+  if (!skipPriceExits && entryPrice != null && currentPrice != null && (direction === "long" || direction === "short")) {
     const changePct =
       direction === "long" ? (currentPrice - entryPrice) / entryPrice : (entryPrice - currentPrice) / entryPrice;
 
