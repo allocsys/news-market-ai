@@ -57,6 +57,7 @@ import { compareSignalOnOffByWindow } from "./signalCompare.js";
 import { insertBacktestRun, completeBacktestRun, failBacktestRun } from "../storage/sim_registry.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 import { SimClock } from "./simClock.js";
+import { effectiveKnobs } from "./knobOverrides.js";
 import { createLlmBudget } from "../llm/budget.js";
 
 // Consecutive Gemini-outage pauses on one news item before the run gives up
@@ -341,6 +342,11 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       off: { avgExposure: meanOf(off.exposure), holdings: grid.tickers.length },
       series: { dates: grid.dates, on: on.returns, off: off.returns, onExposure: on.exposure, onGross: onGross.returns, offGross: offGross.returns },
     };
+
+    // The tuning knobs this run actually used (per-run overrides included), so a
+    // sweep's results are self-describing: no need to remember which env or query
+    // params produced which run (backtest/knobOverrides.js).
+    result.knobs = effectiveKnobs(config);
 
     await onProgress?.({ phase: "saving", percent: 98, done: totalSteps, total: totalSteps, detail: "Saving backtest results", force: true });
     await completeBacktestRun(registryDb, { id, result, finishedAt: new Date().toISOString() });
