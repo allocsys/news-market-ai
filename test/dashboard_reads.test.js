@@ -42,25 +42,27 @@ test("open/closed positions: newest first, limited, camelCased, and scoped to th
   assert.deepEqual(open[0], { id: "MSFT|2026-01-02T00:00:00.000Z", ticker: "MSFT", tradeThesisId: "MSFT|2026-01-02T00:00:00.000Z", positionSizePct: 0.05, direction: "long", entryPrice: 100, stopLossPct: 0.03, takeProfitPct: 0.06, openedAt: "2026-01-02T00:00:00.000Z", maePct: null, mfePct: null });
   assert.equal((await live.listOpenPositions({ limit: 1 })).length, 1);
 
-  // Excursions recorded by recordPositionExcursion ride along on both reads (null until sampled).
-  await live.recordPositionExcursion({ id: "AAPL|2026-01-01T00:00:00.000Z", returnPct: -0.02 });
-  await live.recordPositionExcursion({ id: "AAPL|2026-01-01T00:00:00.000Z", returnPct: 0.04 });
-  const aapl = (await live.listOpenPositions({ limit: 10 })).find((p) => p.ticker === "AAPL");
-  assert.equal(aapl.maePct, -0.02);
-  assert.equal(aapl.mfePct, 0.04);
-  await live.recordPositionExcursion({ id: tslaId, returnPct: 0.05 });
-  await live.closePosition({ id: "AAPL|2026-01-01T00:00:00.000Z", closedAt: "2026-01-06T00:00:00.000Z", closeReason: "time_based", exitPrice: 101 });
-  const closedNow = await live.listRecentlyClosedPositions();
-  const aaplClosed = closedNow.find((p) => p.ticker === "AAPL");
-  assert.equal(aaplClosed.maePct, -0.02);
-  assert.equal(aaplClosed.mfePct, 0.04);
-  assert.equal(closedNow.find((p) => p.ticker === "TSLA").mfePct, null, "TSLA closed before it could be sampled: excursion write is a no-op on a closed row");
-
   const closed = await live.listRecentlyClosedPositions();
   assert.equal(closed.length, 1);
   assert.equal(closed[0].closeReason, "take_profit");
   assert.equal(closed[0].exitPrice, 110);
   assert.equal(closed[0].closedAt, "2026-01-05T00:00:00.000Z");
+  assert.equal(closed[0].maePct, null, "never sampled -> null");
+
+  // Excursions recorded by recordPositionExcursion ride along on both reads.
+  const aaplId = "AAPL|2026-01-01T00:00:00.000Z";
+  await live.recordPositionExcursion({ id: aaplId, returnPct: -0.02 });
+  await live.recordPositionExcursion({ id: aaplId, returnPct: 0.04 });
+  await live.recordPositionExcursion({ id: tslaId, returnPct: 0.05 }); // TSLA is already closed: no-op
+  const aapl = (await live.listOpenPositions({ limit: 10 })).find((p) => p.ticker === "AAPL");
+  assert.equal(aapl.maePct, -0.02);
+  assert.equal(aapl.mfePct, 0.04);
+  await live.closePosition({ id: aaplId, closedAt: "2026-01-06T00:00:00.000Z", closeReason: "time_based", exitPrice: 101 });
+  const closedNow = await live.listRecentlyClosedPositions();
+  const aaplClosed = closedNow.find((p) => p.ticker === "AAPL");
+  assert.equal(aaplClosed.maePct, -0.02);
+  assert.equal(aaplClosed.mfePct, 0.04);
+  assert.equal(closedNow.find((p) => p.ticker === "TSLA").mfePct, null);
 
   assert.deepEqual((await other.listOpenPositions()).map((p) => p.ticker), ["NVDA"]);
   assert.deepEqual(await other.listRecentlyClosedPositions(), []);
