@@ -39,6 +39,19 @@ export const DEFAULT_TRADE_COST_BPS = 5;
 // overrides it; 0 disables the guard.
 export const DEFAULT_SPLIT_GUARD_TOLERANCE = 0.05;
 
+// Drawdown circuit breaker (agents/managers/portfolio_manager.js): when the
+// book's REALIZED P&L over the trailing window is at or below minus this
+// fraction of the book, new entries are rejected until the window rolls past
+// the losses or wins pull it back above the line. P&L = sum of
+// position_size_pct * net realized return over positions closed in the window
+// (storage/run_store.js#getRealizedPnlPctAsOf). Untuned placeholders: 2% of the
+// book over 14 calendar days, i.e. roughly a dozen full stop-outs at 3%
+// sizing. config.drawdownBreakerPct (DRAWDOWN_BREAKER_PCT) and
+// config.drawdownBreakerWindowDays (DRAWDOWN_BREAKER_WINDOW_DAYS) override
+// them; a pct of 0 disables the breaker.
+export const DEFAULT_DRAWDOWN_BREAKER_PCT = 0.02;
+export const DEFAULT_DRAWDOWN_BREAKER_WINDOW_DAYS = 14;
+
 // trade_decisions.status values. RunStore#commitThesis derives the first
 // four in SQL; the pipeline writes 'rejected' and 'skipped_no_price_data'
 // itself when no commit happens. The dashboard (M4) should import this rather
