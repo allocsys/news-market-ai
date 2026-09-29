@@ -137,7 +137,7 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
     exitAsOf = lastBar.date;
   }
 
-  const realizedReturnPct = computeRealizedReturn({ direction, entryPrice, exitPrice });
+  const realizedReturnPct = computeRealizedReturn({ direction, entryPrice, exitPrice, costBps: config.tradeCostBps });
   const positionSizePct = portfolioDecision?.finalPositionSizePct ?? 0;
   const positionPnlPct = realizedReturnPct != null ? realizedReturnPct * positionSizePct : null;
 
