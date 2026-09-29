@@ -312,8 +312,13 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       // themselves (and therefore perWindow's reported testStart/testEnd)
       // are untouched, so the reported window boundaries stay the real ones.
       const positions = await store.getPositionsInRange({ from: spanStart, to: graceExtendedSpanEnd });
-      const on = onEquityReturns(grid, positions);
-      const off = offEquityReturns(grid);
+      const costBps = config.tradeCostBps ?? 0;
+      const on = onEquityReturns(grid, positions, { costBps });
+      const off = offEquityReturns(grid, { costBps });
+      // Both sides are scored NET of costs (per side, see constants.js). The
+      // gross curves are kept alongside so the cost drag stays visible.
+      const onGross = costBps > 0 ? onEquityReturns(grid, positions) : on;
+      const offGross = costBps > 0 ? offEquityReturns(grid) : off;
       const scoringEnd = (window) => (window.testEnd === spanEnd ? graceExtendedSpanEnd : window.testEnd);
 
       const result = await compareSignalOnOffByWindow({
@@ -331,9 +336,10 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       days: grid.dates.length,
       tickers: grid.tickers,
       maxGapDays: DEFAULT_MAX_PRICE_GAP_DAYS,
+      costBps, // per side; on/off below and series.on/off are NET of it, series.onGross/offGross are not
       on: { avgExposure: meanOf(on.exposure), positionsTraded: on.positionsTraded, positionsIgnored: on.positionsIgnored },
       off: { avgExposure: meanOf(off.exposure), holdings: grid.tickers.length },
-      series: { dates: grid.dates, on: on.returns, off: off.returns, onExposure: on.exposure },
+      series: { dates: grid.dates, on: on.returns, off: off.returns, onExposure: on.exposure, onGross: onGross.returns, offGross: offGross.returns },
     };
 
     await onProgress?.({ phase: "saving", percent: 98, done: totalSteps, total: totalSteps, detail: "Saving backtest results", force: true });
