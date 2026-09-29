@@ -28,17 +28,40 @@
 // (shared/constants.js) is not tuned against anything real yet, and (2) there's still no
 // correlation/cross-asset-exposure check -- this is a flat total-risk-
 // budget check only.
+//
+// DRAWDOWN CIRCUIT BREAKER: when the caller passes `realizedPnlPct` (trailing-
+// window realized book P&L, RunStore#getRealizedPnlPctAsOf) and a positive
+// `drawdownBreakerPct`, a P&L at or below -drawdownBreakerPct rejects the thesis
+// (no new entries). Exits are untouched, so open positions still stop out; a
+// would-be flip is blocked too, leaving the open position to its own stops.
+// HONEST SCOPE: realized P&L only (open positions are not marked to market), and
+// RunStore#commitThesis does not re-check it in SQL -- two runs racing across
+// the threshold can each let one entry through, which the risk ceiling still
+// bounds. Omitting either option skips the check.
 
 import { PortfolioDecision } from "../../schemas/index.js";
 import { MAX_PORTFOLIO_RISK_PCT } from "../../shared/constants.js"; // placeholder value: no real cross-position exposure data yet
 
-export function evaluatePortfolio(riskDecision, { openPositionsRiskPct = 0, isReplacingPosition = false } = {}) {
+export function evaluatePortfolio(
+  riskDecision,
+  { openPositionsRiskPct = 0, isReplacingPosition = false, realizedPnlPct = null, drawdownBreakerPct = 0 } = {}
+) {
   if (!riskDecision.approved) {
     return PortfolioDecision.parse({
       tradeThesisId: riskDecision.tradeThesisId,
       approvedForExecution: false,
       finalPositionSizePct: 0,
       reason: "risk_mgmt did not approve this thesis; portfolio_manager has nothing to sign off on",
+    });
+  }
+
+  const breakerTripped = drawdownBreakerPct > 0 && realizedPnlPct != null && realizedPnlPct <= -drawdownBreakerPct;
+  if (breakerTripped) {
+    return PortfolioDecision.parse({
+      tradeThesisId: riskDecision.tradeThesisId,
+      approvedForExecution: false,
+      finalPositionSizePct: 0,
+      reason: `drawdown circuit breaker: trailing realized P&L ${realizedPnlPct} <= -${drawdownBreakerPct} of the book -- no new entries until it recovers or the window rolls`,
     });
   }
 
