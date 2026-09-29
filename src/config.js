@@ -127,6 +127,12 @@ export function loadConfig(env) {
     // anything real yet -- same untuned-placeholder caveat as
     // portfolio_manager.js's MAX_PORTFOLIO_RISK_PCT.
     maxPositionHoldDays: Number(env.MAX_POSITION_HOLD_DAYS) || 10,
+    // Hold/flip rule (RunStore#commitThesis P3): min confidence an OPPOSITE-
+    // direction thesis needs to close and reverse an open position. Unset ->
+    // undefined -> commitThesis falls back to constants.js's
+    // DEFAULT_FLIP_MIN_CONFIDENCE, so the default lives in one place. Not
+    // `Number(x) || default`: 0 ("always flip") is a legitimate setting.
+    flipMinConfidence: env.FLIP_MIN_CONFIDENCE ? Number(env.FLIP_MIN_CONFIDENCE) : undefined,
     // Watchlist for GDELT ingestion (ingestion/sources/gdelt.js) -- one
     // GDELT query per ticker, since the DOC API has no "everything" mode.
     // v1: the ticker symbol itself is the search query, a blunt but fully

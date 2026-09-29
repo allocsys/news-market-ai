@@ -216,6 +216,8 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
           stopLossPct: state.riskDecision.stopLossPct ?? null,
           takeProfitPct: state.riskDecision.takeProfitPct ?? null,
           exitPrice: currentPrice,
+          confidence: state.verdict.confidence,
+          flipMinConfidence: config.flipMinConfidence,
         });
 
         // Settle whatever the batch replaced (realized return + reflection).
@@ -223,7 +225,7 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
         // a retry after a crash between the batch and this step still
         // settles it -- see getUnsettledReplacedPositions.
         for (const replaced of await store.getUnsettledReplacedPositions({ ticker, closedAt: asOf })) {
-          await settlePositionOutcome(env, config, store, { position: replaced, exitPrice: replaced.exitPrice, closedAt: asOf, closeReason: "replaced" });
+          await settlePositionOutcome(env, config, store, { position: replaced, exitPrice: replaced.exitPrice, closedAt: asOf, closeReason: replaced.closeReason });
         }
       }
     }

@@ -29,9 +29,9 @@ import { TRADE_DECISION_STATUS } from "../src/shared/constants.js";
 import { makeCtx, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 import { makeFakeLongModel } from "./helpers/fake_long_model.js";
 
-const config = () => ({
+const config = (modelOpts) => ({
   geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10,
-  fakeModel: makeFakeLongModel(),
+  fakeModel: makeFakeLongModel(modelOpts),
 });
 
 function newsItem(id, publishedAt) {
@@ -73,11 +73,12 @@ test("finding G: two same-day, same-ticker theses replace at DISTINCT intraday p
   assert.equal(opened.length, 1);
   assert.equal(opened[0].entry_price, 181.2, "opened at the morning intraday bar, not the prior daily close");
 
-  await runPipelineForTicker({}, config(), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2", afternoonAsOf), asOf: afternoonAsOf });
+  // A confident SHORT reverses the open long (same-direction theses are now held, see the hold/flip rule in run_store.js).
+  await runPipelineForTicker({}, config({ direction: "short", confidence: 0.9 }), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2", afternoonAsOf), asOf: afternoonAsOf });
 
   const positions = await stateRows(ctx.stateDb, "positions", "opened_at");
   assert.equal(positions.length, 2);
-  assert.equal(positions[0].close_reason, "replaced");
+  assert.equal(positions[0].close_reason, "flipped");
   assert.equal(positions[0].exit_price, 179.4, "replaced-leg exit priced off the afternoon intraday bar, not the same morning entry");
   assert.equal(positions[1].entry_price, 179.4, "new leg opened at the same afternoon bar");
   assert.notEqual(positions[0].entry_price, positions[0].exit_price, "finding G's bug: same-day replace priced both legs identically");

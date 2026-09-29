@@ -24,18 +24,19 @@ function simDb() {
   return createTestD1([STATE_DIR, SIM_DIR]);
 }
 
-function thesisArgs({ id, ticker, asOf, positionSizePct = 0.05 }) {
+function thesisArgs({ id, ticker, asOf, positionSizePct = 0.05, direction = "long", confidence = 0.8 }) {
   return {
     id,
     ticker,
     tradeThesisId: id,
     positionSizePct,
-    direction: "long",
+    direction,
+    confidence,
     entryPrice: 100,
     stopLossPct: 0.03,
     takeProfitPct: 0.06,
     asOf,
-    thesis: { ticker, asOf, direction: "long" },
+    thesis: { ticker, asOf, direction },
     riskDecision: { approved: true, positionSizePct },
     createdAt: asOf,
   };
@@ -72,10 +73,10 @@ test("commitThesis opens a fresh position and records status 'opened'", async ()
 test("commitThesis replaces an older open position for the same ticker (in-order asOf)", async () => {
   const store = new RunStore(liveDb(), "live");
   await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1" }));
-  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2" }));
+  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", direction: "short", confidence: 0.9 }));
 
   const old = await store.db.prepare(`SELECT closed_at, close_reason FROM positions WHERE run_id='live' AND id='AAPL|t1'`).first();
-  assert.equal(old.close_reason, "replaced");
+  assert.equal(old.close_reason, "flipped");
   assert.ok(old.closed_at);
 
   const current = await store.getOpenPositionForTickerAsOf({ ticker: "AAPL", asOf: "t2" });
@@ -172,7 +173,7 @@ test("a ticker's own replaced position is not double-counted against the ceiling
   await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1", positionSizePct: 0.19 }));
   // Re-evaluating AAPL again (replacing its own position) at the same size must NOT be
   // rejected for "double counting" its own existing exposure.
-  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", positionSizePct: 0.19 }));
+  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", positionSizePct: 0.19, direction: "short", confidence: 0.9 }));
 
   const decision = await store.db.prepare(`SELECT status FROM trade_decisions WHERE run_id='live' AND id='AAPL|t2'`).first();
   assert.equal(decision.status, "opened");
@@ -413,12 +414,12 @@ test("commitThesis re-run of an older thesis does not disturb the newer position
   const store = new RunStore(db, "live");
   const t1 = thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1" });
   await store.commitThesis(t1);
-  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2" }));
+  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", direction: "short", confidence: 0.9 }));
   await store.commitThesis(t1); // retried
 
   const { results } = await db.prepare(`SELECT id, closed_at, close_reason FROM positions ORDER BY id`).all();
   assert.deepEqual(results, [
-    { id: "AAPL|t1", closed_at: "t2", close_reason: "replaced" },
+    { id: "AAPL|t1", closed_at: "t2", close_reason: "flipped" },
     { id: "AAPL|t2", closed_at: null, close_reason: null },
   ]);
 });
@@ -427,8 +428,8 @@ test("commitThesis records exitPrice on the position it replaces", async () => {
   const db = liveDb();
   const store = new RunStore(db, "live");
   await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1" }));
-  await store.commitThesis({ ...thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2" }), exitPrice: 104.5 });
+  await store.commitThesis({ ...thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", direction: "short", confidence: 0.9 }), exitPrice: 104.5 });
 
   const old = await db.prepare(`SELECT closed_at, close_reason, exit_price FROM positions WHERE id = 'AAPL|t1'`).first();
-  assert.deepEqual(old, { closed_at: "t2", close_reason: "replaced", exit_price: 104.5 });
+  assert.deepEqual(old, { closed_at: "t2", close_reason: "flipped", exit_price: 104.5 });
 });

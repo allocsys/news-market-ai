@@ -30,11 +30,15 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
   // --- Close-reasons donut for CLOSED positions --------------------------------
   const stopLosses = closedPositions.filter((p) => p.closeReason === "stop_loss").length;
   const takeProfits = closedPositions.filter((p) => p.closeReason === "take_profit").length;
-  const otherExits = closedPositions.length - stopLosses - takeProfits;
+  const flipped = closedPositions.filter((p) => p.closeReason === "flipped").length;
+  const replaced = closedPositions.filter((p) => p.closeReason === "replaced").length;
+  const otherExits = closedPositions.length - stopLosses - takeProfits - flipped - replaced;
   const closeReasonsDonut = donutChart(
     [
       { label: "Take profit", value: takeProfits, color: "var(--color-success-text)" },
       { label: "Stop loss", value: stopLosses, color: "var(--color-danger-text)" },
+      ...(flipped > 0 ? [{ label: "Flipped", value: flipped, color: "var(--color-info-text)" }] : []),
+      ...(replaced > 0 ? [{ label: "Replaced", value: replaced, color: "var(--color-warning-text)" }] : []),
       ...(otherExits > 0 ? [{ label: "Other", value: otherExits, color: "var(--chart-6)" }] : []),
     ],
     {
