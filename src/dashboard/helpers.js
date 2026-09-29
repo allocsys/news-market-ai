@@ -517,7 +517,7 @@ export function renderSummaryCards({ openPositions, closedPositions, decisionSta
   </div>`;
 }
 
-export const CHART_STATUS_COLORS = { approved: "var(--color-success-text)", rejected: "var(--color-danger-text)" };
+export const CHART_STATUS_COLORS = { approved: "var(--color-success-text)", rejected: "var(--color-danger-text)", held: "var(--color-info-text)" };
 export const CHART_STATUS_FALLBACK = "var(--text-muted)";
 
 export function decisionsActivityChart(daily, days) {
