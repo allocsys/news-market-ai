@@ -53,7 +53,7 @@ test("renderSummaryCards with only non-approved statuses shows a dash, not a bog
     openPositions: [], closedPositions: [], decisionStats: { totals: { held: 4 }, daily: [] }, totalExposurePct: 0,
   });
   assert.match(html, /0 approved \/ 0 rejected \/ 4 other/);
-  assert.doesNotMatch(html, /0%/);
+  assert.match(html, /\u2014/, "approval-rate card shows an em dash when nothing was decided");
 });
 
 test("Snapshot view's approval donut reads the 'opened' total", () => {
