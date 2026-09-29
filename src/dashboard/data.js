@@ -341,7 +341,12 @@ export async function getBacktestRunsData(env) {
  *
  * `realizedReturn` is computed here (shared/returns.js, the same function
  * graph/settle.js records reflections with) and is null for a position that is
- * still open or has no exit price -- never a guess.
+ * still open or has no exit price -- never a guess. It is NET of the cost the
+ * run itself simulated with (`run.result.knobs.tradeCostBps`, recorded by
+ * backtest/knobOverrides.js#effectiveKnobs), so the table agrees with the
+ * run's equity curve. A run with no recorded knobs (older than the cost
+ * model) stays GROSS: applying today's default to a run that never charged
+ * costs would show a number the run did not produce.
  */
 export async function getBacktestRunDetailData(env, id, { positionsLimit = 500 } = {}) {
   const db = readOnly(env.SIM_DB);
@@ -349,7 +354,9 @@ export async function getBacktestRunDetailData(env, id, { positionsLimit = 500 }
   if (error || !run) return { run: null, positions: [], positionsError: null, truncated: false, error: error ?? null };
 
   const positionsResult = await safe(() => new RunStore(db, id).listPositionsWithDecisions({ limit: positionsLimit }));
-  const positions = (positionsResult.data?.positions ?? []).map((p) => ({ ...p, realizedReturn: computeRealizedReturn(p) }));
+  const recordedCostBps = run.result?.knobs?.tradeCostBps;
+  const costBps = Number.isFinite(recordedCostBps) ? recordedCostBps : undefined;
+  const positions = (positionsResult.data?.positions ?? []).map((p) => ({ ...p, realizedReturn: computeRealizedReturn({ ...p, costBps }) }));
   return { run, positions, positionsError: positionsResult.error, truncated: positionsResult.data?.truncated ?? false, error: null };
 }
 
