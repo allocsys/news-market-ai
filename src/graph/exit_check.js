@@ -27,6 +27,7 @@ import { resolveCurrentPrice } from "./price_resolution.js";
 import { evaluateExit } from "../agents/risk_mgmt/exit.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
+import { detectSplitJump } from "../shared/split_guard.js";
 
 /**
  * `ctx` is `{ inputs, store }`: `inputs` is an inputs-DB handle (read-only is
@@ -54,21 +55,44 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     // the previous day's stale close.
     const { price: currentPrice } = await resolveCurrentPrice(inputs, { ticker: position.ticker, asOf });
 
+    // Split guard: bars are raw/unadjusted, so a split looks like a crash.
+    // When entry->current matches a split ratio, don't trust the price: skip
+    // stop-loss/take-profit (only the time exit can fire) and log loudly on
+    // every check (Adopted Pattern #11) so an operator sees it.
+    const split = detectSplitJump(position.entryPrice, currentPrice, config.splitGuardTolerance);
+    if (split) {
+      console.error("checkOpenPositionExits: possible stock split in raw prices -- price-based exits suppressed", {
+        positionId: position.id,
+        ticker: position.ticker,
+        entryPrice: position.entryPrice,
+        currentPrice,
+        ratio: split.ratio,
+        suspected: split.kind,
+        factor: split.factor,
+        asOf,
+      });
+    }
+
     const exit = evaluateExit(position, {
       currentPrice,
       asOf,
       maxHoldDays: config.maxPositionHoldDays,
+      skipPriceExits: split != null,
     });
 
     if (exit) {
       // currentPrice IS the exit price -- it's the same bar that triggered
       // this exit decision (or null for a time_based exit with no price
-      // data, same honest-gap convention evaluateExit already follows).
-      const didClose = await store.closePosition({ id: position.id, closedAt: asOf, closeReason: exit.reason, exitPrice: currentPrice });
+      // data, same honest-gap convention evaluateExit already follows). A
+      // split-suspected price is not a real exit price, so a time exit under
+      // suspicion closes with a null exit price: settle skips the reflection
+      // ("return not computable") instead of recording a fake -50% lesson.
+      const exitPrice = split ? null : currentPrice;
+      const didClose = await store.closePosition({ id: position.id, closedAt: asOf, closeReason: exit.reason, exitPrice });
       // Lost a race (commitThesis replaced it after our read): the replaced path
       // settles it with the right reason/price, so settling here would double-record.
       if (!didClose) continue;
-      await settlePositionOutcome(env, config, store, { position, exitPrice: currentPrice, closedAt: asOf, closeReason: exit.reason });
+      await settlePositionOutcome(env, config, store, { position, exitPrice, closedAt: asOf, closeReason: exit.reason });
       closed.push({ id: position.id, ticker: position.ticker, reason: exit.reason });
     }
   }
