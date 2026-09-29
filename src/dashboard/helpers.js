@@ -1,6 +1,8 @@
 // Helper functions, constants, query-param parsing, and component renderers
 // extracted from dashboard.js for Phase 1 structural split.
 
+import { TRADE_DECISION_STATUS } from "../shared/constants.js";
+
 const ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
 export function escapeHtml(value) {
@@ -32,7 +34,26 @@ export function statusBadge(status, label = status) {
 }
 
 export const ACTIVITY_DAYS_OPTIONS = [7, 14, 30, 60];
-export const DECISION_STATUS_OPTIONS = ["all", "approved", "rejected"];
+// Filter options come from the store's real vocabulary (shared/constants.js), so a new
+// status can't silently drop out of the filter the way 'approved' did after M2 renamed it 'opened'.
+export const DECISION_STATUS_OPTIONS = ["all", ...Object.values(TRADE_DECISION_STATUS)];
+
+// The store writes 'opened' where the old pipeline wrote 'approved'. Every "approved" count,
+// rate and chart segment in the dashboard is this status.
+export const DECISION_APPROVED_STATUS = TRADE_DECISION_STATUS.OPENED;
+
+const DECISION_BADGE_VARIANT = {
+  [TRADE_DECISION_STATUS.OPENED]: "approved",
+  [TRADE_DECISION_STATUS.REJECTED]: "rejected",
+};
+const DECISION_STATUS_LABELS = {
+  [TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA]: "skipped (no price)",
+};
+
+/** Badge for a trade_decisions.status: green for opened, red for rejected, neutral for held/superseded/skipped. */
+export function decisionBadge(status) {
+  return statusBadge(DECISION_BADGE_VARIANT[status] ?? "neutral", DECISION_STATUS_LABELS[status] ?? status);
+}
 export const DECISION_LIMIT_OPTIONS = [10, 20, 50, 100];
 export const POSITIONS_LIMIT_OPTIONS = [10, 25, 50, 100];
 export const RANGE_PRESET_DAYS = [7, 14, 30, 90];
@@ -246,7 +267,7 @@ export function decisionsTable(decisions) {
       (d) => `<tr>
         <td class="ticker cell-title">${escapeHtml(d.ticker)}</td>
         <td data-label="Direction">${escapeHtml(d.thesis?.direction ?? "\u2014")}</td>
-        <td data-label="Status">${statusBadge(d.status)}</td>
+        <td data-label="Status">${decisionBadge(d.status)}</td>
         <td class="num" data-label="Size">${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
         <td class="cell-wide" data-label="Reason">${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</td>
         <td class="num" data-label="Decided">${fmtTime(d.createdAt)}</td>
@@ -499,9 +520,9 @@ export function renderSummaryCards({ openPositions, closedPositions, decisionSta
   const longCount = openPositions.filter((p) => p.direction === "long").length;
   const shortCount = openPositions.filter((p) => p.direction === "short").length;
 
-  const approved = decisionStats.totals.approved ?? 0;
+  const approved = decisionStats.totals[DECISION_APPROVED_STATUS] ?? 0;
   const rejected = decisionStats.totals.rejected ?? 0;
-  const otherStatuses = Object.entries(decisionStats.totals).filter(([status]) => status !== "approved" && status !== "rejected");
+  const otherStatuses = Object.entries(decisionStats.totals).filter(([status]) => status !== DECISION_APPROVED_STATUS && status !== "rejected");
   const otherCount = otherStatuses.reduce((sum, [, count]) => sum + count, 0);
   const decidedTotal = approved + rejected;
   const approvalRate = decidedTotal > 0 ? ((approved / decidedTotal) * 100).toFixed(0) + "%" : "\u2014";
@@ -517,7 +538,7 @@ export function renderSummaryCards({ openPositions, closedPositions, decisionSta
   </div>`;
 }
 
-export const CHART_STATUS_COLORS = { approved: "var(--color-success-text)", rejected: "var(--color-danger-text)", held: "var(--color-info-text)" };
+export const CHART_STATUS_COLORS = { [DECISION_APPROVED_STATUS]: "var(--color-success-text)", rejected: "var(--color-danger-text)", held: "var(--color-info-text)" };
 export const CHART_STATUS_FALLBACK = "var(--text-muted)";
 
 export function decisionsActivityChart(daily, days) {
@@ -550,7 +571,7 @@ export function decisionsActivityChart(daily, days) {
   const barSlot = plotW / dayKeys.length;
   const barWidth = Math.max(2, barSlot * 0.62);
 
-  const statuses = ["approved", "rejected", ...[...statusesSeen].filter((s) => s !== "approved" && s !== "rejected").sort()];
+  const statuses = [DECISION_APPROVED_STATUS, "rejected", ...[...statusesSeen].filter((s) => s !== DECISION_APPROVED_STATUS && s !== "rejected").sort()];
 
   const bars = dayKeys
     .map((day, i) => {

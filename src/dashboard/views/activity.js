@@ -1,4 +1,4 @@
-import { buildQuery, ACTIVITY_DAYS_OPTIONS, decisionsActivityChart, errorState, miniStats } from "../helpers.js";
+import { buildQuery, ACTIVITY_DAYS_OPTIONS, DECISION_APPROVED_STATUS, decisionsActivityChart, errorState, miniStats } from "../helpers.js";
 
 export function renderActivityView({ decisionStats, params, error }) {
   const activityFilterBarReal = `<div class="filter-bar">
@@ -17,7 +17,7 @@ export function renderActivityView({ decisionStats, params, error }) {
   // card. Surfacing them here gives the operator a quick read alongside the
   // per-day chart without flipping pages.
   const totals = decisionStats.totals ?? {};
-  const approved = totals.approved ?? 0;
+  const approved = totals[DECISION_APPROVED_STATUS] ?? 0;
   const rejected = totals.rejected ?? 0;
   const decidedTotal = approved + rejected;
   const approvalPct = decidedTotal > 0 ? Math.round((approved / decidedTotal) * 100) : null;

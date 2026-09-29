@@ -1,4 +1,4 @@
-import { renderSummaryCards, donutChart, gaugeChart, errorState, positionsTable } from "../helpers.js";
+import { renderSummaryCards, donutChart, gaugeChart, errorState, positionsTable, DECISION_APPROVED_STATUS } from "../helpers.js";
 
 export function renderSnapshotView({ openPositions, closedPositions, decisionStats, totalExposurePct, error }) {
   if (error) {
@@ -37,9 +37,9 @@ export function renderSnapshotView({ openPositions, closedPositions, decisionSta
     "var(--color-success-text)";
 
   // --- Donut data: approval rate (all-time) ------------------------------------
-  const approved = decisionStats.totals.approved ?? 0;
+  const approved = decisionStats.totals[DECISION_APPROVED_STATUS] ?? 0;
   const rejected = decisionStats.totals.rejected ?? 0;
-  const otherStatusEntries = Object.entries(decisionStats.totals).filter(([status]) => status !== "approved" && status !== "rejected");
+  const otherStatusEntries = Object.entries(decisionStats.totals).filter(([status]) => status !== DECISION_APPROVED_STATUS && status !== "rejected");
   const otherDecisions = otherStatusEntries.reduce((sum, [, count]) => sum + count, 0);
   const decidedTotal = approved + rejected;
   const approvalRatePct = decidedTotal > 0 ? Math.round((approved / decidedTotal) * 100) : null;

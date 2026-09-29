@@ -19,7 +19,8 @@
 // the extra read -- this alert strip covers stale ingestion sources, stuck
 // pipeline checkpoints, and any panel that failed to load.
 import {
-  escapeHtml, fmtTime, errorState, donutChart, gaugeChart, renderSummaryCards, statusBadge, verdictCard, envSuffix,
+  escapeHtml, fmtTime, errorState, donutChart, gaugeChart, renderSummaryCards, decisionBadge, verdictCard, envSuffix,
+  DECISION_APPROVED_STATUS,
 } from "../helpers.js";
 
 const SOURCE_LABEL = { news: "News", priceBars: "Price bars", fundamentals: "Fundamentals" };
@@ -78,9 +79,9 @@ function renderChartRow({ openPositions, decisionStats, totalExposurePct }) {
   const exposureAccent =
     totalExposurePct >= 80 ? "var(--color-danger-text)" : totalExposurePct >= 50 ? "var(--color-warning-text)" : "var(--color-success-text)";
 
-  const approved = decisionStats.totals.approved ?? 0;
+  const approved = decisionStats.totals[DECISION_APPROVED_STATUS] ?? 0;
   const rejected = decisionStats.totals.rejected ?? 0;
-  const otherStatusEntries = Object.entries(decisionStats.totals).filter(([status]) => status !== "approved" && status !== "rejected");
+  const otherStatusEntries = Object.entries(decisionStats.totals).filter(([status]) => status !== DECISION_APPROVED_STATUS && status !== "rejected");
   const otherDecisions = otherStatusEntries.reduce((sum, [, count]) => sum + count, 0);
   const decidedTotal = approved + rejected;
   const approvalRatePct = decidedTotal > 0 ? Math.round((approved / decidedTotal) * 100) : null;
@@ -110,7 +111,7 @@ function renderLatestDecisionPanel(d, error) {
       <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap">
         <span class="ticker" style="font-family:var(--font-mono);font-weight:600">${escapeHtml(d.ticker)}</span>
         <span style="color:var(--text-muted);font-size:0.8125rem">${escapeHtml(d.thesis?.direction ?? "\u2014")}</span>
-        ${statusBadge(d.status)}
+        ${decisionBadge(d.status)}
       </div>
       <p class="note" style="margin-bottom:0.75rem">${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</p>
       ${verdictCard(d)}

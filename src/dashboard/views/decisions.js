@@ -1,5 +1,5 @@
 import {
-  pillLinks, decisionsTable, DECISION_STATUS_OPTIONS, DECISION_LIMIT_OPTIONS,
+  pillLinks, decisionsTable, DECISION_STATUS_OPTIONS, DECISION_LIMIT_OPTIONS, DECISION_APPROVED_STATUS,
   errorState, donutChart, escapeHtml,
 } from "../helpers.js";
 
@@ -22,7 +22,7 @@ export function renderDecisionsView({ decisions, params, error }) {
   // currently on screen, which changes with the Status/Rows filters above).
   // The subtitle calls this out so the donut isn't misread as the all-time rate
   // (that lives on the Snapshot page).
-  const approved = decisions.filter((d) => d.status === "approved").length;
+  const approved = decisions.filter((d) => d.status === DECISION_APPROVED_STATUS).length;
   const rejected = decisions.filter((d) => d.status === "rejected").length;
   const otherCount = decisions.length - approved - rejected;
   const decidedTotal = approved + rejected;

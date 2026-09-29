@@ -270,8 +270,8 @@ for (const path of NON_REFRESHABLE_PAGES) {
 }
 
 test("Refresh link keeps the page's active filters (query string), HTML-escaped", async () => {
-  const html = await getHtml("/dashboard/decisions?decisionStatus=approved&decisionLimit=50");
-  assert.equal(refreshHrefIn(html), "/dashboard/decisions?decisionStatus=approved&amp;decisionLimit=50");
+  const html = await getHtml("/dashboard/decisions?decisionStatus=opened&decisionLimit=50");
+  assert.equal(refreshHrefIn(html), "/dashboard/decisions?decisionStatus=opened&amp;decisionLimit=50");
 });
 
 test("renderShell without refreshHref renders no toolbar (e.g. the POST run-accepted status page)", () => {
@@ -611,9 +611,9 @@ test("filter links on decisions carry the resolved env (?env=) so switching a fi
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/decisions?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
 
-  const approvedHrefMatch = html.match(/href="([^"]*decisionStatus=approved[^"]*)"/);
-  assert.ok(approvedHrefMatch, "found the Approved status pill link");
-  assert.match(approvedHrefMatch[1], new RegExp(`env=${BT}`), "the filter link carries env forward");
+  const openedHrefMatch = html.match(/href="([^"]*decisionStatus=opened[^"]*)"/);
+  assert.ok(openedHrefMatch, "found the Opened status pill link");
+  assert.match(openedHrefMatch[1], new RegExp(`env=${BT}`), "the filter link carries env forward");
 });
 
 test("GET /dashboard/snapshot renders fine (Live-only selector, no crash) when the best-effort /api/backtest-runs lookup itself fails", async () => {

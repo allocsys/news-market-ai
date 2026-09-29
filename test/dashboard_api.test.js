@@ -436,9 +436,9 @@ async function seededEnv(extra = {}) {
   await live.openPosition({ id: "MSFT|1", ticker: "MSFT", tradeThesisId: "MSFT|1", positionSizePct: 0.05, direction: "long", entryPrice: 200, openedAt: "2026-01-02T00:00:00.000Z" });
   await decoy.openPosition({ id: "NVDA|1", ticker: "NVDA", tradeThesisId: "NVDA|1", positionSizePct: 0.9, direction: "long", entryPrice: 1, openedAt: "2026-01-03T00:00:00.000Z" });
   const createdAt = new Date().toISOString();
-  await live.insertTradeDecision({ id: "AAPL|1", ticker: "AAPL", asOf: "2026-01-01T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: true }, portfolioDecision: null, status: "approved", createdAt });
+  await live.insertTradeDecision({ id: "AAPL|1", ticker: "AAPL", asOf: "2026-01-01T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: true }, portfolioDecision: null, status: "opened", createdAt });
   await live.insertTradeDecision({ id: "MSFT|1", ticker: "MSFT", asOf: "2026-01-02T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: false }, portfolioDecision: null, status: "rejected", createdAt });
-  await decoy.insertTradeDecision({ id: "NVDA|1", ticker: "NVDA", asOf: "2026-01-03T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: true }, portfolioDecision: null, status: "approved", createdAt });
+  await decoy.insertTradeDecision({ id: "NVDA|1", ticker: "NVDA", asOf: "2026-01-03T00:00:00.000Z", thesis: { direction: "long" }, riskDecision: { approved: true }, portfolioDecision: null, status: "opened", createdAt });
   await live.saveCheckpoint({ pipelineRunId: "pipe-live", ticker: "AAPL", stage: "trader", state: null });
   await decoy.saveCheckpoint({ pipelineRunId: "pipe-decoy", ticker: "NVDA", stage: "trader", state: null });
   await env.INPUTS_DB.prepare(`INSERT INTO price_bars (ticker, date, open, high, low, close, volume, source, ingested_at) VALUES ('AAPL', '2026-01-01', 1, 1, 1, 101, 0, 't', '2026-01-01T00:00:00.000Z')`).run();
@@ -461,19 +461,19 @@ test("state panels serve LIVE_DB's own run_id only -- a second run in the same D
 
   const decisions = await getJson("/api/decisions", env);
   assert.deepEqual(decisions.decisions.map((d) => d.ticker).sort(), ["AAPL", "MSFT"]);
-  const approved = await getJson("/api/decisions?decisionStatus=approved", env);
-  assert.deepEqual(approved.decisions.map((d) => d.ticker), ["AAPL"]);
+  const opened = await getJson("/api/decisions?decisionStatus=opened", env);
+  assert.deepEqual(opened.decisions.map((d) => d.ticker), ["AAPL"]);
 
   const pipeline = await getJson("/api/pipeline", env);
   assert.deepEqual(pipeline.checkpoints.map((c) => c.run_id), ["pipe-live"]);
 
   const snapshot = await getJson("/api/snapshot", env);
   assert.equal(snapshot.openPositions.length, 2);
-  assert.deepEqual(snapshot.decisionStats.totals, { approved: 1, rejected: 1 });
+  assert.deepEqual(snapshot.decisionStats.totals, { opened: 1, rejected: 1 });
   assert.equal(snapshot.error, null);
 
   const activity = await getJson("/api/activity", env);
-  assert.deepEqual(activity.decisionStats.totals, { approved: 1, rejected: 1 });
+  assert.deepEqual(activity.decisionStats.totals, { opened: 1, rejected: 1 });
 });
 
 test("inputs panels read INPUTS_DB: /api/health counts ingestion tables, /api/charts pulls bars for the open positions' tickers", async () => {
