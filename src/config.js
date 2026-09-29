@@ -3,7 +3,7 @@
 // for these values, so there's exactly one place that knows the env var
 // names.
 
-import { DEFAULT_TRADE_COST_BPS } from "./shared/constants.js";
+import { DEFAULT_TRADE_COST_BPS, DEFAULT_SPLIT_GUARD_TOLERANCE } from "./shared/constants.js";
 
 // Non-negative finite number var (fractions allowed): `fallback` when unset/blank
 // or malformed; '0' is honored (it means "no costs").
@@ -146,6 +146,10 @@ export function loadConfig(env) {
     // Transaction cost per side in basis points (shared/returns.js,
     // backtest/equity.js). Untuned placeholder, see constants.js; 0 disables.
     tradeCostBps: nonNegativeNumberOrDefault(env.TRADE_COST_BPS, DEFAULT_TRADE_COST_BPS),
+    // Stock-split guard (shared/split_guard.js): relative tolerance around
+    // common split ratios. Untuned placeholder, see constants.js; 0 disables.
+    // Consumers handed a config without it (unit tests) run unguarded.
+    splitGuardTolerance: nonNegativeNumberOrDefault(env.SPLIT_GUARD_TOLERANCE, DEFAULT_SPLIT_GUARD_TOLERANCE),
     // Watchlist for GDELT ingestion (ingestion/sources/gdelt.js) -- one
     // GDELT query per ticker, since the DOC API has no "everything" mode.
     // v1: the ticker symbol itself is the search query, a blunt but fully
