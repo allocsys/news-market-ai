@@ -23,9 +23,14 @@ export function computeRealizedReturn({ direction, entryPrice, exitPrice, costBp
   return gross - roundTripCostFraction(costBps);
 }
 
-/** Cost of one round trip as a fraction of notional; 0 for a missing/invalid costBps. */
+/** Cost of ONE trade (an entry or an exit) as a fraction of notional; 0 for a missing/invalid costBps. */
+export function sideCostFraction(costBps) {
+  return Number.isFinite(costBps) && costBps > 0 ? costBps / 10000 : 0;
+}
+
+/** Cost of one round trip (entry + exit) as a fraction of notional. */
 export function roundTripCostFraction(costBps) {
-  return Number.isFinite(costBps) && costBps > 0 ? (2 * costBps) / 10000 : 0;
+  return 2 * sideCostFraction(costBps);
 }
 
 /** The gross, cost-free return (the pre-cost-model definition). */
