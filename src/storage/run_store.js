@@ -620,7 +620,7 @@ export class RunStore {
   async listOpenPositions({ limit = 50 } = {}) {
     const { results } = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, mae_pct, mfe_pct
          FROM positions WHERE run_id = ? AND closed_at IS NULL ORDER BY opened_at DESC LIMIT ?`
       )
       .bind(this.runId, limit)
@@ -636,6 +636,9 @@ export class RunStore {
       stopLossPct: r.stop_loss_pct,
       takeProfitPct: r.take_profit_pct,
       openedAt: r.opened_at,
+      // Running gross excursion extremes (recordPositionExcursion): null until the first exit check sampled the row.
+      maePct: r.mae_pct ?? null,
+      mfePct: r.mfe_pct ?? null,
     }));
   }
 
@@ -663,7 +666,7 @@ export class RunStore {
   async listRecentlyClosedPositions({ limit = 20 } = {}) {
     const { results } = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, exit_price, opened_at, closed_at, close_reason
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, exit_price, opened_at, closed_at, close_reason, mae_pct, mfe_pct
          FROM positions WHERE run_id = ? AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT ?`
       )
       .bind(this.runId, limit)
@@ -680,6 +683,8 @@ export class RunStore {
       openedAt: r.opened_at,
       closedAt: r.closed_at,
       closeReason: r.close_reason,
+      maePct: r.mae_pct ?? null,
+      mfePct: r.mfe_pct ?? null,
     }));
   }
 
