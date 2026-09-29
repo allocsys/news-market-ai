@@ -18,7 +18,7 @@
 
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../../src/schemas/index.js";
 
-export function makeFakeLongModel({ onCall } = {}) {
+export function makeFakeLongModel({ onCall, direction = "long", confidence = 0.8 } = {}) {
   return async (prompt, opts) => {
     onCall?.(opts, prompt);
     if (prompt.startsWith("A trade decision for")) {
@@ -36,7 +36,7 @@ export function makeFakeLongModel({ onCall } = {}) {
         ? JSON.stringify({ argument: "earnings beat justifies a long position", justification: "fundamentals improved" })
         : JSON.stringify({ argument: "one beat doesn't confirm a trend", justification: "macro risk remains" });
     }
-    if (opts.schema === DebateVerdict) return JSON.stringify({ direction: "long", confidence: 0.8, timeHorizon: "days", justification: "bull case outweighs bear case" });
+    if (opts.schema === DebateVerdict) return JSON.stringify({ direction, confidence, timeHorizon: "days", justification: "bull case outweighs bear case" });
     if (opts.schema === TradeThesis) return JSON.stringify({ instrument: "equity", rationale: "ride the post-earnings momentum" });
     throw new Error(`unexpected schema/prompt in test fake model: ${prompt.slice(0, 60)}`);
   };

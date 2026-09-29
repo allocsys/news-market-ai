@@ -20,9 +20,9 @@ import { LookaheadViolationError } from "../src/shared/errors.js";
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
 
-function thesisArgs({ id, asOf, ticker = "AAPL", positionSizePct = 0.05 }) {
+function thesisArgs({ id, asOf, ticker = "AAPL", positionSizePct = 0.05, direction = "long", confidence = 0.8 }) {
   return {
-    id, ticker, tradeThesisId: id, positionSizePct, direction: "long", entryPrice: 100, stopLossPct: 0.03, takeProfitPct: 0.06, exitPrice: 110,
+    id, ticker, tradeThesisId: id, positionSizePct, direction, confidence, entryPrice: 100, stopLossPct: 0.03, takeProfitPct: 0.06, exitPrice: 110,
     asOf, thesis: { ticker, asOf, direction: "long" }, riskDecision: { approved: true, positionSizePct }, createdAt: asOf,
   };
 }
@@ -32,13 +32,13 @@ function thesisArgs({ id, asOf, ticker = "AAPL", positionSizePct = 0.05 }) {
 test("getUnsettledReplacedPositions returns the position a commit just replaced, with its recorded exitPrice", async () => {
   const { store } = makeCtx();
   await store.commitThesis(thesisArgs({ id: "AAPL|t1", asOf: "2026-01-10T00:00:00Z" }));
-  await store.commitThesis({ ...thesisArgs({ id: "AAPL|t2", asOf: "2026-01-15T00:00:00Z" }), exitPrice: 111 });
+  await store.commitThesis({ ...thesisArgs({ id: "AAPL|t2", asOf: "2026-01-15T00:00:00Z", direction: "short", confidence: 0.9 }), exitPrice: 111 });
 
   const unsettled = await store.getUnsettledReplacedPositions({ ticker: "AAPL", closedAt: "2026-01-15T00:00:00Z" });
   assert.equal(unsettled.length, 1);
   assert.equal(unsettled[0].id, "AAPL|t1");
   assert.equal(unsettled[0].tradeThesisId, "AAPL|t1");
-  assert.equal(unsettled[0].closeReason, "replaced");
+  assert.equal(unsettled[0].closeReason, "flipped");
   assert.equal(unsettled[0].exitPrice, 111);
   assert.equal(unsettled[0].entryPrice, 100);
 });
@@ -72,7 +72,7 @@ test("getUnsettledReplacedPositions requires closedAt", async () => {
 
 // --- pipeline: retry after commit-before-settle -----------------------------
 
-function makeModel() {
+function makeModel({ direction = "long", confidence = 0.8 } = {}) {
   return async (prompt, opts) => {
     if (prompt.startsWith("A trade decision for")) {
       return JSON.stringify({ reflection: "settled on retry" });
@@ -85,7 +85,7 @@ function makeModel() {
       });
     }
     if (opts.schema === DebateSide) return JSON.stringify({ argument: "a", justification: "j" });
-    if (opts.schema === DebateVerdict) return JSON.stringify({ direction: "long", confidence: 0.8, timeHorizon: "days", justification: "j" });
+    if (opts.schema === DebateVerdict) return JSON.stringify({ direction, confidence, timeHorizon: "days", justification: "j" });
     if (opts.schema === TradeThesis) return JSON.stringify({ instrument: "equity", rationale: "r" });
     throw new Error("unexpected schema");
   };
@@ -118,17 +118,17 @@ test("a pipeline retry after the replace-commit but before settling still settle
     return realLookup(args);
   };
   await assert.rejects(
-    runPipelineForTicker({}, baseConfig(makeModel()), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2"), asOf: "2026-01-15T00:00:00Z" }),
+    runPipelineForTicker({}, baseConfig(makeModel({ direction: "short", confidence: 0.9 })), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2"), asOf: "2026-01-15T00:00:00Z" }),
     /simulated process death after the commit batch/
   );
   let positions = await stateRows(ctx.stateDb, "positions", "opened_at");
   assert.equal(positions.length, 2);
-  assert.equal(positions[0].close_reason, "replaced"); // the atomic batch DID land
+  assert.equal(positions[0].close_reason, "flipped"); // the atomic batch DID land
   assert.equal(positions[1].closed_at, null);
   assert.equal((await stateRows(ctx.stateDb, "decision_memory")).length, 0); // ...but nothing was settled
 
   // Queue retry: commitThesis is a no-op now, yet the replaced position is found by query and settled.
-  await runPipelineForTicker({}, baseConfig(makeModel()), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2"), asOf: "2026-01-15T00:00:00Z" });
+  await runPipelineForTicker({}, baseConfig(makeModel({ direction: "short", confidence: 0.9 })), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2"), asOf: "2026-01-15T00:00:00Z" });
   const memory = await stateRows(ctx.stateDb, "decision_memory");
   assert.equal(memory.length, 1);
   assert.equal(memory[0].decision_id, positions[0].trade_thesis_id);
@@ -141,7 +141,7 @@ test("a pipeline retry after the replace-commit but before settling still settle
   assert.equal(positions.length, 2);
 
   // A further replay settles nothing new.
-  await runPipelineForTicker({}, baseConfig(makeModel()), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2"), asOf: "2026-01-15T00:00:00Z" });
+  await runPipelineForTicker({}, baseConfig(makeModel({ direction: "short", confidence: 0.9 })), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2"), asOf: "2026-01-15T00:00:00Z" });
   assert.equal((await stateRows(ctx.stateDb, "decision_memory")).length, 1);
 });
 
@@ -149,7 +149,7 @@ test("a pipeline retry after the replace-commit but before settling still settle
 
 test("TRADE_DECISION_STATUS holds the agreed names", () => {
   assert.deepEqual({ ...TRADE_DECISION_STATUS }, {
-    OPENED: "opened", REJECTED: "rejected", SUPERSEDED: "superseded", SKIPPED_NO_PRICE_DATA: "skipped_no_price_data",
+    OPENED: "opened", REJECTED: "rejected", SUPERSEDED: "superseded", SKIPPED_NO_PRICE_DATA: "skipped_no_price_data", HELD: "held",
   });
 });
 

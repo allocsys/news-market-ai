@@ -14,7 +14,7 @@
 // deleted d1.js; the backtest_runs registry is storage/sim_registry.js.
 
 import { LookaheadViolationError } from "../shared/errors.js";
-import { MAX_PORTFOLIO_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
+import { DEFAULT_FLIP_MIN_CONFIDENCE, MAX_PORTFOLIO_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
 import {
   ACTIVE_JOB_MAX_IDLE_MS,
@@ -179,7 +179,7 @@ export class RunStore {
   }
 
   /**
-   * Positions that ticker's commitThesis batch closed as 'replaced' at exactly
+   * Positions that ticker's commitThesis batch closed as 'replaced' or 'flipped' at exactly
    * `closedAt` and that have no decision_memory row yet -- i.e. replaced
    * positions still waiting for graph/settle.js to record their realized
    * outcome. This is how the pipeline finds what to settle AFTER the commit:
@@ -200,7 +200,7 @@ export class RunStore {
       .prepare(
         `SELECT p.id, p.ticker, p.trade_thesis_id, p.position_size_pct, p.direction, p.entry_price, p.exit_price, p.opened_at, p.closed_at, p.close_reason
          FROM positions p
-         WHERE p.run_id = ? AND p.ticker = ? AND p.closed_at = ? AND p.close_reason = 'replaced'
+         WHERE p.run_id = ? AND p.ticker = ? AND p.closed_at = ? AND p.close_reason IN ('replaced', 'flipped')
            AND NOT EXISTS (
              SELECT 1 FROM decision_memory m WHERE m.run_id = p.run_id AND m.decision_id = p.trade_thesis_id
            )`
@@ -262,7 +262,8 @@ export class RunStore {
    *
    * `outcome` (trade_decisions.status) is one of:
    *   'superseded' -- P1 failed: a newer position for this ticker already exists.
-   *   'rejected'   -- P1 held but P2 failed: would breach the risk ceiling.
+   *   'held'       -- P1 held but P3 (hold/flip rule) says keep the existing open position.
+   *   'rejected'   -- P1 and P3 passed but P2 failed: would breach the risk ceiling.
    *   'opened'     -- both held: the position was actually opened.
    * `id`/`tradeThesisId` should both be `${ticker}|${asOf}` (risk.js's own
    * convention) -- ON CONFLICT DO NOTHING on both inserts makes a
@@ -286,6 +287,8 @@ export class RunStore {
     takeProfitPct = null,
     asOf,
     exitPrice = null,
+    confidence = null,
+    flipMinConfidence = DEFAULT_FLIP_MIN_CONFIDENCE,
     thesis,
     riskDecision,
     portfolioDecision = null,
@@ -312,10 +315,30 @@ export class RunStore {
     // later the same day toward THIS decision's exposure check, understating
     // how much room was actually available at this asOf. The as-of bound
     // makes the exposure check correct regardless of insertion order.
+    // P3, the hold/flip rule: an OTHER open position for this ticker that
+    // this thesis must NOT replace -- same direction (hold), or opposite but
+    // with confidence below flipMinConfidence (too weak to reverse). Rows
+    // with no direction (legacy) never hold, so they stay replaceable, and a
+    // null direction/confidence on the new thesis makes the comparison NULL
+    // (= not held), i.e. the pre-P3 replace behavior. The SAME fragment is in
+    // all three statements. That is consistent because (1) is the only
+    // statement that changes what it sees: on a hold it is a no-op, so (2)
+    // and (3) still see the held row; on a flip it closes the old row, so (2)
+    // and (3) no longer see it. `h.id != ?` keeps a checkpoint-resumed re-run
+    // from treating its own already-open row as the thing to hold against.
+    const holdExists = `EXISTS (
+             SELECT 1 FROM positions h
+             WHERE h.run_id = ? AND h.ticker = ? AND h.id != ? AND h.closed_at IS NULL
+               AND h.direction IS NOT NULL AND (h.direction = ? OR ? < ?)
+           )`;
+    const holdBinds = [this.runId, ticker, id, direction, confidence, flipMinConfidence];
+
     const closeOld = this.db
       .prepare(
         `UPDATE positions
-         SET closed_at = ?, close_reason = 'replaced', exit_price = ?
+         SET closed_at = ?,
+             close_reason = CASE WHEN direction IS NOT NULL AND direction != ? THEN 'flipped' ELSE 'replaced' END,
+             exit_price = ?
          WHERE run_id = ? AND ticker = ? AND id != ? AND closed_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM positions p2
@@ -324,14 +347,15 @@ export class RunStore {
            AND (
              SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
              WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
-           ) + ? <= ?`
+           ) + ? <= ?
+           AND NOT ${holdExists}`
       )
-      .bind(asOf, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT);
+      .bind(asOf, direction, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT, ...holdBinds);
 
     const openNew = this.db
       .prepare(
-        `INSERT OR IGNORE INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL
+        `INSERT OR IGNORE INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason, confidence)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM positions p2
            WHERE p2.run_id = ? AND p2.ticker = ? AND p2.closed_at IS NULL AND p2.opened_at > ?
@@ -339,12 +363,14 @@ export class RunStore {
          AND (
            SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
            WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
-         ) + ? <= ?`
+         ) + ? <= ?
+         AND NOT ${holdExists}`
       )
       .bind(
-        this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf,
+        this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf, confidence,
         this.runId, ticker, asOf,
-        this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT
+        this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
+        ...holdBinds
       );
 
     const insertDecision = this.db
@@ -356,6 +382,7 @@ export class RunStore {
                SELECT 1 FROM positions p2
                WHERE p2.run_id = ? AND p2.ticker = ? AND p2.closed_at IS NULL AND p2.opened_at > ?
              ) THEN '${TRADE_DECISION_STATUS.SUPERSEDED}'
+             WHEN ${holdExists} THEN '${TRADE_DECISION_STATUS.HELD}'
              WHEN (
                SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
                WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
@@ -369,6 +396,7 @@ export class RunStore {
         this.runId, id, ticker, asOf,
         JSON.stringify(thesis), JSON.stringify(riskDecision), portfolioDecision != null ? JSON.stringify(portfolioDecision) : null,
         this.runId, ticker, asOf,
+        ...holdBinds,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         opinions != null ? JSON.stringify(opinions) : null,
         debate != null ? JSON.stringify(debate) : null,

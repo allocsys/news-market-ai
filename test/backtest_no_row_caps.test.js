@@ -95,6 +95,9 @@ test("getRealizedReturnsInRange returns every realized return when there are mor
 // Same dispatch-on-schema fake model as test/backtest_on_signal_runner.test.js:
 // always a confident long thesis, so every news item runs the whole pipeline.
 function makeFakeModel({ onCall } = {}) {
+  // Alternates long/short at high confidence: same-direction theses are HELD now (hold/flip rule),
+  // so only a reversal closes the previous position and produces a realized return per item.
+  let verdicts = 0;
   return async (prompt, opts) => {
     onCall?.(opts);
     if (prompt.startsWith("A trade decision for")) {
@@ -112,7 +115,7 @@ function makeFakeModel({ onCall } = {}) {
         ? JSON.stringify({ argument: "earnings beat justifies a long position", justification: "fundamentals improved" })
         : JSON.stringify({ argument: "one beat doesn't confirm a trend", justification: "macro risk remains" });
     }
-    if (opts.schema === DebateVerdict) return JSON.stringify({ direction: "long", confidence: 0.8, timeHorizon: "days", justification: "bull case outweighs bear case" });
+    if (opts.schema === DebateVerdict) return JSON.stringify({ direction: verdicts++ % 2 === 0 ? "long" : "short", confidence: 0.9, timeHorizon: "days", justification: "bull case outweighs bear case" });
     if (opts.schema === TradeThesis) return JSON.stringify({ instrument: "equity", rationale: "ride the post-earnings momentum" });
     throw new Error(`unexpected schema/prompt in test fake model: ${prompt.slice(0, 60)}`);
   };

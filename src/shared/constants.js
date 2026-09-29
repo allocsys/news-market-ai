@@ -9,8 +9,18 @@
 // so they must read the same number.
 export const MAX_PORTFOLIO_RISK_PCT = 0.2;
 
+// Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
+// already has an open position only REPLACES it if it points the OTHER way
+// with at least this confidence. Same direction never replaces (the open
+// position is held, so its hold clock and stops are not reset), and a weaker
+// opposite thesis is ignored too. Untuned placeholder, deliberately above
+// risk.js's MIN_CONFIDENCE_TO_ACT (0.6): reversing costs two trades, so it
+// should need more conviction than opening. config.flipMinConfidence
+// (FLIP_MIN_CONFIDENCE) overrides it.
+export const DEFAULT_FLIP_MIN_CONFIDENCE = 0.75;
+
 // trade_decisions.status values. RunStore#commitThesis derives the first
-// three in SQL; the pipeline writes 'rejected' and 'skipped_no_price_data'
+// four in SQL; the pipeline writes 'rejected' and 'skipped_no_price_data'
 // itself when no commit happens. The dashboard (M4) should import this rather
 // than re-typing the strings. (The old pipeline wrote 'approved' where this
 // writes 'opened'; the state tables started empty, so there are no legacy
@@ -25,4 +35,6 @@ export const TRADE_DECISION_STATUS = Object.freeze({
   SUPERSEDED: "superseded",
   /** Approved, but there was no price bar to open/replace at, so nothing was executed. */
   SKIPPED_NO_PRICE_DATA: "skipped_no_price_data",
+  /** Approved, but the ticker already has an open position that the hold/flip rule keeps (same direction, or a too-weak opposite thesis). */
+  HELD: "held",
 });
