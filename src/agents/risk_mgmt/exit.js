@@ -3,7 +3,8 @@
 // #3). Whether an already-open position should close is not something an
 // LLM judges here: it's a fixed check against the thresholds risk.js
 // already decided at open time and copied onto the position row (see
-// storage/run_store.js#RunStore.openPosition), plus a portfolio-level max-hold-days knob.
+// storage/run_store.js#RunStore.openPosition), plus a portfolio-level max-hold-days knob (counted in trading days,
+// Mon-Fri -- see tradingDaysBetween).
 //
 // HONEST SCOPE: this module only judges ONE position against ONE
 // already-known currentPrice/asOf -- it does no fetching and enforces no
@@ -18,8 +19,36 @@ export const CLOSE_REASON = {
   TIME_BASED: "time_based",
 };
 
-function daysBetween(fromIso, toIso) {
-  return (new Date(toIso).getTime() - new Date(fromIso).getTime()) / (1000 * 60 * 60 * 24);
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+function utcDayStartMs(iso) {
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? NaN : Math.floor(t / MS_PER_DAY) * MS_PER_DAY;
+}
+
+/**
+ * Whole Mon-Fri UTC days in the half-open interval (from's UTC date, to's UTC
+ * date]: the opening day itself never counts, `to`'s own day counts if it is
+ * a weekday. Example: opened Thu 2026-01-01, asOf Thu 2026-01-15 -> 10.
+ *
+ * HONEST SCOPE: weekends only -- there is no exchange-holiday calendar, so a
+ * market holiday still counts as a trading day and the time exit can fire up
+ * to a few days early around holidays. Good enough for a 10-day placeholder
+ * knob; add a calendar if maxHoldDays is ever tuned tightly. XAUUSD (FX)
+ * also trades Mon-Fri, so the same rule fits every instrument on the
+ * watchlist. Returns NaN for an unparseable date (NaN >= n is false, so the
+ * time exit simply never fires -- same as the previous calendar-day math).
+ */
+export function tradingDaysBetween(fromIso, toIso) {
+  const from = utcDayStartMs(fromIso);
+  const to = utcDayStartMs(toIso);
+  if (Number.isNaN(from) || Number.isNaN(to)) return NaN;
+  let count = 0;
+  for (let t = from + MS_PER_DAY; t <= to; t += MS_PER_DAY) {
+    const weekday = new Date(t).getUTCDay(); // 0 = Sunday, 6 = Saturday
+    if (weekday !== 0 && weekday !== 6) count += 1;
+  }
+  return count;
 }
 
 /**
@@ -56,7 +85,7 @@ export function evaluateExit(position, { currentPrice, asOf, maxHoldDays }) {
     }
   }
 
-  if (maxHoldDays != null && openedAt && asOf && daysBetween(openedAt, asOf) >= maxHoldDays) {
+  if (maxHoldDays != null && openedAt && asOf && tradingDaysBetween(openedAt, asOf) >= maxHoldDays) {
     return { reason: CLOSE_REASON.TIME_BASED };
   }
 
