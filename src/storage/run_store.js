@@ -114,6 +114,33 @@ export class RunStore {
     return (res?.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Folds one gross direction-aware return sample (shared/returns.js#
+   * computeGrossReturn) into the position's running excursion extremes:
+   * mae_pct = MIN(mae_pct, r), mfe_pct = MAX(mfe_pct, r), each with a 0
+   * baseline (entry itself), so the first sample always leaves both columns
+   * non-null. Only touches a still-open row (closed_at IS NULL): a position
+   * that closed between the caller's read and this write is left alone, same
+   * guard as closePosition. Writes only when the sample changes something:
+   * the first sample (either column still NULL) or a new extreme -- a sample
+   * inside the existing [mae, mfe] range is a no-op, so a check that doesn't
+   * move the extremes costs no D1 row write. Returns true only if a row was
+   * updated. A non-finite sample is ignored (never writes NaN/null over real
+   * extremes).
+   */
+  async recordPositionExcursion({ id, returnPct }) {
+    if (!Number.isFinite(returnPct)) return false;
+    const res = await this.db
+      .prepare(
+        `UPDATE positions SET mae_pct = MIN(COALESCE(mae_pct, 0), ?), mfe_pct = MAX(COALESCE(mfe_pct, 0), ?)
+         WHERE run_id = ? AND id = ? AND closed_at IS NULL
+           AND (mae_pct IS NULL OR mfe_pct IS NULL OR ? < mae_pct OR ? > mfe_pct)`
+      )
+      .bind(returnPct, returnPct, this.runId, id, returnPct, returnPct)
+      .run();
+    return (res?.meta?.changes ?? 0) > 0;
+  }
+
   async getOpenPositionsAsOf({ asOf }) {
     requireAsOf("getOpenPositionsAsOf", asOf);
 
