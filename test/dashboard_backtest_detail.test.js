@@ -221,6 +221,26 @@ test("GET /api/backtest-runs/:id returns 400 for a malformed id, 404 for an unkn
   assert.equal((await get("/api/backtest-runs")).status, 200, "the list route is unaffected");
 });
 
+test("GET /api/backtest-runs/:id nets realizedReturn by the run's recorded tradeCostBps (round trip = 2 sides) and stays gross when no knobs were recorded", async () => {
+  const env = await backendEnv();
+  const get = async () => (await backendWorker.fetch(new Request(`https://backend.example/api/backtest-runs/${RUN}`), env)).json();
+  const returns = async () => (await get()).positions.map((p) => p.realizedReturn);
+  assert.deepEqual(await returns(), [0.1, -0.1], "no result.knobs -> gross, exactly as the run computed it");
+
+  // 50 bps per side -> 100 bps round trip = 0.01 off every closed position.
+  const withKnobs = { ...RESULT, knobs: { tradeCostBps: 50 } };
+  await env.SIM_DB.prepare(`UPDATE backtest_runs SET result = ? WHERE id = ?`).bind(JSON.stringify(withKnobs), RUN).run();
+  const [aapl, tsla] = await returns();
+  assert.ok(Math.abs(aapl - 0.09) < 1e-12, `long: 0.10 - 0.01, got ${aapl}`);
+  assert.ok(Math.abs(tsla - -0.11) < 1e-12, `short: -0.10 - 0.01, got ${tsla}`);
+
+  // A zero (costs off) or non-numeric recorded value is gross too.
+  for (const tradeCostBps of [0, null, "5"]) {
+    await env.SIM_DB.prepare(`UPDATE backtest_runs SET result = ? WHERE id = ?`).bind(JSON.stringify({ ...RESULT, knobs: { tradeCostBps } }), RUN).run();
+    assert.deepEqual(await returns(), [0.1, -0.1], `tradeCostBps=${JSON.stringify(tradeCostBps)}`);
+  }
+});
+
 async function dashboardEnv(backend) {
   backend ??= await backendEnv();
   return {
