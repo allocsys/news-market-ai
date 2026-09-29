@@ -100,11 +100,17 @@ export class RunStore {
       .run();
   }
 
+  /**
+   * Returns true only if THIS call closed the row. false means it was already
+   * closed (e.g. commitThesis replaced it between an exit check's read and this
+   * write), so the caller must not settle it again with its stale reason/price.
+   */
   async closePosition({ id, closedAt, closeReason = null, exitPrice = null }) {
-    await this.db
+    const res = await this.db
       .prepare(`UPDATE positions SET closed_at = ?, close_reason = ?, exit_price = ? WHERE run_id = ? AND id = ? AND closed_at IS NULL`)
       .bind(closedAt, closeReason, exitPrice, this.runId, id)
       .run();
+    return (res?.meta?.changes ?? 0) > 0;
   }
 
   async getOpenPositionsAsOf({ asOf }) {
