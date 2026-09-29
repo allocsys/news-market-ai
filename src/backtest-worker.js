@@ -45,6 +45,7 @@ import { loadConfig } from "./config.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
+import { applyKnobOverrides } from "./backtest/knobOverrides.js";
 import { replayNewsItems } from "./backtest/newsReplay.js";
 import { getNewsItemsByIds } from "./storage/inputs_view.js";
 import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
@@ -112,7 +113,10 @@ export default {
           // Worker's LLM_LOG_ENABLED=false default -- config is loaded once per
           // batch and shared across messages, so this must be a fresh object per
           // job, never a mutation of the shared `config`.
-          const jobConfig = job.enableLlmLog ? { ...config, llmLogEnabled: true } : config;
+          // Per-run knob overrides (backtest/knobOverrides.js) layer on top of the
+          // same fresh-object rule: applyKnobOverrides returns a NEW config, and the
+          // very same one when there is nothing to apply.
+          const jobConfig = applyKnobOverrides(job.enableLlmLog ? { ...config, llmLogEnabled: true } : config, job.knobOverrides);
           const { budget, runEnv } = buildBudgetedEnv(env, jobConfig);
           // Bookkeeping that must not be cut in half by the budget: counted, never refused.
           const unenf = (fn) => (budget ? budget.unenforced(fn) : fn());
@@ -171,7 +175,7 @@ export default {
           // phase display -- a SEPARATE, finer-grained record from the
           // backtest_runs registry, which runManualBacktest itself writes
           // ('running' up front, 'complete'/'failed' once it resolves).
-          const reporter = createJobReporter(ctx.store, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays } });
+          const reporter = createJobReporter(ctx.store, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, ...(job.knobOverrides ? { knobOverrides: job.knobOverrides } : {}) } });
           // start() first (part 1 only -- a continuation's row already exists):
           // it upserts the row to 'running' whether or not backend's 'queued'
           // row exists (a redelivered message may find it already 'running').
@@ -225,7 +229,9 @@ export default {
             // usual continuation one; never shorter than it.
             const delaySeconds = Math.max(config.backtestContinuationDelaySeconds, outcome.delaySeconds ?? 0);
             await env.BACKTEST.send(
-              { type: "backtest", id, tickers, testStart, testEnd, graceDays, part: part + 1, cursor: outcome.cursor },
+              // enableLlmLog and knobOverrides MUST ride along: a part that dropped them
+              // would finish the run under different knobs than it started with.
+              { type: "backtest", id, tickers, testStart, testEnd, graceDays, ...(job.enableLlmLog ? { enableLlmLog: true } : {}), ...(job.knobOverrides ? { knobOverrides: job.knobOverrides } : {}), part: part + 1, cursor: outcome.cursor },
               { delaySeconds }
             );
             message.ack();

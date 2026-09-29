@@ -50,6 +50,7 @@ import { RunStore, readOnly } from "./storage/run_store.js";
 import { getNewsItemsInRange } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { SimClock } from "./backtest/simClock.js";
+import { parseKnobOverrides } from "./backtest/knobOverrides.js";
 import { cancelBacktestRun, getBacktestRun } from "./storage/sim_registry.js";
 import { cleanupCancelledRun, cleanupOldRuns, purgeFailedAndCancelledRuns } from "./backtest/cleanup.js";
 import { BACKTEST_ID_RE } from "./dashboard/helpers.js";
@@ -316,6 +317,15 @@ export default {
       // this run's config, not globally.
       const enableLlmLog = url.searchParams.get("enableLlmLog") === "1";
 
+      // Per-run knob overrides (backtest/knobOverrides.js): the tuning knobs from
+      // docs/rollout.md, allowlisted and range-checked. A bad value is a 400 here,
+      // before a job row exists -- a sweep run with a silently dropped knob would
+      // look like a real data point.
+      const knobParse = parseKnobOverrides((name) => url.searchParams.get(name));
+      if (knobParse.error) return jsonResponse({ error: knobParse.error }, { status: 400 });
+      const knobOverrides = knobParse.overrides;
+      const hasKnobOverrides = Object.keys(knobOverrides).length > 0;
+
       // Point-in-time date strings (YYYY-MM-DD) become UTC-midnight ISO
       // timestamps -- onSignalRunner.js and the equity scoring (equity.js) both
       // expect full ISO strings.
@@ -350,10 +360,10 @@ export default {
       // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
       // progress-write hiccup here can never block the real enqueue below.
       // env_run_id/run_id = this backtest's own id, in SIM_DB.
-      await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, enableLlmLog } }).queued();
+      await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}) } }).queued();
       try {
-        await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays, enableLlmLog });
-        return jsonResponse({ accepted: true, id, tickers, testStart, testEnd });
+        await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}) });
+        return jsonResponse({ accepted: true, id, tickers, testStart, testEnd, ...(hasKnobOverrides ? { knobOverrides } : {}) });
       } catch (err) {
         console.error("backtest enqueue failed", { id, tickers, message: err.message });
         return jsonResponse({ error: "backtest enqueue failed", message: err.message }, { status: 500 });
