@@ -28,6 +28,7 @@ import { evaluateExit } from "../agents/risk_mgmt/exit.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 import { detectSplitJump } from "../shared/split_guard.js";
+import { computeGrossReturn } from "../shared/returns.js";
 
 /**
  * `ctx` is `{ inputs, store }`: `inputs` is an inputs-DB handle (read-only is
@@ -71,6 +72,17 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
         factor: split.factor,
         asOf,
       });
+    }
+
+    // MAE/MFE: fold this check's gross return into the position's running
+    // excursion extremes BEFORE evaluating exits, so the bar that triggers a
+    // stop/take-profit is itself counted. A split-suspected price is not a real
+    // price, so it is never sampled; a missing price/entry/direction yields a
+    // null return and is skipped (recordPositionExcursion ignores non-finite).
+    // Sampled at check cadence from one price, not intrabar highs/lows.
+    if (!split) {
+      const returnPct = computeGrossReturn({ direction: position.direction, entryPrice: position.entryPrice, exitPrice: currentPrice });
+      if (returnPct != null) await store.recordPositionExcursion({ id: position.id, returnPct });
     }
 
     const exit = evaluateExit(position, {
