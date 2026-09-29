@@ -611,9 +611,9 @@ test("filter links on decisions carry the resolved env (?env=) so switching a fi
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/decisions?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
 
-  const approvedHrefMatch = html.match(/href="([^"]*decisionStatus=approved[^"]*)"/);
-  assert.ok(approvedHrefMatch, "found the Approved status pill link");
-  assert.match(approvedHrefMatch[1], new RegExp(`env=${BT}`), "the filter link carries env forward");
+  const openedHrefMatch = html.match(/href="([^"]*decisionStatus=opened[^"]*)"/);
+  assert.ok(openedHrefMatch, "found the Opened status pill link");
+  assert.match(openedHrefMatch[1], new RegExp(`env=${BT}`), "the filter link carries env forward");
 });
 
 test("GET /dashboard/snapshot renders fine (Live-only selector, no crash) when the best-effort /api/backtest-runs lookup itself fails", async () => {
