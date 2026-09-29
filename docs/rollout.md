@@ -23,13 +23,19 @@ All numeric thresholds below are PROPOSED starting values. They are not tuned. T
 | Split-guard hits | split guard events | `SPLIT_GUARD_TOLERANCE` 0.05 |
 | Win rate, avg hold (trading days) | closed positions | context only, not a gate |
 
+## Pass test for net return
+
+"Net return > 0" below means the LOWER BOUND is above zero: mean net return per trade minus 1.645 x standard error (one-sided 95%, PROPOSED) is > 0. A positive average alone does not pass. This ties the pass rule to the sample size, so a lucky small sample cannot advance a stage.
+
+For reference, the live DB opened 57 positions in its first ~8 days (Sep 19-26, peak ~16/day), so the sample sizes below are reachable in weeks, not years.
+
 ## Stage 1: Backtest
 
 Purpose: pick knob values and confirm the strategy has positive net expectancy.
 
-- Sample: at least N_bt = 100 closed trades AND at least 6 months of data (PROPOSED).
+- Sample: at least 500 closed trades AND at least 3 months of data covering different market conditions (PROPOSED).
 - Pass to paper when ALL hold:
-  - net return after costs > 0 over the full window;
+  - net return after costs > 0 (lower bound, see above) over the full window;
   - net return > 0 in each half of the window (no single-period dependence);
   - max drawdown < 2x the breaker level;
   - breaker trips <= 2 over the window;
@@ -41,9 +47,9 @@ Purpose: pick knob values and confirm the strategy has positive net expectancy.
 
 Purpose: confirm live data, timing and execution logic behave as in backtest.
 
-- Minimum: at least 30 closed trades AND at least 8 weeks (PROPOSED).
+- Minimum: at least 200 closed trades AND at least 4 weeks (PROPOSED).
 - Advance to micro-live when ALL hold:
-  - net return after costs > 0;
+  - net return after costs > 0 (lower bound, see above);
   - realised results are not worse than the backtest by more than a set margin: net return per trade at least 50% of the backtest figure (PROPOSED);
   - breaker trips <= 1;
   - no unexplained split-guard hit and no open bug in the exit or settle path;
@@ -59,10 +65,10 @@ Purpose: confirm live data, timing and execution logic behave as in backtest.
 Purpose: confirm real fills and real costs, with capital at risk small enough to lose.
 
 - Size: a fixed small amount chosen by the owner (a number is set before this stage starts; not in this doc).
-- Minimum: at least 30 closed trades AND at least 8 weeks (PROPOSED).
+- Minimum: at least 100 closed trades AND at least 4 weeks (PROPOSED).
 - Hard stop: cumulative loss reaches the owner's pre-set loss limit, or the drawdown breaker trips twice in a window. Trading stops and the stage drops back to paper.
 - Pass (eligible for scaling, a separate decision) when ALL hold:
-  - net return after costs > 0, using ACTUAL costs;
+  - net return after costs > 0 (lower bound, see above), using ACTUAL costs;
   - actual cost per side is within 2x `TRADE_COST_BPS`; if it is not, re-run the backtest with the real cost before anything else;
   - no manual intervention was needed on any position;
   - metrics match paper within the margin used above.
