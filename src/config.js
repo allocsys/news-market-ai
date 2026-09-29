@@ -3,6 +3,16 @@
 // for these values, so there's exactly one place that knows the env var
 // names.
 
+import { DEFAULT_TRADE_COST_BPS } from "./shared/constants.js";
+
+// Non-negative finite number var (fractions allowed): `fallback` when unset/blank
+// or malformed; '0' is honored (it means "no costs").
+function nonNegativeNumberOrDefault(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 // Non-negative integer var: `fallback` when unset/blank, and '0' is honored
 // (it means "disabled" for the backtest subrequest budget). A malformed value
 // falls back too, rather than silently turning the guard off.
@@ -133,6 +143,9 @@ export function loadConfig(env) {
     // DEFAULT_FLIP_MIN_CONFIDENCE, so the default lives in one place. Not
     // `Number(x) || default`: 0 ("always flip") is a legitimate setting.
     flipMinConfidence: env.FLIP_MIN_CONFIDENCE ? Number(env.FLIP_MIN_CONFIDENCE) : undefined,
+    // Transaction cost per side in basis points (shared/returns.js,
+    // backtest/equity.js). Untuned placeholder, see constants.js; 0 disables.
+    tradeCostBps: nonNegativeNumberOrDefault(env.TRADE_COST_BPS, DEFAULT_TRADE_COST_BPS),
     // Watchlist for GDELT ingestion (ingestion/sources/gdelt.js) -- one
     // GDELT query per ticker, since the DOC API has no "everything" mode.
     // v1: the ticker symbol itself is the search query, a blunt but fully

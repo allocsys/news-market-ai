@@ -32,6 +32,7 @@
 // max drawdown, Sharpe (sqrt(252) is right for daily returns) and up-day rate.
 
 import { utcDateOf } from "../shared/price_availability.js";
+import { sideCostFraction } from "../shared/returns.js";
 
 /** The longest run of calendar days without a bar we accept before calling a ticker's data unfit (a long weekend or a holiday is 4). */
 export const DEFAULT_MAX_PRICE_GAP_DAYS = 5;
@@ -149,17 +150,23 @@ function coverageProblem({ bars, inSpan, before, from, to, maxGapDays }) {
  * 1/N of the starting equity at its entry price (`grid.basis`) and is never
  * rebalanced. Returns { returns, exposure } aligned with `grid.dates`;
  * exposure is 1 every day (fully invested). Empty grid -> empty series.
+ *
+ * `costBps` (per side, default 0 = gross): the initial purchase pays one entry
+ * cost, so every day's value is scaled by (1 - cost). It is never sold inside
+ * the span, so no exit cost -- the same treatment as a still-open position on
+ * the signal side, which keeps the two curves comparable.
  */
-export function offEquityReturns(grid) {
+export function offEquityReturns(grid, { costBps = 0 } = {}) {
   const n = grid.tickers.length;
   if (n === 0 || grid.dates.length === 0) return { returns: [], exposure: [] };
 
   const returns = [];
+  const entryFactor = 1 - sideCostFraction(costBps);
   let previous = 1;
   for (let k = 0; k < grid.dates.length; k++) {
     let value = 0;
     for (const ticker of grid.tickers) value += grid.closes[ticker][k] / grid.basis[ticker];
-    value /= n;
+    value = (value / n) * entryFactor;
     returns.push(value / previous - 1);
     previous = value;
   }
@@ -185,8 +192,16 @@ export function offEquityReturns(grid) {
  * Returns { returns, exposure, positionsTraded, positionsIgnored } with `returns`
  * and `exposure` (fraction of equity invested at the start of each day) aligned
  * with `grid.dates`.
+ *
+ * `costBps` (per side, default 0 = gross): every position pays costBps of its
+ * traded notional when it enters (allocation) and again when it exits (its
+ * last marked value), charged on the grid date the trade happens -- the open
+ * day, and the first grid date on/after its close date. A position still open
+ * at the end of the span pays no exit cost. A flip is therefore two trades: the
+ * old position's exit and the new position's entry.
  */
-export function onEquityReturns(grid, positions) {
+export function onEquityReturns(grid, positions, { costBps = 0 } = {}) {
+  const sideCost = sideCostFraction(costBps);
   if (grid.tickers.length === 0 || grid.dates.length === 0) {
     return { returns: [], exposure: [], positionsTraded: 0, positionsIgnored: positions.length };
   }
@@ -210,6 +225,7 @@ export function onEquityReturns(grid, positions) {
       closeDate: p.closedAt ? utcDateOf(p.closedAt) : null,
       allocation: null,
       previousValue: null,
+      exitCharged: false,
     });
   }
 
@@ -225,6 +241,13 @@ export function onEquityReturns(grid, positions) {
 
     for (const pos of replayable) {
       if (pos.openDate > date) continue;
+      // Exit cost, on the first grid date the position is no longer held: on/after
+      // its close date and, for a same-day round trip (closeDate === openDate,
+      // active only that one day), strictly after the open date.
+      if (sideCost > 0 && pos.allocation !== null && !pos.exitCharged && pos.closeDate !== null && date >= pos.closeDate && date > pos.openDate) {
+        pnl -= pos.previousValue * sideCost;
+        pos.exitCharged = true;
+      }
       // A position opened and closed (e.g. replaced) within the same UTC day
       // has openDate === closeDate; the plain `date >= closeDate` check below
       // would then exclude it on its only active day, silently dropping every
@@ -237,6 +260,7 @@ export function onEquityReturns(grid, positions) {
       if (pos.allocation === null) {
         pos.allocation = pos.positionSizePct * equity;
         pos.previousValue = pos.allocation;
+        pnl -= pos.allocation * sideCost; // entry cost
         traded.add(pos.id);
       }
 

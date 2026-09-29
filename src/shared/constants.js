@@ -19,6 +19,16 @@ export const MAX_PORTFOLIO_RISK_PCT = 0.2;
 // (FLIP_MIN_CONFIDENCE) overrides it.
 export const DEFAULT_FLIP_MIN_CONFIDENCE = 0.75;
 
+// Transaction cost per SIDE (one entry or one exit), in basis points of the
+// traded notional: commission + half spread + impact folded into one number.
+// A round trip costs twice this, and a flip is two trades (the close and the
+// new open). Untuned placeholder for liquid large caps / gold; before this
+// every reported return was gross and replacement churn looked free.
+// config.tradeCostBps (TRADE_COST_BPS) overrides it; 0 turns costs off.
+// Consumers that are handed a config with no tradeCostBps (unit tests) charge
+// nothing, so only config.js#loadConfig applies this default.
+export const DEFAULT_TRADE_COST_BPS = 5;
+
 // trade_decisions.status values. RunStore#commitThesis derives the first
 // four in SQL; the pipeline writes 'rejected' and 'skipped_no_price_data'
 // itself when no commit happens. The dashboard (M4) should import this rather
