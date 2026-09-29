@@ -44,9 +44,8 @@ export async function settlePositionOutcome(env, config, store, { position, exit
     direction: position.direction,
     entryPrice: position.entryPrice,
     exitPrice,
+    costBps: config.tradeCostBps,
   });
-
-  if (realizedReturn == null) {
     console.error("settlePositionOutcome: skipping reflection -- realized return not computable", {
       tradeThesisId: position.tradeThesisId,
       ticker: position.ticker,
@@ -67,6 +66,7 @@ export async function settlePositionOutcome(env, config, store, { position, exit
     openedAt: position.openedAt,
     closedAt,
     closeReason,
+    costBps: config.tradeCostBps ?? 0, // realizedReturn below is net of this per-side cost
   };
 
   try {
