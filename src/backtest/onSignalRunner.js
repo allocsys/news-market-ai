@@ -44,7 +44,8 @@
 // run see price/position state it should only see day-by-day, not
 // instantly.
 //
-// GRACE PERIOD: `graceDays` (default config.maxPositionHoldDays) extends
+// GRACE PERIOD: `graceDays` (default: the calendar days covering
+// config.maxPositionHoldDays trading days) extends
 // the day-by-day walk PAST `testEnd` purely so a position opened near the
 // end of the test window still gets its fair chance to hit a stop-loss/
 // take-profit/time-based exit and contribute a realized return, rather
@@ -69,6 +70,7 @@
 import { getNewsItemsInRange } from "../storage/inputs_view.js";
 import { runPipelineForTicker } from "../graph/pipeline.js";
 import { checkOpenPositionExits } from "../graph/exit_check.js";
+import { calendarDaysCoveringTradingDays } from "../agents/risk_mgmt/exit.js";
 import { SubrequestBudgetExhaustedError, VendorError } from "../shared/errors.js";
 
 const DAY_MS = 86400000;
@@ -115,7 +117,9 @@ export function computeWalkEnd(config, { testEnd, graceDays, clock, isLastWindow
   // test couldn't catch since it only checked a step COUNT, not which
   // ticker-days made it up).
   if (!isLastWindow) return new Date(new Date(testEnd).getTime() - DAY_MS).toISOString();
-  const grace = graceDays ?? config.maxPositionHoldDays ?? 10;
+  // Default grace: enough calendar days to reach a time exit, since
+  // maxPositionHoldDays counts trading days (exit.js#tradingDaysBetween).
+  const grace = graceDays ?? calendarDaysCoveringTradingDays(config.maxPositionHoldDays ?? 10);
   const walkEnd = new Date(new Date(testEnd).getTime() + grace * DAY_MS).toISOString();
   return clock ? clock.clampEnd(walkEnd) : walkEnd;
 }
