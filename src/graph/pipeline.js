@@ -38,6 +38,7 @@ import { checkpoint, resumeFrom } from "./checkpointer.js";
 import { shouldContinueDebate } from "./conditional_logic.js";
 import { loadLessonsForDebate } from "./reflection.js";
 import { settlePositionOutcome } from "./settle.js";
+import { loadDrawdownBreakerOptions } from "./drawdown_breaker.js";
 import { TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 
@@ -144,9 +145,11 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
     const tradeThesisId = state.riskDecision.tradeThesisId;
     const existingPosition = await store.getOpenPositionForTickerAsOf({ ticker, asOf });
     const openPositionsRiskPct = await store.getOpenPositionsRiskPctAsOf({ asOf, excludeTicker: ticker });
+    const breakerOptions = await loadDrawdownBreakerOptions(store, config, { asOf });
     state.portfolioDecision = evaluatePortfolio(state.riskDecision, {
       openPositionsRiskPct,
       isReplacingPosition: existingPosition !== null && existingPosition.id !== tradeThesisId,
+      ...breakerOptions,
     });
 
     // The persisted decision row: the full chain as a real, queryable row

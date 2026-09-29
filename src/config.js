@@ -3,7 +3,12 @@
 // for these values, so there's exactly one place that knows the env var
 // names.
 
-import { DEFAULT_TRADE_COST_BPS, DEFAULT_SPLIT_GUARD_TOLERANCE } from "./shared/constants.js";
+import {
+  DEFAULT_TRADE_COST_BPS,
+  DEFAULT_SPLIT_GUARD_TOLERANCE,
+  DEFAULT_DRAWDOWN_BREAKER_PCT,
+  DEFAULT_DRAWDOWN_BREAKER_WINDOW_DAYS,
+} from "./shared/constants.js";
 
 // Non-negative finite number var (fractions allowed): `fallback` when unset/blank
 // or malformed; '0' is honored (it means "no costs").
@@ -150,6 +155,12 @@ export function loadConfig(env) {
     // common split ratios. Untuned placeholder, see constants.js; 0 disables.
     // Consumers handed a config without it (unit tests) run unguarded.
     splitGuardTolerance: nonNegativeNumberOrDefault(env.SPLIT_GUARD_TOLERANCE, DEFAULT_SPLIT_GUARD_TOLERANCE),
+    // Drawdown circuit breaker (portfolio_manager.js): reject new entries when
+    // the trailing-window realized P&L is at or below -pct of the book. Untuned
+    // placeholders, see constants.js; pct 0 disables. Consumers handed a config
+    // without these (unit tests) run unguarded and make no extra store read.
+    drawdownBreakerPct: nonNegativeNumberOrDefault(env.DRAWDOWN_BREAKER_PCT, DEFAULT_DRAWDOWN_BREAKER_PCT),
+    drawdownBreakerWindowDays: nonNegativeNumberOrDefault(env.DRAWDOWN_BREAKER_WINDOW_DAYS, DEFAULT_DRAWDOWN_BREAKER_WINDOW_DAYS),
     // Watchlist for GDELT ingestion (ingestion/sources/gdelt.js) -- one
     // GDELT query per ticker, since the DOC API has no "everything" mode.
     // v1: the ticker symbol itself is the search query, a blunt but fully

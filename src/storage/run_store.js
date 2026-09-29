@@ -14,6 +14,7 @@
 // deleted d1.js; the backtest_runs registry is storage/sim_registry.js.
 
 import { LookaheadViolationError } from "../shared/errors.js";
+import { computeRealizedReturn } from "../shared/returns.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE, MAX_PORTFOLIO_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
 import {
@@ -148,6 +149,41 @@ export class RunStore {
 
     const { results } = await this.db.prepare(sql).bind(...binds).all();
     return results.reduce((sum, r) => sum + r.position_size_pct, 0);
+  }
+
+  /**
+   * Realized book P&L (fraction of the book) over the trailing `windowDays`
+   * ending at `asOf`: sum of position_size_pct * NET realized return
+   * (shared/returns.js, same `costBps` as settle.js) over positions whose
+   * closed_at falls in (asOf - windowDays, asOf]. Feeds the drawdown circuit
+   * breaker (portfolio_manager.js).
+   *
+   * HONEST SCOPE: REALIZED only -- open positions are not marked to market
+   * (that needs a price read per position on every decision). A position with
+   * no entry/exit price or direction has no computable return and contributes
+   * nothing, same as settle.js skipping its reflection. Point-in-time: only
+   * closes at or before `asOf` count. Returns 0 when nothing closed.
+   */
+  async getRealizedPnlPctAsOf({ asOf, windowDays, costBps } = {}) {
+    requireAsOf("getRealizedPnlPctAsOf", asOf);
+    const asOfMs = new Date(asOf).getTime();
+    if (Number.isNaN(asOfMs) || !Number.isFinite(windowDays) || windowDays <= 0) return 0;
+    const windowStart = new Date(asOfMs - windowDays * 86400000).toISOString();
+
+    const { results } = await this.db
+      .prepare(
+        `SELECT direction, entry_price, exit_price, position_size_pct FROM positions
+         WHERE run_id = ? AND closed_at IS NOT NULL AND closed_at <= ? AND closed_at > ?`
+      )
+      .bind(this.runId, asOf, windowStart)
+      .all();
+
+    let pnl = 0;
+    for (const r of results) {
+      const ret = computeRealizedReturn({ direction: r.direction, entryPrice: r.entry_price, exitPrice: r.exit_price, costBps });
+      if (ret != null) pnl += ret * r.position_size_pct;
+    }
+    return pnl;
   }
 
   async getOpenPositionForTickerAsOf({ ticker, asOf }) {
