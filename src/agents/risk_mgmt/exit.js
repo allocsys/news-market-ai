@@ -52,6 +52,17 @@ export function tradingDaysBetween(fromIso, toIso) {
 }
 
 /**
+ * Calendar days that always cover `tradingDays` trading days from any start
+ * day: whole weeks, ceil(n / 5) * 7. Used to size windows that must reach a
+ * time exit (backtest grace period, replay bar horizon) now that maxHoldDays
+ * is in trading days. Non-positive / non-finite input -> 0.
+ */
+export function calendarDaysCoveringTradingDays(tradingDays) {
+  if (!Number.isFinite(tradingDays) || tradingDays <= 0) return 0;
+  return Math.ceil(tradingDays / 5) * 7;
+}
+
+/**
  * Returns `{ reason }` (one of CLOSE_REASON's values) if `position` should
  * close given `currentPrice`/`asOf`/`maxHoldDays`, else `null`.
  *
