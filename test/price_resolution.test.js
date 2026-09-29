@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveCurrentPrice } from "../src/graph/price_resolution.js";
+import { resolveCurrentPrice, INTRADAY_MAX_AGE_MS } from "../src/graph/price_resolution.js";
 import { makeCtx, seedBar, seedIntradayBar } from "./helpers/engine_ctx.js";
 
 test("resolveCurrentPrice prefers an intraday bar over the daily close when both are visible", async () => {
@@ -84,4 +84,55 @@ test("resolveCurrentPrice: two same-day calls for the same ticker at distinct in
   assert.equal(morning.price, 181.2);
   assert.equal(afternoon.price, 179.4);
   assert.notEqual(morning.price, afternoon.price);
+});
+
+test("resolveCurrentPrice ignores a months-old intraday bar (2026-09-24 incident: backfill had only loaded 2026-06-26) and uses the daily close", async () => {
+  const { inputs } = makeCtx();
+  await seedBar(inputs, { ticker: "MSFT", date: "2026-09-23", close: 500.59 });
+  // The only intraday bar in the table is from the oldest backfilled day.
+  await seedIntradayBar(inputs, { ticker: "MSFT", ts: "2026-06-26T20:30:00Z", close: 357.37 });
+
+  const originalError = console.error;
+  console.error = () => {};
+  let result;
+  try {
+    result = await resolveCurrentPrice(inputs, { ticker: "MSFT", asOf: "2026-09-24T09:12:00Z" });
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.equal(result.source, "daily");
+  assert.equal(result.price, 500.59);
+});
+
+test("resolveCurrentPrice still uses Friday's last intraday bar on Monday pre-market (a normal weekend gap is inside the bound)", async () => {
+  const { inputs } = makeCtx();
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-08", close: 175 });
+  await seedIntradayBar(inputs, { ticker: "AAPL", ts: "2026-01-09T20:55:00Z", close: 178.3 }); // Friday, last bar of the session
+
+  const result = await resolveCurrentPrice(inputs, { ticker: "AAPL", asOf: "2026-01-12T13:36:00Z" }); // Monday
+  assert.equal(result.source, "intraday");
+  assert.equal(result.price, 178.3);
+});
+
+test("resolveCurrentPrice bound is INTRADAY_MAX_AGE_MS from the bar's close: exactly at the bound is used, one minute past it falls back to daily", async () => {
+  assert.equal(INTRADAY_MAX_AGE_MS, 5 * 24 * 60 * 60 * 1000);
+  const { inputs } = makeCtx();
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-14", close: 180 });
+  await seedIntradayBar(inputs, { ticker: "AAPL", ts: "2026-01-10T13:30:00Z", close: 190 }); // closes 13:35
+
+  const atBound = await resolveCurrentPrice(inputs, { ticker: "AAPL", asOf: "2026-01-15T13:35:00Z" });
+  assert.equal(atBound.source, "intraday");
+  assert.equal(atBound.price, 190);
+
+  const originalError = console.error;
+  console.error = () => {};
+  let pastBound;
+  try {
+    pastBound = await resolveCurrentPrice(inputs, { ticker: "AAPL", asOf: "2026-01-15T13:36:00Z" });
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(pastBound.source, "daily");
+  assert.equal(pastBound.price, 180);
 });
