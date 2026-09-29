@@ -281,6 +281,13 @@ export function decisionsTable(decisions) {
   </table></div>`;
 }
 
+/** Signed percent for an excursion fraction (-0.021 -> "-2.1%"); a dash when the position has not been sampled yet. */
+function fmtExcursion(v) {
+  if (v == null || !Number.isFinite(Number(v))) return "\u2014";
+  const pct = Number(v) * 100;
+  return `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%`;
+}
+
 export function positionsTable(positions, { closed = false } = {}) {
   if (positions.length === 0) return `<p class="empty">None.</p>`;
   const rows = positions
@@ -290,6 +297,8 @@ export function positionsTable(positions, { closed = false } = {}) {
         <td data-label="Direction">${escapeHtml(p.direction ?? "\u2014")}</td>
         <td class="num" data-label="Size">${(p.positionSizePct * 100).toFixed(1)}%</td>
         <td class="num" data-label="Entry">${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
+        <td class="num" data-label="MAE" title="Worst gross return seen while open (sampled at exit checks)">${fmtExcursion(p.maePct)}</td>
+        <td class="num" data-label="MFE" title="Best gross return seen while open (sampled at exit checks)">${fmtExcursion(p.mfePct)}</td>
         ${closed ? `<td class="num" data-label="Exit">${p.exitPrice != null ? "$" + Number(p.exitPrice).toFixed(2) : "\u2014"}</td>` : ""}
         <td class="num" data-label="Opened">${fmtTime(p.openedAt)}</td>
         ${closed ? `<td class="num" data-label="Closed">${fmtTime(p.closedAt)}</td><td data-label="Reason">${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
@@ -297,7 +306,7 @@ export function positionsTable(positions, { closed = false } = {}) {
     )
     .join("\n");
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th>${closed ? "<th>Exit</th>" : ""}<th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
+    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th><th>MAE</th><th>MFE</th>${closed ? "<th>Exit</th>" : ""}<th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
