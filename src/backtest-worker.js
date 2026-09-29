@@ -231,7 +231,7 @@ export default {
             await env.BACKTEST.send(
               // enableLlmLog and knobOverrides MUST ride along: a part that dropped them
               // would finish the run under different knobs than it started with.
-              { type: "backtest", id, tickers, testStart, testEnd, graceDays, enableLlmLog: job.enableLlmLog, knobOverrides: job.knobOverrides, part: part + 1, cursor: outcome.cursor },
+              { type: "backtest", id, tickers, testStart, testEnd, graceDays, ...(job.enableLlmLog ? { enableLlmLog: true } : {}), ...(job.knobOverrides ? { knobOverrides: job.knobOverrides } : {}), part: part + 1, cursor: outcome.cursor },
               { delaySeconds }
             );
             message.ack();
