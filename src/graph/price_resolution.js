@@ -14,15 +14,16 @@
 // intraday history hasn't been backfilled yet (step 6, not built), or a day
 // that has aged out of the planned 4-6 month intraday retention window.
 //
-// NO maxAgeMs BOUND (plan.md step 3's getIntradayPriceAsOf param) is passed
-// here: the daily fallback already exists specifically for "no intraday bar
-// at this asOf", and an unbounded intraday read that happens to be a few
-// days stale (a weekend, an overnight gap) is no worse than the daily
-// reader's own previous-UTC-day-close it would otherwise fall back to --
-// bounding it would just turn some of those into daily-fallback reads for
-// no benefit. Revisit with a real maxAgeMs if a case turns up where an
-// intraday bar visible-but-very-old is worse than falling back (e.g. once
-// step 6's purge is live and a very old still-unpurged row could exist).
+// The intraday read IS BOUNDED by INTRADAY_MAX_AGE_MS (getIntradayPriceAsOf's
+// maxAgeMs param). This used to be unbounded on the reasoning that a few-days-
+// stale intraday bar is no worse than the daily fallback's previous-day close.
+// That holds for a weekend or holiday gap, NOT for a table that only holds
+// old bars: on 2026-09-24 the intraday backfill was still loading its oldest
+// day (2026-06-26), so between 08:45 and ~09:15 UTC the newest visible bar for
+// MSFT/AAPL was ~3 months old. Live fills, stop-loss and take-profit checks
+// took that price as current (MSFT 500.59 long "stopped" at 371.94, AAPL short
+// "take-profit" at 282.12 against ~336, entries at 390.30 / 294.18). A bar
+// older than the bound now falls through to the daily close, which is logged.
 //
 // Adopted Pattern #11 (explicit vendor fallback, no silent degradation):
 // every fallback-to-daily is logged, naming the ticker/asOf, so a backtest
@@ -31,6 +32,11 @@
 // intraday-priced run.
 
 import { getIntradayPriceAsOf, getPriceBarsAsOf } from "../storage/inputs_view.js";
+
+// 5 days covers the longest normal gap (a 3-day weekend plus one day of slack;
+// a Friday-close bar is ~3 days old on Monday pre-market, ~4 across a Monday
+// holiday). Anything older is not "the current price" and is never used.
+export const INTRADAY_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
 
 /**
  * Resolves the fill price for `ticker` as of `asOf`.
@@ -46,12 +52,12 @@ import { getIntradayPriceAsOf, getPriceBarsAsOf } from "../storage/inputs_view.j
  *     SKIPPED_NO_PRICE_DATA path and exit.js's null-price handling).
  */
 export async function resolveCurrentPrice(inputs, { ticker, asOf }) {
-  const intraday = await getIntradayPriceAsOf(inputs, { ticker, asOf });
+  const intraday = await getIntradayPriceAsOf(inputs, { ticker, asOf, maxAgeMs: INTRADAY_MAX_AGE_MS });
   if (intraday) {
     return { price: intraday.close, source: "intraday", bar: intraday };
   }
 
-  console.error("price_resolution: no intraday bar visible at asOf -- falling back to daily close", { ticker, asOf });
+  console.error("price_resolution: no fresh intraday bar visible at asOf -- falling back to daily close", { ticker, asOf });
 
   const dailyBars = await getPriceBarsAsOf(inputs, { ticker, asOf, limit: 1 });
   const dailyBar = dailyBars[0] ?? null;
