@@ -84,7 +84,10 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
   }
 
   const toDateObj = new Date(asOfDate.getTime());
-  toDateObj.setUTCDate(toDateObj.getUTCDate() + maxHoldDays + 2);
+  // maxHoldDays counts trading days (exit.js#tradingDaysBetween), so the
+  // calendar window must cover whole weeks: ceil(n / 5) * 7, plus 2 days of
+  // slack for bar-visibility timing and holidays.
+  toDateObj.setUTCDate(toDateObj.getUTCDate() + Math.ceil(maxHoldDays / 5) * 7 + 2);
   const toDateStr = toDateObj.toISOString().slice(0, 10);
 
   const bars = await getPriceBarsInRange(inputs, { ticker, fromDate: asOfDateStr, toDate: toDateStr });
