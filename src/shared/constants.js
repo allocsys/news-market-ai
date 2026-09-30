@@ -70,4 +70,8 @@ export const TRADE_DECISION_STATUS = Object.freeze({
   SKIPPED_NO_PRICE_DATA: "skipped_no_price_data",
   /** Approved, but the ticker already has an open position that the hold/flip rule keeps (same direction, or a too-weak opposite thesis). */
   HELD: "held",
+  /** Approved, but the entry price was stale (off-hours/holiday): waiting to fill at the next session bar's open. No position yet. */
+  PENDING_ENTRY: "pending_entry",
+  /** A pending_entry that no bar filled before its fill_expires_at, so nothing was executed. */
+  SKIPPED_NO_FILL: "skipped_no_fill",
 });
