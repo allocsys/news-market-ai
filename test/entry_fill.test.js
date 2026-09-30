@@ -118,3 +118,36 @@ test("filling a confident opposite thesis FLIPS the open position at the fill pr
   assert.equal(memory.length, 1, "the flipped position is settled once");
   assert.ok(Math.abs(memory[0].realized_return - (170 - 100) / 100) < 1e-9);
 });
+
+// Exposure opened AFTER the signal (between its asOf and the fill bar's open) was invisible to the pipeline's
+// risk check, so the fill must re-check the ceiling (MAX_PORTFOLIO_RISK_PCT = 0.2, summed position_size_pct).
+const otherTickerPosition = (sizePct) => ({
+  id: "MSFT|new", ticker: "MSFT", tradeThesisId: "MSFT|new", positionSizePct: sizePct,
+  direction: "long", entryPrice: 400, stopLossPct: 0.05, takeProfitPct: 0.1, openedAt: "2026-01-15T20:00:00Z",
+});
+
+test("a fill that would breach the portfolio risk ceiling against exposure opened after the signal is REJECTED, no position", async () => {
+  const ctx = await pendingCtx();
+  await ctx.store.openPosition(otherTickerPosition(0.19)); // 0.19 + the pending ~0.04 > 0.2
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-16", close: 170 });
+
+  const { filled } = await fillPendingEntries({}, config(), ctx, { asOf: "2026-01-17T00:00:00Z" });
+  assert.equal(filled.length, 1, "the commit ran (and upgraded the decision row)");
+
+  const positions = await stateRows(ctx.stateDb, "positions");
+  assert.deepEqual(positions.map((p) => p.ticker), ["MSFT"], "no AAPL position opened");
+  const [decision] = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(decision.status, TRADE_DECISION_STATUS.REJECTED);
+});
+
+test("the same fill under the ceiling (0.10 + ~0.04) opens normally", async () => {
+  const ctx = await pendingCtx();
+  await ctx.store.openPosition(otherTickerPosition(0.1));
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-16", close: 170 });
+
+  await fillPendingEntries({}, config(), ctx, { asOf: "2026-01-17T00:00:00Z" });
+
+  assert.deepEqual((await stateRows(ctx.stateDb, "positions")).map((p) => p.ticker).sort(), ["AAPL", "MSFT"]);
+  const [decision] = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(decision.status, TRADE_DECISION_STATUS.OPENED);
+});
