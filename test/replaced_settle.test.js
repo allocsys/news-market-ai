@@ -150,6 +150,7 @@ test("a pipeline retry after the replace-commit but before settling still settle
 test("TRADE_DECISION_STATUS holds the agreed names", () => {
   assert.deepEqual({ ...TRADE_DECISION_STATUS }, {
     OPENED: "opened", REJECTED: "rejected", SUPERSEDED: "superseded", SKIPPED_NO_PRICE_DATA: "skipped_no_price_data", HELD: "held",
+    PENDING_ENTRY: "pending_entry", SKIPPED_NO_FILL: "skipped_no_fill",
   });
 });
 
