@@ -14,6 +14,7 @@ import { priceBarCutoffDate, assertNoPriceBarLookahead, utcDateOf } from "../src
 import { LookaheadViolationError } from "../src/shared/errors.js";
 import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { checkOpenPositionExits } from "../src/graph/exit_check.js";
+import { fillPendingEntries } from "../src/graph/entry_fill.js";
 import { makeCtx, seedBar, seedNews, stateRows } from "./helpers/engine_ctx.js";
 import { makeFakeLongModel } from "./helpers/fake_long_model.js";
 import { AnalystTeamOpinion } from "../src/schemas/index.js";
@@ -85,7 +86,7 @@ test("getPriceBarsAsOf re-checks what it returns: a result set that ignores the 
   await assert.rejects(() => getPriceBarsAsOf(leakyDb, { ticker: "AAPL", asOf: "2026-01-05T09:35:00.000Z" }), LookaheadViolationError);
 });
 
-test("the pipeline opens a position at the PRIOR close and shows the technical analyst only prior-day bars", async () => {
+test("the pipeline never prices off the same-day bar (waits for the next open) and shows the technical analyst only prior-day bars", async () => {
   const ctx = makeCtx();
   const publishedAt = "2026-01-05T09:35:00.000Z";
   await seedNews(ctx.inputs, { id: "n1", tickers: ["AAPL"], publishedAt, title: "AAPL beats", body: "body" });
@@ -104,9 +105,17 @@ test("the pipeline opens a position at the PRIOR close and shows the technical a
     newsItem: { id: "n1", tickers: ["AAPL"], title: "AAPL beats", body: "body", publishedAt },
   });
 
+  // The prior close is stale and the same-day bar is not knowable: nothing opens yet, the thesis is pending_entry.
+  assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0);
+  const [pending] = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(pending.status, "pending_entry");
+  // It fills at the first bar that opens after the news (Jan 6), never at the same-day 200 or the stale 100.
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-06", close: 120 });
+  const { filled } = await fillPendingEntries({}, config, ctx, { asOf: "2026-01-07T00:00:00.000Z" });
+  assert.equal(filled.length, 1);
   const positions = await stateRows(ctx.stateDb, "positions");
   assert.equal(positions.length, 1);
-  assert.equal(positions[0].entry_price, 100, "entry price is the prior close, not the same-day 200");
+  assert.equal(positions[0].entry_price, 120, "entry price is the next bar's open, not the same-day 200 or the stale prior close");
 
   assert.ok(technicalPrompt, "the technical analyst ran");
   assert.match(technicalPrompt, /"latestDate": "2026-01-02"/);
