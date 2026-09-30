@@ -9,7 +9,7 @@ import { walkOnSignalWindow } from "../src/backtest/onSignalRunner.js";
 import { SubrequestBudget, countedD1 } from "../src/backtest/subrequestBudget.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
-import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
+import { makeCtx, seedNews, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 
 function makeFakeModel() {
   return async (prompt, opts) => {
@@ -41,7 +41,13 @@ const NEWS = [
 async function seeded() {
   const ctx = makeCtx({ runId: RUN_ID });
   for (const ticker of WINDOW.tickers) await seedBar(ctx.inputs, { ticker, date: "2025-12-31", close: 100 });
-  for (const n of NEWS) await seedNews(ctx.inputs, n);
+  for (const n of NEWS) {
+    await seedNews(ctx.inputs, n);
+    // A fresh flat 5m bar closing <=30min before the news is the entry price; a daily close alone is stale
+    // and would wait as pending_entry instead of opening at asOf.
+    const ts = `${new Date(Math.floor(Date.parse(n.publishedAt) / 300000) * 300000 - 300000).toISOString().slice(0, 19)}Z`;
+    for (const ticker of n.tickers) await seedIntradayBar(ctx.inputs, { ticker, ts, close: 100 });
+  }
   return ctx;
 }
 
