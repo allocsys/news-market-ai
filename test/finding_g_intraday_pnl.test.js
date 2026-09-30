@@ -25,6 +25,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { checkOpenPositionExits } from "../src/graph/exit_check.js";
+import { fillPendingEntries } from "../src/graph/entry_fill.js";
 import { TRADE_DECISION_STATUS } from "../src/shared/constants.js";
 import { makeCtx, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 import { makeFakeLongModel } from "./helpers/fake_long_model.js";
@@ -104,11 +105,20 @@ test("pipeline never opens a position off an intraday bar that has not fully clo
   const asOf = "2026-01-15T13:32:00Z";
   await runPipelineForTicker({}, config(), ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: newsItem("news-1", asOf), asOf });
 
+  // The only price left is the stale daily close, so nothing opens now: the thesis waits as pending_entry.
+  assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0, "no position off a stale daily close or the unclosed 999 bar");
+  const [pending] = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(pending.status, "pending_entry");
+
+  // The first bar that OPENS at/after asOf, once closed, is the fill -- never the 999 bar that opened before asOf.
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-15T13:35:00Z", close: 181 }); // visible from 13:40
+  const { filled } = await fillPendingEntries({}, config(), ctx, { asOf: "2026-01-15T13:41:00Z" });
+  assert.equal(filled.length, 1);
   const [position] = await stateRows(ctx.stateDb, "positions");
-  assert.equal(position.entry_price, 180, "must fall back to the daily close -- the 999 intraday bar has not closed yet");
+  assert.equal(position.entry_price, 181);
   assert.notEqual(position.entry_price, 999);
-  assert.equal(position.entry_price_source, "daily");
-  assert.equal(position.entry_price_bar_ts, "2026-01-14");
+  assert.equal(position.entry_price_source, "intraday");
+  assert.equal(position.entry_price_bar_ts, "2026-01-15T13:35:00Z");
 });
 
 test("exit-check never prices a stop-loss/take-profit off an intraday bar that has not fully closed at asOf", async () => {
@@ -138,7 +148,7 @@ test("exit-check never prices a stop-loss/take-profit off an intraday bar that h
 
 // --- 3. fallback-to-daily under real pipeline/exit-check conditions --------
 
-test("pipeline falls back to the daily close, logged, for a ticker with NO intraday bars at all (the realistic pre-backfill case)", async () => {
+test("pipeline waits as pending_entry, then fills at the next daily open, for a ticker with NO intraday bars at all (the realistic pre-backfill case)", async () => {
   const ctx = makeCtx();
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 150 });
   // No seedIntradayBar call at all -- price_bars_intraday is empty for AAPL,
@@ -150,12 +160,19 @@ test("pipeline falls back to the daily close, logged, for a ticker with NO intra
     runPipelineForTicker({}, config(), ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: newsItem("news-1", asOf), asOf })
   );
 
+  void errors;
+  assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0, "a daily close is a stale entry price: no position yet");
+  const [pending] = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(pending.status, "pending_entry");
+
+  // Next UTC day's daily bar: fills at its open once it has closed (asOf past that day's end).
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-16", close: 152 });
+  const { filled } = await fillPendingEntries({}, config(), ctx, { asOf: "2026-01-17T00:00:00Z" });
+  assert.equal(filled.length, 1);
   const [position] = await stateRows(ctx.stateDb, "positions");
-  assert.equal(position.entry_price, 150, "opened off the daily close with no intraday data at all");
-  assert.ok(
-    errors.some((args) => /falling back to daily close/.test(String(args[0])) && args[1]?.ticker === "AAPL"),
-    "the daily fallback must be logged (Adopted Pattern #11), even though the pipeline otherwise succeeds"
-  );
+  assert.equal(position.entry_price, 152);
+  assert.equal(position.entry_price_source, "daily");
+  assert.equal(position.entry_price_bar_ts, "2026-01-16");
 });
 
 test("exit-check falls back to the daily close, logged, for a ticker with no intraday bars, and can still trigger a stop off it", async () => {
