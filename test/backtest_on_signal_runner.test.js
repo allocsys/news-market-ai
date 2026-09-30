@@ -63,6 +63,9 @@ test("runOnSignalForTicker opens a position from backfilled news, closes it on a
   // returns it for every asOf in the walk, so entryPrice === exitPrice
   // (realized return 0, but a REAL computed number, not a fabricated one).
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+  // A daily-only price is a stale entry price, so the thesis waits as pending_entry and fills at the
+  // open of the first bar at/after the news: this Jan 1 bar (flat, so entry === exit still).
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
 
   const calls = [];
   const config = {
@@ -123,6 +126,9 @@ test("runOnSignalReturns pools realized returns across multiple tickers for one 
   await seedNews(ctx.inputs, { id: "news-msft", tickers: ["MSFT"], publishedAt: "2026-01-01T00:00:00.000Z", title: "MSFT news", body: "MSFT body" });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
   await seedBar(ctx.inputs, { ticker: "MSFT", date: "2025-12-31", close: 200 });
+  // Fill-day bars (pending_entry fills at the first bar open at/after the news).
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "MSFT", date: "2026-01-01", close: 200 });
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 1, fakeModel: makeFakeModel() };
 
   const returns = await runOnSignalReturns({}, config, ctx, {
@@ -140,6 +146,7 @@ test("makeOnSignalReturns returns a function matching compareSignalOnOffByWindow
   const ctx = makeCtx();
   await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "t", body: "b" });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 50 });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 50 }); // fill-day bar
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 1, fakeModel: makeFakeModel() };
 
   const getOnReturns = makeOnSignalReturns({}, config, ctx, { tickers: ["AAPL"], graceDays: 2 });
@@ -194,6 +201,9 @@ test("walkOnSignalWindow: a ticker's decision on day D can see another ticker's 
   await seedNews(ctx.inputs, { id: "news-msft", tickers: ["MSFT"], publishedAt: "2026-01-03T00:00:00.000Z", title: "MSFT news", body: "MSFT body" });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
   await seedBar(ctx.inputs, { ticker: "MSFT", date: "2025-12-31", close: 100 });
+  // Fill-day bars: each pending entry fills at the open of the bar dated its news day.
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "MSFT", date: "2026-01-03", close: 100 });
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 30, fakeModel: makeFakeModel() };
 
   await walkOnSignalWindow({}, config, ctx, {
