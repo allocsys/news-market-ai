@@ -1,0 +1,12 @@
+-- positions.last_checked_at: the bar-based exit check's cursor (graph/exit_check.js).
+-- Meaning: every price bar that FULLY CLOSED at or before this instant has already
+-- been walked for stop-loss / take-profit (and folded into mae_pct / mfe_pct).
+-- It is the close time of the last bar evaluated (an intraday bar's ts + 5 minutes,
+-- or the next 00:00Z for a daily bar), NOT the wall-clock time of the check, so a
+-- bar that was ingested late is still picked up by the next check.
+-- NULL means "never checked": the first check starts at opened_at (bars that opened
+-- at or after the entry; the entry-time bar itself is never counted).
+-- Written by RunStore#advancePositionCheck ONLY after a window was evaluated
+-- successfully, and never on the check that finds an exit (so a crash between
+-- "exit found" and closePosition re-finds the same exit on the next run).
+ALTER TABLE positions ADD COLUMN last_checked_at TEXT;
