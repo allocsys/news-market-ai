@@ -72,6 +72,8 @@ test("finding G: two same-day, same-ticker theses replace at DISTINCT intraday p
   const opened = await stateRows(ctx.stateDb, "positions");
   assert.equal(opened.length, 1);
   assert.equal(opened[0].entry_price, 181.2, "opened at the morning intraday bar, not the prior daily close");
+  assert.equal(opened[0].entry_price_source, "intraday");
+  assert.equal(opened[0].entry_price_bar_ts, "2026-01-15T13:30:00Z");
 
   // A confident SHORT reverses the open long (same-direction theses are now held, see the hold/flip rule in run_store.js).
   await runPipelineForTicker({}, config({ direction: "short", confidence: 0.9 }), ctx, { pipelineRunId: "news-2", ticker: "AAPL", newsItem: newsItem("news-2", afternoonAsOf), asOf: afternoonAsOf });
@@ -105,6 +107,8 @@ test("pipeline never opens a position off an intraday bar that has not fully clo
   const [position] = await stateRows(ctx.stateDb, "positions");
   assert.equal(position.entry_price, 180, "must fall back to the daily close -- the 999 intraday bar has not closed yet");
   assert.notEqual(position.entry_price, 999);
+  assert.equal(position.entry_price_source, "daily");
+  assert.equal(position.entry_price_bar_ts, "2026-01-14");
 });
 
 test("exit-check never prices a stop-loss/take-profit off an intraday bar that has not fully closed at asOf", async () => {
