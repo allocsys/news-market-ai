@@ -264,7 +264,7 @@ export class RunStore {
 
     const row = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at
          FROM positions
          WHERE run_id = ? AND ticker = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)
          ORDER BY opened_at DESC
@@ -284,6 +284,7 @@ export class RunStore {
       stopLossPct: row.stop_loss_pct,
       takeProfitPct: row.take_profit_pct,
       openedAt: row.opened_at,
+      lastCheckedAt: row.last_checked_at ?? null,
     };
   }
 

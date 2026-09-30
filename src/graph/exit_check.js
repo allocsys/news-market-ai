@@ -100,6 +100,22 @@ async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance })
 }
 
 /**
+ * Records MAE/MFE for a position that is about to be closed by something OTHER than an exit check
+ * (commitThesis 'flipped' / 'replaced'), so a position closed before any check saw it is not left
+ * with empty excursions. Walks the same bar window as checkOpenPositionExits (cursor ?? opened_at
+ * up to `asOf`, asOf-gated) and writes only the excursion: it never closes the position and never
+ * moves the cursor, so it cannot change any exit outcome. Call it BEFORE the closing write
+ * (recordPositionExcursionRange only touches an open row). Idempotent (MIN/MAX), so a
+ * checkpoint-resumed re-run is harmless. Returns true when an excursion was written.
+ */
+export async function recordExcursionBeforeClose(config, { inputs, store }, position, { asOf }) {
+  const walk = await walkPositionBars(inputs, position, { asOf, splitGuardTolerance: config.splitGuardTolerance });
+  if (!walk || (walk.maePct == null && walk.mfePct == null)) return false;
+  await store.recordPositionExcursionRange({ id: position.id, maePct: walk.maePct, mfePct: walk.mfePct });
+  return true;
+}
+
+/**
  * `ctx` is `{ inputs, store }`: `inputs` is an inputs-DB handle (read-only is
  * enough -- pass readOnly(env.INPUTS_DB)) for price bars, `store` a RunStore
  * for the environment being checked.
