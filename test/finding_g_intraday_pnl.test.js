@@ -170,8 +170,10 @@ test("exit-check falls back to the daily close, logged, for a ticker with no int
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   const [position] = await stateRows(ctx.stateDb, "positions");
   assert.equal(position.exit_price, 50);
+  // The stop is now decided by the bar walk (exit_check.js#walkPositionBars), which logs its own
+  // daily-bar fallback (resolveCurrentPrice is only reached for a time exit).
   assert.ok(
-    errors.some((args) => /falling back to daily close/.test(String(args[0])) && args[1]?.ticker === "AAPL"),
+    errors.some((args) => /daily-bar fallback/.test(String(args[0])) && args[1]?.ticker === "AAPL" && args[1]?.dailyBars >= 1),
     "exit-check's daily fallback must also be logged"
   );
 });
