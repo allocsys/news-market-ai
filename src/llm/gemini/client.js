@@ -130,7 +130,10 @@ async function callOnce(config, model, apiKey, body, keyIndex) {
     const message = (data && (data.error?.message || JSON.stringify(data))) || res.statusText;
     throw new VendorError("gemini", `Gemini API error (${res.status}, model: ${model}, key #${keyIndex}): ${message}`, {
       status: res.status,
-      transient: res.status === 429 || res.status === 503,
+      // 5xx (500 "Internal error", 502, 503 overload, 504) are the vendor's
+      // problem and usually pass; a 500 from the last fallback used to be
+      // non-transient, which failed a multi-hour backtest instead of pausing.
+      transient: res.status === 429 || (res.status >= 500 && res.status < 600),
     });
   }
   return data;
@@ -255,7 +258,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         note({ model, keyIndex: ki, outcome: "error", status: err.status ?? null, detail: err.message });
         const isBadKey = err.status === 401 || err.status === 403;
         const isRateLimited = err.status === 429;
-        const isOverloaded = err.status === 503;
+        const isOverloaded = err.status >= 500 && err.status < 600; // any vendor-side 5xx: cool the model down and try the next
         const isNetworkTransient = err.transient === true && !err.status;
 
         console.log(
