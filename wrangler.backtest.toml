@@ -103,7 +103,10 @@ invocation_logs = true
 # "on" side calls the real pipeline (analysts/debate/trader), which reads
 # these same config.js fields regardless of which Worker is running it.
 GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
-GEMINI_DEEP_MODEL = "gemini-3.6-flash"
+# UPDATE (2026-09-30): deep = a Lite model for backtests. gemini-3.6-flash is
+# 5 RPM / 20 RPD per project (3 keys = 3 projects -> 60 calls/day total),
+# far below a backtest's call volume; the Lite models get 15 RPM / 500 RPD.
+GEMINI_DEEP_MODEL = "gemini-3.5-flash-lite"
 # UPDATE (2026-09-22): dropped gemini-2.5-flash -- Google retired it (404 "no
 # longer available to new users"), which killed a live backtest outright when
 # the cascade fell all the way through to it as the last model (see

@@ -21,7 +21,7 @@
 // failure instead of after (keys.length) failures, so a capped budget
 // actually gets to a model that might work.
 
-import { isCoolingDown, setCooldown, parseRetryDelaySeconds, isDailyQuotaError, dailyQuotaCooldownSeconds } from "../../shared/cooldown.js";
+import { isCoolingDown, setCooldown, parseRetryDelaySeconds, classifyRateLimit, dailyQuotaCooldownSeconds } from "../../shared/cooldown.js";
 import { VendorError } from "../../shared/errors.js";
 
 const DEFAULT_COOLDOWN_SECONDS = 60;
@@ -97,6 +97,18 @@ function cascadeExhaustedError({ realErr, lastErr, attempts, elapsedMs, cooldown
   });
 }
 
+/** The quotaId Google names in a 429's error.details (QuotaFailure.violations), e.g. "GenerateRequestsPerDayPerProjectPerModel-FreeTier"; undefined if absent. */
+function extractQuotaId(data) {
+  const details = data?.error?.details;
+  if (!Array.isArray(details)) return undefined;
+  for (const detail of details) {
+    for (const violation of detail?.violations || []) {
+      if (violation?.quotaId) return String(violation.quotaId);
+    }
+  }
+  return undefined;
+}
+
 async function callOnce(config, model, apiKey, body, keyIndex) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.geminiRequestTimeoutMs);
@@ -128,10 +140,16 @@ async function callOnce(config, model, apiKey, body, keyIndex) {
 
   if (!res.ok) {
     const message = (data && (data.error?.message || JSON.stringify(data))) || res.statusText;
-    throw new VendorError("gemini", `Gemini API error (${res.status}, model: ${model}, key #${keyIndex}): ${message}`, {
+    const apiErr = new VendorError("gemini", `Gemini API error (${res.status}, model: ${model}, key #${keyIndex}): ${message}`, {
       status: res.status,
-      transient: res.status === 429 || res.status === 503,
+      // 5xx (500 "Internal error", 502, 503 overload, 504) are the vendor's
+      // problem and usually pass; a 500 from the last fallback used to be
+      // non-transient, which failed a multi-hour backtest instead of pausing.
+      transient: res.status === 429 || (res.status >= 500 && res.status < 600),
     });
+    const quotaId = extractQuotaId(data);
+    if (quotaId) apiErr.quotaId = quotaId;
+    throw apiErr;
   }
   return data;
 }
@@ -255,7 +273,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         note({ model, keyIndex: ki, outcome: "error", status: err.status ?? null, detail: err.message });
         const isBadKey = err.status === 401 || err.status === 403;
         const isRateLimited = err.status === 429;
-        const isOverloaded = err.status === 503;
+        const isOverloaded = err.status >= 500 && err.status < 600; // any vendor-side 5xx: fall through to the next model/key
         const isNetworkTransient = err.transient === true && !err.status;
 
         console.log(
@@ -278,11 +296,19 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         }
         if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
 
-        const seconds = isRateLimited
-          ? (isDailyQuotaError(err.message) ? dailyQuotaCooldownSeconds() : parseRetryDelaySeconds(err.message) ?? DEFAULT_COOLDOWN_SECONDS)
-          : DEFAULT_COOLDOWN_SECONDS;
+        let seconds = DEFAULT_COOLDOWN_SECONDS;
+        if (isRateLimited) {
+          const kind = classifyRateLimit(err.message, err.quotaId);
+          seconds = kind === "daily" ? dailyQuotaCooldownSeconds() : parseRetryDelaySeconds(err.message) ?? DEFAULT_COOLDOWN_SECONDS;
+          console.log(`[gemini] 429 classified ${kind}: model="${model}" key=#${ki} quotaId=${err.quotaId ?? "n/a"} cooldown=${seconds}s`);
+        }
+        // `seconds` still feeds the exhaustion error's retryAfterSeconds hint for
+        // every kind of failure, but a 5xx other than 503 (500 "Internal error",
+        // 502, 504) is a blip, not a signal the model is out of quota: it writes
+        // NO cooldown, so the next call may try that model again immediately.
         cooldownSeconds.push(seconds);
-        await setCooldown(kv, model, ki, seconds);
+        const writesCooldown = !(isOverloaded && err.status !== 503);
+        if (writesCooldown) await setCooldown(kv, model, ki, seconds);
         if (isLastCombination) throw cascadeExhausted();
         // otherwise fall through to next model, or (via outer loop) next key
       }
