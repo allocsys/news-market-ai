@@ -160,7 +160,7 @@ test("a 500 on the last usable model exhausts the cascade as TRANSIENT with a re
   assert.match(err.message, /last error: .*Internal error encountered/);
 });
 
-test("a 500 on the first model cools it down and falls through to the fallback instead of throwing", async (t) => {
+test("a 500 on the first model falls through to the fallback and writes NO cooldown (a blip, not a quota signal)", async (t) => {
   t.mock.method(console, "log", () => {});
   const kv = fakeKv();
   const calls = mockFetch(t, (url) => (url.includes("m-quick") ? jsonResponse(500, { error: { message: "Internal error encountered." } }) : jsonResponse(200, { candidates: [] })));
@@ -169,6 +169,18 @@ test("a 500 on the first model cools it down and falls through to the fallback i
 
   assert.equal(calls.length, 2, "m-quick was tried once, then m-fallback");
   assert.equal(data._fallbackModelUsed, "m-fallback");
-  assert.equal(kv.puts.length, 1, "the failing model got a cooldown");
+  assert.equal(kv.puts.length, 0, "a 500 must not put the model in cooldown");
+});
+
+test("a 503 on the first model still cools it down (60s) and falls through", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const kv = fakeKv();
+  mockFetch(t, (url) => (url.includes("m-quick") ? jsonResponse(503, { error: { message: "high demand" } }) : jsonResponse(200, { candidates: [] })));
+
+  const data = await geminiGenerateContent({ CACHE_KV: kv }, cascadeConfig(), { contents: [] });
+
+  assert.equal(data._fallbackModelUsed, "m-fallback");
+  assert.equal(kv.puts.length, 1);
   assert.match(kv.puts[0][0], /m-quick/);
+  assert.equal(kv.puts[0][2].expirationTtl, 60);
 });
