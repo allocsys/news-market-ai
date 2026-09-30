@@ -18,7 +18,7 @@ import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { TRADE_DECISION_STATUS } from "../src/shared/constants.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
-import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
+import { makeCtx, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 
 function thesisArgs({ id, asOf, ticker = "AAPL", positionSizePct = 0.05, direction = "long", confidence = 0.8 }) {
   return {
@@ -98,6 +98,10 @@ test("a pipeline retry after the replace-commit but before settling still settle
   const ctx = makeCtx();
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 110 });
+  // Fresh intraday bars closing exactly at each asOf are the entry/exit prices; a daily close alone is
+  // stale and would wait as pending_entry instead of committing.
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-09T23:55:00Z", close: 100 });
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-14T23:55:00Z", close: 110 });
 
   // First thesis opens a position at 100.
   await runPipelineForTicker({}, baseConfig(makeModel()), ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: newsItem("news-1"), asOf: "2026-01-10T00:00:00Z" });
