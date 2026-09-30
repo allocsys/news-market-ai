@@ -45,6 +45,7 @@
 import { loadConfig } from "./config.js";
 import { runPipelineForTicker } from "./graph/pipeline.js";
 import { checkOpenPositionExits } from "./graph/exit_check.js";
+import { fillPendingEntries } from "./graph/entry_fill.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { withLlmLogContext } from "./storage/llm_calls.js";
@@ -136,6 +137,15 @@ export default {
           // either, the next scheduled tick re-evaluates every still-open
           // position regardless.
           const liveCtx = buildLiveContext(env);
+          // Fill / expire pending entries FIRST (graph/entry_fill.js): a position opened at this tick's
+          // session open is then visible to the exit check below. Own try/catch -- a failed fill must
+          // not block the exit check of positions that are already open.
+          try {
+            const fills = await fillPendingEntries(env, withLlmLogContext(config, { source: "entry_fill" }), liveCtx, { asOf: job.asOf });
+            if (fills.filled.length || fills.expired.length) console.log("entry fill completed", fills);
+          } catch (err) {
+            console.error("entry fill failed", { message: err.message });
+          }
           try {
             const closed = await checkOpenPositionExits(env, withLlmLogContext(config, { source: "exit_check" }), liveCtx, { asOf: job.asOf });
             console.log("exit_check job completed", { closed: closed.length, closed });

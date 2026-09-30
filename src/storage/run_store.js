@@ -502,7 +502,8 @@ export class RunStore {
              ELSE '${TRADE_DECISION_STATUS.OPENED}'
            END),
            ?, ?, ?)
-         ON CONFLICT(run_id, id) DO NOTHING`
+         ON CONFLICT(run_id, id) DO UPDATE SET status = excluded.status
+           WHERE trade_decisions.status = '${TRADE_DECISION_STATUS.PENDING_ENTRY}'`
       )
       .bind(
         this.runId, id, ticker, asOf,
@@ -519,15 +520,66 @@ export class RunStore {
   }
 
   // -------------------------------------------------------------------
+  // Pending entries (next-session-open fill, migration 0008). A 'pending_entry'
+  // decision has NO position; the fill step (graph/entry_fill.js) opens it through
+  // commitThesis at the fill bar's open, which upgrades this same row in place.
+  // -------------------------------------------------------------------
+
+  /**
+   * Pending decisions with as_of <= `asOf`, oldest first. Point-in-time: a pending entry
+   * decided after `asOf` does not exist yet for a backtest walk standing at `asOf`.
+   * JSON columns come back parsed (thesis / riskDecision / portfolioDecision / debate) --
+   * everything the fill needs, nothing is re-derived.
+   */
+  async listPendingEntriesAsOf({ asOf, limit = 200 }) {
+    requireAsOf("listPendingEntriesAsOf", asOf);
+    const { results } = await this.db
+      .prepare(
+        `SELECT id, ticker, as_of, thesis, risk_decision, portfolio_decision, opinions, debate, fill_expires_at, created_at
+         FROM trade_decisions
+         WHERE run_id = ? AND status = '${TRADE_DECISION_STATUS.PENDING_ENTRY}' AND as_of <= ?
+         ORDER BY as_of ASC, id ASC
+         LIMIT ?`
+      )
+      .bind(this.runId, asOf, limit)
+      .all();
+    const parse = (raw) => (raw ? JSON.parse(raw) : null);
+    return results.map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      asOf: r.as_of,
+      thesis: parse(r.thesis),
+      riskDecision: parse(r.risk_decision),
+      portfolioDecision: parse(r.portfolio_decision),
+      opinions: parse(r.opinions),
+      debate: parse(r.debate),
+      fillExpiresAt: r.fill_expires_at ?? null,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /**
+   * pending_entry -> skipped_no_fill. Guarded on the current status, so a decision that a
+   * concurrent run already filled (or expired) is left alone. Returns true only if THIS call expired it.
+   */
+  async expirePendingEntry({ id }) {
+    const res = await this.db
+      .prepare(`UPDATE trade_decisions SET status = ? WHERE run_id = ? AND id = ? AND status = ?`)
+      .bind(TRADE_DECISION_STATUS.SKIPPED_NO_FILL, this.runId, id, TRADE_DECISION_STATUS.PENDING_ENTRY)
+      .run();
+    return (res?.meta?.changes ?? 0) > 0;
+  }
+
+  // -------------------------------------------------------------------
   // Trade decisions / decision memory
   // -------------------------------------------------------------------
 
   /** Direct insert, no risk/replace logic -- same shape as d1.js#insertTradeDecision, run_id-scoped. Prefer commitThesis for the live write path once wired in M2. */
-  async insertTradeDecision({ id, ticker, asOf, thesis, riskDecision, portfolioDecision, status, createdAt, opinions = null, debate = null }) {
+  async insertTradeDecision({ id, ticker, asOf, thesis, riskDecision, portfolioDecision, status, createdAt, opinions = null, debate = null, fillExpiresAt = null }) {
     await this.db
       .prepare(
-        `INSERT INTO trade_decisions (run_id, id, ticker, as_of, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO trade_decisions (run_id, id, ticker, as_of, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate, fill_expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id, id) DO NOTHING`
       )
       .bind(
@@ -535,7 +587,8 @@ export class RunStore {
         JSON.stringify(thesis), JSON.stringify(riskDecision), portfolioDecision != null ? JSON.stringify(portfolioDecision) : null,
         status, createdAt,
         opinions != null ? JSON.stringify(opinions) : null,
-        debate != null ? JSON.stringify(debate) : null
+        debate != null ? JSON.stringify(debate) : null,
+        fillExpiresAt
       )
       .run();
   }

@@ -42,6 +42,7 @@ import { recordExcursionBeforeClose } from "./exit_check.js";
 import { loadDrawdownBreakerOptions } from "./drawdown_breaker.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE, TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
+import { isEntryPriceStale, pendingEntryExpiresAt } from "../shared/entry_timing.js";
 
 /**
  * Runs the full analyst -> debate -> trade -> risk -> portfolio pipeline for
@@ -205,6 +206,19 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
         // a fresh chance once price_bars has data.
         console.error("pipeline: skipping position open/replace -- no price_bars data for ticker", { ticker, asOf });
         await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA });
+      } else if (isEntryPriceStale({ price: currentPrice, source: priceSource, bar: priceBar }, asOf)) {
+        // Off-hours / holiday / ingestion gap: the only price is an old close, so no real order could
+        // have got it. Do NOT open (and do not touch this ticker's existing position -- replace/flip/
+        // hold is decided at fill time, against what is open then). Store the approved thesis as
+        // 'pending_entry'; the fill step (graph/entry_fill.js, exit cron + backtest walk) opens it at
+        // the first bar's OPEN after asOf, or expires it as 'skipped_no_fill'. Idempotent on retry:
+        // the decision id is the tradeThesisId and the insert is ON CONFLICT DO NOTHING.
+        console.error("pipeline: entry price is stale -- deferring entry to the next session open", { ticker, asOf, priceSource, priceBarTs });
+        await store.insertTradeDecision({
+          ...decision,
+          status: TRADE_DECISION_STATUS.PENDING_ENTRY,
+          fillExpiresAt: pendingEntryExpiresAt(asOf),
+        });
       } else {
         // ONE atomic batch (plan.md "Atomic portfolio commit"): close this
         // ticker's older open position as 'replaced' (recording

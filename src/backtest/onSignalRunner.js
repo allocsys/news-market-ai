@@ -70,6 +70,7 @@
 import { getNewsItemsInRange } from "../storage/inputs_view.js";
 import { runPipelineForTicker } from "../graph/pipeline.js";
 import { checkOpenPositionExits } from "../graph/exit_check.js";
+import { fillPendingEntries } from "../graph/entry_fill.js";
 import { calendarDaysCoveringTradingDays } from "../agents/risk_mgmt/exit.js";
 import { SubrequestBudgetExhaustedError, VendorError } from "../shared/errors.js";
 
@@ -220,6 +221,9 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
     // Runs regardless of whether any news landed today -- an already-open
     // position from an earlier day can still hit its stop-loss/take-profit/
     // time-based exit on a day with no news at all, same as the live path.
+    // Pending entries (stale-price approvals from earlier) fill first, at the first bar open after
+    // their asOf that has closed by dayIso; the exit check then sees the new positions.
+    await fillPendingEntries(env, config, ctx, { asOf: dayIso });
     await checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
     await onStep?.({ ticker, dayIso, done: true });
   }
@@ -371,7 +375,11 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
       // position from an earlier day can still hit its stop-loss/take-profit/
       // time-based exit on a day with no news at all, same as the live path.
       const exitsBefore = budget?.mark();
-      const runExits = () => checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
+      // Fill/expire pending entries first, same unit as the exit check (never cut in half).
+      const runExits = async () => {
+        await fillPendingEntries(env, config, ctx, { asOf: dayIso });
+        return checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
+      };
       if (budget) await budget.unenforced(runExits);
       else await runExits();
       budget?.recordUnit("exits", exitsBefore);

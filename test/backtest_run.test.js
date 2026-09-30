@@ -18,7 +18,7 @@ import { SimClock } from "../src/backtest/simClock.js";
 import { insertBacktestRun } from "../src/storage/sim_registry.js";
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
-import { makeCtx, seedNews, seedBar, stateRows, SIM_DIR } from "./helpers/engine_ctx.js";
+import { makeCtx, seedNews, seedBar, seedIntradayBar, stateRows, SIM_DIR } from "./helpers/engine_ctx.js";
 
 /** Engine ctx + a registry DB holding only the sim schema's backtest_runs. */
 function makeBacktestCtx() {
@@ -322,6 +322,9 @@ test("runManualBacktest scores both sides as daily equity curves over the same d
   for (const [date, close] of [["2025-12-31", 100], ["2026-01-01", 100], ["2026-01-02", 110], ["2026-01-03", 121], ["2026-01-04", 121], ["2026-01-05", 121]]) {
     await seedBar(ctx.inputs, { ticker: "AAPL", date, close });
   }
+  // A fresh 5m bar closing at 12:00 is the entry price (100). A daily close alone is stale: the thesis would wait
+  // as pending_entry and fill at the next daily open (121), changing this hand-checked scenario.
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-02T11:55:00Z", close: 100 });
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10, fakeModel: makeFakeModel() };
 
   const outcome = await runManualBacktest({}, config, ctx, {

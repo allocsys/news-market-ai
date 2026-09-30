@@ -16,7 +16,7 @@ import {
   DEFAULT_DRAWDOWN_BREAKER_WINDOW_DAYS,
   TRADE_DECISION_STATUS,
 } from "../src/shared/constants.js";
-import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
+import { makeCtx, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 import { makeFakeLongModel } from "./helpers/fake_long_model.js";
 
 const close = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg ?? ""} expected ${b}, got ${a}`);
@@ -150,6 +150,9 @@ async function seedLoss(ctx) {
 
 async function runAapl(ctx, config, asOf, barDate) {
   await seedBar(ctx.inputs, { ticker: "AAPL", date: barDate, close: 180 });
+  // A fresh intraday bar (closed <=30min before asOf) is the entry price; a daily close alone is stale and would wait as pending_entry.
+  const barTs = `${new Date(Math.floor(Date.parse(asOf) / 300000) * 300000 - 300000).toISOString().slice(0, 19)}Z`;
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: barTs, close: 180 });
   return runPipelineForTicker({}, config, ctx, { pipelineRunId: `news-${asOf}`, ticker: "AAPL", newsItem: newsItem("n1", asOf), asOf });
 }
 
