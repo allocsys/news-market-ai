@@ -14,7 +14,7 @@ import { readOnly } from "../src/storage/run_store.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
 import { runOnSignalForTicker } from "../src/backtest/onSignalRunner.js";
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
-import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
+import { makeCtx, seedNews, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 
 const BASE_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
 const isoAt = (offsetSeconds) => new Date(BASE_MS + offsetSeconds * 1000).toISOString();
@@ -129,6 +129,11 @@ test("runOnSignalForTicker processes every news item in the window and scores ev
     await seedNews(ctx.inputs, { id: `run-${pad(i)}`, tickers: ["AAPL"], publishedAt: minuteIso(i), title: `AAPL headline ${i}`, body: "body" });
   }
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+  // A daily close alone is a stale entry price (the thesis would wait as pending_entry), so cover every news
+  // minute with a fresh flat 5m bar: each item opens at its own asOf, as this test's scoring count expects.
+  for (let t = BASE_MS - 300000; t <= BASE_MS + COUNT * 60000; t += 300000) {
+    await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: `${new Date(t).toISOString().slice(0, 19)}Z`, close: 100 });
+  }
 
   const calls = [];
   const config = {
