@@ -329,29 +329,35 @@ test("runManualBacktest scores both sides as daily equity curves over the same d
   });
 
   assert.equal(outcome.status, "complete", outcome.error);
-  // The pipeline opened a long at the PRIOR close (Jan 1 = 100) sized min(5%, 0.8 * 5%) = 4%; the Jan 2 close of 110 is +10% >= the 6% take-profit,
-  // so the Jan 3 exit check closed it at the prior close, 110.
+  // The pipeline opened a long at the PRIOR close (Jan 1 = 100) sized min(5%, 0.8 * 5%) = 4%, at 12:00 on Jan 2. Exits are decided by walking bars now:
+  // the Jan 2 daily bar is the ENTRY day (it covers the hours before the entry, so it is never counted), the Jan 3 exit check has no fully closed bar
+  // after the entry, and the Jan 4 check walks the Jan 3 bar. That bar (121) is past the 6% take-profit level (106), so it gapped through it: the fill is
+  // the bar's OPEN, 121, stamped with the bar's close time, Jan 4 00:00.
   const [position] = await stateRows(ctx.stateDb, "positions");
   assert.equal(position.entry_price, 100);
   assert.ok(Math.abs(position.position_size_pct - 0.04) < 1e-12); // 0.8 * 0.05, give or take float noise
-  assert.equal(position.exit_price, 110);
-  assert.equal(position.closed_at, "2026-01-03T00:00:00.000Z");
+  assert.equal(position.exit_price, 121);
+  assert.equal(position.closed_at, "2026-01-04T00:00:00.000Z");
+  assert.equal(position.close_reason, "take_profit");
+  assert.ok(Math.abs(position.mfe_pct - 0.21) < 1e-9, `mfe_pct: ${position.mfe_pct}`); // the Jan 3 bar's high, 121, against the entry of 100
 
   const { portfolio, overall } = outcome.result;
   assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]);
   const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 1e-9, `${label}: expected ${expected}, got ${actual}`);
   // Buy-and-hold: bought at the Dec 31 close of 100, so +0% on Jan 1, +10% on Jan 2, +10% on Jan 3, flat after.
   [0, 0.1, 0.1, 0, 0].forEach((r, i) => near(portfolio.series.off[i], r, `off[${i}]`));
-  // Signal: in cash except Jan 2, when 4% of the portfolio earned 10%.
-  [0, 0.004, 0, 0, 0].forEach((r, i) => near(portfolio.series.on[i], r, `on[${i}]`));
+  // Signal: in cash except Jan 2 and Jan 3. Jan 2: 4% of the portfolio earned 10% (100 -> 110) = +0.4%. Jan 3: the position is now worth 0.04 * 1.1 = 0.044 of a
+  // 1.004 portfolio and earned 10% again (110 -> the 121 exit) = 0.044 / 1.004 * 0.1.
+  const jan3 = (0.044 / 1.004) * 0.1;
+  [0, 0.004, jan3, 0, 0].forEach((r, i) => near(portfolio.series.on[i], r, `on[${i}]`));
   near(overall.off.cumulativeReturn, 1.1 * 1.1 - 1, "off cumulative");
-  near(overall.on.cumulativeReturn, 0.004, "on cumulative");
-  near(overall.delta.cumulativeReturn, 0.004 - 0.21, "delta"); // the signal LOST to buy-and-hold here, and says so
+  near(overall.on.cumulativeReturn, 0.0084, "on cumulative"); // 1.004 * (1 + jan3) - 1 = 0.004 + 0.044 * 0.1
+  near(overall.delta.cumulativeReturn, 0.0084 - 0.21, "delta"); // the signal LOST to buy-and-hold here, and says so
   assert.equal(overall.on.n, 5);
   assert.equal(overall.off.n, 5);
   assert.equal(portfolio.on.positionsTraded, 1);
   assert.equal(portfolio.on.positionsIgnored, 0);
-  near(portfolio.on.avgExposure, 0.04 / 5, "avg exposure");
+  near(portfolio.on.avgExposure, (0.04 + 0.044 / 1.004) / 5, "avg exposure");
   assert.equal(portfolio.off.avgExposure, 1);
 });
 
