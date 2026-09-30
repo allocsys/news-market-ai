@@ -18,6 +18,7 @@ import { LookaheadViolationError } from "../shared/errors.js";
 import { assertNoPriceBarLookahead, priceBarCutoffDate } from "../shared/price_availability.js";
 import { assertNoIntradayLookahead, intradayBarAvailableAt, intradayCutoffTs } from "../shared/intraday_availability.js";
 import { gateIntradayBars, summarizeIntradayRejections } from "../shared/intraday_sanity.js";
+import { EXIT_WINDOW_DAILY_ROW_CAP, EXIT_WINDOW_INTRADAY_ROW_CAP } from "../shared/bar_window.js";
 
 /** Rows per D1 round trip in getNewsItemsInRange. A response-size bound only; the function pages until the range is exhausted. */
 export const NEWS_RANGE_PAGE_SIZE = 500;
@@ -519,6 +520,95 @@ export async function getIntradayPriceAsOf(db, { ticker, asOf, maxAgeMs } = {}) 
     if (ageMs > maxAgeMs) return null;
   }
   return { ...row, availableAt };
+}
+
+/**
+ * Point-in-time RANGE read of intraday OHLC bars for the bar-based exit walk
+ * (graph/exit_check.js): every bar for `ticker` with `fromTs <= ts` that had
+ * FULLY CLOSED at `asOf` (`ts + 5min <= asOf`, shared/intraday_availability.js),
+ * oldest first, as `{ rows, truncated }`. `fromTs` is the canonical inclusive lower
+ * bound from shared/bar_window.js#exitWindowStart. Unlike getIntradayPriceAsOf
+ * (one latest bar) this returns a window, but it is still asOf-gated on the upper
+ * end -- nothing newer than the cutoff can leave this function, and the rows are
+ * re-checked (assertNoIntradayLookahead) before they do.
+ *
+ * `limit` (default EXIT_WINDOW_INTRADAY_ROW_CAP) bounds one read; one extra row is
+ * fetched to tell "exactly limit rows" from "more exist": `truncated: true` means
+ * the window was cut off at the last returned row and the caller must not treat
+ * what follows as missing data.
+ */
+export async function getIntradayBarsWindowAsOf(db, { ticker, fromTs, asOf, limit = EXIT_WINDOW_INTRADAY_ROW_CAP } = {}) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getIntradayBarsWindowAsOf requires an explicit asOf timestamp");
+  }
+  if (!ticker) {
+    throw new Error("getIntradayBarsWindowAsOf requires a ticker");
+  }
+  if (!fromTs) {
+    throw new LookaheadViolationError("getIntradayBarsWindowAsOf requires an explicit fromTs lower bound");
+  }
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`getIntradayBarsWindowAsOf: limit must be a positive integer, got ${limit}`);
+  }
+  const cutoff = intradayCutoffTs(asOf);
+  // Canonical timestamps compare correctly as strings (see shared/intraday_availability.js).
+  if (fromTs > cutoff) return { rows: [], truncated: false };
+
+  const { results } = await db
+    .prepare(
+      `SELECT ticker, ts, open, high, low, close, volume, source
+       FROM price_bars_intraday
+       WHERE ticker = ? AND ts >= ? AND ts <= ?
+       ORDER BY ts ASC
+       LIMIT ?`
+    )
+    .bind(ticker, fromTs, cutoff, limit + 1)
+    .all();
+
+  const truncated = results.length > limit;
+  const rows = truncated ? results.slice(0, limit) : results;
+  assertNoIntradayLookahead(rows, asOf);
+  return { rows, truncated };
+}
+
+/**
+ * Daily sibling of getIntradayBarsWindowAsOf: every daily bar for `ticker` with
+ * `fromDate <= date < UTC date of asOf` (a daily bar is visible from the NEXT
+ * 00:00Z, shared/price_availability.js), oldest first, as `{ rows, truncated }`,
+ * re-checked with assertNoPriceBarLookahead. Used only for UTC days that have no
+ * intraday rows (shared/bar_window.js#buildBarSequence).
+ */
+export async function getDailyBarsWindowAsOf(db, { ticker, fromDate, asOf, limit = EXIT_WINDOW_DAILY_ROW_CAP } = {}) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getDailyBarsWindowAsOf requires an explicit asOf timestamp");
+  }
+  if (!ticker) {
+    throw new Error("getDailyBarsWindowAsOf requires a ticker");
+  }
+  if (!fromDate) {
+    throw new LookaheadViolationError("getDailyBarsWindowAsOf requires an explicit fromDate lower bound");
+  }
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`getDailyBarsWindowAsOf: limit must be a positive integer, got ${limit}`);
+  }
+  const cutoffDate = priceBarCutoffDate(asOf);
+  if (fromDate >= cutoffDate) return { rows: [], truncated: false };
+
+  const { results } = await db
+    .prepare(
+      `SELECT ticker, date, open, high, low, close, volume, source
+       FROM price_bars
+       WHERE ticker = ? AND date >= ? AND date < ?
+       ORDER BY date ASC
+       LIMIT ?`
+    )
+    .bind(ticker, fromDate, cutoffDate, limit + 1)
+    .all();
+
+  const truncated = results.length > limit;
+  const rows = truncated ? results.slice(0, limit) : results;
+  assertNoPriceBarLookahead(rows, asOf);
+  return { rows, truncated };
 }
 
 /**
