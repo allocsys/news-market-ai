@@ -141,3 +141,34 @@ test("the cascade's wall-clock budget error also names the attempts and carries 
   assert.match(err.message, /m-quick#0 error 503/);
   assert.match(err.message, /last error: .*high demand/);
 });
+
+// Live incident 2026-09-29: a 3-hour backtest died when the LAST usable fallback
+// answered HTTP 500 (every other model was in cooldown). 500 was non-transient,
+// so the raw error escaped the cascade and the backtest failed (and cleaned up
+// its rows) instead of pausing like it does for a 503.
+test("a 500 on the last usable model exhausts the cascade as TRANSIENT with a retry hint, so the backtest pauses instead of failing", async (t) => {
+  t.mock.method(console, "log", () => {});
+  mockFetch(t, () => jsonResponse(500, { error: { message: "Internal error encountered." } }));
+
+  const err = await captureError(geminiGenerateContent({ CACHE_KV: fakeKv(["m-quick"]) }, cascadeConfig(), { contents: [] }));
+
+  assert.ok(err instanceof VendorError);
+  assert.equal(err.transient, true);
+  assert.equal(err.status, 500);
+  assert.equal(err.retryAfterSeconds, 60);
+  assert.match(err.message, /m-quick#0 skipped; m-fallback#0 error 500/);
+  assert.match(err.message, /last error: .*Internal error encountered/);
+});
+
+test("a 500 on the first model cools it down and falls through to the fallback instead of throwing", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const kv = fakeKv();
+  const calls = mockFetch(t, (url) => (url.includes("m-quick") ? jsonResponse(500, { error: { message: "Internal error encountered." } }) : jsonResponse(200, { candidates: [] })));
+
+  const data = await geminiGenerateContent({ CACHE_KV: kv }, cascadeConfig(), { contents: [] });
+
+  assert.equal(calls.length, 2, "m-quick was tried once, then m-fallback");
+  assert.equal(data._fallbackModelUsed, "m-fallback");
+  assert.equal(kv.puts.length, 1, "the failing model got a cooldown");
+  assert.match(kv.puts[0][0], /m-quick/);
+});
