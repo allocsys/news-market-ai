@@ -393,6 +393,8 @@ export class RunStore {
     positionSizePct,
     direction = null,
     entryPrice = null,
+    entryPriceSource = null,
+    entryPriceBarTs = null,
     stopLossPct = null,
     takeProfitPct = null,
     asOf,
@@ -464,8 +466,8 @@ export class RunStore {
 
     const openNew = this.db
       .prepare(
-        `INSERT OR IGNORE INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason, confidence)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?
+        `INSERT OR IGNORE INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason, confidence, entry_price_source, entry_price_bar_ts)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM positions p2
            WHERE p2.run_id = ? AND p2.ticker = ? AND p2.closed_at IS NULL AND p2.opened_at > ?
@@ -477,7 +479,7 @@ export class RunStore {
          AND NOT ${holdExists}`
       )
       .bind(
-        this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf, confidence,
+        this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf, confidence, entryPriceSource, entryPriceBarTs,
         this.runId, ticker, asOf,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         ...holdBinds
