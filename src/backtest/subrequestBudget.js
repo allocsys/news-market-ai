@@ -48,9 +48,27 @@ import { SubrequestBudgetExhaustedError } from "../shared/errors.js";
 // with headroom. Before this cap existed a single call could retry unboundedly
 // and blow the whole invocation's budget by itself; canStart() using the old
 // flat 8 here understated that risk for the SECOND item of an invocation onward.
+//
+// exits: the daily exit check is bar-based now (graph/exit_check.js). In D1 statements it costs 1 to list
+// the open positions, then PER OPEN POSITION at most 4: the intraday window read, the daily window read
+// (each skipped when its window is empty by construction), the MAE/MFE range write and the cursor write
+// (both only when bars were walked). A close adds closePosition + the settle writes/reflection, a time exit
+// adds resolveCurrentPrice's 2 reads. The default (13 = 1 + 4*3) fits 3 open positions; exitsEstimate()
+// scales it for a run with more tickers (at most one open position per ticker). The estimate only gates
+// STARTING the check -- the check itself runs unenforced -- and is replaced by the observed max once one
+// check has completed in an invocation.
+const EXITS_DEFAULT_TOTAL = 13;
+const EXITS_STATEMENTS_PER_POSITION = 4;
+
+/** Estimate for one day's exit check with up to `maxOpenPositions` open positions (never below the default). */
+export function exitsEstimate(maxOpenPositions) {
+  const n = Number.isFinite(maxOpenPositions) ? Math.max(0, Math.floor(maxOpenPositions)) : 0;
+  return { external: 2, total: Math.max(EXITS_DEFAULT_TOTAL, 1 + EXITS_STATEMENTS_PER_POSITION * n + 2) };
+}
+
 const DEFAULT_ESTIMATES = {
   item: { external: 21, total: 41 },
-  exits: { external: 2, total: 13 },
+  exits: { external: 2, total: EXITS_DEFAULT_TOTAL },
   score: { external: 0, total: 25 },
 };
 
