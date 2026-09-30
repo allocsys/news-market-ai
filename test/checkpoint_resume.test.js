@@ -23,7 +23,7 @@ import { STAGES, nextStage, checkpoint, resumeFrom } from "../src/graph/checkpoi
 import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { runAnalystTeam } from "../src/agents/analysts/analystTeam.js";
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
-import { makeCtx, seedBar, stateRows } from "./helpers/engine_ctx.js";
+import { makeCtx, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 import { withLlmLogContext } from "../src/storage/llm_calls.js";
 import { RunStore } from "../src/storage/run_store.js";
 
@@ -106,6 +106,9 @@ test("checkpoints are scoped by environment run_id: the same (pipelineRunId, tic
 async function ctxWithEntryBar() {
   const ctx = makeCtx();
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 181 });
+  // Fresh intraday bar closing exactly at the tests' asOf (2026-01-15T00:00Z): a daily close alone is a stale
+  // entry price and would wait as pending_entry instead of opening.
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-14T23:55:00Z", close: 181 });
   return ctx;
 }
 
