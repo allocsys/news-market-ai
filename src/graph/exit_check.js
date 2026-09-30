@@ -156,7 +156,12 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     // Price exit found in the bars: fill at the level (or the gapped open), stamped with the
     // triggering bar's close time. The cursor is deliberately NOT advanced here.
     if (walk?.exit) {
-      const { reason, exitPrice, closedAt } = walk.exit;
+      const { reason, exitPrice, closedAt: barClosedAt } = walk.exit;
+      // positions.closed_at is compared as a STRING against asOf (getOpenPositionsAsOf, getRealizedPnlPctAsOf),
+      // and asOf everywhere is toISOString() form ("...:00.000Z"). The bar's canonical "...:00Z" sorts AFTER
+      // that ('.' < 'Z'), so a daily bar closing exactly at asOf would still read as open at asOf. Store the
+      // same instant in the ms form, which compares as closed (never wrongly open).
+      const closedAt = new Date(Date.parse(barClosedAt)).toISOString();
       const didClose = await store.closePosition({ id: position.id, closedAt, closeReason: reason, exitPrice });
       // Lost a race (commitThesis replaced it after our read): the replaced path
       // settles it with the right reason/price, so settling here would double-record.
