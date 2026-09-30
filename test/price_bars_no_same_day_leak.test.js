@@ -132,5 +132,6 @@ test("an exit check during day D does not see day D's bar: a same-day crash clos
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   const [position] = await stateRows(ctx.stateDb, "positions");
   assert.equal(position.exit_price, 50);
-  assert.equal(position.closed_at, "2026-01-04T00:00:00.000Z");
+  // closedAt is the triggering bar's close time (Jan 3's daily bar closes at Jan 4 00:00:00Z), not the check's asOf string.
+  assert.equal(position.closed_at, "2026-01-04T00:00:00Z");
 });
