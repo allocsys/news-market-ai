@@ -33,11 +33,13 @@ test("Status filter options come from TRADE_DECISION_STATUS: every real status i
 test("decisionBadge: opened is green, rejected is red, held/superseded/skipped are neutral", () => {
   assert.match(decisionBadge("opened"), /status-approved/);
   assert.match(decisionBadge("rejected"), /status-rejected/);
-  for (const status of ["held", "superseded", "skipped_no_price_data"]) {
+  for (const status of ["held", "superseded", "skipped_no_price_data", "pending_entry", "skipped_no_fill"]) {
     assert.match(decisionBadge(status), /status-neutral/, `${status} is neutral`);
   }
   assert.match(decisionBadge("held"), />\s*held</);
   assert.match(decisionBadge("skipped_no_price_data"), /skipped \(no price\)/);
+  assert.match(decisionBadge("pending_entry"), /pending entry/);
+  assert.match(decisionBadge("skipped_no_fill"), /skipped \(no fill\)/);
 });
 
 test("renderSummaryCards counts 'opened' as approved: approval rate = opened / (opened + rejected), held/superseded are 'other'", () => {
