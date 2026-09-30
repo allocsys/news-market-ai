@@ -92,10 +92,35 @@ export function parseRetryDelaySeconds(message) {
 // same 429, burning subrequests for nothing. Google's own error messages
 // name the quota metric, so we can tell the two apart and cool down for the
 // right duration instead of guessing.
-const DAILY_QUOTA_PATTERN = /free_tier_requests|PerDayPerProjectPerModel|RequestsPerDay/i;
+//
+// UPDATE (2026-09-30): the old pattern also matched `free_tier_requests`, which
+// appears in EVERY free-tier 429 (RPM ones too), so a per-minute 429 (limit
+// 5/10/15) got a cooldown until midnight Pacific. Classification now goes:
+//   1. quotaId from error.details (e.g. ...PerDayPerProjectPerModel-FreeTier
+//      vs ...PerMinutePerProjectPerModel-FreeTier) -- authoritative;
+//   2. PerDay / PerMinute named in the message;
+//   3. `limit: N` in the message (non-token quotas): N <= 15 is a per-minute
+//      limit, anything larger (20, 500) a daily one;
+//   4. unknown -> "minute" (60s), the cheap, self-correcting default.
+const MAX_RPM_LIMIT = 15;
 
-export function isDailyQuotaError(message) {
-  return DAILY_QUOTA_PATTERN.test(message || "");
+export function classifyRateLimit(message, quotaId) {
+  if (quotaId) {
+    if (/PerDay/i.test(quotaId)) return "daily";
+    if (/PerMinute/i.test(quotaId)) return "minute";
+  }
+  const text = message || "";
+  if (/PerDay/i.test(text)) return "daily";
+  if (/PerMinute/i.test(text)) return "minute";
+  if (!/token/i.test(text)) {
+    const match = /limit:\s*(\d+)/i.exec(text);
+    if (match) return Number(match[1]) <= MAX_RPM_LIMIT ? "minute" : "daily";
+  }
+  return "minute";
+}
+
+export function isDailyQuotaError(message, quotaId) {
+  return classifyRateLimit(message, quotaId) === "daily";
 }
 
 // Gemini RPD quotas reset at midnight Pacific time (per ai.google.dev/gemini-api/docs/rate-limits).
