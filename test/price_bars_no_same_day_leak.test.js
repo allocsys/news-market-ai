@@ -132,5 +132,8 @@ test("an exit check during day D does not see day D's bar: a same-day crash clos
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   const [position] = await stateRows(ctx.stateDb, "positions");
   assert.equal(position.exit_price, 50);
+  // closedAt is the triggering bar's close time (Jan 3's daily bar closes at Jan 4 00:00:00Z), stored in ms ISO form.
   assert.equal(position.closed_at, "2026-01-04T00:00:00.000Z");
+  // ...and it must read as CLOSED at that very asOf (a canonical "...:00Z" would sort after "...:00.000Z" and read as open).
+  assert.deepEqual(await ctx.store.getOpenPositionsAsOf({ asOf: "2026-01-04T00:00:00.000Z" }), []);
 });

@@ -150,6 +150,7 @@ test("openPosition stores direction/entryPrice/stopLossPct/takeProfitPct, and ge
     id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03,
     direction: "long", entryPrice: 150, stopLossPct: 0.03, takeProfitPct: 0.06,
     openedAt: "2026-01-01T00:00:00Z",
+    lastCheckedAt: null, // bar-based exit cursor: never checked yet
   });
 });
 

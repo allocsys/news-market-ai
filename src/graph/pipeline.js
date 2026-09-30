@@ -38,8 +38,9 @@ import { checkpoint, resumeFrom } from "./checkpointer.js";
 import { shouldContinueDebate } from "./conditional_logic.js";
 import { loadLessonsForDebate } from "./reflection.js";
 import { settlePositionOutcome } from "./settle.js";
+import { recordExcursionBeforeClose } from "./exit_check.js";
 import { loadDrawdownBreakerOptions } from "./drawdown_breaker.js";
-import { TRADE_DECISION_STATUS } from "../shared/constants.js";
+import { DEFAULT_FLIP_MIN_CONFIDENCE, TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 
 /**
@@ -210,6 +211,21 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
         // / superseded (a newer position already exists) -- all guarded by
         // the same predicate. Replaces the old read-then-close-then-open
         // sequence that let overlapping open positions happen.
+        // MAE/MFE for a position this commit may close as 'flipped'/'replaced': sampled from the
+        // bars BEFORE the closing write, because a position closed before any exit check saw it
+        // would otherwise keep empty excursions. Skipped when the hold rule certainly keeps it
+        // (same direction, or an opposite thesis below flipMinConfidence). Never closes or
+        // advances the cursor.
+        if (existingPosition && existingPosition.id !== tradeThesisId) {
+          const heldByRule =
+            existingPosition.direction != null &&
+            (existingPosition.direction === state.thesis.direction ||
+              state.verdict.confidence < (config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE));
+          if (!heldByRule) {
+            await recordExcursionBeforeClose(config, { inputs, store }, existingPosition, { asOf });
+          }
+        }
+
         await store.commitThesis({
           ...decision,
           tradeThesisId,

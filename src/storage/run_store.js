@@ -141,12 +141,56 @@ export class RunStore {
     return (res?.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Bar-based exit variant of recordPositionExcursion: folds a WINDOW's gross
+   * extremes (bar lows/highs, exit_bars.js) into the running mae_pct / mfe_pct in
+   * ONE write. `maePct` (<= 0 expected) only ever lowers mae_pct, `mfePct` (>= 0
+   * expected) only ever raises mfe_pct, each with the same 0 baseline and
+   * closed_at IS NULL guard as recordPositionExcursion; a null / non-finite side is
+   * ignored. A window that moves neither extreme writes nothing. Returns true only
+   * if a row was updated.
+   */
+  async recordPositionExcursionRange({ id, maePct, mfePct }) {
+    const mae = Number.isFinite(maePct) ? Math.min(maePct, 0) : null;
+    const mfe = Number.isFinite(mfePct) ? Math.max(mfePct, 0) : null;
+    if (mae == null && mfe == null) return false;
+    const res = await this.db
+      .prepare(
+        `UPDATE positions SET mae_pct = MIN(COALESCE(mae_pct, 0), ?), mfe_pct = MAX(COALESCE(mfe_pct, 0), ?)
+         WHERE run_id = ? AND id = ? AND closed_at IS NULL
+           AND (mae_pct IS NULL OR mfe_pct IS NULL OR ? < mae_pct OR ? > mfe_pct)`
+      )
+      .bind(mae ?? 0, mfe ?? 0, this.runId, id, mae ?? 0, mfe ?? 0)
+      .run();
+    return (res?.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Moves the bar-based exit cursor (positions.last_checked_at, migration 0006)
+   * forward to `lastCheckedAt`, the close time of the last bar evaluated. Only
+   * ever forward (a stale/out-of-order call is a no-op) and only on a still-open
+   * row. Call it AFTER the window was evaluated successfully and only when no
+   * exit was found, so a crash between "exit found" and closePosition re-finds the
+   * same exit next run. Returns true only if the cursor moved.
+   */
+  async advancePositionCheck({ id, lastCheckedAt }) {
+    if (!lastCheckedAt) return false;
+    const res = await this.db
+      .prepare(
+        `UPDATE positions SET last_checked_at = ?
+         WHERE run_id = ? AND id = ? AND closed_at IS NULL AND (last_checked_at IS NULL OR last_checked_at < ?)`
+      )
+      .bind(lastCheckedAt, this.runId, id, lastCheckedAt)
+      .run();
+    return (res?.meta?.changes ?? 0) > 0;
+  }
+
   async getOpenPositionsAsOf({ asOf }) {
     requireAsOf("getOpenPositionsAsOf", asOf);
 
     const { results } = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at
          FROM positions
          WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`
       )
@@ -163,6 +207,8 @@ export class RunStore {
       stopLossPct: r.stop_loss_pct,
       takeProfitPct: r.take_profit_pct,
       openedAt: r.opened_at,
+      // Bar-based exit cursor (advancePositionCheck); null = never checked, the window starts at openedAt.
+      lastCheckedAt: r.last_checked_at ?? null,
     }));
   }
 
@@ -218,7 +264,7 @@ export class RunStore {
 
     const row = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at
          FROM positions
          WHERE run_id = ? AND ticker = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)
          ORDER BY opened_at DESC
@@ -238,6 +284,7 @@ export class RunStore {
       stopLossPct: row.stop_loss_pct,
       takeProfitPct: row.take_profit_pct,
       openedAt: row.opened_at,
+      lastCheckedAt: row.last_checked_at ?? null,
     };
   }
 
