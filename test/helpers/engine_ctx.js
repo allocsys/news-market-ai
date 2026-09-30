@@ -57,6 +57,26 @@ export async function seedIntradayBar(inputs, { ticker, ts, close, volume = 0, s
     .run();
 }
 
+/**
+ * Seeds one daily bar with a real range. Bar-based exits read high/low, so
+ * flat bars (seedBar) can only ever test a touch at the close.
+ */
+export async function seedBarOhlc(inputs, { ticker, date, open, high, low, close, volume = 0 }) {
+  await insertPriceBar(inputs, { ticker, date, open, high, low, close, volume, source: "test" });
+}
+
+/**
+ * OHLC sibling of seedIntradayBar: same raw-SQL insert, but with a real
+ * range so a test can put a low/high between two checks. `ts` is the bar's
+ * OPEN time (canonical `YYYY-MM-DDTHH:MM:SSZ`).
+ */
+export async function seedIntradayBarOhlc(inputs, { ticker, ts, open, high, low, close, volume = 0, source = "alpaca" }) {
+  await inputs
+    .prepare("INSERT INTO price_bars_intraday (ticker, ts, open, high, low, close, volume, source, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(ticker, ts, open, high, low, close, volume, source, "2026-01-01T00:00:00Z")
+    .run();
+}
+
 /** All rows of a table in the state DB, for assertions. */
 export async function stateRows(stateDb, table, orderBy = "rowid") {
   const { results } = await stateDb.prepare(`SELECT * FROM ${table} ORDER BY ${orderBy}`).all();
