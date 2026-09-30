@@ -181,7 +181,9 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
       // daily-close fallback (see price_resolution.js) -- this is what lets
       // two same-day decisions for the same ticker get distinct real prices
       // instead of sharing one previous-day close (finding G's root cause).
-      const { price: currentPrice } = await resolveCurrentPrice(inputs, { ticker, asOf });
+      const { price: currentPrice, source: priceSource, bar: priceBar } = await resolveCurrentPrice(inputs, { ticker, asOf });
+      // Entry provenance: the bar's identity (intraday ts, or daily date) -- see migration 0007.
+      const priceBarTs = priceBar ? (priceBar.ts ?? priceBar.date ?? null) : null;
 
       if (currentPrice == null) {
         // HONEST SCOPE: no price_bars data for this ticker as of `asOf`
@@ -232,6 +234,8 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
           positionSizePct: state.portfolioDecision.finalPositionSizePct,
           direction: state.thesis.direction,
           entryPrice: currentPrice,
+          entryPriceSource: priceSource,
+          entryPriceBarTs: priceBarTs,
           stopLossPct: state.riskDecision.stopLossPct ?? null,
           takeProfitPct: state.riskDecision.takeProfitPct ?? null,
           exitPrice: currentPrice,
