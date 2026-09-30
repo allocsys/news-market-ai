@@ -48,6 +48,8 @@ const DECISION_BADGE_VARIANT = {
 };
 const DECISION_STATUS_LABELS = {
   [TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA]: "skipped (no price)",
+  [TRADE_DECISION_STATUS.PENDING_ENTRY]: "pending entry",
+  [TRADE_DECISION_STATUS.SKIPPED_NO_FILL]: "skipped (no fill)",
 };
 
 /** Badge for a trade_decisions.status: green for opened, red for rejected, neutral for held/superseded/skipped. */
