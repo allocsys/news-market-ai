@@ -202,6 +202,12 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     if (walk && (walk.maePct != null || walk.mfePct != null)) {
       await store.recordPositionExcursionRange({ id: position.id, maePct: walk.maePct, mfePct: walk.mfePct });
     }
+    // Running extremes INCLUDING this window (the stored values were read before the walk), handed to
+    // settle so the reflection knows how far the trade went against / for us. null = never sampled.
+    const excursion = {
+      maePct: position.maePct == null && walk?.maePct == null ? null : Math.min(position.maePct ?? 0, walk?.maePct ?? 0),
+      mfePct: position.mfePct == null && walk?.mfePct == null ? null : Math.max(position.mfePct ?? 0, walk?.mfePct ?? 0),
+    };
 
     // Price exit found in the bars: fill at the level (or the gapped open), stamped with the
     // triggering bar's close time. The cursor is deliberately NOT advanced here.
@@ -216,7 +222,7 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
       // Lost a race (commitThesis replaced it after our read): the replaced path
       // settles it with the right reason/price, so settling here would double-record.
       if (!didClose) continue;
-      await settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason: reason });
+      await settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason: reason, excursion });
       closed.push({ id: position.id, ticker: position.ticker, reason });
       continue;
     }
@@ -243,7 +249,7 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
         const { exitPrice, closedAt } = fill;
         const didClose = await store.closePosition({ id: position.id, closedAt, closeReason: timeExit.reason, exitPrice });
         if (!didClose) continue;
-        await settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason: timeExit.reason });
+        await settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason: timeExit.reason, excursion });
         closed.push({ id: position.id, ticker: position.ticker, reason: timeExit.reason });
         continue;
       }
