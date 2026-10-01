@@ -41,19 +41,41 @@ import { settlePositionOutcome } from "./settle.js";
 import { recordExcursionBeforeClose } from "./exit_check.js";
 import { loadDrawdownBreakerOptions } from "./drawdown_breaker.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE, TRADE_DECISION_STATUS } from "../shared/constants.js";
-import { withLlmLogContext } from "../storage/llm_calls.js";
+import { withLlmLogContext, flushLlmCallBuffer } from "../storage/llm_calls.js";
 import { isEntryPriceStale, pendingEntryExpiresAt } from "../shared/entry_timing.js";
 
 /**
  * Runs the full analyst -> debate -> trade -> risk -> portfolio pipeline for
  * ONE ticker mentioned in ONE already-ingested, already-normalized news
- * item. Checkpoints after every stage so a crashed/interrupted run resumes
- * from the next stage instead of re-spending LLM calls (Adopted Pattern #12).
+ * item. Checkpoints after each LLM stage (analyzed, debated, traded) so a
+ * crashed/interrupted run resumes from the next stage instead of re-spending
+ * LLM calls (Adopted Pattern #12). risk_checked is NOT checkpointed: it is a
+ * pure function of the traded state, so a resume after "traded" recomputes it
+ * (same deterministic tradeThesisId) for free. The final portfolio_checked
+ * marker is written atomically WITH the decision (see below). LLM-call log rows
+ * are buffered for the whole item and written in one batch at the end.
  *
  * `pipelineRunId` should be stable for a given ingestion batch (e.g. the
  * news item's id) so resume can find the right checkpoint row.
  */
-export async function runPipelineForTicker(env, config, { inputs, store }, { pipelineRunId, ticker, newsItem, asOf }) {
+export async function runPipelineForTicker(env, config, ctx, args) {
+  // Buffered llm_calls: every call of this item queues its log row on `llmConfig.llmLog.buffer`, flushed as ONE
+  // db.batch in the finally (also when the item throws or pauses), instead of one D1 subrequest per call.
+  const llmConfig = withLlmLogContext(config, {
+    source: config.llmLog?.source ?? "pipeline",
+    runId: args.pipelineRunId,
+    ticker: args.ticker,
+    store: ctx.store,
+    buffer: [],
+  });
+  try {
+    return await runPipelineStages(env, llmConfig, ctx, args);
+  } finally {
+    await flushLlmCallBuffer(llmConfig);
+  }
+}
+
+async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId, ticker, newsItem, asOf }) {
   // Tag every LLM call this run makes (analysts, debate, trader, and the
   // reflection when an old position is replaced below) with its runId/ticker
   // for the dashboard's LLM-call log. `source` is left as whatever the caller
@@ -61,7 +83,7 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
   // it gets here -- and only defaults to "pipeline" for the live path. `store`
   // rides along so callStructured's log write lands in this environment's
   // llm_calls (env_run_id = store.runId).
-  config = withLlmLogContext(config, { source: config.llmLog?.source ?? "pipeline", runId: pipelineRunId, ticker, store });
+  // (`config` already carries that context -- set up by runPipelineForTicker above.)
   const resume = await resumeFrom(store, { pipelineRunId, ticker });
   let stage = resume.stage;
   const state = resume.state ?? {};
@@ -129,9 +151,9 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
     // comment on state.priceBars above). evaluateRisk uses these bars to
     // scale stop-loss/take-profit to the ticker's own volatility (ATR)
     // instead of a flat distance -- see risk_mgmt/risk.js.
+    // No checkpoint here: pure and deterministic (tradeThesisId = `${ticker}|${asOf}`), so a resume after "traded" just recomputes it.
     state.riskDecision = evaluateRisk(state.thesis, state.verdict, state.priceBars);
-    await checkpoint(store, { pipelineRunId, ticker, stage: "risk_checked", state });
-    stage = "portfolio_checked"; // next-needed after "risk_checked" is written
+    stage = "portfolio_checked";
   }
 
   if (stage === "portfolio_checked") {
@@ -160,6 +182,11 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
     // with bull/bear nested). id = tradeThesisId, the same value as the
     // position's id, so every write below is idempotent across a
     // checkpoint-resumed / queue-retried re-run of this stage.
+    // The completion marker. Folded into the decision write (one atomic batch: decision + marker) wherever that is
+    // safe; `checkpointFolded` tells the end of this stage whether it still has to write the marker itself.
+    const finalCheckpoint = { pipelineRunId, ticker, stage: "portfolio_checked", state };
+    let checkpointFolded = false;
+
     const decision = {
       id: tradeThesisId,
       ticker,
@@ -174,7 +201,8 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
 
     if (!state.portfolioDecision.approvedForExecution) {
       // risk_mgmt / portfolio_manager itself said no: nothing to execute.
-      await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.REJECTED });
+      await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.REJECTED, checkpoint: finalCheckpoint });
+      checkpointFolded = true;
     } else {
       // Fetched ONCE -- it's both the exitPrice for a replaced existing
       // position and the entryPrice for the new one below, since both
@@ -205,7 +233,8 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
         // later news item for this ticker (fresh asOf/tradeThesisId) gets
         // a fresh chance once price_bars has data.
         console.error("pipeline: skipping position open/replace -- no price_bars data for ticker", { ticker, asOf });
-        await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA });
+        await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA, checkpoint: finalCheckpoint });
+        checkpointFolded = true;
       } else if (isEntryPriceStale({ price: currentPrice, source: priceSource, bar: priceBar }, asOf)) {
         // Off-hours / holiday / ingestion gap: the only price is an old close, so no real order could
         // have got it. Do NOT open (and do not touch this ticker's existing position -- replace/flip/
@@ -218,7 +247,9 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
           ...decision,
           status: TRADE_DECISION_STATUS.PENDING_ENTRY,
           fillExpiresAt: pendingEntryExpiresAt(asOf),
+          checkpoint: finalCheckpoint,
         });
+        checkpointFolded = true;
       } else {
         // ONE atomic batch (plan.md "Atomic portfolio commit"): close this
         // ticker's older open position as 'replaced' (recording
@@ -255,7 +286,13 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
           exitPrice: currentPrice,
           confidence: state.verdict.confidence,
           flipMinConfidence: config.flipMinConfidence,
+          // Fold the marker into the commit ONLY when this ticker had no open position: then nothing can have been
+          // replaced, so there is nothing to settle below. With an existing position (a possible replace, or this
+          // thesis's own position on a retry) the marker stays AFTER the settle loop, so a crash in between re-runs
+          // this stage and still settles the replaced position.
+          checkpoint: existingPosition === null ? finalCheckpoint : null,
         });
+        checkpointFolded = existingPosition === null;
 
         // Settle whatever the batch replaced (realized return + reflection).
         // Found by querying rather than by remembering `existingPosition`, so
@@ -267,7 +304,7 @@ export async function runPipelineForTicker(env, config, { inputs, store }, { pip
       }
     }
 
-    await checkpoint(store, { pipelineRunId, ticker, stage: "portfolio_checked", state });
+    if (!checkpointFolded) await checkpoint(store, finalCheckpoint);
   }
 
   return state.portfolioDecision;
