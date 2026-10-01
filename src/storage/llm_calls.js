@@ -123,13 +123,36 @@ function cleanAttempt(a) {
 export async function recordLlmCall(config, entry) {
   const ctx = config?.llmLog ?? {};
   if (config?.llmLogEnabled !== true || typeof ctx.store?.insertLlmCall !== "function") return;
+  const merged = { source: ctx.source ?? "pipeline", jobId: ctx.jobId, runId: ctx.runId, ...entry, ticker: entry.ticker ?? ctx.ticker };
+  const maxChars = config.llmLogMaxChars || DEFAULT_MAX_CHARS;
+  // Buffered mode: the context carries an array (runPipelineForTicker sets one per news item x ticker), so the
+  // row is queued with its own timestamp and written later by flushLlmCallBuffer in ONE db.batch (one
+  // subrequest instead of one per call). Rows written are the same; the log shows up when the item finishes.
+  if (Array.isArray(ctx.buffer)) {
+    ctx.buffer.push({ entry: merged, maxChars, now: new Date().toISOString() });
+    return;
+  }
   try {
-    await ctx.store.insertLlmCall(
-      { source: ctx.source ?? "pipeline", jobId: ctx.jobId, runId: ctx.runId, ...entry, ticker: entry.ticker ?? ctx.ticker },
-      { maxChars: config.llmLogMaxChars || DEFAULT_MAX_CHARS }
-    );
+    await ctx.store.insertLlmCall(merged, { maxChars });
   } catch (err) {
     console.warn("llm call log write failed (non-fatal)", { message: err.message });
+  }
+}
+
+/**
+ * Writes everything queued in `config.llmLog.buffer` as ONE batch and empties it. Best-effort like recordLlmCall
+ * (never throws). Call it in a `finally` so a failed or paused item still logs the calls it made; a Worker killed
+ * before the flush loses that item's buffered rows (the trade-off for the saved subrequests).
+ */
+export async function flushLlmCallBuffer(config) {
+  const ctx = config?.llmLog ?? {};
+  if (!Array.isArray(ctx.buffer) || ctx.buffer.length === 0) return;
+  const pending = ctx.buffer.splice(0, ctx.buffer.length);
+  if (typeof ctx.store?.insertLlmCalls !== "function") return;
+  try {
+    await ctx.store.insertLlmCalls(pending);
+  } catch (err) {
+    console.warn("llm call log batch write failed (non-fatal)", { message: err.message, rows: pending.length });
   }
 }
 

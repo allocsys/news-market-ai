@@ -410,6 +410,7 @@ export class RunStore {
     opinions = null,
     debate = null,
     createdAt,
+    checkpoint = null,
   }) {
     if (!asOf) {
       throw new LookaheadViolationError("commitThesis requires an explicit asOf timestamp");
@@ -519,7 +520,12 @@ export class RunStore {
         createdAt
       );
 
-    return this.db.batch([closeOld, openNew, insertDecision]);
+    // `checkpoint` ({ pipelineRunId, ticker, stage, state }), when given, rides in the SAME atomic batch as the
+    // LAST statement (so the closeOld/openNew/insertDecision result indices are unchanged): the completion marker
+    // and the decision commit together or not at all, for one subrequest instead of two.
+    const statements = [closeOld, openNew, insertDecision];
+    if (checkpoint) statements.push(this.#checkpointStatement(checkpoint));
+    return this.db.batch(statements);
   }
 
   // -------------------------------------------------------------------
@@ -578,8 +584,8 @@ export class RunStore {
   // -------------------------------------------------------------------
 
   /** Direct insert, no risk/replace logic -- same shape as d1.js#insertTradeDecision, run_id-scoped. Prefer commitThesis for the live write path once wired in M2. */
-  async insertTradeDecision({ id, ticker, asOf, thesis, riskDecision, portfolioDecision, status, createdAt, opinions = null, debate = null, fillExpiresAt = null }) {
-    await this.db
+  async insertTradeDecision({ id, ticker, asOf, thesis, riskDecision, portfolioDecision, status, createdAt, opinions = null, debate = null, fillExpiresAt = null, checkpoint = null }) {
+    const insert = this.db
       .prepare(
         `INSERT INTO trade_decisions (run_id, id, ticker, as_of, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate, fill_expires_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -592,8 +598,10 @@ export class RunStore {
         opinions != null ? JSON.stringify(opinions) : null,
         debate != null ? JSON.stringify(debate) : null,
         fillExpiresAt
-      )
-      .run();
+      );
+    // Optional `checkpoint` ({ pipelineRunId, ticker, stage, state }): written in the same atomic batch (one subrequest, all-or-nothing).
+    if (checkpoint) await this.db.batch([insert, this.#checkpointStatement(checkpoint)]);
+    else await insert.run();
   }
 
   async recordDecisionOutcome({ id, decisionId, ticker, realizedReturn, alphaReturn, reflection, resolvedAt }) {
@@ -727,15 +735,19 @@ export class RunStore {
   // migrations/state/0001_init.sql's header.
   // -------------------------------------------------------------------
 
-  async saveCheckpoint({ pipelineRunId, ticker, stage, state }) {
-    await this.db
+  /** The (unexecuted) checkpoint upsert, so it can run alone (saveCheckpoint) or ride in another atomic batch (commitThesis / insertTradeDecision). */
+  #checkpointStatement({ pipelineRunId, ticker, stage, state }) {
+    return this.db
       .prepare(
         `INSERT INTO pipeline_checkpoints (run_id, pipeline_run_id, ticker, stage, state, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id, pipeline_run_id, ticker) DO UPDATE SET stage = excluded.stage, state = excluded.state, updated_at = excluded.updated_at`
       )
-      .bind(this.runId, pipelineRunId, ticker, stage, state != null ? JSON.stringify(state) : null, new Date().toISOString())
-      .run();
+      .bind(this.runId, pipelineRunId, ticker, stage, state != null ? JSON.stringify(state) : null, new Date().toISOString());
+  }
+
+  async saveCheckpoint({ pipelineRunId, ticker, stage, state }) {
+    await this.#checkpointStatement({ pipelineRunId, ticker, stage, state }).run();
   }
 
   async getCheckpoint({ pipelineRunId, ticker }) {
@@ -1048,8 +1060,22 @@ export class RunStore {
 
   /** Inserts one row for this environment. `entry` is the camelCase shape recordLlmCall builds; see llm_calls.js#buildLlmCallRow for clipping/redaction. */
   async insertLlmCall(entry, { maxChars = DEFAULT_MAX_CHARS, now = new Date().toISOString() } = {}) {
+    await this.#llmCallStatement(entry, { maxChars, now }).run();
+  }
+
+  /**
+   * Inserts several rows in ONE db.batch (one subrequest, atomic). `items` are `{ entry, maxChars, now }` as
+   * llm_calls.js#recordLlmCall buffers them -- `now` is when the call was recorded, not when the batch flushes.
+   * Rows written are unchanged; only the subrequest count drops. No-op for an empty list.
+   */
+  async insertLlmCalls(items) {
+    if (!items?.length) return;
+    await this.db.batch(items.map(({ entry, maxChars = DEFAULT_MAX_CHARS, now = new Date().toISOString() }) => this.#llmCallStatement(entry, { maxChars, now })));
+  }
+
+  #llmCallStatement(entry, { maxChars, now }) {
     const r = buildLlmCallRow(entry, { maxChars, now });
-    await this.db
+    return this.db
       .prepare(
         `INSERT INTO llm_calls (env_run_id, created_at, source, job_id, run_id, ticker, label, requested_model, model_used, key_index, status, error_stage, error, duration_ms, attempts, prompt, response, prompt_chars, response_chars, truncated)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -1057,8 +1083,7 @@ export class RunStore {
       .bind(
         this.runId, r.created_at, r.source, r.job_id, r.run_id, r.ticker, r.label, r.requested_model, r.model_used, r.key_index,
         r.status, r.error_stage, r.error, r.duration_ms, r.attempts, r.prompt, r.response, r.prompt_chars, r.response_chars, r.truncated
-      )
-      .run();
+      );
   }
 
   /** Deletes THIS environment's rows older than `days`. Throws on D1 failure. */
