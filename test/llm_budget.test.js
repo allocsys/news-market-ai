@@ -105,6 +105,8 @@ async function setup() {
   await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "AAPL beats earnings", body: "Apple reported EPS above estimates." });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-05", close: 110 });
+  // Time exit (hold 2) is due Wed Jan 7 00:00Z and fills at the open of the first bar at/after it: this Jan 7 bar.
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-07", close: 110 });
   return ctx;
 }
 

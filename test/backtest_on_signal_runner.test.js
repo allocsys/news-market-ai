@@ -66,6 +66,9 @@ test("runOnSignalForTicker opens a position from backfilled news, closes it on a
   // A daily-only price is a stale entry price, so the thesis waits as pending_entry and fills at the
   // open of the first bar at/after the news: this Jan 1 bar (flat, so entry === exit still).
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
+  // The time exit is due Mon Jan 5 00:00Z and fills at the OPEN of the first bar at/after it: this Jan 5 bar
+  // (visible from the Jan 6 check), so closed_at is still Jan 5 00:00 and the return is still 0.
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-05", close: 100 });
 
   const calls = [];
   const config = {
@@ -129,6 +132,9 @@ test("runOnSignalReturns pools realized returns across multiple tickers for one 
   // Fill-day bars (pending_entry fills at the first bar open at/after the news).
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 });
   await seedBar(ctx.inputs, { ticker: "MSFT", date: "2026-01-01", close: 200 });
+  // Time-exit-day bars (maxPositionHoldDays 1 -> due Fri Jan 2 00:00Z; the exit fills at the first bar open at/after it).
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-02", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "MSFT", date: "2026-01-02", close: 200 });
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 1, fakeModel: makeFakeModel() };
 
   const returns = await runOnSignalReturns({}, config, ctx, {
@@ -147,6 +153,7 @@ test("makeOnSignalReturns returns a function matching compareSignalOnOffByWindow
   await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "t", body: "b" });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 50 });
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 50 }); // fill-day bar
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-02", close: 50 }); // time-exit-day bar (hold 1 -> due Jan 2 00:00Z)
   const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 1, fakeModel: makeFakeModel() };
 
   const getOnReturns = makeOnSignalReturns({}, config, ctx, { tickers: ["AAPL"], graceDays: 2 });
