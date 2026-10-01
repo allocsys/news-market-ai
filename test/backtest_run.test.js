@@ -85,7 +85,10 @@ test("runManualBacktest persists a 'complete' run with the real compareSignalOnO
   assert.equal(outcome.result.perWindow.length, 1); // trainDays=0, one implicit test window covering the whole range
   // Scored as daily equity curves over one shared grid (plan.md step D), not per-trade returns.
   const { portfolio } = outcome.result;
-  assert.equal(portfolio.method, "daily-equity-curve-v2");
+  assert.equal(portfolio.method, "daily-equity-curve-v3");
+  assert.equal(portfolio.requestedTo, "2026-01-06"); // scored on the requested window, not the grace-extended span
+  assert.equal(portfolio.to, portfolio.requestedTo);
+  assert.equal(portfolio.priceCoverageTo, "2026-01-09"); // prices were still checked over testEnd + grace
   assert.deepEqual(portfolio.tickers, ["AAPL"]);
   assert.deepEqual(portfolio.series.dates, ["2026-01-05"]); // the only bar inside [Jan 1, Jan 6)
   assert.equal(portfolio.series.on.length, portfolio.series.dates.length);
@@ -360,8 +363,43 @@ test("runManualBacktest scores both sides as daily equity curves over the same d
   assert.equal(overall.off.n, 5);
   assert.equal(portfolio.on.positionsTraded, 1);
   assert.equal(portfolio.on.positionsIgnored, 0);
+  assert.equal(portfolio.on.openAtSpanEnd, 0);
+  assert.equal(portfolio.on.openAtRunEnd, 0);
   near(portfolio.on.avgExposure, (0.04 + 0.044 / 1.004) / 5, "avg exposure");
   assert.equal(portfolio.off.avgExposure, 1);
+});
+
+test("runManualBacktest scores only the requested window: a position that closes in the grace tail stays marked to market at testEnd, its post-testEnd move is not scored, and it is counted as open at span end", async () => {
+  const ctx = makeBacktestCtx();
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-02T12:00:00.000Z", title: "AAPL beats earnings", body: "Apple reported EPS above estimates." });
+  for (const [date, close] of [["2025-12-31", 100], ["2026-01-01", 100], ["2026-01-02", 110], ["2026-01-03", 121], ["2026-01-04", 121], ["2026-01-05", 121]]) {
+    await seedBar(ctx.inputs, { ticker: "AAPL", date, close });
+  }
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-02T11:55:00Z", close: 100 });
+  const config = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10, fakeModel: makeFakeModel() };
+
+  // Same scenario as the hand-checked numbers test, but the requested window ends Jan 3: the long opened on Jan 2
+  // takes profit on Jan 4, INSIDE the grace tail.
+  const outcome = await runManualBacktest({}, config, ctx, {
+    id: "run-fixed-window", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-03T00:00:00.000Z", graceDays: 3,
+  });
+
+  assert.equal(outcome.status, "complete", outcome.error);
+  const [position] = await stateRows(ctx.stateDb, "positions");
+  assert.equal(position.closed_at, "2026-01-04T00:00:00.000Z"); // the grace walk still settled it
+
+  const { portfolio, overall } = outcome.result;
+  assert.equal(portfolio.method, "daily-equity-curve-v3");
+  assert.equal(portfolio.requestedTo, "2026-01-03");
+  assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02"]); // Jan 3+ (the grace tail) is not scored
+  const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 1e-9, `${label}: expected ${expected}, got ${actual}`);
+  [0, 0.1].forEach((r, i) => near(portfolio.series.off[i], r, `off[${i}]`));
+  [0, 0.004].forEach((r, i) => near(portfolio.series.on[i], r, `on[${i}]`)); // still open at the cut: marked to market, no exit cost, nothing after Jan 2
+  assert.equal(overall.on.n, 2);
+  assert.equal(overall.off.n, 2);
+  assert.equal(portfolio.on.positionsTraded, 1);
+  assert.equal(portfolio.on.openAtSpanEnd, 1);
+  assert.equal(portfolio.on.openAtRunEnd, 0); // it did close, in the grace tail
 });
 
 test("runManualBacktest refuses a ticker with no usable prices BEFORE any LLM call, naming it, and never shrinks the universe", async () => {
@@ -439,18 +477,16 @@ test("runManualBacktest with several walk-forward windows: per-window slices til
   assert.equal(outcome.status, "complete", outcome.error);
   const { perWindow, overall, portfolio } = outcome.result;
   assert.equal(perWindow.length, 2); // [Jan 1, Jan 3) and [Jan 3, Jan 5)
-  // Window 2 is the LAST window: its own slice is widened by its 1 grace day (Jan 5),
-  // which has a real bar here, so it scores 3 days (Jan 3-5) instead of 2 -- the whole
-  // point of the grace-period scoring fix. Window 1 isn't last, so it's untouched.
-  // (Scoring is unaffected by the walk-dedupe fix below -- it was never driven by
-  // window 1's own grace walk, only by the grid/scoringEnd arithmetic in runBacktest.js.)
-  assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 3]);
-  assert.equal(overall.off.n, 5);
-  assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]);
+  // Scoring is fixed to the requested window [Jan 1, Jan 5) (daily-equity-curve-v3): the
+  // last window's 1 grace day (Jan 5) is walked to settle trades but NOT scored, so both
+  // windows score 2 days.
+  assert.deepEqual(perWindow.map((w) => w.comparison.off.n), [2, 2]);
+  assert.equal(overall.off.n, 4);
+  assert.deepEqual(portfolio.series.dates, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]);
   // The pooled curve is exactly the windows chained: (1 + w1) * (1 + w2) - 1.
   const chained = (1 + perWindow[0].comparison.off.cumulativeReturn) * (1 + perWindow[1].comparison.off.cumulativeReturn) - 1;
   assert.ok(Math.abs(overall.off.cumulativeReturn - chained) < 1e-9);
-  assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99 (Jan 5 is flat vs Jan 4, same ending value)
+  assert.ok(Math.abs(overall.off.cumulativeReturn - (99 / 100 - 1)) < 1e-9); // bought at 100, ended at 99 on Jan 4
 
   // Grace-window-exit-dedupe fix (plan.md item 9, corrected again 2026-09-27):
   // window 1 is NOT the last window, so it now stops the day BEFORE its own
