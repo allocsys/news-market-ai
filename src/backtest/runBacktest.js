@@ -333,7 +333,22 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
         // The walk stopped early in the grace tail (nothing open, nothing pending): the days it
         // did not visit are done for progress purposes, so the bar still reaches its total.
         // Carried across parts by `completed` in the cursor.
-        completedSteps += (res.skippedDays ?? 0) * tickers.length;
+        const skippedSteps = (res.skippedDays ?? 0) * tickers.length;
+        if (skippedSteps > 0) {
+          completedSteps += skippedSteps;
+          // Report it: the last tick the walk emitted predates the skip, so without this the
+          // bar would stop short of its total until the 'saving' update.
+          await unenf(() =>
+            onProgress?.({
+              phase: "simulating",
+              percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
+              done: completedSteps,
+              total: totalSteps,
+              detail: `Grace tail: ${res.skippedDays} idle day${res.skippedDays === 1 ? "" : "s"} skipped`,
+              force: true,
+            }),
+          );
+        }
       }
     }
 
