@@ -63,6 +63,26 @@ export function calendarDaysCoveringTradingDays(tradingDays) {
 }
 
 /**
+ * The instant a position's time exit becomes due: 00:00:00.000Z of the first weekday on which
+ * tradingDaysBetween(openedAt, that midnight) reaches maxHoldDays -- exactly the first instant
+ * evaluateExit's time rule is true. Lets the exit check price the exit at the first tradable bar
+ * after this instant instead of at whatever stale price is visible when it happens to run. Returns
+ * null when it cannot be computed (unparseable openedAt, maxHoldDays <= 0 or absurdly large); the
+ * caller then keeps the legacy 'close at asOf' behavior.
+ */
+export function timeExitDueAt(openedAt, maxHoldDays) {
+  if (!Number.isFinite(maxHoldDays) || maxHoldDays <= 0 || maxHoldDays > 1000) return null;
+  const from = utcDayStartMs(openedAt);
+  if (Number.isNaN(from)) return null;
+  let count = 0;
+  for (let t = from + MS_PER_DAY; ; t += MS_PER_DAY) {
+    const weekday = new Date(t).getUTCDay();
+    if (weekday !== 0 && weekday !== 6) count += 1;
+    if (count >= maxHoldDays) return new Date(t).toISOString();
+  }
+}
+
+/**
  * Returns `{ reason }` (one of CLOSE_REASON's values) if `position` should
  * close given `currentPrice`/`asOf`/`maxHoldDays`, else `null`.
  *
