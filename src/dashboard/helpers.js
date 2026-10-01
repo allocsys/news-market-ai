@@ -332,6 +332,16 @@ export function backtestMetricRow(label, on, off, delta, { isPercent = true } = 
   return `<tr class="rt-tiles"><td class="cell-title">${escapeHtml(label)}</td><td class="num" data-label="Signal ON">${fmt(on)}</td><td class="num" data-label="Signal OFF">${fmt(off)}</td><td class="num ${deltaCls}" data-label="Delta">${delta > 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
 }
 
+/** Per-trade rollout-gate line (backtest/gateStats.js, result.gate). Runs saved before it have no `gate`: renders nothing. Null stats (n too small) show an em dash, never 0, so a thin sample can't read as a pass. */
+export function backtestGateNote(gate) {
+  if (!gate) return "";
+  const pct2 = (v) => (v != null && Number.isFinite(v) ? `${v > 0 ? "+" : ""}${(v * 100).toFixed(2)}%` : "\u2014");
+  const n = Number(gate.n) || 0;
+  const open = gate.openAtEnd ? `, ${gate.openAtEnd} still open at run end (not counted)` : "";
+  const unusable = gate.unreplayable ? `, ${gate.unreplayable} closed without usable prices (not counted)` : "";
+  return `<p class="note">Rollout gate (per trade, net of ${Number(gate.costBps) || 0} bps per side): ${n} closed trade${n === 1 ? "" : "s"} decided in the window, mean ${pct2(gate.mean)}, one-sided 95% lower bound ${pct2(gate.lowerBound)}${open}${unusable}. The return test passes only when the lower bound is above 0, and the gate also needs the minimum trade count and months in docs/rollout.md.</p>`;
+}
+
 export function backtestResultTable(result) {
   if (!result) return "";
   const { on, off, delta } = result.overall;
@@ -353,7 +363,7 @@ export function backtestResultTable(result) {
       ${backtestMetricRow("Max drawdown", on.maxDrawdown, off.maxDrawdown, delta.maxDrawdown)}
     </tbody>
   </table></div>
-  <p class="note">${scoring}Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>`;
+  <p class="note">${scoring}Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>${backtestGateNote(result.gate)}`;
 }
 
 export const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed", cancelled: "cancelled" };
