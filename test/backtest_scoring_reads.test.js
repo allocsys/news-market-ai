@@ -77,6 +77,61 @@ test("getPositionsInRange reads only its own run's positions, and requires both 
 });
 
 // ---------------------------------------------------------------------------
+// RunStore#getPositionsDecidedInRange (the per-trade rollout-gate read)
+// ---------------------------------------------------------------------------
+
+async function decide(ctx, id, ticker, asOf, runId = ctx.store.runId) {
+  await ctx.stateDb
+    .prepare(`INSERT INTO trade_decisions (run_id, id, ticker, as_of, thesis, risk_decision, status, created_at) VALUES (?, ?, ?, ?, '{}', '{}', 'opened', ?)`)
+    .bind(runId, id, ticker, asOf, asOf)
+    .run();
+}
+
+test("getPositionsDecidedInRange keys by DECISION date: a grace-tail fill counts, a pre-window decision filled in-window does not, no decision row falls back to opened_at", async () => {
+  const ctx = makeCtx();
+  const from = "2026-01-01T00:00:00.000Z";
+  const to = "2026-01-06T00:00:00.000Z";
+
+  // Decided inside the window, filled and closed AFTER it (grace tail): counts.
+  await decide(ctx, "grace", "AAPL", "2026-01-05T00:00:00.000Z");
+  await open(ctx.store, "grace", "AAPL", "2026-01-07T00:00:00.000Z");
+  await ctx.store.closePosition({ id: "grace", closedAt: "2026-01-09T00:00:00.000Z", closeReason: "take_profit", exitPrice: 106 });
+  // Decided BEFORE the window, filled inside it: does not count (keyed by decision, not fill).
+  await decide(ctx, "early", "MSFT", "2025-12-31T00:00:00.000Z");
+  await open(ctx.store, "early", "MSFT", "2026-01-02T00:00:00.000Z");
+  // Decided exactly at `to`: excluded (exclusive end).
+  await decide(ctx, "at-to", "TSLA", to);
+  await open(ctx.store, "at-to", "TSLA", to);
+  // No decision row: falls back to opened_at, still open at run end.
+  await open(ctx.store, "fallback", "USO", "2026-01-02T00:00:00.000Z");
+
+  const rows = await ctx.store.getPositionsDecidedInRange({ from, to });
+
+  assert.deepEqual(rows.map((r) => r.id), ["fallback", "grace"]); // oldest decision first
+  assert.deepEqual(rows[1], {
+    id: "grace", ticker: "AAPL", direction: "long", entryPrice: 100, exitPrice: 106, closeReason: "take_profit",
+    openedAt: "2026-01-07T00:00:00.000Z", closedAt: "2026-01-09T00:00:00.000Z", decidedAt: "2026-01-05T00:00:00.000Z",
+  });
+  assert.equal(rows[0].closedAt, null);
+  assert.equal(rows[0].decidedAt, "2026-01-02T00:00:00.000Z"); // fallback = opened_at
+});
+
+test("getPositionsDecidedInRange reads only its own run's positions, and requires both bounds", async () => {
+  const ctx = makeCtx({ runId: "bt-1" });
+  await decide(ctx, "mine", "AAPL", "2026-01-02T00:00:00.000Z");
+  await open(ctx.store, "mine", "AAPL", "2026-01-02T00:00:00.000Z");
+  const other = new ctx.store.constructor(ctx.stateDb, "bt-2");
+  await decide(ctx, "theirs", "MSFT", "2026-01-02T00:00:00.000Z", "bt-2");
+  await open(other, "theirs", "MSFT", "2026-01-02T00:00:00.000Z");
+
+  const rows = await ctx.store.getPositionsDecidedInRange({ from: "2026-01-01T00:00:00.000Z", to: "2026-01-06T00:00:00.000Z" });
+  assert.deepEqual(rows.map((r) => r.id), ["mine"]);
+
+  await assert.rejects(() => ctx.store.getPositionsDecidedInRange({ from: "2026-01-01T00:00:00.000Z" }), LookaheadViolationError);
+  await assert.rejects(() => ctx.store.getPositionsDecidedInRange({ to: "2026-01-06T00:00:00.000Z" }), LookaheadViolationError);
+});
+
+// ---------------------------------------------------------------------------
 // loadPriceGrid / assertPriceCoverage
 // ---------------------------------------------------------------------------
 

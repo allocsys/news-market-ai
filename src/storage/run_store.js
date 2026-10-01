@@ -683,6 +683,43 @@ export class RunStore {
     }));
   }
 
+  /**
+   * Backtest-result read for the per-trade rollout gate (backtest/gateStats.js), not asOf-gated
+   * (same carve-out as getPositionsInRange). Every position of this run whose DECISION date falls in
+   * [from, to): positions.id is the trade_thesis_id, i.e. trade_decisions.id, so the decision's as_of
+   * comes from that join (fallback: opened_at when no decision row exists). Keyed by decision date, not
+   * fill date, so a trade decided in the window but filled/closed in the grace tail still counts, and
+   * the count does not shift with how long the grace tail runs. Still-open positions have closedAt null.
+   */
+  async getPositionsDecidedInRange({ from, to }) {
+    if (!from || !to) {
+      throw new LookaheadViolationError("getPositionsDecidedInRange requires an explicit {from, to} range");
+    }
+
+    const { results } = await this.db
+      .prepare(
+        `SELECT p.id, p.ticker, p.direction, p.entry_price, p.exit_price, p.close_reason, p.opened_at, p.closed_at, d.as_of AS decided_at
+         FROM positions p
+         LEFT JOIN trade_decisions d ON d.run_id = p.run_id AND d.id = p.trade_thesis_id
+         WHERE p.run_id = ? AND COALESCE(d.as_of, p.opened_at) >= ? AND COALESCE(d.as_of, p.opened_at) < ?
+         ORDER BY COALESCE(d.as_of, p.opened_at) ASC, p.id ASC`
+      )
+      .bind(this.runId, from, to)
+      .all();
+
+    return results.map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      direction: r.direction,
+      entryPrice: r.entry_price,
+      exitPrice: r.exit_price,
+      closeReason: r.close_reason,
+      openedAt: r.opened_at,
+      closedAt: r.closed_at,
+      decidedAt: r.decided_at ?? r.opened_at,
+    }));
+  }
+
   // -------------------------------------------------------------------
   // Pipeline checkpoints -- `pipelineRunId` here is the OLD `runId`
   // concept (one per-ticker pipeline execution), renamed to avoid

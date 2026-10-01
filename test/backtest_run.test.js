@@ -96,6 +96,15 @@ test("runManualBacktest persists a 'complete' run with the real compareSignalOnO
   assert.equal(outcome.result.overall.on.n, 1);
   assert.equal(outcome.result.overall.off.n, 1);
 
+  // Per-trade rollout-gate stats: the one trade opened from the Jan 1 decision is counted exactly
+  // once, either as a closed trade (n) or as still open at run end; never dropped, never invented.
+  const { gate } = outcome.result;
+  assert.equal(gate.method, "per-trade-net-v1");
+  assert.equal(gate.costBps, 0);
+  assert.equal(gate.n + gate.openAtEnd + gate.unreplayable, 1);
+  assert.equal(gate.se, null); // one trade can't have a standard error, so no lower bound either
+  assert.equal(gate.lowerBound, null);
+
   const persisted = await getRun(ctx.registryDb, "run-happy");
   assert.equal(persisted.status, "complete");
   assert.deepEqual(JSON.parse(persisted.result), outcome.result);
@@ -146,6 +155,12 @@ test("runManualBacktest with no backfilled news for the window still completes, 
   assert.equal(outcome.status, "complete");
   assert.equal((await stateRows(ctx.stateDb, "positions")).length, 0); // no news -> no pipeline run -> no position
   assert.equal(outcome.result.overall.on.cumulativeReturn, 0); // empty return series, not a fabricated number
+  // No trades -> the gate block is all nulls/zeros: a thin sample must never read as a pass.
+  assert.equal(outcome.result.gate.method, "per-trade-net-v1");
+  assert.equal(outcome.result.gate.n, 0);
+  assert.equal(outcome.result.gate.openAtEnd, 0);
+  assert.equal(outcome.result.gate.mean, null);
+  assert.equal(outcome.result.gate.lowerBound, null);
 });
 
 // ---------------------------------------------------------------------------
