@@ -107,8 +107,10 @@ const AnalystContent = z.object({
   eventType: z.string().optional(),
   entities: z.array(z.string()).default([]),
   sentiment: SentimentBand.optional(),
-  summary: z.string(),
-  justification: z.string(),
+  // Lite fallback models sometimes omit these; default to "" so one sparse
+  // response doesn't fail the whole run (AnalystOpinion still gets a string).
+  summary: z.string().default(""),
+  justification: z.string().default(""),
 });
 
 // One Gemini call standing in for what used to be three (news_event +
