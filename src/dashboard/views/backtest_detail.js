@@ -4,7 +4,7 @@
 // opinions, bull/bear debate, trader rationale -- helpers.js#llmAnswerDetails).
 // Props are exactly what backend's GET /api/backtest-runs/:id returns.
 import {
-  escapeHtml, fmtTime, errorState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery,
+  escapeHtml, fmtTime, errorState, emptyState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery,
   tradeTimelineChart, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
 } from "../helpers.js";
 import { renderJobProgressPanel } from "./status.js";
@@ -19,7 +19,7 @@ function clip(text, max) {
 const price = (v) => (v != null && Number.isFinite(Number(v)) ? `$${Number(v).toFixed(2)}` : DASH);
 
 export function tradeTimelineTable(positions) {
-  if (positions.length === 0) return `<p class="empty">This run has no positions.</p>`;
+  if (positions.length === 0) return emptyState("This run has no positions.", { href: "/dashboard/backtest", label: "Back to backtest runs" });
   const rows = positions
     .map((p) => {
       const pnlClass = p.realizedReturn > 0 ? "status-approved" : p.realizedReturn < 0 ? "status-rejected" : "status-neutral";
