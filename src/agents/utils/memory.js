@@ -46,7 +46,9 @@ export async function fetchPriorLessons(store, { ticker, asOf, limit = 5 }) {
 export async function recordAndReflect(env, config, store, { id, decisionId, ticker, decisionSummary, realizedReturn, alphaReturn, resolvedAt }) {
   const prompt = `A trade decision for ${ticker} has resolved. Write ONE short sentence \
 reflecting on what worked or didn't -- this will be shown to a future version of yourself \
-before a similar decision. Be specific and actionable, not generic.
+before a similar decision. Be specific and actionable, not generic. If the decision has maePct / mfePct \
+(gross worst / best return while open, as fractions), use them: e.g. a stop hit after a large favorable \
+run, or a trade that never went far from entry, says something about stop/target placement.
 
 Respond as JSON only, matching exactly:
 { "reflection": string }
