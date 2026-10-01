@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { replayNewsItem, replayNewsItems, simulateForward } from "../src/backtest/newsReplay.js";
 import { getNewsItemsByIds } from "../src/storage/inputs_view.js";
-import { makeCtx, seedNews, seedBar, stateRows } from "./helpers/engine_ctx.js";
+import { makeCtx, seedNews, seedBar, seedIntradayBar, seedIntradayBarOhlc, stateRows } from "./helpers/engine_ctx.js";
 import { AnalystOpinion, AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 
 /**
@@ -179,6 +179,8 @@ test("getNewsItemsByIds: empty ids array returns empty without querying", async 
 
 test("simulateForward: approved long position hits take-profit within horizon", async () => {
   const { inputs } = makeCtx({ runId: "replay-test-7" });
+  // A stale daily close no longer prices an entry (it would wait for the next bar open); a fresh 5m bar closing at asOf does.
+  await seedIntradayBar(inputs, { ticker: "AAPL", ts: "2026-01-10T13:55:00Z", close: 100 });
   await seedBar(inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
   await seedBar(inputs, { ticker: "AAPL", date: "2026-01-10", close: 115 });
 
@@ -217,6 +219,7 @@ test("simulateForward: unapproved position produces all-null pnl shape", async (
 
 test("simulateForward: maxDrawdownPct correctly tracked peak-to-trough", async () => {
   const { inputs } = makeCtx({ runId: "replay-test-9" });
+  await seedIntradayBar(inputs, { ticker: "AAPL", ts: "2026-01-10T13:55:00Z", close: 100 });
   await seedBar(inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
   await seedBar(inputs, { ticker: "AAPL", date: "2026-01-10", close: 110 });
   await seedBar(inputs, { ticker: "AAPL", date: "2026-01-11", close: 95 });
@@ -235,4 +238,51 @@ test("simulateForward: maxDrawdownPct correctly tracked peak-to-trough", async (
   // Entry 100, Peak at day 1 (110, +10%), dip at day 2 (95, -5% from entry).
   // Drawdown from peak: (110-95)/100 = 15% = 0.15.
   assert.ok(Math.abs(pnl.maxDrawdownPct - 0.15) < 0.001);
+});
+
+const APPROVED_LONG = {
+  thesis: { direction: "long" },
+  riskDecision: { stopLossPct: 0.05, takeProfitPct: 0.10 },
+  portfolioDecision: { approvedForExecution: true, finalPositionSizePct: 0.5 },
+};
+
+test("simulateForward: stale entry price fills at the next bar's open, and the exit walk starts from the fill", async () => {
+  const { inputs } = makeCtx({ runId: "replay-test-10" });
+  // asOf is off-hours: only the 01-09 daily close (100) is visible, so the entry is stale.
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
+  await seedIntradayBarOhlc(inputs, { ticker: "AAPL", ts: "2026-01-11T14:30:00Z", open: 102, high: 103, low: 101, close: 103 });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-12", close: 120 });
+
+  const pnl = await simulateForward(inputs, {}, { ticker: "AAPL", asOf: "2026-01-10T22:00:00.000Z", decision: APPROVED_LONG });
+
+  assert.equal(pnl.entryPrice, 102, "filled at the first bar's OPEN, not the stale 100 close");
+  assert.equal(pnl.entryAsOf, "2026-01-11T14:30:00.000Z");
+  assert.equal(pnl.exitReason, "take_profit");
+  assert.equal(pnl.exitPrice, 120);
+  assert.ok(Math.abs(pnl.realizedReturnPct - 18 / 102) < 1e-9, "return is measured from the fill, and the pre-fill 01-09 bar is never walked");
+  assert.equal(pnl.holdDays, 1);
+});
+
+test("simulateForward: stale entry with no bar opening after asOf reports skipped_no_fill", async () => {
+  const { inputs } = makeCtx({ runId: "replay-test-11" });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
+
+  const pnl = await simulateForward(inputs, {}, { ticker: "AAPL", asOf: "2026-01-10T22:00:00.000Z", decision: APPROVED_LONG });
+
+  assert.equal(pnl.exitReason, "skipped_no_fill");
+  assert.strictEqual(pnl.entryPrice, null);
+  assert.strictEqual(pnl.realizedReturnPct, null);
+  assert.strictEqual(pnl.holdDays, null);
+});
+
+test("simulateForward: a bar that only opens after the 5-day pending-entry expiry is too late to fill", async () => {
+  const { inputs } = makeCtx({ runId: "replay-test-12" });
+  await seedBar(inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
+  // asOf + 5d = 2026-01-15T22:00Z; this bar opens on 01-16.
+  await seedIntradayBarOhlc(inputs, { ticker: "AAPL", ts: "2026-01-16T14:30:00Z", open: 102, high: 103, low: 101, close: 103 });
+
+  const pnl = await simulateForward(inputs, {}, { ticker: "AAPL", asOf: "2026-01-10T22:00:00.000Z", decision: APPROVED_LONG });
+
+  assert.equal(pnl.exitReason, "skipped_no_fill");
+  assert.strictEqual(pnl.entryPrice, null);
 });

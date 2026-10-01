@@ -21,23 +21,16 @@
 // HONEST SCOPE: the drawdown-breaker / sizing in portfolioDecision was decided at signal time and is
 // not re-evaluated at fill; only the SQL risk ceiling is re-checked.
 
-import { getDailyBarsWindowAsOf, getIntradayBarsWindowAsOf } from "../storage/inputs_view.js";
-import { buildBarSequence, exitWindowStart } from "../shared/bar_window.js";
-import { findFillBar, isPendingEntryExpired } from "../shared/entry_timing.js";
+import { findFirstBarOpenAtOrAfter } from "./bar_fill.js";
+import { isPendingEntryExpired } from "../shared/entry_timing.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE } from "../shared/constants.js";
 import { recordExcursionBeforeClose } from "./exit_check.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 
-async function findFillForPending(inputs, pending, { asOf }) {
-  // Same window rule as the exit walk with the decision's asOf as the anchor: intraday bars with
-  // ts >= asOf, daily bars from the next full UTC day (or the same day when asOf is exactly 00:00:00Z).
-  const start = exitWindowStart({ openedAt: pending.asOf, lastCheckedAt: null });
-  if (!start) return null;
-  const intraday = await getIntradayBarsWindowAsOf(inputs, { ticker: pending.ticker, fromTs: start.intradayFromTs, asOf });
-  const daily = await getDailyBarsWindowAsOf(inputs, { ticker: pending.ticker, fromDate: start.dailyFromDate, asOf });
-  const bars = buildBarSequence({ intraday: intraday.rows, daily: daily.rows, intradayTruncated: intraday.truncated });
-  return findFillBar(bars, pending.asOf);
+function findFillForPending(inputs, pending, { asOf }) {
+  // Window rule lives in bar_fill.js (shared with the read-only replay): the decision's asOf is the anchor.
+  return findFirstBarOpenAtOrAfter(inputs, { ticker: pending.ticker, from: pending.asOf, asOf });
 }
 
 /**
