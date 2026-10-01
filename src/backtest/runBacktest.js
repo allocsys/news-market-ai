@@ -330,6 +330,10 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
           // budget pauses interleave forever without ever reaching maxStalls.
           return await yieldPart({ phase: "walk", window: wi, walk: res.cursor, stall: cursor?.stall }, res.reason);
         }
+        // The walk stopped early in the grace tail (nothing open, nothing pending): the days it
+        // did not visit are done for progress purposes, so the bar still reaches its total.
+        // Carried across parts by `completed` in the cursor.
+        completedSteps += (res.skippedDays ?? 0) * tickers.length;
       }
     }
 
