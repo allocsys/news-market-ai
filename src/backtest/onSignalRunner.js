@@ -312,7 +312,16 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
  * news item (skipped ones too); `onExits({ticker, dayIso, done})` around the day's exit check,
  * `ticker` being the last one walked that day, so a failure there can still be attributed.
  *
- * Returns `{ complete: true }` or `{ complete: false, cursor, reason }`
+ * EARLY EXIT IN THE GRACE TAIL: on the last window, once a day at/after testEnd has finished its
+ * exit unit with no pending entry left and no open position, nothing can change on any later
+ * day (the tail has no news, so no new decisions), so the walk stops there instead of walking
+ * the rest of the grace period. The result then carries `skippedDays` (walk days not visited) so
+ * the caller can complete its progress count. An open position (e.g. a time exit due over a
+ * weekend) or a pending entry still waiting for a bar keeps the walk going; the grace length
+ * stays the hard cap. Resume-safe: the day list is unchanged and the check is recomputed after
+ * every exit unit.
+ *
+ * Returns `{ complete: true }` (plus `skippedDays` when it stopped early) or `{ complete: false, cursor, reason }`
  * (`reason`: "budget" = the next unit didn't fit, "exhausted" = the budget ran
  * out inside a unit, "transient" = Gemini was unavailable inside a unit; that
  * one also carries `error` and `retryAfterSeconds`).
@@ -400,14 +409,28 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
       // time-based exit on a day with no news at all, same as the live path.
       const exitsBefore = budget?.mark();
       // Fill/expire pending entries first, same unit as the exit check (never cut in half).
+      let waiting = 0;
       const runExits = async () => {
-        await fillPendingEntries(env, config, ctx, { asOf: dayIso });
+        ({ waiting } = await fillPendingEntries(env, config, ctx, { asOf: dayIso }));
         return checkOpenPositionExits(env, config, ctx, { asOf: dayIso });
       };
       if (budget) await budget.unenforced(runExits);
       else await runExits();
       budget?.recordUnit("exits", exitsBefore);
       if (tickers.length) await onExits?.({ ticker: tickers[tickers.length - 1], dayIso, done: true });
+
+      // Grace tail with nothing left that can change: stop (see EARLY EXIT above). `waiting` only
+      // covers the first 200 pendings fillPendingEntries read, so confirm with a limit-1 read.
+      // Both reads are counted but never refused by the budget, like the exit unit.
+      if (isLastWindow && waiting === 0 && Date.parse(dayIso) >= Date.parse(testEnd) && dayIndex < days.length - 1) {
+        const nothingLeft = async () => {
+          if ((await ctx.store.getOpenPositionsAsOf({ asOf: dayIso })).length > 0) return false;
+          return (await ctx.store.listPendingEntriesAsOf({ asOf: dayIso, limit: 1 })).length === 0;
+        };
+        if (budget ? await budget.unenforced(nothingLeft) : await nothingLeft()) {
+          return { complete: true, skippedDays: days.length - 1 - dayIndex };
+        }
+      }
     }
     return { complete: true };
   } catch (err) {
