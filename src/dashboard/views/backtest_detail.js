@@ -5,7 +5,7 @@
 // Props are exactly what backend's GET /api/backtest-runs/:id returns.
 import {
   escapeHtml, fmtTime, errorState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery,
-  tradeTimelineChart, tradeTimelineSummary, newsBasis, signedPct, outcomeColor,
+  tradeTimelineChart, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
 } from "../helpers.js";
 import { renderJobProgressPanel } from "./status.js";
 
@@ -33,6 +33,8 @@ export function tradeTimelineTable(positions) {
         <td class="num" data-label="Closed">${p.closedAt ? fmtTime(p.closedAt) : "still open"}</td>
         <td class="num" data-label="Entry &rarr; exit">${price(p.entryPrice)} &rarr; ${price(p.exitPrice)}</td>
         <td data-label="Close reason">${escapeHtml(p.closeReason ?? DASH)}</td>
+        <td class="num" data-label="MAE" title="Worst gross return seen while open (sampled at exit checks)">${fmtExcursion(p.maePct)}</td>
+        <td class="num" data-label="MFE" title="Best gross return seen while open (sampled at exit checks)">${fmtExcursion(p.mfePct)}</td>
         <td class="num ${pnlClass}" data-label="P&amp;L" style="color:${outcomeColor(p.realizedReturn)}">${escapeHtml(pnl)}</td>
         <td class="cell-wide" data-label="Based on">${news ? escapeHtml(clip(news, NEWS_PREVIEW_CHARS)) : `<span class="empty">not recorded</span>`}</td>
         <td class="cell-wide" data-label="Why">${llmAnswerDetails(p.decision ?? {})}</td>
@@ -40,7 +42,7 @@ export function tradeTimelineTable(positions) {
     })
     .join("\n");
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Opened</th><th>Closed</th><th>Entry &rarr; exit</th><th>Close reason</th><th>P&amp;L</th><th>Based on</th><th>Why</th></tr></thead>
+    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Opened</th><th>Closed</th><th>Entry &rarr; exit</th><th>Close reason</th><th>MAE</th><th>MFE</th><th>P&amp;L</th><th>Based on</th><th>Why</th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }

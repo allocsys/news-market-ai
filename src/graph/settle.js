@@ -39,7 +39,7 @@ import { LlmBudgetExceededError, SubrequestBudgetExhaustedError } from "../share
  * couldn't be computed (see computeRealizedReturn) or closeTheLoop itself
  * failed (logged, not thrown -- see header).
  */
-export async function settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason }) {
+export async function settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason, excursion }) {
   const realizedReturn = computeRealizedReturn({
     direction: position.direction,
     entryPrice: position.entryPrice,
@@ -70,6 +70,12 @@ export async function settlePositionOutcome(env, config, store, { position, exit
     closeReason,
     costBps: config.tradeCostBps ?? 0, // realizedReturn below is net of this per-side cost
   };
+  // Gross worst / best return while open (fractions), so the reflection can judge stop/target
+  // placement (e.g. a stop hit after a big favorable run). Omitted when never sampled.
+  const mae = excursion?.maePct ?? position.maePct;
+  const mfe = excursion?.mfePct ?? position.mfePct;
+  if (Number.isFinite(mae)) decisionSummary.maePct = mae;
+  if (Number.isFinite(mfe)) decisionSummary.mfePct = mfe;
 
   try {
     return await closeTheLoop(env, config, store, {

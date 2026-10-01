@@ -190,7 +190,7 @@ export class RunStore {
 
     const { results } = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at, mae_pct, mfe_pct
          FROM positions
          WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`
       )
@@ -209,6 +209,9 @@ export class RunStore {
       openedAt: r.opened_at,
       // Bar-based exit cursor (advancePositionCheck); null = never checked, the window starts at openedAt.
       lastCheckedAt: r.last_checked_at ?? null,
+      // Running gross excursion extremes so far (recordPositionExcursion*); null = never sampled.
+      maePct: r.mae_pct ?? null,
+      mfePct: r.mfe_pct ?? null,
     }));
   }
 
@@ -807,7 +810,7 @@ export class RunStore {
     const { results } = await this.db
       .prepare(
         `SELECT p.id, p.ticker, p.trade_thesis_id, p.position_size_pct, p.direction, p.entry_price, p.exit_price,
-                p.stop_loss_pct, p.take_profit_pct, p.opened_at, p.closed_at, p.close_reason,
+                p.stop_loss_pct, p.take_profit_pct, p.opened_at, p.closed_at, p.close_reason, p.mae_pct, p.mfe_pct,
                 d.as_of AS d_as_of, d.status AS d_status, d.thesis AS d_thesis, d.risk_decision AS d_risk_decision,
                 d.portfolio_decision AS d_portfolio_decision, d.opinions AS d_opinions, d.debate AS d_debate
          FROM positions p
@@ -838,6 +841,8 @@ export class RunStore {
         openedAt: r.opened_at,
         closedAt: r.closed_at,
         closeReason: r.close_reason,
+        maePct: r.mae_pct ?? null,
+        mfePct: r.mfe_pct ?? null,
         decision:
           r.d_status == null
             ? null

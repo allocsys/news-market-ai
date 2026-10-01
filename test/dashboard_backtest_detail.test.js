@@ -73,6 +73,16 @@ test("listPositionsWithDecisions reports truncation instead of silently cutting 
   assert.equal(all.positions.at(-1).decision, null);
 });
 
+test("listPositionsWithDecisions returns each position's stored MAE/MFE, null until a check has sampled it", async () => {
+  const sim = await seededSim();
+  await sim.prepare(`UPDATE positions SET mae_pct = ?, mfe_pct = ? WHERE run_id = ? AND id = ?`).bind(-0.021, 0.034, RUN, "AAPL|2026-09-15T10:00:00.000Z").run();
+  const { positions } = await new RunStore(sim, RUN).listPositionsWithDecisions();
+  assert.equal(positions[0].maePct, -0.021);
+  assert.equal(positions[0].mfePct, 0.034);
+  assert.equal(positions[1].maePct, null, "never sampled -> null, not 0");
+  assert.equal(positions[1].mfePct, null);
+});
+
 test("cumulativeReturns compounds daily returns and treats a non-finite day as flat", () => {
   const c = cumulativeReturns([0.01, 0.02]);
   assert.ok(Math.abs(c[1] - 0.0302) < 1e-12);
@@ -150,6 +160,15 @@ test("renderBacktestDetailView shows headline, chart, news basis, why, P&L and a
   assert.match(html, /Not recorded for this decision/, "position with no decision row");
   assert.ok(html.includes(`env=${RUN}`) && html.includes(`llmJob=${RUN}`));
   assert.ok(html.includes("T&lt;S&gt;") && !html.includes("T<S>"));
+});
+
+test("renderBacktestDetailView shows MAE/MFE columns: signed percents when sampled, a dash when not", () => {
+  const d = detail();
+  const html = renderBacktestDetailView({ ...d, positions: [{ ...d.positions[0], maePct: -0.021, mfePct: 0.034 }, { ...d.positions[1], maePct: null, mfePct: null }] });
+  assert.match(html, /<th>MAE<\/th><th>MFE<\/th>/);
+  assert.match(html, /data-label="MAE"[^>]*>-2\.1%<\/td>/);
+  assert.match(html, /data-label="MFE"[^>]*>\+3\.4%<\/td>/);
+  assert.match(html, /data-label="MAE"[^>]*>\u2014<\/td>/, "unsampled position shows a dash");
 });
 
 test("renderBacktestDetailView handles not-found, error, running, failed, truncated and a positions error", () => {

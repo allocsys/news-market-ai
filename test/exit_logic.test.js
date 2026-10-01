@@ -151,6 +151,8 @@ test("openPosition stores direction/entryPrice/stopLossPct/takeProfitPct, and ge
     direction: "long", entryPrice: 150, stopLossPct: 0.03, takeProfitPct: 0.06,
     openedAt: "2026-01-01T00:00:00Z",
     lastCheckedAt: null, // bar-based exit cursor: never checked yet
+    maePct: null, // running excursion extremes: never sampled yet
+    mfePct: null,
   });
 });
 
