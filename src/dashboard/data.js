@@ -233,7 +233,17 @@ export async function getPositionsData(env, params) {
 export async function getPipelineData(env, params = {}) {
   const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
   const checkpointsResult = await safe(() => store.listRecentCheckpoints({ limit: 30 }));
-  return { checkpoints: checkpointsResult.data ?? [], error: checkpointsResult.error, resolvedEnv, envError };
+  // Aggregate (not capped to 30 rows) behind the Operations tab's per-ticker
+  // cards. A failure here degrades to the raw checkpoints rather than erroring
+  // the page, so `checkpoints` (used by Overview) stays the source of truth.
+  const stageCountsResult = await safe(() => store.listCheckpointStageCounts());
+  return {
+    checkpoints: checkpointsResult.data ?? [],
+    tickerStages: stageCountsResult.data ?? [],
+    error: checkpointsResult.error,
+    resolvedEnv,
+    envError,
+  };
 }
 
 /**
