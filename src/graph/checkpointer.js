@@ -6,6 +6,12 @@
 // environment -- see migrations/state/0001_init.sql's NAMING note. Keeping the order here (not in pipeline.js) means
 // conditional_logic.js and pipeline.js can both ask "what's after X" without
 // duplicating the list.
+//
+// STAGES is the full ORDER, not the list of stages that get a row: pipeline.js no
+// longer writes "risk_checked" (pure + deterministic, recomputed on resume, one
+// fewer upsert per item) and writes "portfolio_checked" atomically with the
+// decision. nextStage/resumeFrom still accept "risk_checked" so rows written
+// before this change resume correctly; any skipped stage must be safe to redo.
 
 export const STAGES = ["ingested", "analyzed", "debated", "traded", "risk_checked", "portfolio_checked"];
 
