@@ -506,7 +506,7 @@ export function rangePresetButtons(fromId, toId) {
 }
 
 export function checkpointsTable(checkpoints) {
-  if (checkpoints.length === 0) return `<p class="empty">No pipeline activity recorded yet.</p>`;
+  if (checkpoints.length === 0) return emptyState("No pipeline activity recorded yet.", { href: "/dashboard/backtest", label: "Run a backtest" });
   const rows = checkpoints
     .map((c) => `<tr><td class="ticker cell-title">${escapeHtml(c.ticker)}</td><td data-label="Last stage">${escapeHtml(c.stage)}</td><td class="num" data-label="Updated">${fmtTime(c.updated_at)}</td></tr>`)
     .join("\n");
