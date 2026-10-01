@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  DECISION_STATUS_OPTIONS, DECISION_APPROVED_STATUS, decisionBadge, renderSummaryCards, decisionsActivityChart,
+  DECISION_STATUS_OPTIONS, DECISION_APPROVED_STATUS, decisionBadge, renderSummaryCards, renderBookCharts, decisionsActivityChart,
 } from "../src/dashboard/helpers.js";
 import { renderSnapshotView } from "../src/dashboard/views/snapshot.js";
 import { renderPositionsView } from "../src/dashboard/views/positions.js";
@@ -58,11 +58,20 @@ test("renderSummaryCards with only non-approved statuses shows a dash, not a bog
   assert.match(html, /\u2014/, "approval-rate card shows an em dash when nothing was decided");
 });
 
-test("Snapshot view's approval donut reads the 'opened' total", () => {
+test("Book charts' approval donut reads the 'opened' total", () => {
+  const html = renderBookCharts({
+    openPositions: [], decisionStats: { totals: TOTALS, daily: [] }, totalExposurePct: 0,
+  });
+  assert.match(html, /67%/);
+});
+
+test("Snapshot view shows the recently-closed table and no longer duplicates Overview's cards and charts", () => {
   const html = renderSnapshotView({
     openPositions: [], closedPositions: [], decisionStats: { totals: TOTALS, daily: [] }, totalExposurePct: 0, error: null,
   });
-  assert.match(html, /67%/);
+  assert.match(html, /Recently closed/);
+  assert.doesNotMatch(html, /stat-grid/);
+  assert.doesNotMatch(html, /chart-row-3/);
 });
 
 test("decisionsActivityChart stacks 'opened' as the approved (green) segment and gives 'held' its own color", () => {
