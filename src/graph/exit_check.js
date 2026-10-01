@@ -231,11 +231,11 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     });
 
     if (timeExit) {
-      // Time exits close at asOf; the exit price is the current price (same resolver as
-      // before). A split-suspected price is not a real exit price, so it closes with a null
-      // exit price: settle skips the reflection ("return not computable") instead of
-      // recording a fake -50% lesson. The current price is checked against the split ratio
-      // too, in case the bars in the window were missing and the walk could not see it.
+      // Fills at the first bar open after the due instant (resolveTimeExitFill), or waits for one.
+      // A split-suspected price is not a real exit price, so it closes at asOf with a null exit
+      // price: settle skips the reflection ("return not computable") instead of recording a fake
+      // -50% lesson. The fill price is checked against the split ratio too, in case the bars in
+      // the window were missing and the walk could not see it.
       const fill = split
         ? { exitPrice: null, closedAt: asOf }
         : await resolveTimeExitFill(inputs, position, { asOf, dueAt, splitGuardTolerance: config.splitGuardTolerance });
