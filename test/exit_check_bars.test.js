@@ -238,20 +238,78 @@ test("a UTC day that has intraday rows ignores that day's daily bar", async () =
 });
 
 // ---------------------------------------------------------------------------
-// time exit is unchanged
+// time exit: first bar open after the hold limit is reached
 // ---------------------------------------------------------------------------
+// Fixture: opened Thu 2026-01-01 00:00Z, max hold 10 trading days -> due Thu 2026-01-15 00:00Z.
 
-test("time exit: still closes at asOf (not at a bar close), priced by resolveCurrentPrice, when no price exit fired in the walked bars", async () => {
+const TIME_OPENED = "2026-01-01T00:00:00Z";
+
+test("time exit: due but no bar after the due instant yet -> stays open (cursor still advances), then closes at the first bar's OPEN, stamped with its open time", async () => {
   const ctx = makeCtx();
-  await openPosition(ctx, { openedAt: "2026-01-01T00:00:00Z" });
+  await openPosition(ctx, { openedAt: TIME_OPENED });
   await seedBarOhlc(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", open: 101, high: 102, low: 100, close: 101 });
 
+  // Check exactly at the due instant (the daily backtest walk's midnight check): no bar has opened since.
+  const first = await captureErrors(() => checkOpenPositionExits({}, makeConfig(), ctx, { asOf: "2026-01-15T00:00:00.000Z" }));
+  assert.deepEqual(first.result, [], "deferred: nothing tradable after the due instant yet");
+  let r = await posRow(ctx);
+  assert.equal(r.closed_at ?? null, null);
+  assert.equal(r.last_checked_at, "2026-01-15T00:00:00Z", "the quiet window still moved the cursor");
+
+  // The market opens. Its low (90) is through the stop (97), but the bar is AFTER the due instant: the price walk is capped there.
+  await seedIntradayBarOhlc(ctx.inputs, { ticker: "AAPL", ts: "2026-01-15T14:30:00Z", open: 103, high: 104, low: 90, close: 100 });
+  const closed = await checkOpenPositionExits({}, makeConfig(), ctx, { asOf: "2026-01-15T15:00:00.000Z" });
+
+  assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "time_based" }]);
+  r = await posRow(ctx);
+  assert.equal(r.close_reason, "time_based");
+  assert.equal(r.exit_price, 103, "the first bar's open, not the stale 101 close and not the stop level");
+  assert.equal(r.closed_at, "2026-01-15T14:30:00.000Z");
+});
+
+test("time exit: a UTC day with only a daily bar fills at that daily bar's open, closedAt = the day's start", async () => {
+  const ctx = makeCtx();
+  await openPosition(ctx, { openedAt: TIME_OPENED });
+  await seedBarOhlc(ctx.inputs, { ticker: "AAPL", date: "2026-01-15", open: 102, high: 103, low: 101, close: 99 });
+
+  // The 01-15 daily bar is not visible until 01-16 00:00Z.
   const { result: closed } = await captureErrors(() =>
-    checkOpenPositionExits({}, makeConfig(), ctx, { asOf: "2026-01-15T00:00:00.000Z" }) // 10 trading days after Thu 2026-01-01
+    checkOpenPositionExits({}, makeConfig(), ctx, { asOf: "2026-01-16T00:00:00.000Z" })
   );
 
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "time_based" }]);
   const r = await posRow(ctx);
+  assert.equal(r.exit_price, 102);
   assert.equal(r.closed_at, "2026-01-15T00:00:00.000Z");
+});
+
+test("time exit: a price exit that happened BEFORE the due instant still wins", async () => {
+  const ctx = makeCtx();
+  await openPosition(ctx, { openedAt: TIME_OPENED });
+  await seedBarOhlc(ctx.inputs, { ticker: "AAPL", date: "2026-01-12", open: 100, high: 100, low: 90, close: 95 }); // stop touched
+  await seedBarOhlc(ctx.inputs, { ticker: "AAPL", date: "2026-01-15", open: 102, high: 103, low: 101, close: 102 });
+
+  const { result: closed } = await captureErrors(() =>
+    checkOpenPositionExits({}, makeConfig(), ctx, { asOf: "2026-01-16T00:00:00.000Z" })
+  );
+
+  assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
+  assert.equal((await posRow(ctx)).closed_at, "2026-01-13T00:00:00.000Z");
+});
+
+test("time exit: no bar within 5 days of the due instant falls back to closing at asOf with the legacy resolveCurrentPrice price", async () => {
+  const ctx = makeCtx();
+  await openPosition(ctx, { openedAt: TIME_OPENED });
+  await seedBarOhlc(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", open: 101, high: 102, low: 100, close: 101 });
+
+  // Still inside the 5-day window at due + 5d exactly: keeps waiting.
+  const early = await captureErrors(() => checkOpenPositionExits({}, makeConfig(), ctx, { asOf: "2026-01-20T00:00:00.000Z" }));
+  assert.deepEqual(early.result, []);
+  assert.equal((await posRow(ctx)).closed_at ?? null, null);
+
+  const late = await captureErrors(() => checkOpenPositionExits({}, makeConfig(), ctx, { asOf: "2026-01-20T00:00:01.000Z" }));
+  assert.deepEqual(late.result, [{ id: "AAPL|t1", ticker: "AAPL", reason: "time_based" }]);
+  const r = await posRow(ctx);
+  assert.equal(r.closed_at, "2026-01-20T00:00:01.000Z");
   assert.equal(r.exit_price, 101);
 });
