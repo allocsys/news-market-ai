@@ -1,6 +1,6 @@
 import {
   pillLinks, decisionsTable, DECISION_STATUS_OPTIONS, DECISION_LIMIT_OPTIONS, DECISION_APPROVED_STATUS,
-  errorState, donutChart, escapeHtml,
+  errorState, emptyState, fmtShare, donutChart, escapeHtml,
 } from "../helpers.js";
 
 export function renderDecisionsView({ decisions, params, error }) {
@@ -52,12 +52,12 @@ export function renderDecisionsView({ decisions, params, error }) {
       <div class="panel">
         <div class="panel-header"><span class="panel-title">Direction split</span></div>
         <div class="panel-body">
-          ${decisions.length === 0 ? `<p class="empty">No decisions match this filter.</p>` : (() => {
+          ${decisions.length === 0 ? emptyState("No decisions match this filter.", { href: "/dashboard/decisions", label: "Clear filters" }) : (() => {
             const longs = decisions.filter((d) => d.thesis?.direction === "long").length;
             const shorts = decisions.filter((d) => d.thesis?.direction === "short").length;
             const neutral = decisions.length - longs - shorts; // "other": neutral OR no thesis recorded
             const total = decisions.length || 1;
-            const bar = (count, color) => `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.6rem"><span style="font-size:0.75rem;color:var(--text-muted);min-width:60px">${escapeHtml(color === "var(--color-success-text)" ? "Long" : color === "var(--color-danger-text)" ? "Short" : "Other")}</span><div style="flex:1;height:8px;background:var(--bg-elevated);border-radius:4px;overflow:hidden"><div style="width:${(count/total*100).toFixed(1)}%;height:100%;background:${color};border-radius:4px"></div></div><span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-main);min-width:48px;text-align:right">${count} (${(count/total*100).toFixed(0)}%)</span></div>`;
+            const bar = (count, color) => { const name = color === "var(--color-success-text)" ? "Long" : color === "var(--color-danger-text)" ? "Short" : "Other"; return `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.6rem"><span style="font-size:0.75rem;color:var(--text-muted);min-width:60px">${escapeHtml(name)}</span><div role="img" aria-label="${escapeHtml(name)}: ${count} of ${decisions.length} (${fmtShare(count, total)})" style="flex:1;height:8px;background:var(--bg-elevated);border-radius:4px;overflow:hidden"><div style="width:${(count/total*100).toFixed(1)}%;height:100%;background:${color};border-radius:4px"></div></div><span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-main);min-width:48px;text-align:right">${count} (${fmtShare(count, total)})</span></div>`; };
             return bar(longs, "var(--color-success-text)") + bar(shorts, "var(--color-danger-text)") + (neutral > 0 ? bar(neutral, "var(--chart-6)") : "");
           })()}
         </div>
