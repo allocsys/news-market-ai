@@ -476,7 +476,7 @@ test("runManualBacktest with several walk-forward windows never processes the sa
 
   const outcome = await runManualBacktest({}, config, ctx, {
     id: "run-windows-nodupe", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-05T00:00:00.000Z", trainDays: 0, testDays: 2, graceDays: 1,
-    onProgress: async (u) => { if (u.phase === "simulating" && u.detail) finishedTicks.push(u.detail); },
+    onProgress: async (u) => { if (u.phase === "simulating" && /^AAPL \d{4}-\d{2}-\d{2}$/.test(u.detail ?? "")) finishedTicks.push(u.detail); },
   });
 
   assert.equal(outcome.status, "complete", outcome.error);
@@ -485,10 +485,13 @@ test("runManualBacktest with several walk-forward windows never processes the sa
   // "AAPL 2026-01-04" would appear here twice. After the fix it appears once,
   // and every other ticker-day in [Jan 1, Jan 6] (window 2's real grace end)
   // also appears exactly once -- nothing is skipped, nothing is doubled.
-  const days = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05", "2026-01-06"];
+  // Jan 6 is the LAST grace day: this run has no news and no positions, so the grace-tail
+  // early exit stops the walk after Jan 5 (the first tail day) and skips Jan 6 entirely.
+  const days = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"];
   for (const day of days) {
     const count = finishedTicks.filter((d) => d === `AAPL ${day}`).length;
     assert.equal(count, 1, `AAPL ${day} should be processed exactly once, was processed ${count} times`);
   }
+  assert.equal(finishedTicks.filter((d) => d === "AAPL 2026-01-06").length, 0, "the idle last grace day is skipped, not walked");
   assert.equal(finishedTicks.length, days.length); // no other ticker-days snuck in either
 });
