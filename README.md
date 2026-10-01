@@ -6,10 +6,12 @@ rigorous point-in-time backtesting. Full design and rationale live in
 
 ## Status
 
-Early scaffold. Architecture and shared helpers are in place; ingestion
-source adapters and the actual orchestration loop (wiring ingestion -> 
-analyst agents -> researcher debate -> trader -> risk) are not yet
-implemented. See plan.md's "Open questions / next steps".
+The pipeline is implemented end to end (ingest -> analyst team -> bull/bear
+debate -> trader -> risk -> portfolio check -> commit), with a point-in-time
+backtester and a dashboard. Live trading is OFF by owner decision; the
+rollout gates (backtest -> paper -> micro-live) are in
+[`docs/rollout.md`](./docs/rollout.md). Current priorities are in plan.md's
+"Next To-Dos". Stage and Worker diagrams: [`docs/pipeline-diagram.md`](./docs/pipeline-diagram.md).
 
 ## Stack
 
@@ -31,13 +33,17 @@ src/
     normalize.js            # "jsonify anything" boundary
     sources/                # one adapter per source (gdelt.js first, stubbed)
   storage/                  # D1 access: run_store.js, inputs_view.js, jobs.js, llm_calls.js, sim_registry.js (see plan.md Repo Structure)
-  backtest/pointInTime.js    # leak-check + walk-forward window helpers
+  backtest/                # point-in-time helpers, onSignalRunner.js, runBacktest.js
+  graph/                   # pipeline.js stage sequence, exit_check, settle, checkpointer
+  dashboard/               # data.js, helpers.js, routes.js, shell.js + views/
+  dashboard-worker.js      # public dashboard Worker (other Workers: ingest, llm, backtest)
   agents/
-    analysts/                # quick-tier: news/event, sentiment
+    analysts/                # quick-tier: analystTeam.js (batched news/event, sentiment, technical)
     researchers/              # deep-tier: bull, bear, judge
     trader/                   # deep-tier: direction/thesis only
     risk_mgmt/                # deterministic, NOT an LLM -- position sizing
   index.js                  # Worker entry (fetch + scheduled)
+docs/                       # rollout.md, pipeline-diagram.md + diagrams/
 migrations/                 # D1 schemas: inputs/, state/ (live + sim), sim/ (backtest_runs)
 test/                       # includes the mandatory backtest leak-check test
 ```
