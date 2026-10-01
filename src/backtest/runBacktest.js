@@ -52,6 +52,7 @@
 import { walkOnSignalWindow, countSignalWalkSteps, computeWalkEnd } from "./onSignalRunner.js";
 import { onEquityReturns, offEquityReturns, sliceSeriesByWindow, truncateGrid, meanOf, DEFAULT_MAX_PRICE_GAP_DAYS } from "./equity.js";
 import { utcDateOf } from "../shared/price_availability.js";
+import { computeGateStats } from "./gateStats.js";
 import { loadPriceGrid, assertPriceCoverage } from "./priceGrid.js";
 import { walkForwardWindows } from "./pointInTime.js";
 import { compareSignalOnOffByWindow } from "./signalCompare.js";
@@ -388,6 +389,11 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
       const openedInSpan = positions.filter((p) => p.openedAt && utcDateOf(p.openedAt) < spanEndDate);
       const openAtSpanEnd = openedInSpan.filter((p) => !p.closedAt || utcDateOf(p.closedAt) >= spanEndDate).length;
       const openAtRunEnd = openedInSpan.filter((p) => !p.closedAt).length;
+      // Per-trade rollout-gate stats (docs/rollout.md): every trade DECIDED in the requested window,
+      // including ones that fill/close in the grace tail, net return per trade (gateStats.js). The
+      // curves above feed only max drawdown and the each-half test, not this.
+      const gateTrades = await store.getPositionsDecidedInRange({ from: spanStart, to: spanEnd });
+      const gate = { method: "per-trade-net-v1", from: spanStart, to: spanEnd, costBps, ...computeGateStats(gateTrades, { costBps }) };
 
       const result = await compareSignalOnOffByWindow({
         startDate: testStart,
@@ -416,6 +422,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     // sweep's results are self-describing: no need to remember which env or query
     // params produced which run (backtest/knobOverrides.js).
     result.knobs = effectiveKnobs(config);
+    result.gate = gate;
     // News items the walk skipped for unusable model output (absent when none): the
     // run's trade count is lower by whatever those would have opened.
     if (skipped.count) result.skippedItems = { count: skipped.count, listed: skipped.items.length, items: skipped.items };
