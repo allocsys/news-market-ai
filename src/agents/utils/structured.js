@@ -8,6 +8,7 @@
 import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
 import { recordLlmCall } from "../../storage/llm_calls.js";
 import { chargeLlmCall } from "../../llm/budget.js";
+import { markLlmOutputError } from "../../shared/errors.js";
 
 /**
  * Fake-model injection point (plan.md open item, closed 2026-09-17). Every
@@ -100,8 +101,11 @@ export async function callStructured(env, config, schema, prompt, { model, extra
     const parsed = JSON.parse(stripJsonFence(text));
     result = schema.parse({ ...extraFields, ...parsed });
   } catch (err) {
-    await log({ status: "error", errorStage: err?.name === "ZodError" ? "validation" : "parse", error: err?.message ?? String(err), response: text });
-    throw err;
+    const stage = err?.name === "ZodError" ? "validation" : "parse";
+    await log({ status: "error", errorStage: stage, error: err?.message ?? String(err), response: text });
+    // Tagged (not wrapped) so a backtest can tell "the model answered with
+    // something unusable" from every other failure and skip just that item.
+    throw markLlmOutputError(err, stage);
   }
 
   await log({ status: "ok", response: text });
