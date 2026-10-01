@@ -99,6 +99,10 @@ export function loadConfig(env) {
     // stuck on the same news item; '0' means never give up on that ground.
     backtestTransientPauseSeconds: intOrDefault(env.BACKTEST_TRANSIENT_PAUSE_SECONDS, 90),
     backtestMaxTransientStalls: intOrDefault(env.BACKTEST_MAX_TRANSIENT_STALLS, 30),
+    // A news item whose model output is unusable (not JSON / fails the schema) is
+    // SKIPPED, not fatal; the run fails once more than this many were skipped
+    // (a systematic mismatch, not noise). '0' = never skip: fail on the first one.
+    backtestMaxSkippedItems: intOrDefault(env.BACKTEST_MAX_SKIPPED_ITEMS, 25),
     // Timeout for every plain-`fetch` ingestion call (shared/fetch_with_timeout.js)
     // -- gdelt.js (search + full-text enrichment), html_scrape.js, yfinance.js,
     // rss.js, edgar_fundamentals.js, edgar_cik_lookup.js. UPDATE: added after a
