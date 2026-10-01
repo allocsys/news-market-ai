@@ -279,6 +279,22 @@ export function onEquityReturns(grid, positions, { costBps = 0 } = {}) {
   return { returns, exposure, positionsTraded: traded.size, positionsIgnored };
 }
 
+/**
+ * The same grid cut to the dates before `to` (`YYYY-MM-DD` or an ISO timestamp; exclusive), by
+ * index: no extra reads, tickers/basis unchanged. Used to score on the REQUESTED window only
+ * while the price grid itself was loaded (and coverage-checked) over the longer grace span.
+ * Positions still open at the cut stay in the curve marked to market and pay no exit cost
+ * (onEquityReturns). A `to` at or past the last date returns the grid with `to` set.
+ */
+export function truncateGrid(grid, to) {
+  const end = utcDateOf(to);
+  let n = grid.dates.findIndex((d) => d >= end);
+  if (n === -1) n = grid.dates.length;
+  const closes = {};
+  for (const ticker of grid.tickers) closes[ticker] = grid.closes[ticker].slice(0, n);
+  return { ...grid, dates: grid.dates.slice(0, n), closes, to: end };
+}
+
 /** The values of a grid-aligned series whose date falls in [utcDate(testStart), utcDate(testEnd)). */
 export function sliceSeriesByWindow(dates, values, { testStart, testEnd }) {
   const from = utcDateOf(testStart);

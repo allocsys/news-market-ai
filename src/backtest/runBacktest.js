@@ -50,7 +50,8 @@
 // spanning the whole [testStart, testEnd) range.
 
 import { walkOnSignalWindow, countSignalWalkSteps, computeWalkEnd } from "./onSignalRunner.js";
-import { onEquityReturns, offEquityReturns, sliceSeriesByWindow, meanOf, DEFAULT_MAX_PRICE_GAP_DAYS } from "./equity.js";
+import { onEquityReturns, offEquityReturns, sliceSeriesByWindow, truncateGrid, meanOf, DEFAULT_MAX_PRICE_GAP_DAYS } from "./equity.js";
+import { utcDateOf } from "../shared/price_availability.js";
 import { loadPriceGrid, assertPriceCoverage } from "./priceGrid.js";
 import { walkForwardWindows } from "./pointInTime.js";
 import { compareSignalOnOffByWindow } from "./signalCompare.js";
@@ -361,45 +362,54 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     return await unenf(async () => {
       grid ??= await loadPriceGrid(inputs, { tickers, testStart: spanStart, testEnd: graceExtendedSpanEnd });
 
-      // SCORE: both sides as daily equity curves over the same (grace-extended)
-      // grid, then sliced per window (their pooled series is the whole-span
-      // curve). Earlier windows' grace periods already fall inside
-      // [spanStart, spanEnd) -- they overlap the NEXT window's own real test
-      // range, since walkForwardWindows produces contiguous windows -- so
-      // their slice needs no adjustment. Only the LAST window has grace days
-      // past spanEnd with no later window to be sliced into, so only its own
-      // slice is widened to graceExtendedSpanEnd; the window objects
-      // themselves (and therefore perWindow's reported testStart/testEnd)
-      // are untouched, so the reported window boundaries stay the real ones.
+      // SCORE (daily-equity-curve-v3): both sides as daily equity curves over the
+      // FIXED REQUESTED window [spanStart, spanEnd), then sliced per window. The
+      // grid was loaded and coverage-checked over the longer grace span, but it is
+      // cut back to spanEnd here (truncateGrid): the grace walk only exists to
+      // settle trades, it does not widen the scored horizon. That keeps the OFF
+      // baseline identical across runs and knob sweeps (the horizon no longer
+      // depends on when the ON side's last position happened to close). A
+      // position still open at spanEnd stays in the curve marked to market at
+      // spanEnd and pays no exit cost (equity.js); exits after spanEnd are not
+      // scored, on either side.
+      const scoreGrid = truncateGrid(grid, spanEnd);
       const positions = await store.getPositionsInRange({ from: spanStart, to: graceExtendedSpanEnd });
       const costBps = config.tradeCostBps ?? 0;
-      const on = onEquityReturns(grid, positions, { costBps });
-      const off = offEquityReturns(grid, { costBps });
+      const on = onEquityReturns(scoreGrid, positions, { costBps });
+      const off = offEquityReturns(scoreGrid, { costBps });
       // Both sides are scored NET of costs (per side, see constants.js). The
       // gross curves are kept alongside so the cost drag stays visible.
-      const onGross = costBps > 0 ? onEquityReturns(grid, positions) : on;
-      const offGross = costBps > 0 ? offEquityReturns(grid) : off;
-      const scoringEnd = (window) => (window.testEnd === spanEnd ? graceExtendedSpanEnd : window.testEnd);
+      const onGross = costBps > 0 ? onEquityReturns(scoreGrid, positions) : on;
+      const offGross = costBps > 0 ? offEquityReturns(scoreGrid) : off;
+      // Trades opened inside the requested window that are not closed by its end
+      // (marked to market in the curve) or not closed even after the grace cap
+      // (unresolved: a short or clamped grace cannot hide them).
+      const spanEndDate = utcDateOf(spanEnd);
+      const openedInSpan = positions.filter((p) => p.openedAt && utcDateOf(p.openedAt) < spanEndDate);
+      const openAtSpanEnd = openedInSpan.filter((p) => !p.closedAt || utcDateOf(p.closedAt) >= spanEndDate).length;
+      const openAtRunEnd = openedInSpan.filter((p) => !p.closedAt).length;
 
       const result = await compareSignalOnOffByWindow({
         startDate: testStart,
         endDate: testEnd,
         trainDays,
         testDays: resolvedTestDays,
-        getOnReturns: (window) => sliceSeriesByWindow(grid.dates, on.returns, { testStart: window.testStart, testEnd: scoringEnd(window) }),
-        getOffReturns: (window) => sliceSeriesByWindow(grid.dates, off.returns, { testStart: window.testStart, testEnd: scoringEnd(window) }),
+        getOnReturns: (window) => sliceSeriesByWindow(scoreGrid.dates, on.returns, { testStart: window.testStart, testEnd: window.testEnd }),
+        getOffReturns: (window) => sliceSeriesByWindow(scoreGrid.dates, off.returns, { testStart: window.testStart, testEnd: window.testEnd }),
     });
     result.portfolio = {
-      method: "daily-equity-curve-v2",
-      from: grid.from,
-      to: grid.to,
-      days: grid.dates.length,
-      tickers: grid.tickers,
+      method: "daily-equity-curve-v3",
+      from: scoreGrid.from,
+      to: scoreGrid.to, // = requestedTo: the scored window's exclusive end
+      requestedTo: scoreGrid.to,
+      priceCoverageTo: grid.to, // the longer grace span the prices were checked/loaded over (not scored)
+      days: scoreGrid.dates.length,
+      tickers: scoreGrid.tickers,
       maxGapDays: DEFAULT_MAX_PRICE_GAP_DAYS,
       costBps, // per side; on/off below and series.on/off are NET of it, series.onGross/offGross are not
-      on: { avgExposure: meanOf(on.exposure), positionsTraded: on.positionsTraded, positionsIgnored: on.positionsIgnored },
-      off: { avgExposure: meanOf(off.exposure), holdings: grid.tickers.length },
-      series: { dates: grid.dates, on: on.returns, off: off.returns, onExposure: on.exposure, onGross: onGross.returns, offGross: offGross.returns },
+      on: { avgExposure: meanOf(on.exposure), positionsTraded: on.positionsTraded, positionsIgnored: on.positionsIgnored, openAtSpanEnd, openAtRunEnd },
+      off: { avgExposure: meanOf(off.exposure), holdings: scoreGrid.tickers.length },
+      series: { dates: scoreGrid.dates, on: on.returns, off: off.returns, onExposure: on.exposure, onGross: onGross.returns, offGross: offGross.returns },
     };
 
     // The tuning knobs this run actually used (per-run overrides included), so a
