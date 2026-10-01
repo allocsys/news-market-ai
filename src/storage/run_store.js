@@ -190,7 +190,7 @@ export class RunStore {
 
     const { results } = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at, mae_pct, mfe_pct
          FROM positions
          WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`
       )
@@ -209,6 +209,9 @@ export class RunStore {
       openedAt: r.opened_at,
       // Bar-based exit cursor (advancePositionCheck); null = never checked, the window starts at openedAt.
       lastCheckedAt: r.last_checked_at ?? null,
+      // Running gross excursion extremes so far (recordPositionExcursion*); null = never sampled.
+      maePct: r.mae_pct ?? null,
+      mfePct: r.mfe_pct ?? null,
     }));
   }
 
