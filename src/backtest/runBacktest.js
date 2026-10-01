@@ -152,6 +152,27 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
   // and it is appended to the stored error so a failed run whose data has
   // been cleaned up (backtest/cleanup.js) still says how far it got.
   let current = null;
+  // Within-day progress: the step counter only moves when a ticker's day is done, and a busy
+  // day takes many continuation parts, so each finished news item also writes a progress line
+  // (throttled by the reporter). The fraction is kept below one full step, so percent never
+  // runs ahead of the next ticker-day tick and never goes backwards.
+  const onItem = async ({ ticker, dayIso, index, count }) => {
+    if (!onProgress) return;
+    await unenf(() =>
+      onProgress({
+        phase: "simulating",
+        percent: Math.min(95, Math.round((95 * (completedSteps + index / (count + 1))) / Math.max(totalSteps, 1))),
+        done: completedSteps,
+        total: totalSteps,
+        detail: `${ticker} ${dayIso.slice(0, 10)} (news ${index}/${count})`,
+      }),
+    );
+  };
+  // The day's exit check runs after every ticker's news (and after their step ticks), so it
+  // marks itself in flight here: a failure inside it is still attributed to a ticker-day.
+  const onExits = ({ ticker, dayIso, done }) => {
+    current = done ? null : { ticker, dayIso };
+  };
   const onStep = async ({ ticker, dayIso, done }) => {
     if (!done) {
       current = { ticker, dayIso };
@@ -276,7 +297,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
         // corrected again 2026-09-27).
         const isLastWindow = wi === windows.length - 1;
         const windowGraceDays = isLastWindow ? graceDays : 0;
-        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays: windowGraceDays, onStep, onItemSkipped: maxSkipped > 0 ? onItemSkipped : undefined, clock, cursor: resume, budget, isLastWindow });
+        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays: windowGraceDays, onStep, onItemSkipped: maxSkipped > 0 ? onItemSkipped : undefined, onItem, onExits, clock, cursor: resume, budget, isLastWindow });
         if (!res.complete) {
           if (res.reason === "transient") {
             // Gemini was unavailable inside a news item (the client's whole cascade came
