@@ -31,6 +31,8 @@ import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
 import { evaluateExit, calendarDaysCoveringTradingDays } from "../agents/risk_mgmt/exit.js";
 import { computeRealizedReturn } from "../shared/returns.js";
 import { resolveCurrentPrice } from "../graph/price_resolution.js";
+import { findFirstBarOpenAtOrAfter } from "../graph/bar_fill.js";
+import { isEntryPriceStale, pendingEntryExpiresAt } from "../shared/entry_timing.js";
 import { shouldContinueDebate } from "../graph/conditional_logic.js";
 import { loadLessonsForDebate } from "../graph/reflection.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
@@ -52,6 +54,12 @@ async function runParallelAnalysts(env, config, { ticker, newsItem, bars }) {
  * entry pricing respectively) and mirrors evaluateExit's real exit rules so the
  * simulated PnL reflects the SAME exit logic the live system would actually apply,
  * not an invented one.
+ *
+ * ENTRY follows graph/pipeline.js: a fresh intraday price opens at asOf; a stale one
+ * (shared/entry_timing.js#isEntryPriceStale) fills at the OPEN of the first bar at/after asOf
+ * (graph/bar_fill.js), or reports exitReason 'skipped_no_fill' when none opens within the
+ * pending-entry expiry. The exit walk then starts from the fill instant (`entryAsOf`). Bars are
+ * read forward past asOf on purpose -- this is a historical what-if, not a live decision.
  */
 export async function simulateForward(inputs, config, { ticker, asOf, decision }) {
   const emptyPnl = {
@@ -63,6 +71,7 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
     positionPnlPct: null,
     maxDrawdownPct: null,
     holdDays: null,
+    entryAsOf: null,
   };
 
   const { thesis, riskDecision, portfolioDecision } = decision;
@@ -71,12 +80,23 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
   }
 
   const resolved = await resolveCurrentPrice(inputs, { ticker, asOf });
-  const entryPrice = resolved.price;
+  let entryPrice = resolved.price;
   if (entryPrice == null) {
     return emptyPnl;
   }
 
-  const asOfDateStr = String(asOf).slice(0, 10);
+  let entryAsOf = asOf;
+  if (isEntryPriceStale(resolved, asOf)) {
+    const expiresAt = pendingEntryExpiresAt(asOf);
+    const fill = expiresAt ? await findFirstBarOpenAtOrAfter(inputs, { ticker, from: asOf, asOf: expiresAt }) : null;
+    if (fill == null || !(Date.parse(fill.openedAt) < Date.parse(expiresAt))) {
+      return { ...emptyPnl, exitReason: "skipped_no_fill" };
+    }
+    entryPrice = fill.price;
+    entryAsOf = fill.openedAt;
+  }
+
+  const asOfDateStr = String(entryAsOf).slice(0, 10);
   const maxHoldDays = config.maxPositionHoldDays ?? 10;
   const asOfDate = new Date(asOfDateStr + "T00:00:00Z");
   if (Number.isNaN(asOfDate.getTime())) {
@@ -95,6 +115,7 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
     return {
       ...emptyPnl,
       entryPrice,
+      entryAsOf,
     };
   }
 
@@ -121,7 +142,7 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
     }
 
     const exitEval = evaluateExit(
-      { direction, entryPrice, stopLossPct, takeProfitPct, openedAt: asOf },
+      { direction, entryPrice, stopLossPct, takeProfitPct, openedAt: entryAsOf },
       { currentPrice: bar.close, asOf: bar.date, maxHoldDays }
     );
 
@@ -148,6 +169,7 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
 
   return {
     entryPrice,
+    entryAsOf,
     exitPrice,
     exitReason,
     exitAsOf,
