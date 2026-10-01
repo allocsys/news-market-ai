@@ -25,10 +25,15 @@
 // with NO exit; on an exit it is left alone, so a crash between "exit found" and
 // closePosition re-finds the same exit.
 //
-// TIME EXIT. Unchanged: agents/risk_mgmt/exit.js#evaluateExit with price exits
-// skipped, closing at `asOf` with graph/price_resolution.js#resolveCurrentPrice as
-// the exit price (intraday close when a bar is visible, else the previous UTC day's
-// daily close -- Adopted Pattern #11 logging lives there).
+// TIME EXIT. agents/risk_mgmt/exit.js#evaluateExit decides WHEN (price exits skipped); the
+// price is the OPEN of the first bar at/after the instant the hold limit was reached
+// (exit.js#timeExitDueAt, graph/bar_fill.js), stamped closedAt = that bar's open -- the same
+// rule as a pending entry's fill, so an exit is never priced at a stale close nobody could
+// trade. While no such bar is visible yet (market shut, bars not ingested) the position stays
+// open and the next check retries; after 5 days with no bar it closes at `asOf` at
+// graph/price_resolution.js#resolveCurrentPrice (the legacy price, possibly null) so a ticker
+// with no data cannot stay open forever. The price walk is capped at the due instant, so a
+// bar after it can never trigger a stop/target on a position that should already be gone.
 //
 // HONEST SCOPE:
 //   - The entry-time bar is never counted and a UTC day with no intraday rows
@@ -42,13 +47,15 @@
 //     logged on every check, and suppresses price exits (see exit_bars.js).
 
 import { resolveCurrentPrice } from "./price_resolution.js";
-import { evaluateExit } from "../agents/risk_mgmt/exit.js";
+import { evaluateExit, timeExitDueAt } from "../agents/risk_mgmt/exit.js";
 import { exitLevels, walkBarsForExit } from "../agents/risk_mgmt/exit_bars.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 import { getDailyBarsWindowAsOf, getIntradayBarsWindowAsOf } from "../storage/inputs_view.js";
 import { buildBarSequence, exitWindowStart } from "../shared/bar_window.js";
 import { detectSplitJump } from "../shared/split_guard.js";
+import { findFirstBarOpenAtOrAfter } from "./bar_fill.js";
+import { PENDING_ENTRY_EXPIRY_MS } from "../shared/entry_timing.js";
 
 /**
  * Reads the position's bar window (intraday + daily, both asOf-gated) and walks
@@ -116,6 +123,28 @@ export async function recordExcursionBeforeClose(config, { inputs, store }, posi
 }
 
 /**
+ * Where a due time exit fills: `{ exitPrice, closedAt }` to close now, or `null` to wait for the
+ * next check. `dueAt` is exit.js#timeExitDueAt (null -> legacy pricing). A fill price that looks
+ * like a stock split is not a real exit price and closes with a null exit price (settle skips the
+ * reflection), same as the legacy path.
+ */
+async function resolveTimeExitFill(inputs, position, { asOf, dueAt, splitGuardTolerance }) {
+  const dueMs = dueAt == null ? Number.NaN : Date.parse(dueAt);
+  if (!Number.isNaN(dueMs)) {
+    const fill = await findFirstBarOpenAtOrAfter(inputs, { ticker: position.ticker, from: dueAt, asOf });
+    if (fill) {
+      const exitPrice = detectSplitJump(position.entryPrice, fill.price, splitGuardTolerance) ? null : fill.price;
+      return { exitPrice, closedAt: fill.openedAt };
+    }
+    // No tradable bar yet: wait (quietly -- this is the normal overnight/weekend state, every 15 min).
+    if (Date.parse(asOf) - dueMs <= PENDING_ENTRY_EXPIRY_MS) return null;
+  }
+  const { price } = await resolveCurrentPrice(inputs, { ticker: position.ticker, asOf });
+  const exitPrice = detectSplitJump(position.entryPrice, price, splitGuardTolerance) ? null : price;
+  return { exitPrice, closedAt: asOf };
+}
+
+/**
  * `ctx` is `{ inputs, store }`: `inputs` is an inputs-DB handle (read-only is
  * enough -- pass readOnly(env.INPUTS_DB)) for price bars, `store` a RunStore
  * for the environment being checked.
@@ -134,7 +163,12 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
   const closed = [];
 
   for (const position of openPositions) {
-    const walk = await walkPositionBars(inputs, position, { asOf, splitGuardTolerance: config.splitGuardTolerance });
+    // Once the time exit is due, the price walk stops at that instant: bars after it must not be
+    // able to stop/target out a position that the hold rule has already ended (and in the daily
+    // backtest walk the due day's own bars are visible by the time the exit is priced).
+    const dueAt = config.maxPositionHoldDays != null ? timeExitDueAt(position.openedAt, config.maxPositionHoldDays) : null;
+    const timeDue = dueAt != null && Date.parse(dueAt) <= Date.parse(asOf);
+    const walk = await walkPositionBars(inputs, position, { asOf: timeDue ? dueAt : asOf, splitGuardTolerance: config.splitGuardTolerance });
 
     // Split guard: bars are raw/unadjusted, so a split looks like a crash. The walk already
     // stopped before the suspicious bar; log loudly on every check (Adopted Pattern #11) so an
@@ -202,16 +236,18 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
       // exit price: settle skips the reflection ("return not computable") instead of
       // recording a fake -50% lesson. The current price is checked against the split ratio
       // too, in case the bars in the window were missing and the walk could not see it.
-      let exitPrice = null;
-      if (!split) {
-        const { price } = await resolveCurrentPrice(inputs, { ticker: position.ticker, asOf });
-        exitPrice = detectSplitJump(position.entryPrice, price, config.splitGuardTolerance) ? null : price;
+      const fill = split
+        ? { exitPrice: null, closedAt: asOf }
+        : await resolveTimeExitFill(inputs, position, { asOf, dueAt, splitGuardTolerance: config.splitGuardTolerance });
+      if (fill) {
+        const { exitPrice, closedAt } = fill;
+        const didClose = await store.closePosition({ id: position.id, closedAt, closeReason: timeExit.reason, exitPrice });
+        if (!didClose) continue;
+        await settlePositionOutcome(env, config, store, { position, exitPrice, closedAt, closeReason: timeExit.reason });
+        closed.push({ id: position.id, ticker: position.ticker, reason: timeExit.reason });
+        continue;
       }
-      const didClose = await store.closePosition({ id: position.id, closedAt: asOf, closeReason: timeExit.reason, exitPrice });
-      if (!didClose) continue;
-      await settlePositionOutcome(env, config, store, { position, exitPrice, closedAt: asOf, closeReason: timeExit.reason });
-      closed.push({ id: position.id, ticker: position.ticker, reason: timeExit.reason });
-      continue;
+      // No tradable bar yet: stay open, fall through to the cursor advance, retry next check.
     }
 
     // Window evaluated, nothing fired: move the cursor to the last bar walked (never past a
