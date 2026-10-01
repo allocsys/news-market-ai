@@ -505,17 +505,6 @@ export function rangePresetButtons(fromId, toId) {
   </div>`;
 }
 
-export function checkpointsTable(checkpoints) {
-  if (checkpoints.length === 0) return emptyState("No pipeline activity recorded yet.", { href: "/dashboard/backtest", label: "Run a backtest" });
-  const rows = checkpoints
-    .map((c) => `<tr><td class="ticker cell-title">${escapeHtml(c.ticker)}</td><td data-label="Last stage">${escapeHtml(c.stage)}</td><td class="num" data-label="Updated">${fmtTime(c.updated_at)}</td></tr>`)
-    .join("\n");
-  return `<div class="table-wrap"><table>
-    <thead><tr><th>Ticker</th><th>Last Stage</th><th>Updated</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
-}
-
 /**
  * One card per ticker with a tally per pipeline stage ("portfolio_checked x12
  * / analyzed x1") and the newest update time -- replaces the one-row-per-run
