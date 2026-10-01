@@ -302,13 +302,14 @@ export function positionsTable(positions, { closed = false } = {}) {
         <td class="num" data-label="MAE" title="Worst gross return seen while open (sampled at exit checks)">${fmtExcursion(p.maePct)}</td>
         <td class="num" data-label="MFE" title="Best gross return seen while open (sampled at exit checks)">${fmtExcursion(p.mfePct)}</td>
         ${closed ? `<td class="num" data-label="Exit">${p.exitPrice != null ? "$" + Number(p.exitPrice).toFixed(2) : "\u2014"}</td>` : ""}
+        ${closed ? `<td class="num ${p.realizedReturn > 0 ? "status-approved" : p.realizedReturn < 0 ? "status-rejected" : "status-neutral"}" data-label="P&amp;L" title="${p.returnIsNet === false ? "Gross return (this run predates the cost model)" : "Return net of round-trip trading costs"}">${fmtExcursion(p.realizedReturn)}</td>` : ""}
         <td class="num" data-label="Opened">${fmtTime(p.openedAt)}</td>
         ${closed ? `<td class="num" data-label="Closed">${fmtTime(p.closedAt)}</td><td data-label="Reason">${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
       </tr>`
     )
     .join("\n");
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th><th>MAE</th><th>MFE</th>${closed ? "<th>Exit</th>" : ""}<th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
+    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Entry</th><th>MAE</th><th>MFE</th>${closed ? "<th>Exit</th><th>P&amp;L</th>" : ""}<th>Opened</th>${closed ? "<th>Closed</th><th>Reason</th>" : ""}</tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
