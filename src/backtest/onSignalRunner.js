@@ -306,13 +306,19 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
  * wrong (runBacktest.js throws then, and that throw is NOT swallowed here). Without
  * the callback, behavior is unchanged: the error propagates.
  *
+ * PROGRESS HOOKS (all optional, never affect the walk): `onStep({ticker, dayIso, done})` fires
+ * done:false when a ticker's day starts and done:true once ITS NEWS is processed (each ticker-day
+ * counts once, before the day's exit check); `onItem({ticker, dayIso, index, count})` after each
+ * news item (skipped ones too); `onExits({ticker, dayIso, done})` around the day's exit check,
+ * `ticker` being the last one walked that day, so a failure there can still be attributed.
+ *
  * Returns `{ complete: true }` or `{ complete: false, cursor, reason }`
  * (`reason`: "budget" = the next unit didn't fit, "exhausted" = the budget ran
  * out inside a unit, "transient" = Gemini was unavailable inside a unit; that
  * one also carries `error` and `retryAfterSeconds`).
  */
 
-export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, onItemSkipped, clock, cursor = null, budget = null, isLastWindow = true }) {
+export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, onItem, onExits, onItemSkipped, clock, cursor = null, budget = null, isLastWindow = true }) {
   const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock, isLastWindow });
   const days = eachDayIso(testStart, walkEnd);
 
@@ -331,10 +337,9 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
       const dayIso = days[dayIndex];
       if (dayIso !== pos.day) Object.assign(pos, { day: dayIso, ticker: 0, after: null, exits: false });
 
-      // Resuming straight into a day's exit check: no ticker segment runs this
-      // time, so re-announce the last one (the failure suffix in runBacktest.js
-      // then still names a ticker-day if the exit check throws).
-      const resumedIntoExits = pos.exits;
+      // The exit check announces itself through onExits (below), also when resuming
+      // straight into it, where no ticker segment runs: that is how the failure
+      // suffix in runBacktest.js still names a ticker-day if the exit check throws.
       if (!pos.exits) {
         while (pos.ticker < tickers.length) {
           const ticker = tickers[pos.ticker];
@@ -375,15 +380,21 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
             }
             budget?.recordUnit("item", before);
             pos.after = { publishedAt: item.published_at, id: item.id };
+            // Per-item progress (skipped items count too): a busy day takes many parts.
+            await onItem?.({ ticker, dayIso, index: dayItems.indexOf(item) + 1, count: dayItems.length });
           }
           pos.ticker++;
+          // This ticker-day's news is done: count it now, not when the whole day (every
+          // ticker's news + the exit check) ends -- with many items per day that moved
+          // the counter only once every dozens of parts.
+          await onStep?.({ ticker, dayIso, done: true });
           pos.after = null;
         }
         pos.exits = true;
       }
 
       if (budget && !budget.canStart("exits")) return pause("budget");
-      if (resumedIntoExits && tickers.length) await onStep?.({ ticker: tickers[tickers.length - 1], dayIso, done: false });
+      if (tickers.length) await onExits?.({ ticker: tickers[tickers.length - 1], dayIso, done: false });
       // Runs regardless of whether any news landed today -- an already-open
       // position from an earlier day can still hit its stop-loss/take-profit/
       // time-based exit on a day with no news at all, same as the live path.
@@ -396,9 +407,7 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
       if (budget) await budget.unenforced(runExits);
       else await runExits();
       budget?.recordUnit("exits", exitsBefore);
-      for (const ticker of tickers) {
-        await onStep?.({ ticker, dayIso, done: true });
-      }
+      if (tickers.length) await onExits?.({ ticker: tickers[tickers.length - 1], dayIso, done: true });
     }
     return { complete: true };
   } catch (err) {
