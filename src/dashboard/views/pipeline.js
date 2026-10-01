@@ -1,4 +1,4 @@
-import { checkpointsTable, errorState, escapeHtml } from "../helpers.js";
+import { checkpointsTable, errorState, emptyState, escapeHtml, fmtShare } from "../helpers.js";
 
 export function renderPipelineView({ checkpoints, error }) {
   // Per-stage distribution -- the table shows latest stage per ticker, but
@@ -15,17 +15,17 @@ export function renderPipelineView({ checkpoints, error }) {
     .sort((a, b) => b[1] - a[1])
     .map(([stage, count]) => {
       const total = checkpoints.length || 1;
-      const pct = (count / total * 100).toFixed(0);
+      const pct = fmtShare(count, total);
       return `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.55rem">
         <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-main);min-width:140px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(stage)}</span>
-        <div style="flex:1;height:6px;background:var(--bg-elevated);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--accent-bright);border-radius:3px"></div></div>
+        <div role="img" aria-label="${escapeHtml(stage)}: ${count} of ${checkpoints.length} (${pct})" style="flex:1;height:6px;background:var(--bg-elevated);border-radius:3px;overflow:hidden"><div style="width:${pct};height:100%;background:var(--accent-bright);border-radius:3px"></div></div>
         <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-muted);min-width:36px;text-align:right">${count}</span>
       </div>`;
     }).join("");
 
   const stagePanel = checkpoints.length === 0 ? "" : `<div class="panel" style="margin-bottom:1.5rem">
     <div class="panel-header"><span class="panel-title">Stage distribution</span><span style="font-size:0.6875rem;color:var(--text-muted);font-family:var(--font-mono)">${checkpoints.length} recent checkpoint${checkpoints.length === 1 ? "" : "s"}</span></div>
-    <div class="panel-body">${stageRows || `<p class="empty">No checkpoints recorded.</p>`}</div>
+    <div class="panel-body">${stageRows || emptyState("No checkpoints recorded.", { href: "/dashboard/backtest", label: "Run a backtest" })}</div>
   </div>`;
 
   return `<section id="pipeline">

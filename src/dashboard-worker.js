@@ -451,7 +451,7 @@ export default {
     // of its sub-links -- goes somewhere. Query string (notably ?env=)
     // travels with the redirect so a chosen backtest survives the hop. Old
     // per-section URLs below are completely unchanged by this reorg.
-    if (pathname === "/dashboard/book") return redirect(`/dashboard/snapshot${url.search}`);
+    if (pathname === "/dashboard/book") return redirect(`/dashboard/positions${url.search}`);
     if (pathname === "/dashboard/research") return redirect(`/dashboard/decisions${url.search}`);
     if (pathname === "/dashboard/operations") return redirect(`/dashboard/pipeline${url.search}`);
 

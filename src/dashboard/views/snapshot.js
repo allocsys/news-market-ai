@@ -7,13 +7,13 @@ import { errorState, positionsTable } from "../helpers.js";
 export function renderSnapshotView({ closedPositions, error }) {
   if (error) {
     return `<section id="snapshot">
-      <h2>Portfolio snapshot</h2>
+      <h2>Recent exits</h2>
       ${errorState(error)}
     </section>`;
   }
 
   return `<section id="snapshot">
-    <h2>Portfolio snapshot</h2>
+    <h2>Recent exits</h2>
     <p class="note">Book activity: the most recent exits. For open risk, exposure and decision outcomes see Overview; for open positions see Positions. Reads D1 directly on each page load, so the Refresh link in the toolbar above is what re-fetches it.</p>
 
     <section>

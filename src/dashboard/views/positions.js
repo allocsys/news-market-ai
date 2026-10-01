@@ -1,6 +1,6 @@
 import {
   pillLinks, positionsTable, POSITIONS_LIMIT_OPTIONS, errorState,
-  donutChart, gaugeChart, miniStats,
+  donutChart, gaugeChart, miniStats, fmtShare,
 } from "../helpers.js";
 
 export function renderPositionsView({ openPositions, openPositionsError, closedPositions, closedPositionsError, params, totalExposurePct }) {
@@ -61,7 +61,7 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
     totalExposurePct >= 50 ? "var(--color-warning-text)" :
     "var(--color-success-text)";
   const exposureGauge = gaugeChart(exposureFraction, {
-    valueLabel: totalExposurePct.toFixed(1) + "%",
+    valueLabel: fmtShare(totalExposurePct, 100, 1),
     label: "deployed",
     title: "Open exposure",
     subtitle: "sum of position size %",
@@ -70,13 +70,13 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
 
   // --- Exit quality mini-stats -------------------------------------------------
   const exitTotal = closedPositions.length || 1;
-  const tpPct = ((takeProfits / exitTotal) * 100).toFixed(0);
-  const slPct = ((stopLosses / exitTotal) * 100).toFixed(0);
+  const tpPct = fmtShare(takeProfits, exitTotal);
+  const slPct = fmtShare(stopLosses, exitTotal);
   const tpSlRatio = stopLosses > 0 ? (takeProfits / stopLosses).toFixed(2) : takeProfits > 0 ? "\u221e" : "\u2014";
   const exitQuality = miniStats(
     [
-      { value: takeProfits, label: `Take profit (${tpPct}%)`, color: "var(--color-success-text)" },
-      { value: stopLosses, label: `Stop loss (${slPct}%)`, color: "var(--color-danger-text)" },
+      { value: takeProfits, label: `Take profit (${tpPct})`, color: "var(--color-success-text)" },
+      { value: stopLosses, label: `Stop loss (${slPct})`, color: "var(--color-danger-text)" },
       { value: tpSlRatio, label: "TP / SL ratio" },
     ],
     { cols: 3 }

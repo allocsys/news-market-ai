@@ -5,7 +5,7 @@
 // previews, since a stored prompt/response can be tens of thousands of chars.
 
 import {
-  escapeHtml, fmtTime, errorState, statusBadge,
+  escapeHtml, fmtTime, errorState, emptyState, statusBadge,
   LLM_SOURCE_OPTIONS, LLM_STATUS_OPTIONS, LLM_LIMIT_OPTIONS, llmQuery, envSuffix,
 } from "../helpers.js";
 
@@ -75,12 +75,15 @@ function scopeNote(params) {
 // wonder if the calls will "show up once it's done".
 function backtestLoggingNote(params) {
   if (!params.env || params.env === "live") return "";
-  return `<p class="note">LLM call logging is off by default for backtest runs, to save D1 write budget on the Free plan &mdash; so calls made by <code>${escapeHtml(params.env)}</code> won't appear here, whether it's still running or already finished. This applies to every backtest today; there's no per-run way to turn logging on yet.</p>`;
+  return `<div class="note" role="status" style="border-left:3px solid var(--color-warning-text, var(--text-muted));background:var(--bg-elevated);color:var(--text-main);padding:0.7rem 1rem;border-radius:var(--radius-sm);margin:0.75rem 0"><strong>No calls will appear for this backtest.</strong> LLM call logging is off by default for backtest runs, to save D1 write budget on the Free plan &mdash; so calls made by <code>${escapeHtml(params.env)}</code> won't appear here, whether it's still running or already finished. This applies to every backtest today; there's no per-run way to turn logging on yet. <a href="/dashboard/llm">View live calls &rarr;</a></div>`;
 }
 
 function callsTable(calls, env) {
   if (calls.length === 0) {
-    return `<p class="empty">No LLM calls match these filters. Calls from the live pipeline and exit-check reflections are logged as they happen; rows older than the retention window (14 days by default) are pruned.</p>`;
+    return emptyState(
+      "No LLM calls match these filters. Calls from the live pipeline and exit-check reflections are logged as they happen; rows older than the retention window (14 days by default) are pruned.",
+      { href: `/dashboard/llm${envSuffix(env)}`, label: "Clear filters" },
+    );
   }
   const rows = calls
     .map((c) => {

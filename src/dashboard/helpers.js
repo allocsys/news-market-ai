@@ -17,7 +17,19 @@ export function fmtTime(iso) {
 }
 
 export function errorState(message) {
-  return `<p class="empty error-inline">Couldn't load this section${message ? `: ${escapeHtml(message)}` : ""}.</p>`;
+  return `<p class="empty error-inline" role="alert">Couldn't load this section${message ? `: ${escapeHtml(message)}` : ""}.</p>`;
+}
+
+/** Empty-state paragraph with an optional next-step link: emptyState("No decisions match.", { href: "/dashboard/decisions", label: "Clear filters" }). `message` is escaped; `href` must be a trusted internal path. */
+export function emptyState(message, action = null) {
+  const link = action?.href && action?.label ? ` <a href="${escapeHtml(action.href)}">${escapeHtml(action.label)} &rarr;</a>` : "";
+  return `<p class="empty">${escapeHtml(message)}${link}</p>`;
+}
+
+/** Share of a total as a percent string: fmtShare(1, 4) -> "25%", fmtShare(1, 4, 1) -> "25.0%". Em dash when the total is zero/invalid. */
+export function fmtShare(count, total, digits = 0) {
+  if (!Number.isFinite(count) || !Number.isFinite(total) || total <= 0) return "\u2014";
+  return ((count / total) * 100).toFixed(digits) + "%";
 }
 
 // `status` drives the color/icon (must be "approved", "rejected", or anything else for
@@ -30,7 +42,7 @@ export function errorState(message) {
 export function statusBadge(status, label = status) {
   const cls = status === "approved" ? "status-approved" : status === "rejected" ? "status-rejected" : "status-neutral";
   const icon = status === "approved" ? "\u2713" : status === "rejected" ? "\u2715" : "\u2014";
-  return `<span class="status ${cls}"><span>${icon}</span> ${escapeHtml(label)}</span>`;
+  return `<span class="status ${cls}"><span aria-hidden="true">${icon}</span> ${escapeHtml(label)}</span>`;
 }
 
 export const ACTIVITY_DAYS_OPTIONS = [7, 14, 30, 60];
@@ -494,7 +506,7 @@ export function rangePresetButtons(fromId, toId) {
 }
 
 export function checkpointsTable(checkpoints) {
-  if (checkpoints.length === 0) return `<p class="empty">No pipeline activity recorded yet.</p>`;
+  if (checkpoints.length === 0) return emptyState("No pipeline activity recorded yet.", { href: "/dashboard/backtest", label: "Run a backtest" });
   const rows = checkpoints
     .map((c) => `<tr><td class="ticker cell-title">${escapeHtml(c.ticker)}</td><td data-label="Last stage">${escapeHtml(c.stage)}</td><td class="num" data-label="Updated">${fmtTime(c.updated_at)}</td></tr>`)
     .join("\n");
@@ -829,6 +841,11 @@ export function donutChart(segments, { centerValue, centerLabel, title, subtitle
   let cursor = 0;
   const slices = [];
   const legendRows = [];
+  // Screen readers get the same numbers the legend shows, not just the chart title.
+  const ariaSummary = segments
+    .filter((seg) => seg.value > 0)
+    .map((seg) => `${seg.label}: ${seg.value} (${((seg.value / total) * 100).toFixed(0)}%)`)
+    .join(", ");
   segments.forEach((seg, i) => {
     if (seg.value <= 0) return;
     const fraction = seg.value / total;
@@ -845,7 +862,7 @@ export function donutChart(segments, { centerValue, centerLabel, title, subtitle
     ${title ? `<div class="donut-cell-title">${escapeHtml(title)}</div>` : ""}
     ${subtitle ? `<div class="donut-cell-subtitle">${escapeHtml(subtitle)}</div>` : ""}
     <div class="donut-wrap">
-      <svg viewBox="0 0 160 160" width="160" height="160" class="donut-svg" role="img" aria-label="${escapeHtml(title ?? "donut chart")}">
+      <svg viewBox="0 0 160 160" width="160" height="160" class="donut-svg" role="img" aria-label="${escapeHtml(title ?? "donut chart")}: ${escapeHtml(ariaSummary)}">
         <circle cx="${cx}" cy="${cy}" r="${(outerR + innerR) / 2}" fill="none" stroke="var(--bg-elevated)" stroke-width="${outerR - innerR}" />
         ${slices.join("\n        ")}
         <text x="${cx}" y="${cy - 2}" text-anchor="middle" class="donut-center-value" font-size="26">${escapeHtml(centerValue ?? "")}</text>

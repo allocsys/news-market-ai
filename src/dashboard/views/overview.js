@@ -19,7 +19,7 @@
 // the extra read -- this alert strip covers stale ingestion sources, stuck
 // pipeline checkpoints, and any panel that failed to load.
 import {
-  escapeHtml, fmtTime, errorState, renderSummaryCards, renderBookCharts, decisionBadge, verdictCard, envSuffix,
+  escapeHtml, fmtTime, errorState, emptyState, renderSummaryCards, renderBookCharts, decisionBadge, verdictCard, envSuffix,
 } from "../helpers.js";
 
 const SOURCE_LABEL = { news: "News", priceBars: "Price bars", fundamentals: "Fundamentals" };
@@ -61,12 +61,12 @@ function renderAlertStrip({ health, checkpoints, snapshotError, healthError, pip
   </div>`;
 }
 
-function renderLatestDecisionPanel(d, error) {
+function renderLatestDecisionPanel(d, error, env) {
   if (error) {
     return `<div class="panel"><div class="panel-header"><span class="panel-title">Latest decision</span></div><div class="panel-body">${errorState(error)}</div></div>`;
   }
   if (!d) {
-    return `<div class="panel"><div class="panel-header"><span class="panel-title">Latest decision</span></div><div class="panel-body"><p class="empty">No decisions recorded yet.</p></div></div>`;
+    return `<div class="panel"><div class="panel-header"><span class="panel-title">Latest decision</span></div><div class="panel-body">${emptyState("No decisions recorded yet.", { href: `/dashboard/activity${envSuffix(env)}`, label: "See recent activity" })}</div></div>`;
   }
   return `<div class="panel">
     <div class="panel-header"><span class="panel-title">Latest decision</span><span style="font-family:var(--font-mono);font-size:0.6875rem;color:var(--text-muted)">${fmtTime(d.createdAt)}</span></div>
@@ -87,7 +87,7 @@ function renderPipelinePulse(checkpoints, error) {
     return `<div class="panel"><div class="panel-header"><span class="panel-title">Pipeline pulse</span></div><div class="panel-body">${errorState(error)}</div></div>`;
   }
   if (checkpoints.length === 0) {
-    return `<div class="panel"><div class="panel-header"><span class="panel-title">Pipeline pulse</span></div><div class="panel-body"><p class="empty">No pipeline activity recorded yet.</p></div></div>`;
+    return `<div class="panel"><div class="panel-header"><span class="panel-title">Pipeline pulse</span></div><div class="panel-body">${emptyState("No pipeline activity recorded yet.", { href: "/dashboard/backtest", label: "Run a backtest" })}</div></div>`;
   }
   const rows = checkpoints
     .slice(0, 10)
@@ -136,7 +136,7 @@ export function renderOverviewView({
     ${renderBookCharts({ openPositions, decisionStats, totalExposurePct })}
 
     <div class="chart-row-2">
-      ${renderLatestDecisionPanel(latestDecision, latestDecisionError)}
+      ${renderLatestDecisionPanel(latestDecision, latestDecisionError, resolvedEnv)}
       ${renderPipelinePulse(checkpoints, pipelineError)}
     </div>
 

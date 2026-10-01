@@ -815,7 +815,7 @@ const STYLE = `
   }
   .legend-item { display: inline-flex; align-items: center; gap: 0.4rem; }
   .legend-swatch { width: 0.6rem; height: 0.6rem; border-radius: 2px; display: inline-block; }
-  .chart-cell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+  .chart-cell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 1rem; }
   .chart-cell {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
@@ -1016,7 +1016,15 @@ const STYLE = `
     .chart-row-2, .chart-row-3 { grid-template-columns: 1fr; }
     .donut-wrap { flex-direction: column; align-items: stretch; }
     .donut-svg { align-self: center; }
-    h2 { font-size: 1.0625rem; }
+    h2 { font-size: 1.0625rem; flex-wrap: wrap; gap: 0.25rem 0.6rem; }
+    /* Overflow guards: wrapping headers, fluid SVGs, long unbroken strings. */
+    .panel-header { flex-wrap: wrap; gap: 0.4rem 0.75rem; padding: 0.75rem 0.9rem; }
+    .panel-body { padding: 0.9rem; }
+    .chart, .sparkline { max-width: 100%; height: auto; }
+    .sparkline-meta { flex-wrap: wrap; }
+    .donut-legend { min-width: 0; }
+    code, .note, .llm-block, .llm-justification { overflow-wrap: anywhere; }
+    .llm-answer-body { max-width: none; }
 
     /* Fixed bottom navigation bar (min 44x44px touch targets) */
     .bottom-nav {
@@ -1291,7 +1299,7 @@ const STYLE = `
 
 export const NAV_SECTIONS = [
   ["overview", "Overview", "OV"],
-  ["snapshot", "Snapshot", "SN"],
+  ["snapshot", "Recent exits", "RX"],
   ["activity", "Activity", "AC"],
   ["charts", "Charts", "CH"],
   ["health", "Health", "HE"],
@@ -1319,7 +1327,7 @@ export const NAV_SECTIONS = [
 // since nothing was renamed. Only the new group-landing URLs are additions.
 export const NAV_GROUPS = [
   { id: "overview", label: "Overview", sections: ["overview"] },
-  { id: "book", label: "Book", sections: ["snapshot", "positions", "charts"] },
+  { id: "book", label: "Book", sections: ["positions", "snapshot", "charts"] },
   { id: "research", label: "Research", sections: ["decisions", "llm"] },
   { id: "operations", label: "Operations", sections: ["pipeline", "health", "backfill"] },
   { id: "backtest", label: "Backtest", sections: ["backtest"] },
