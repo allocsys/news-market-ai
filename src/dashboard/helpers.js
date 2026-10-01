@@ -284,7 +284,7 @@ export function decisionsTable(decisions) {
 }
 
 /** Signed percent for an excursion fraction (-0.021 -> "-2.1%"); a dash when the position has not been sampled yet. */
-function fmtExcursion(v) {
+export function fmtExcursion(v) {
   if (v == null || !Number.isFinite(Number(v))) return "\u2014";
   const pct = Number(v) * 100;
   return `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%`;
