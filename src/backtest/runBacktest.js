@@ -158,7 +158,12 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
   // day takes many continuation parts, so each finished news item also writes a progress line
   // (throttled by the reporter). The fraction is kept below one full step, so percent never
   // runs ahead of the next ticker-day tick and never goes backwards.
+  // Last finished news item of THIS part, e.g. "AAPL 2026-09-05 (news 3/9)". The forced progress line a part
+  // writes when it hands over (yieldPart below) carries it, so the dashboard keeps showing where the day stands
+  // instead of a bare "Continuing in part N". Memory only: no extra read or write.
+  let lastItemDetail = null;
   const onItem = async ({ ticker, dayIso, index, count }) => {
+    lastItemDetail = `${ticker} ${dayIso.slice(0, 10)} (news ${index}/${count})`;
     if (!onProgress) return;
     await unenf(() =>
       onProgress({
@@ -269,7 +274,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
           percent: Math.min(95, Math.round((95 * completedSteps) / Math.max(totalSteps, 1))),
           done: completedSteps,
           total: totalSteps,
-          detail: extra.detail ?? `Continuing in part ${part + 1}`,
+          detail: extra.detail ?? (lastItemDetail ? `${lastItemDetail} \u00b7 Continuing in part ${part + 1}` : `Continuing in part ${part + 1}`),
           force: true,
         }),
       );
