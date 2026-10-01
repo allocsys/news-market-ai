@@ -85,7 +85,11 @@ invocation_logs = true
 # backend's wrangler.toml (Step 6) -- this is now the only Worker that calls
 # Gemini at all.
 GEMINI_QUICK_MODEL = "gemini-3.1-flash-lite"
-GEMINI_DEEP_MODEL = "gemini-3.6-flash"
+# UPDATE (2026-10-01): deep = a Lite model, same as wrangler.backtest.toml.
+# gemini-3.6-flash is 5 RPM / 20 RPD on the free tier; 3.5-flash-lite gets
+# 15 RPM / 500 RPD. Quick stays 3.1-flash-lite so the two tiers draw on
+# separate Lite quotas.
+GEMINI_DEEP_MODEL = "gemini-3.5-flash-lite"
 # Tried in order AFTER the requested model; client.js drops whichever entry
 # equals the requested model. Do NOT make this list just the quick model --
 # that leaves quick-tier calls (most calls) with a single-model cascade and no
