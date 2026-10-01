@@ -66,8 +66,10 @@ export function exitsEstimate(maxOpenPositions) {
   return { external: 2, total: Math.max(EXITS_DEFAULT_TOTAL, 1 + EXITS_STATEMENTS_PER_POSITION * n + 2) };
 }
 
+// item.total was 41; the per-item D1 writes dropped by 7 in the worst case (the ~7 llm_calls inserts are one batch: -6, and the
+// risk_checked checkpoint is gone: -1; the final-marker fold saves one more only when no position can be replaced), so 34.
 const DEFAULT_ESTIMATES = {
-  item: { external: 21, total: 41 },
+  item: { external: 21, total: 34 },
   exits: { external: 2, total: EXITS_DEFAULT_TOTAL },
   score: { external: 0, total: 25 },
 };
