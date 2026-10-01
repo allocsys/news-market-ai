@@ -19,8 +19,7 @@
 // the extra read -- this alert strip covers stale ingestion sources, stuck
 // pipeline checkpoints, and any panel that failed to load.
 import {
-  escapeHtml, fmtTime, errorState, donutChart, gaugeChart, renderSummaryCards, decisionBadge, verdictCard, envSuffix,
-  DECISION_APPROVED_STATUS,
+  escapeHtml, fmtTime, errorState, renderSummaryCards, renderBookCharts, decisionBadge, verdictCard, envSuffix,
 } from "../helpers.js";
 
 const SOURCE_LABEL = { news: "News", priceBars: "Price bars", fundamentals: "Fundamentals" };
@@ -59,42 +58,6 @@ function renderAlertStrip({ health, checkpoints, snapshotError, healthError, pip
   return `<div class="panel" style="margin-bottom:1.75rem">
     <div class="panel-header"><span class="panel-title">Attention needed</span></div>
     <div class="panel-body">${rows}</div>
-  </div>`;
-}
-
-// Same composition Snapshot's donut/gauge row uses (book composition, open
-// exposure, decision outcomes) -- see this file's header for why it's
-// duplicated here rather than imported from snapshot.js.
-function renderChartRow({ openPositions, decisionStats, totalExposurePct }) {
-  const longCount = openPositions.filter((p) => p.direction === "long").length;
-  const shortCount = openPositions.filter((p) => p.direction === "short").length;
-  const otherCount = openPositions.length - longCount - shortCount;
-  const compositionSegments = [
-    { label: `Long (${longCount})`, value: longCount, color: "var(--color-success-text)" },
-    { label: `Short (${shortCount})`, value: shortCount, color: "var(--color-danger-text)" },
-    ...(otherCount > 0 ? [{ label: `Other (${otherCount})`, value: otherCount, color: "var(--color-warning-text)" }] : []),
-  ];
-
-  const exposureFraction = Math.max(0, Math.min(1, totalExposurePct / 100));
-  const exposureAccent =
-    totalExposurePct >= 80 ? "var(--color-danger-text)" : totalExposurePct >= 50 ? "var(--color-warning-text)" : "var(--color-success-text)";
-
-  const approved = decisionStats.totals[DECISION_APPROVED_STATUS] ?? 0;
-  const rejected = decisionStats.totals.rejected ?? 0;
-  const otherStatusEntries = Object.entries(decisionStats.totals).filter(([status]) => status !== DECISION_APPROVED_STATUS && status !== "rejected");
-  const otherDecisions = otherStatusEntries.reduce((sum, [, count]) => sum + count, 0);
-  const decidedTotal = approved + rejected;
-  const approvalRatePct = decidedTotal > 0 ? Math.round((approved / decidedTotal) * 100) : null;
-  const approvalSegments = [
-    { label: "Approved", value: approved, color: "var(--color-success-text)" },
-    { label: "Rejected", value: rejected, color: "var(--color-danger-text)" },
-    ...(otherDecisions > 0 ? [{ label: "Other", value: otherDecisions, color: "var(--chart-6)" }] : []),
-  ];
-
-  return `<div class="chart-row-3">
-    ${donutChart(compositionSegments, { centerValue: String(openPositions.length), centerLabel: "open", title: "Book composition", subtitle: "open positions by direction" })}
-    ${gaugeChart(exposureFraction, { valueLabel: totalExposurePct.toFixed(1) + "%", label: "total exposure", title: "Open exposure", subtitle: "sum of position size %", accent: exposureAccent })}
-    ${donutChart(approvalSegments, { centerValue: approvalRatePct !== null ? approvalRatePct + "%" : "--", centerLabel: "approval", title: "Decision outcomes", subtitle: "all-time, all statuses" })}
   </div>`;
 }
 
@@ -170,7 +133,7 @@ export function renderOverviewView({
 
     ${renderSummaryCards({ openPositions, closedPositions, decisionStats, totalExposurePct })}
 
-    ${renderChartRow({ openPositions, decisionStats, totalExposurePct })}
+    ${renderBookCharts({ openPositions, decisionStats, totalExposurePct })}
 
     <div class="chart-row-2">
       ${renderLatestDecisionPanel(latestDecision, latestDecisionError)}
