@@ -65,6 +65,15 @@ import { createLlmBudget } from "../llm/budget.js";
 // truth, this only covers a hand-built config that lacks it).
 const DEFAULT_MAX_TRANSIENT_STALLS = 30;
 
+// News items the walk may SKIP because the model's output was unusable (not JSON /
+// failed the schema) before the run fails (config.backtestMaxSkippedItems overrides;
+// 0 = never skip, fail on the first one). A handful is noise from a lite model; many
+// means something systematic (a prompt/schema mismatch) that would silently hollow out
+// the backtest, so past the cap the run fails and says so.
+const DEFAULT_MAX_SKIPPED_ITEMS = 25;
+// Skipped items listed in the stored result / cursor (the count is always exact).
+const MAX_LISTED_SKIPS = 50;
+
 /** A stored stall error is quoted in the final failure message: keep two of them well under any row/message limit. */
 function clipStallError(message, max = 700) {
   return message.length > max ? `${message.slice(0, max)}...` : message;
@@ -101,6 +110,16 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
   // bookkeeping that must not be cut in half: counted, never refused.
   if (budget) config = { ...config, subrequestBudget: budget };
   const unenf = (fn) => (budget ? budget.unenforced(fn) : fn());
+  // Items skipped for unusable model output, carried across parts in the cursor.
+  const maxSkipped = config.backtestMaxSkippedItems ?? DEFAULT_MAX_SKIPPED_ITEMS;
+  const skipped = { count: cursor?.skipped?.count ?? 0, items: [...(cursor?.skipped?.items ?? [])] };
+  const onItemSkipped = async ({ ticker, dayIso, itemId, stage, message }) => {
+    skipped.count++;
+    if (skipped.items.length < MAX_LISTED_SKIPS) skipped.items.push({ ticker, day: dayIso.slice(0, 10), itemId, stage, message: clipStallError(message, 200) });
+    if (skipped.count > maxSkipped) {
+      throw new Error(`More than ${maxSkipped} news items were skipped for unusable model output (${stage}); something systematic is wrong, giving up. Latest: ${ticker} ${dayIso.slice(0, 10)} item ${itemId}: ${clipStallError(message, 300)}`);
+    }
+  };
   // A single [testStart, testEnd) window (no walk-forward roll) unless the
   // caller explicitly asks for one via testDays -- testDays defaults to the
   // whole window's own length so walkForwardWindows yields exactly one
@@ -231,7 +250,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
           force: true,
         }),
       );
-      return { id, status: "continue", reason, ...(extra.delaySeconds ? { delaySeconds: extra.delaySeconds } : {}), cursor: { clockNow: clock.now(), ...state, completed: completedSteps } };
+      return { id, status: "continue", reason, ...(extra.delaySeconds ? { delaySeconds: extra.delaySeconds } : {}), cursor: { clockNow: clock.now(), ...state, completed: completedSteps, ...(skipped.count ? { skipped } : {}) } };
     };
 
     // WALK: windows in order, each one leaving its positions in the store.
@@ -257,7 +276,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
         // corrected again 2026-09-27).
         const isLastWindow = wi === windows.length - 1;
         const windowGraceDays = isLastWindow ? graceDays : 0;
-        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays: windowGraceDays, onStep, clock, cursor: resume, budget, isLastWindow });
+        const res = await walkOnSignalWindow(env, config, { inputs, store }, { tickers, testStart: window.testStart, testEnd: window.testEnd, graceDays: windowGraceDays, onStep, onItemSkipped: maxSkipped > 0 ? onItemSkipped : undefined, clock, cursor: resume, budget, isLastWindow });
         if (!res.complete) {
           if (res.reason === "transient") {
             // Gemini was unavailable inside a news item (the client's whole cascade came
@@ -347,6 +366,9 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     // sweep's results are self-describing: no need to remember which env or query
     // params produced which run (backtest/knobOverrides.js).
     result.knobs = effectiveKnobs(config);
+    // News items the walk skipped for unusable model output (absent when none): the
+    // run's trade count is lower by whatever those would have opened.
+    if (skipped.count) result.skippedItems = { count: skipped.count, listed: skipped.items.length, items: skipped.items };
 
     await onProgress?.({ phase: "saving", percent: 98, done: totalSteps, total: totalSteps, detail: "Saving backtest results", force: true });
     await completeBacktestRun(registryDb, { id, result, finishedAt: new Date().toISOString() });

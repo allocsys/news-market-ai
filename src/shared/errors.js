@@ -26,6 +26,25 @@ export class VendorError extends Error {
 }
 
 /**
+ * Tags (in place) an error thrown because the MODEL'S OUTPUT was unusable: the
+ * text was not valid JSON (stage "parse") or did not match the schema (stage
+ * "validation"). Tagging instead of wrapping keeps the original error (a ZodError
+ * stays a ZodError) so nothing that inspects it today changes. Set by
+ * agents/utils/structured.js#callStructured, read by the backtest walk
+ * (backtest/onSignalRunner.js), which skips such a news item instead of failing
+ * the whole run. Returns the same error.
+ */
+export function markLlmOutputError(err, stage) {
+  if (err && typeof err === "object") err.llmOutputStage = stage;
+  return err;
+}
+
+/** Whether `err` was tagged by markLlmOutputError (a model answered, but with something unusable). */
+export function isLlmOutputError(err) {
+  return Boolean(err && typeof err === "object" && err.llmOutputStage);
+}
+
+/**
  * Thrown when a data-access call is missing the required point-in-time
  * cutoff, or when a leak-check assertion finds a row timestamped after the
  * simulated `asOf`. See plan.md "Backtesting Integrity" -- this exists so a

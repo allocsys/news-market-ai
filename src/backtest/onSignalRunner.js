@@ -72,7 +72,7 @@ import { runPipelineForTicker } from "../graph/pipeline.js";
 import { checkOpenPositionExits } from "../graph/exit_check.js";
 import { fillPendingEntries } from "../graph/entry_fill.js";
 import { calendarDaysCoveringTradingDays } from "../agents/risk_mgmt/exit.js";
-import { SubrequestBudgetExhaustedError, VendorError } from "../shared/errors.js";
+import { SubrequestBudgetExhaustedError, VendorError, isLlmOutputError } from "../shared/errors.js";
 
 const DAY_MS = 86400000;
 
@@ -295,13 +295,24 @@ export async function walkOnSignalForTicker(env, config, ctx, { ticker, testStar
  * fails the run, and with no budget (no continuation chain to resume in)
  * nothing changes -- the error propagates as before.
  *
+ * UNUSABLE MODEL OUTPUT SKIPS THE ITEM (only with `onItemSkipped`): when an item's
+ * pipeline throws an error tagged by shared/errors.js#markLlmOutputError (the
+ * model answered, but not valid JSON / not matching the schema), the walk calls
+ * `onItemSkipped({ ticker, dayIso, itemId, stage, message })`, moves past that item
+ * and carries on, instead of failing the run (a lite model omitting one field
+ * killed a run weeks of simulated days in). The item opens nothing: those
+ * failures happen in the analyst/debate/trader stages, before any position
+ * exists. The callback decides when too many skips mean something systematic is
+ * wrong (runBacktest.js throws then, and that throw is NOT swallowed here). Without
+ * the callback, behavior is unchanged: the error propagates.
+ *
  * Returns `{ complete: true }` or `{ complete: false, cursor, reason }`
  * (`reason`: "budget" = the next unit didn't fit, "exhausted" = the budget ran
  * out inside a unit, "transient" = Gemini was unavailable inside a unit; that
  * one also carries `error` and `retryAfterSeconds`).
  */
 
-export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, clock, cursor = null, budget = null, isLastWindow = true }) {
+export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart, testEnd, graceDays, onStep, onItemSkipped, clock, cursor = null, budget = null, isLastWindow = true }) {
   const walkEnd = computeWalkEnd(config, { testEnd, graceDays, clock, isLastWindow });
   const days = eachDayIso(testStart, walkEnd);
 
@@ -358,7 +369,9 @@ export async function walkOnSignalWindow(env, config, ctx, { tickers, testStart,
               });
             } catch (err) {
               if (budget && isTransientGeminiError(err)) return pause("transient", { error: err, retryAfterSeconds: err.retryAfterSeconds ?? null });
-              throw err;
+              if (!onItemSkipped || !isLlmOutputError(err)) throw err;
+              // A throw from the callback (too many skips) is not caught here: it fails the run.
+              await onItemSkipped({ ticker, dayIso, itemId: item.id, stage: err.llmOutputStage, message: err?.message ?? String(err) });
             }
             budget?.recordUnit("item", before);
             pos.after = { publishedAt: item.published_at, id: item.id };
