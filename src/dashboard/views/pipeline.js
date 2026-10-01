@@ -1,4 +1,4 @@
-import { checkpointsTable, errorState, escapeHtml, fmtShare } from "../helpers.js";
+import { checkpointsTable, errorState, emptyState, escapeHtml, fmtShare } from "../helpers.js";
 
 export function renderPipelineView({ checkpoints, error }) {
   // Per-stage distribution -- the table shows latest stage per ticker, but
@@ -25,7 +25,7 @@ export function renderPipelineView({ checkpoints, error }) {
 
   const stagePanel = checkpoints.length === 0 ? "" : `<div class="panel" style="margin-bottom:1.5rem">
     <div class="panel-header"><span class="panel-title">Stage distribution</span><span style="font-size:0.6875rem;color:var(--text-muted);font-family:var(--font-mono)">${checkpoints.length} recent checkpoint${checkpoints.length === 1 ? "" : "s"}</span></div>
-    <div class="panel-body">${stageRows || `<p class="empty">No checkpoints recorded.</p>`}</div>
+    <div class="panel-body">${stageRows || emptyState("No checkpoints recorded.", { href: "/dashboard/backtest", label: "Run a backtest" })}</div>
   </div>`;
 
   return `<section id="pipeline">
