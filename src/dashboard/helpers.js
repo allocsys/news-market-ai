@@ -337,8 +337,12 @@ export function backtestResultTable(result) {
   const { on, off, delta } = result.overall;
   // Runs saved before the daily-equity-curve scoring (plan.md step D) have no `portfolio`.
   const p = result.portfolio;
+  // daily-equity-curve-v3 scores the FIXED requested window for both sides (grace tail only settles trades;
+  // positions still open at the window end are marked to market). v2 runs scored a grace-extended span.
+  const isV3 = p?.method === "daily-equity-curve-v3";
+  const openAtEnd = isV3 && p.on.openAtSpanEnd ? `, ${p.on.openAtSpanEnd} still open at window end, marked to market` : "";
   const scoring = p
-    ? `Scored on ${p.days} daily portfolio return${p.days === 1 ? "" : "s"} (${escapeHtml(p.from)} to ${escapeHtml(p.to)}) over ${escapeHtml(p.tickers.join(", "))}. Signal ON = the positions the pipeline opened, sized by the risk rules, the rest in cash (average ${(p.on.avgExposure * 100).toFixed(1)}% invested, ${p.on.positionsTraded} position${p.on.positionsTraded === 1 ? "" : "s"}${p.on.positionsIgnored ? `, ${p.on.positionsIgnored} could not be replayed` : ""}). Signal OFF = equal-weight buy &amp; hold of the same tickers, fully invested. `
+    ? `Scored on ${p.days} daily portfolio return${p.days === 1 ? "" : "s"} (${escapeHtml(p.from)} to ${escapeHtml(p.to)}) over ${escapeHtml(p.tickers.join(", "))}. Signal ON = the positions the pipeline opened, sized by the risk rules, the rest in cash (average ${(p.on.avgExposure * 100).toFixed(1)}% invested, ${p.on.positionsTraded} position${p.on.positionsTraded === 1 ? "" : "s"}${p.on.positionsIgnored ? `, ${p.on.positionsIgnored} could not be replayed` : ""}${openAtEnd}). Signal OFF = equal-weight buy &amp; hold of the same tickers, fully invested. `
     : "";
   return `<div class="table-wrap"><table>
     <thead><tr><th>Metric</th><th>Signal ON</th><th>Signal OFF (buy &amp; hold)</th><th>Delta</th></tr></thead>
