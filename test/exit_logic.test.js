@@ -222,7 +222,10 @@ test("checkOpenPositionExits closes a position on a time-based exit even with no
   // No price bars seeded for TSLA at all -- this is the "yfinance not wired
   // in yet" case documented in exit_check.js's header.
 
-  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-08T00:00:00Z" }); // 7 calendar days = 5 trading days later (Jan 2, 5, 6, 7, 8)
+  // Time exit is due Thu Jan 8 00:00Z (5 trading days after Jan 1) but there is no bar to fill it at, so it waits...
+  assert.deepEqual(await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-08T00:00:00Z" }), []);
+  // ...until 5 days past the due instant, then closes at asOf with the legacy (here null) price so a no-data ticker never stays open.
+  const closed = await checkOpenPositionExits({}, config, ctx, { asOf: "2026-01-13T00:00:01Z" });
   assert.deepEqual(closed, [{ id: "TSLA|t1", ticker: "TSLA", reason: "time_based" }]);
 
   // No entryPrice AND no exitPrice -- settlePositionOutcome must skip
