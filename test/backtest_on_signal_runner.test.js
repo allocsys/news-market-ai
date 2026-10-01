@@ -182,8 +182,8 @@ test("walkOnSignalWindow processes every ticker's day D before any ticker's day 
   await walkOnSignalWindow({}, config, ctx, {
     tickers: ["AAPL", "MSFT"],
     testStart: "2026-01-01T00:00:00.000Z",
-    testEnd: "2026-01-01T00:00:00.000Z", // single test day
-    graceDays: 1, // walk = Jan 1 .. Jan 2
+    testEnd: "2026-01-02T00:00:00.000Z", // two test days; no grace, so the walk is Jan 1 .. Jan 2 (the early exit never applies to the walk's last day)
+    graceDays: 0,
     onStep: ({ ticker, dayIso, done }) => {
       if (!done) steps.push(`${ticker}|${dayIso.slice(0, 10)}`);
     },
@@ -258,4 +258,90 @@ test("runOnSignalForTicker with a SimClock stops the walk at now, and its step c
 
   assert.deepEqual(days, ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]);
   assert.equal(days.length, countSignalWalkSteps(config, { tickers: ["AAPL"], ...args, clock }));
+});
+
+// ---------------------------------------------------------------------------
+// Grace-tail early exit: once a day at/after testEnd has nothing open and nothing pending, no later
+// day can change anything (the tail has no news), so the walk stops and reports skippedDays.
+// ---------------------------------------------------------------------------
+
+const TAIL_CONFIG = { geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1 };
+
+/** Runs walkOnSignalWindow and returns { res, visited } where visited lists the ticker-days that finished (onStep done). */
+async function walkTail(ctx, config, window) {
+  const visited = [];
+  const res = await walkOnSignalWindow({}, config, ctx, {
+    ...window,
+    onStep: ({ ticker, dayIso, done }) => { if (done) visited.push(`${ticker}|${dayIso.slice(0, 10)}`); },
+  });
+  return { res, visited };
+}
+
+test("walkOnSignalWindow stops the grace tail once nothing is open or pending, and visited + skipped days add up to countSignalWalkSteps", async () => {
+  const ctx = makeCtx();
+  const config = { ...TAIL_CONFIG, fakeModel: makeFakeModel() };
+  const window = { tickers: ["AAPL", "MSFT"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z", graceDays: 5 }; // walk = Jan 1 .. Jan 7
+
+  const { res, visited } = await walkTail(ctx, config, window);
+
+  // Jan 1 is before testEnd (no break); Jan 2 is the first day at/after testEnd, and nothing is open.
+  assert.equal(res.complete, true);
+  assert.deepEqual(visited, ["AAPL|2026-01-01", "MSFT|2026-01-01", "AAPL|2026-01-02", "MSFT|2026-01-02"]);
+  assert.equal(res.skippedDays, 5);
+  // The progress total is reached once runBacktest.js adds skippedDays * tickers.
+  assert.equal(visited.length + res.skippedDays * window.tickers.length, countSignalWalkSteps(config, window));
+});
+
+test("walkOnSignalWindow keeps walking the whole grace tail while a position is still open", async () => {
+  const ctx = makeCtx();
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "AAPL news", body: "AAPL body" });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 }); // fill-day bar
+  const config = { ...TAIL_CONFIG, maxPositionHoldDays: 30, fakeModel: makeFakeModel() }; // far-off time exit: stays open
+
+  const { res, visited } = await walkTail(ctx, config, { tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-03T00:00:00.000Z", graceDays: 3 }); // Jan 1 .. Jan 6
+
+  const positions = await stateRows(ctx.stateDb, "positions");
+  assert.equal(positions.length, 1);
+  assert.equal(positions[0].closed_at, null);
+  assert.equal(visited.length, 6);
+  assert.equal(res.skippedDays, undefined);
+});
+
+test("walkOnSignalWindow keeps walking while a pending entry is still waiting for a fill bar", async () => {
+  const ctx = makeCtx();
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "AAPL news", body: "AAPL body" });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 }); // stale daily price only: the entry waits, no bar ever fills it
+  const config = { ...TAIL_CONFIG, maxPositionHoldDays: 30, fakeModel: makeFakeModel() };
+
+  // Jan 1 .. Jan 5; a pending entry expires 5 days after its asOf (Jan 6), so it is still waiting on every walked day.
+  const { res, visited } = await walkTail(ctx, config, { tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z", graceDays: 3 });
+
+  const decisions = await stateRows(ctx.stateDb, "trade_decisions");
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].status, "pending_entry");
+  assert.equal(visited.length, 5);
+  assert.equal(res.skippedDays, undefined);
+});
+
+test("walkOnSignalWindow does not stop over a weekend while a time exit is still due, and stops once it has closed", async () => {
+  const ctx = makeCtx();
+  await seedNews(ctx.inputs, { id: "news-1", tickers: ["AAPL"], publishedAt: "2026-01-01T00:00:00.000Z", title: "AAPL news", body: "AAPL body" });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2025-12-31", close: 100 });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-01", close: 100 }); // fill-day bar
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-05", close: 100 }); // time exit due Mon Jan 5 (hold 2 trading days)
+  const config = { ...TAIL_CONFIG, maxPositionHoldDays: 2, fakeModel: makeFakeModel() };
+
+  // Jan 1 .. Jan 7. Jan 2 (Fri) is at/after testEnd with the position open; Sat/Sun have no bars.
+  const { res, visited } = await walkTail(ctx, config, { tickers: ["AAPL"], testStart: "2026-01-01T00:00:00.000Z", testEnd: "2026-01-02T00:00:00.000Z", graceDays: 5 });
+
+  const positions = await stateRows(ctx.stateDb, "positions");
+  assert.equal(positions.length, 1);
+  assert.equal(positions[0].close_reason, "time_based");
+  assert.equal(positions[0].closed_at, "2026-01-05T00:00:00.000Z");
+  // The weekend and the due day were all walked, not skipped.
+  for (const day of ["2026-01-03", "2026-01-04", "2026-01-05"]) assert.ok(visited.includes(`AAPL|${day}`), `${day} was walked`);
+  // Once it closed, the rest of the tail is skipped, and every walk day is accounted for.
+  assert.ok(res.skippedDays >= 1);
+  assert.equal(visited.length + res.skippedDays, 7);
 });
