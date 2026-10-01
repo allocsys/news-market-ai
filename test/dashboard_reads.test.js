@@ -123,6 +123,27 @@ test("listRecentCheckpoints returns the PIPELINE run id as run_id (the view's sh
   assert.equal((await live.listRecentCheckpoints({ limit: 1 })).length, 1);
 });
 
+test("listCheckpointStageCounts tallies per (ticker, stage) with the newest updated_at, ordered ticker then count, uncapped and run-scoped", async () => {
+  const db = createTestD1([STATE_DIR]);
+  const live = new RunStore(db, "live");
+  const other = new RunStore(db, "bt-1");
+  // 35 portfolio_checked rows for AAPL (more than the 30-row recent cap) + 1 analyzed.
+  for (let i = 0; i < 35; i++) await live.saveCheckpoint({ pipelineRunId: `pipe-${i}`, ticker: "AAPL", stage: "portfolio_checked", state: null });
+  await live.saveCheckpoint({ pipelineRunId: "pipe-a", ticker: "AAPL", stage: "analyzed", state: null });
+  await live.saveCheckpoint({ pipelineRunId: "pipe-m", ticker: "MSFT", stage: "analyzed", state: null });
+  await other.saveCheckpoint({ pipelineRunId: "pipe-x", ticker: "NVDA", stage: "analyzed", state: null });
+  await db.prepare(`UPDATE pipeline_checkpoints SET updated_at = ? WHERE run_id = 'live' AND pipeline_run_id = 'pipe-0'`).bind("2026-02-01T00:00:00.000Z").run();
+  await db.prepare(`UPDATE pipeline_checkpoints SET updated_at = ? WHERE run_id = 'live' AND pipeline_run_id != 'pipe-0'`).bind("2026-01-01T00:00:00.000Z").run();
+
+  const rows = (await live.listCheckpointStageCounts()).map((r) => ({ ...r }));
+  assert.deepEqual(rows, [
+    { ticker: "AAPL", stage: "portfolio_checked", count: 35, updated_at: "2026-02-01T00:00:00.000Z" },
+    { ticker: "AAPL", stage: "analyzed", count: 1, updated_at: "2026-01-01T00:00:00.000Z" },
+    { ticker: "MSFT", stage: "analyzed", count: 1, updated_at: "2026-01-01T00:00:00.000Z" },
+  ]);
+  assert.deepEqual((await other.listCheckpointStageCounts()).map((r) => r.ticker), ["NVDA"]);
+});
+
 test("getDecisionStats: all-time totals by status + a windowed per-day breakdown, run-scoped", async () => {
   const db = createTestD1([STATE_DIR]);
   const live = new RunStore(db, "live");

@@ -505,15 +505,35 @@ export function rangePresetButtons(fromId, toId) {
   </div>`;
 }
 
-export function checkpointsTable(checkpoints) {
-  if (checkpoints.length === 0) return emptyState("No pipeline activity recorded yet.", { href: "/dashboard/backtest", label: "Run a backtest" });
-  const rows = checkpoints
-    .map((c) => `<tr><td class="ticker cell-title">${escapeHtml(c.ticker)}</td><td data-label="Last stage">${escapeHtml(c.stage)}</td><td class="num" data-label="Updated">${fmtTime(c.updated_at)}</td></tr>`)
+/**
+ * One card per ticker with a tally per pipeline stage ("portfolio_checked x12
+ * / analyzed x1") and the newest update time -- replaces the one-row-per-run
+ * checkpoint table, which filled up with identical "portfolio_checked" rows.
+ * `rows` come from RunStore#listCheckpointStageCounts: {ticker, stage, count,
+ * updated_at}, already ordered ticker ASC then count DESC.
+ */
+export function tickerStageCards(rows) {
+  if (!rows || rows.length === 0) return emptyState("No pipeline activity recorded yet.", { href: "/dashboard/backtest", label: "Run a backtest" });
+  const byTicker = new Map();
+  for (const r of rows) {
+    const entry = byTicker.get(r.ticker) ?? { stages: [], total: 0, updatedAt: null };
+    entry.stages.push({ stage: r.stage ?? "unknown", count: Number(r.count) || 0 });
+    entry.total += Number(r.count) || 0;
+    if (r.updated_at && (!entry.updatedAt || r.updated_at > entry.updatedAt)) entry.updatedAt = r.updated_at;
+    byTicker.set(r.ticker, entry);
+  }
+  const cards = [...byTicker.entries()]
+    .map(([ticker, { stages, total, updatedAt }]) => {
+      const chips = stages
+        .map(({ stage, count }) => `<div style="display:flex;justify-content:space-between;gap:0.75rem;font-family:var(--font-mono);font-size:0.75rem;margin-bottom:0.35rem"><span style="color:var(--text-main);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(stage)}</span><span style="color:var(--text-muted)">×${count}</span></div>`)
+        .join("");
+      return `<div class="panel" style="margin-bottom:1rem">
+        <div class="panel-header"><span class="panel-title ticker">${escapeHtml(ticker)}</span><span style="font-size:0.6875rem;color:var(--text-muted);font-family:var(--font-mono)">${total} action${total === 1 ? "" : "s"}</span></div>
+        <div class="panel-body">${chips}<div style="font-size:0.6875rem;color:var(--text-muted);margin-top:0.5rem">Updated ${fmtTime(updatedAt)}</div></div>
+      </div>`;
+    })
     .join("\n");
-  return `<div class="table-wrap"><table>
-    <thead><tr><th>Ticker</th><th>Last Stage</th><th>Updated</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
+  return `<div class="ticker-stage-cards">${cards}</div>`;
 }
 
 export function statCard(value, label, sub = null, accent = "var(--accent)") {

@@ -404,7 +404,7 @@ const STYLE = `
      corners, no elevated gradient header block. Just a hairline top/bottom
      rule around the whole table and a hairline rule under the header and
      between every row -- the rule itself is the design. Applies to every
-     table on the dashboard (decisionsTable, positionsTable, checkpointsTable,
+     table on the dashboard (decisionsTable, positionsTable,
      the LLM-calls table) since they all already share these classes -- no
      markup change needed, this is CSS only. Numeric/ticker columns keep the
      mono font at tabular-nums so figures line up down the column. */

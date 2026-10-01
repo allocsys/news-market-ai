@@ -937,6 +937,28 @@ export class RunStore {
   }
 
   /**
+   * Per (ticker, stage) tally of pipeline_checkpoints in this environment,
+   * with the newest updated_at for each pair. Unlike listRecentCheckpoints
+   * this is not capped to the latest N rows, so the dashboard can show one
+   * card per ticker with action counts instead of a card per cron run.
+   * Ordered by ticker, then most frequent stage first.
+   */
+  async listCheckpointStageCounts() {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ticker, stage, COUNT(*) AS count, MAX(updated_at) AS updated_at
+         FROM pipeline_checkpoints
+         WHERE run_id = ? AND ticker IS NOT NULL AND ticker != ''
+         GROUP BY ticker, stage
+         ORDER BY ticker ASC, count DESC`
+      )
+      .bind(this.runId)
+      .all();
+
+    return results;
+  }
+
+  /**
    * Trade-decision counts by status (all-time totals) plus a per-day
    * breakdown for the last `days` days, both by status -- the activity
    * chart's stacked bars. `day` buckets on created_at's first 10 characters
