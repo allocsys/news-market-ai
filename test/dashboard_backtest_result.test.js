@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { backtestResultTable } from "../src/dashboard/helpers.js";
+import { backtestResultTable, backtestGateNote } from "../src/dashboard/helpers.js";
 
 const side = (cumulativeReturn) => ({ n: 5, cumulativeReturn, meanReturn: 0, sharpeRatio: 1.5, maxDrawdown: 0.02, winRate: 0.4 });
 const overall = { on: side(0.004), off: side(0.21), delta: { cumulativeReturn: -0.206, sharpeRatio: 0, winRate: 0, maxDrawdown: 0 } };
@@ -36,4 +36,23 @@ test("backtestResultTable says how many positions could not be replayed, and sti
   assert.match(old, /Win rate/);
   assert.doesNotMatch(old, /Scored on/);
   assert.equal(backtestResultTable(null), "");
+});
+
+test("backtestGateNote shows the per-trade gate stats, dashes a thin sample instead of 0, and renders nothing for runs without a gate block", () => {
+  const full = backtestGateNote({ method: "per-trade-net-v1", costBps: 5, n: 40, mean: 0.0123, lowerBound: -0.0041, openAtEnd: 2, unreplayable: 1 });
+  assert.match(full, /net of 5 bps per side/);
+  assert.match(full, /40 closed trades decided in the window/);
+  assert.match(full, /mean \+1\.23%/);
+  assert.match(full, /lower bound -0\.41%/);
+  assert.match(full, /2 still open at run end \(not counted\)/);
+  assert.match(full, /1 closed without usable prices \(not counted\)/);
+
+  const thin = backtestGateNote({ method: "per-trade-net-v1", costBps: 0, n: 1, mean: 0.02, lowerBound: null, openAtEnd: 0, unreplayable: 0 });
+  assert.match(thin, /1 closed trade decided/);
+  assert.match(thin, /lower bound \u2014/);
+  assert.doesNotMatch(thin, /still open|without usable/);
+
+  assert.equal(backtestGateNote(undefined), "");
+  assert.doesNotMatch(backtestResultTable({ overall, perWindow: [{}] }), /Rollout gate/);
+  assert.match(backtestResultTable({ overall, perWindow: [{}], gate: { n: 0, mean: null, lowerBound: null, costBps: 0 } }), /Rollout gate \(per trade[^<]*0 closed trades[^<]*mean \u2014/);
 });
