@@ -112,15 +112,15 @@ test("runAnalystTeam's schema rejects a response missing a required section (e.g
   );
 });
 
-test("runAnalystTeam's schema rejects a section missing its required justification", async () => {
+test("runAnalystTeam's schema tolerates a section missing justification or summary (lite models omit them)", async () => {
   const config = baseConfig(async () =>
     JSON.stringify({
       news_event: { eventType: "e", entities: [], summary: "s" }, // no justification
-      sentiment: { sentiment: "neutral", summary: "s", justification: "j" },
+      sentiment: { sentiment: "neutral", justification: "j" }, // no summary
     })
   );
 
-  await assert.rejects(() =>
+  await assert.doesNotReject(() =>
     runAnalystTeam({}, config, { ticker: "AAPL", newsItem: { id: "news1", title: "t", body: "b" }, bars: BARS })
   );
 });
