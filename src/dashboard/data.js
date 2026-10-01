@@ -16,7 +16,23 @@ import { STAGES } from "../graph/checkpointer.js";
 // eventually crosses PIPELINE_STALE_HOURS just by sitting there, so it must
 // be excluded from the staleness check below rather than flagged as stuck.
 const TERMINAL_STAGE = STAGES[STAGES.length - 1];
-import { computeRealizedReturn } from "../shared/returns.js";
+import { computeRealizedReturn, computeGrossReturn } from "../shared/returns.js";
+import { loadConfig } from "../config.js";
+
+/**
+ * Adds `realizedReturn` to closed positions: NET of `costBps` per side (same
+ * definition graph/settle.js records), or GROSS when costBps is undefined (a
+ * backtest run older than the cost model). `returnIsNet` tells the view which.
+ * null for a position with no exit price -- never a guess.
+ */
+function withRealizedReturn(positions, costBps) {
+  return positions.map((p) => ({
+    ...p,
+    realizedReturn: computeRealizedReturn({ ...p, costBps }),
+    grossReturn: computeGrossReturn(p),
+    returnIsNet: costBps !== undefined,
+  }));
+}
 
 /**
  * Read-only RunStore over LIVE_DB (run_id 'live'): every state-schema panel
@@ -53,7 +69,7 @@ export function liveReadStore(env) {
  * simulated trading days it covered.
  */
 export async function resolveEnv(env, envParam) {
-  const live = () => ({ store: liveReadStore(env), resolvedEnv: "live", anchor: null, envError: null });
+  const live = () => ({ store: liveReadStore(env), resolvedEnv: "live", anchor: null, envError: null, costBps: loadConfig(env).tradeCostBps });
   if (!envParam || envParam === "live") return live();
   if (!BACKTEST_ID_RE.test(envParam)) return { ...live(), envError: `unknown environment "${envParam}" -- showing live` };
 
@@ -66,6 +82,8 @@ export async function resolveEnv(env, envParam) {
     resolvedEnv: envParam,
     anchor: run.finishedAt || run.startedAt,
     envError: null,
+    // The cost the run itself simulated with; undefined (gross) for a run older than the cost model.
+    costBps: Number.isFinite(run.result?.knobs?.tradeCostBps) ? run.result.knobs.tradeCostBps : undefined,
   };
 }
 
@@ -123,7 +141,7 @@ async function safe(promiseOrFn) {
 }
 
 export async function getSnapshotData(env, params) {
-  const { store, resolvedEnv, anchor, envError } = await resolveEnv(env, params.env);
+  const { store, resolvedEnv, anchor, envError, costBps } = await resolveEnv(env, params.env);
   const [openPositionsResult, closedPositionsResult, decisionStatsResult, exposureResult] = await Promise.all([
     safe(() => store.listOpenPositions({ limit: params.positionsLimit })),
     safe(() => store.listRecentlyClosedPositions({ limit: 20 })),
@@ -136,7 +154,7 @@ export async function getSnapshotData(env, params) {
   const error = openPositionsResult.error || closedPositionsResult.error || decisionStatsResult.error || exposureResult.error || null;
   return {
     openPositions: openPositionsResult.data ?? [],
-    closedPositions: closedPositionsResult.data ?? [],
+    closedPositions: withRealizedReturn(closedPositionsResult.data ?? [], costBps),
     decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} },
     totalExposurePct: (exposureResult.data?.totalPct ?? 0) * 100,
     error,
@@ -191,7 +209,7 @@ export async function getDecisionsData(env, params) {
 }
 
 export async function getPositionsData(env, params) {
-  const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
+  const { store, resolvedEnv, envError, costBps } = await resolveEnv(env, params.env);
   const [openPositionsResult, closedPositionsResult, exposureResult] = await Promise.all([
     safe(() => store.listOpenPositions({ limit: params.positionsLimit })),
     safe(() => store.listRecentlyClosedPositions({ limit: 20 })),
@@ -204,7 +222,7 @@ export async function getPositionsData(env, params) {
   return {
     openPositions: openPositionsResult.data ?? [],
     openPositionsError: openPositionsResult.error || exposureResult.error || null,
-    closedPositions: closedPositionsResult.data ?? [],
+    closedPositions: withRealizedReturn(closedPositionsResult.data ?? [], costBps),
     closedPositionsError: closedPositionsResult.error,
     totalExposurePct: (exposureResult.data?.totalPct ?? 0) * 100,
     resolvedEnv,
