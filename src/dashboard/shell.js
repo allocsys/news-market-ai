@@ -1291,7 +1291,7 @@ const STYLE = `
 
 export const NAV_SECTIONS = [
   ["overview", "Overview", "OV"],
-  ["snapshot", "Snapshot", "SN"],
+  ["snapshot", "Recent exits", "RX"],
   ["activity", "Activity", "AC"],
   ["charts", "Charts", "CH"],
   ["health", "Health", "HE"],
@@ -1319,7 +1319,7 @@ export const NAV_SECTIONS = [
 // since nothing was renamed. Only the new group-landing URLs are additions.
 export const NAV_GROUPS = [
   { id: "overview", label: "Overview", sections: ["overview"] },
-  { id: "book", label: "Book", sections: ["snapshot", "positions", "charts"] },
+  { id: "book", label: "Book", sections: ["positions", "snapshot", "charts"] },
   { id: "research", label: "Research", sections: ["decisions", "llm"] },
   { id: "operations", label: "Operations", sections: ["pipeline", "health", "backfill"] },
   { id: "backtest", label: "Backtest", sections: ["backtest"] },
