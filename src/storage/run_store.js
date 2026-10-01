@@ -810,7 +810,7 @@ export class RunStore {
     const { results } = await this.db
       .prepare(
         `SELECT p.id, p.ticker, p.trade_thesis_id, p.position_size_pct, p.direction, p.entry_price, p.exit_price,
-                p.stop_loss_pct, p.take_profit_pct, p.opened_at, p.closed_at, p.close_reason,
+                p.stop_loss_pct, p.take_profit_pct, p.opened_at, p.closed_at, p.close_reason, p.mae_pct, p.mfe_pct,
                 d.as_of AS d_as_of, d.status AS d_status, d.thesis AS d_thesis, d.risk_decision AS d_risk_decision,
                 d.portfolio_decision AS d_portfolio_decision, d.opinions AS d_opinions, d.debate AS d_debate
          FROM positions p
@@ -841,6 +841,8 @@ export class RunStore {
         openedAt: r.opened_at,
         closedAt: r.closed_at,
         closeReason: r.close_reason,
+        maePct: r.mae_pct ?? null,
+        mfePct: r.mfe_pct ?? null,
         decision:
           r.d_status == null
             ? null
