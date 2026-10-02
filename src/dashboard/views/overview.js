@@ -1,3 +1,26 @@
+// Overview command-center page (plan.md "Dashboard: Scoped UX Adoption"
+// item 5). Visual layout matches prototype-ui-overhaul/src/components/dash/
+// views/overview.tsx: an alert strip, the same 4 stat cards + 3-chart row
+// Snapshot already renders (renderSummaryCards / donut+gauge+donut -- built
+// here from the same data.js#getOverviewData props, not imported from
+// snapshot.js, since the two pages are independent views that happen to
+// share a visual recipe; not worth a cross-page helper for one screen each),
+// a latest-decision panel + pipeline-pulse list side by side, and a
+// quick-links strip. The prototype's ticker-spotlight grid is OUT of scope
+// here -- it needs a ticker search / price feed, which is plan.md item 6 and
+// deferred price-feed work, not this page.
+//
+// DELIBERATE SCOPE NOTE: the prototype's alert strip also flags an
+// in-flight backfill/backtest job ("running job"). That isn't one of the
+// four functions data.js#getOverviewData composes (getSnapshotData /
+// getHealthData / getPipelineData / getDecisionsData), and pulling in
+// getActiveJob here would mean a 5th D1 round trip this page's data
+// function doesn't otherwise need. Left for a follow-up if it proves worth
+// the extra read -- this alert strip covers stale ingestion sources, stuck
+// pipeline checkpoints, and any panel that failed to load.
+//
+// Mobile (<768px) reorders the blocks with CSS `order` (see the .ov-* rules
+// in shell.js): alert, cards, latest-decision + pulse panels, then charts.
 import {
   escapeHtml, fmtTime, errorState, emptyState, renderSummaryCards, renderBookCharts, decisionBadge, verdictCard, envSuffix,
 } from "../helpers.js";
@@ -87,6 +110,9 @@ function renderPipelinePulse(checkpoints, error) {
   </div>`;
 }
 
+// "Activity"/"LLM Calls" are env-aware (helpers.js#ENV_SECTIONS), so they carry
+// the resolved environment along; "Backtest"/"Health" are env-unaware (see
+// ENV_SECTIONS's own comment) and never take an env suffix.
 function renderQuickLinks(env) {
   const links = [
     [`/dashboard/activity${envSuffix(env)}`, "Activity"],
