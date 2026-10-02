@@ -13,15 +13,22 @@
  * vendor is worth calling again -- set by llm/gemini/client.js when its whole
  * model cascade is exhausted, read by the backtest walk's pause-on-outage
  * path (backtest/onSignalRunner.js). Absent (not just undefined) when unknown.
+ *
+ * `dailyQuota: true` (Gemini cascade exhaustion only) means EVERY model/key the
+ * cascade considered is on a DAILY quota cooldown (shared/cooldown.js), so the
+ * outage will not pass within minutes: the backtest pauses for the day (manual
+ * resume) instead of burning ~30 pauses and failing. `retryAfterSeconds` is then
+ * the shortest remaining daily cooldown. Absent otherwise.
  */
 export class VendorError extends Error {
-  constructor(vendor, message, { status, transient = false, retryAfterSeconds } = {}) {
+  constructor(vendor, message, { status, transient = false, retryAfterSeconds, dailyQuota = false } = {}) {
     super(message);
     this.name = "VendorError";
     this.vendor = vendor;
     this.status = status;
     this.transient = transient;
     if (retryAfterSeconds != null) this.retryAfterSeconds = retryAfterSeconds;
+    if (dailyQuota) this.dailyQuota = true;
   }
 }
 
