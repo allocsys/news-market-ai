@@ -43,6 +43,7 @@
 
 import { CLOSE_REASON } from "./exit.js";
 import { computeGrossReturn } from "../../shared/returns.js";
+import { ratchetedStop, betterPeak } from "./trailing.js";
 import { detectSplitJump } from "../../shared/split_guard.js";
 
 function isFiniteBar(bar) {
@@ -89,11 +90,23 @@ export function exitLevels({ direction, entryPrice, stopLossPct, takeProfitPct }
  *   invalidBars        bars skipped for non-finite / inverted OHLC
  *   split              null, or { kind, factor, ratio, barOpenMs, barKind } when the walk stopped at a suspected split
  *
+ *   peakPrice          best favorable price reached, INCLUDING the walked bars and never worse than entry
+ *                      (what advancePositionCheck persists to positions.peak_price); null when `trailing` is off.
+ *                      Not set on an exit (the position is closing, nothing persists it).
+ *
  * `splitGuardTolerance` 0/absent disables the guard (detectSplitJump contract).
+ *
+ * `trailing` (trailing.js#resolveTrailingConfig, null/absent = off) turns on the break-even / trailing
+ * stop. Each bar is judged against the level from the peak through the PREVIOUS bar (position.peakPrice,
+ * then the bars already walked); the bar's own high/low is folded into the peak only afterwards, so a spike
+ * inside a bar can never stop out the same bar at a level it just created. The ratcheted level replaces
+ * the static stop (it is never looser: trailing.js), the exit reason is the rule that produced it
+ * (STOP_LOSS / BREAKEVEN_STOP / TRAILING_STOP), and with trailRemovesTarget the take-profit is ignored
+ * once the trail is the binding stop. With `trailing` off the walk is exactly the static stop/target walk.
  * With no computable levels (see exitLevels) nothing is walked and every field is empty.
  */
-export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}) {
-  const empty = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, lastClose: null, barsWalked: 0, invalidBars: 0, split: null };
+export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trailing = null } = {}) {
+  const empty = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, lastClose: null, barsWalked: 0, invalidBars: 0, split: null, peakPrice: null };
   const levels = exitLevels(position);
   if (!levels || !Array.isArray(bars) || bars.length === 0) return empty;
 
@@ -106,6 +119,8 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
   let lastClose = null;
   let barsWalked = 0;
   let invalidBars = 0;
+  // High-water mark for the break-even / trailing ratchet. null = no peak yet (entry is the baseline).
+  let peak = trailing && Number.isFinite(position.peakPrice) && position.peakPrice > 0 ? position.peakPrice : null;
 
   for (const bar of bars) {
     if (!isFiniteBar(bar)) {
@@ -128,6 +143,7 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
         barsWalked,
         invalidBars,
         split: { kind: split.kind, factor: split.factor, ratio: split.ratio, barOpenMs: bar.openMs, barKind: bar.kind },
+        peakPrice: trailing ? peak : null,
       };
     }
 
@@ -142,12 +158,22 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
     lastBarAvailableAt = bar.availableAt;
     lastClose = bar.close;
 
-    const stopHit = levels.stop != null && (isLong ? bar.low <= levels.stop : bar.high >= levels.stop);
+    // The stop level for THIS bar comes from the peak through the PREVIOUS bar (no lookahead); only then
+    // is this bar's own favorable extreme folded into the peak (for the next bar and for persistence).
+    const rule = trailing
+      ? ratchetedStop({ direction, entryPrice, stopLossPct: position.stopLossPct, peakPrice: peak }, trailing)
+      : null;
+    if (trailing) peak = betterPeak(direction, betterPeak(direction, peak, favorablePrice), entryPrice);
+    const stop = rule ? rule.level : levels.stop;
+    const stopReason = rule ? rule.reason : CLOSE_REASON.STOP_LOSS;
+    const target = rule && trailing.trailRemovesTarget && rule.reason === CLOSE_REASON.TRAILING_STOP ? null : levels.target;
+
+    const stopHit = stop != null && (isLong ? bar.low <= stop : bar.high >= stop);
     if (stopHit) {
-      const gapped = isLong ? bar.open < levels.stop : bar.open > levels.stop;
-      const exitPrice = isLong ? Math.min(bar.open, levels.stop) : Math.max(bar.open, levels.stop);
+      const gapped = isLong ? bar.open < stop : bar.open > stop;
+      const exitPrice = isLong ? Math.min(bar.open, stop) : Math.max(bar.open, stop);
       return {
-        exit: { reason: CLOSE_REASON.STOP_LOSS, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs },
+        exit: { reason: stopReason, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs },
         maePct,
         mfePct,
         lastBarAvailableAt,
@@ -158,10 +184,10 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
       };
     }
 
-    const targetHit = levels.target != null && (isLong ? bar.high >= levels.target : bar.low <= levels.target);
+    const targetHit = target != null && (isLong ? bar.high >= target : bar.low <= target);
     if (targetHit) {
-      const gapped = isLong ? bar.open > levels.target : bar.open < levels.target;
-      const exitPrice = isLong ? Math.max(bar.open, levels.target) : Math.min(bar.open, levels.target);
+      const gapped = isLong ? bar.open > target : bar.open < target;
+      const exitPrice = isLong ? Math.max(bar.open, target) : Math.min(bar.open, target);
       return {
         exit: { reason: CLOSE_REASON.TAKE_PROFIT, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs },
         maePct,
@@ -175,5 +201,5 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
     }
   }
 
-  return { exit: null, maePct, mfePct, lastBarAvailableAt, lastClose, barsWalked, invalidBars, split: null };
+  return { exit: null, maePct, mfePct, lastBarAvailableAt, lastClose, barsWalked, invalidBars, split: null, peakPrice: trailing ? peak : null };
 }
