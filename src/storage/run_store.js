@@ -173,14 +173,17 @@ export class RunStore {
    * exit was found, so a crash between "exit found" and closePosition re-finds the
    * same exit next run. Returns true only if the cursor moved.
    */
-  async advancePositionCheck({ id, lastCheckedAt }) {
+  async advancePositionCheck({ id, lastCheckedAt, lastPrice = null }) {
     if (!lastCheckedAt) return false;
+    // The mark (positions.last_price, migration 0009) rides in the SAME UPDATE as the cursor: no extra D1 call.
+    // A missing/non-finite price keeps the previous mark (COALESCE), never writes NULL/NaN over a real one.
+    const price = Number.isFinite(lastPrice) && lastPrice > 0 ? lastPrice : null;
     const res = await this.db
       .prepare(
-        `UPDATE positions SET last_checked_at = ?
+        `UPDATE positions SET last_checked_at = ?, last_price = COALESCE(?, last_price)
          WHERE run_id = ? AND id = ? AND closed_at IS NULL AND (last_checked_at IS NULL OR last_checked_at < ?)`
       )
-      .bind(lastCheckedAt, this.runId, id, lastCheckedAt)
+      .bind(lastCheckedAt, price, this.runId, id, lastCheckedAt)
       .run();
     return (res?.meta?.changes ?? 0) > 0;
   }
@@ -259,23 +262,38 @@ export class RunStore {
    * nothing, same as settle.js skipping its reflection. Point-in-time: only
    * closes at or before `asOf` count. Returns 0 when nothing closed.
    */
-  async getRealizedPnlPctAsOf({ asOf, windowDays, costBps } = {}) {
+  async getRealizedPnlPctAsOf({ asOf, windowDays, costBps, includeUnrealized = false } = {}) {
     requireAsOf("getRealizedPnlPctAsOf", asOf);
     const asOfMs = new Date(asOf).getTime();
     if (Number.isNaN(asOfMs) || !Number.isFinite(windowDays) || windowDays <= 0) return 0;
     const windowStart = new Date(asOfMs - windowDays * 86400000).toISOString();
 
-    const { results } = await this.db
-      .prepare(
-        `SELECT direction, entry_price, exit_price, position_size_pct FROM positions
-         WHERE run_id = ? AND closed_at IS NOT NULL AND closed_at <= ? AND closed_at > ?`
-      )
-      .bind(this.runId, asOf, windowStart)
-      .all();
+    // With includeUnrealized the SAME query also returns the positions open as of `asOf` (no extra D1 read):
+    // each is marked at positions.last_price (migration 0009, written with the exit-check cursor) and counts
+    // size * NET return as if closed at that mark (so it carries the same costBps as a real close). The mark
+    // is used only when last_checked_at <= asOf (point-in-time: a mark from after asOf is ignored, the
+    // position then counts as flat); a never-marked position also counts as flat, never as a guess.
+    const sql = includeUnrealized
+      ? `SELECT direction, entry_price, exit_price, position_size_pct, closed_at, last_price, last_checked_at FROM positions
+         WHERE run_id = ? AND (
+           (closed_at IS NOT NULL AND closed_at <= ? AND closed_at > ?)
+           OR (opened_at <= ? AND (closed_at IS NULL OR closed_at > ?))
+         )`
+      : `SELECT direction, entry_price, exit_price, position_size_pct, closed_at, last_price, last_checked_at FROM positions
+         WHERE run_id = ? AND closed_at IS NOT NULL AND closed_at <= ? AND closed_at > ?`;
+    const binds = includeUnrealized ? [this.runId, asOf, windowStart, asOf, asOf] : [this.runId, asOf, windowStart];
+    const { results } = await this.db.prepare(sql).bind(...binds).all();
 
     let pnl = 0;
     for (const r of results) {
-      const ret = computeRealizedReturn({ direction: r.direction, entryPrice: r.entry_price, exitPrice: r.exit_price, costBps });
+      const closedByAsOf = r.closed_at != null && r.closed_at <= asOf;
+      let exitPrice = r.exit_price;
+      if (!closedByAsOf) {
+        // Open as of asOf: only a mark that existed by asOf counts.
+        if (r.last_price == null || r.last_checked_at == null || r.last_checked_at > asOf) continue;
+        exitPrice = r.last_price;
+      }
+      const ret = computeRealizedReturn({ direction: r.direction, entryPrice: r.entry_price, exitPrice, costBps });
       if (ret != null) pnl += ret * r.position_size_pct;
     }
     return pnl;
