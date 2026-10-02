@@ -151,11 +151,22 @@ BACKTEST_MAX_PARTS = "1500"
 # POST /backtest/run route). Keep in sync with the other configs.
 WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO"
 
-# BACKTEST_DAILY_WRITE_BUDGET (plan.md's "Backtest write cap (proposed)",
-# default 40K) is NOT set here -- still awaiting owner approval as of this
-# commit (see checkpoint notes). Once approved it belongs here as a var,
-# read by the backtest Worker before starting a run to refuse if the day's
-# total D1 rows written would exceed it.
+# DAILY QUOTA GUARD + PAUSE/RESUME (src/backtest-worker.js, storage/quota_usage.js).
+# Not set here: the defaults in config.js apply. Each part adds its D1 rows
+# written/read, KV writes/reads and Gemini calls to ONE ledger row per UTC day
+# (quota_usage, sim D1). At a part boundary, once today's total reaches
+# QUOTA_PAUSE_PCT percent (default 90) of one of OUR daily shares, the run is
+# PAUSED (status 'paused', data and cursor kept) instead of failed. A paused run
+# never restarts by itself: resume it from the dashboard (POST /backtest/:id/resume).
+# Part 1 of a new run is never refused. Shares (our slice of the platform caps,
+# which live trading shares; '0' disables a counter, QUOTA_PAUSE_PCT '0' disables
+# the percent check but the D1 write share still stops at 100%):
+#   BACKTEST_DAILY_WRITE_BUDGET    = 40000    (D1 rows written)
+#   BACKTEST_DAILY_READ_BUDGET     = 2000000  (D1 rows read; a lower bound)
+#   BACKTEST_DAILY_KV_WRITE_BUDGET = 500
+#   BACKTEST_DAILY_KV_READ_BUDGET  = 50000
+# Every Gemini key on a DAILY cooldown also pauses the run (gemini_daily_cap).
+# The operator's Pause button pauses with reason 'operator'.
 
 # Secrets -- set via `wrangler secret put GEMINI_API_KEYS --config wrangler.backtest.toml`,
 # never committed. This Worker needs the same GEMINI_API_KEYS the `llm`
