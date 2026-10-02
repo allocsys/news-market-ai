@@ -75,7 +75,7 @@ function scopeNote(params) {
 // wonder if the calls will "show up once it's done".
 function backtestLoggingNote(params) {
   if (!params.env || params.env === "live") return "";
-  return `<div class="note" role="status" style="border-left:3px solid var(--color-warning-text, var(--text-muted));background:var(--bg-elevated);color:var(--text-main);padding:0.7rem 1rem;border-radius:var(--radius-sm);margin:0.75rem 0"><strong>No calls will appear for this backtest.</strong> LLM call logging is off by default for backtest runs, to save D1 write budget on the Free plan &mdash; so calls made by <code>${escapeHtml(params.env)}</code> won't appear here, whether it's still running or already finished. This applies to every backtest today; there's no per-run way to turn logging on yet. <a href="/dashboard/llm">View live calls &rarr;</a></div>`;
+  return `<div class="note llm-backtest-note" role="status"><strong>No calls are logged for backtest <code>${escapeHtml(params.env)}</code>.</strong> Logging is off for backtests to save D1 writes. <a href="/dashboard/llm">View live calls &rarr;</a></div>`;
 }
 
 function callsTable(calls, env) {
@@ -117,7 +117,7 @@ function pager(params, nextBeforeId) {
 }
 
 export function renderLlmView({ calls, nextBeforeId, params, error }) {
-  const filterBar = `<div class="filter-bar">
+  const filterBar = `<div class="filter-bar filter-bar-scroll">
     ${llmPills("Source", LLM_SOURCE_OPTIONS, params.llmSource, "llmSource", params)}
     ${llmPills("Status", LLM_STATUS_OPTIONS, params.llmStatus, "llmStatus", params)}
     ${llmPills("Rows", LLM_LIMIT_OPTIONS, params.llmLimit, "llmLimit", params)}
@@ -133,7 +133,7 @@ export function renderLlmView({ calls, nextBeforeId, params, error }) {
 
   return `<section id="llm">
     <h2>LLM calls${error ? "" : ` <span class="h2-count">${calls.length}${nextBeforeId ? "+" : ""}</span>`}</h2>
-    <p class="note">Every prompt sent to Gemini and the raw text that came back, newest first &mdash; from the live pipeline and exit-check reflections. Failed calls (Gemini errors, unparseable JSON, schema mismatches) are logged too. A call that reused a checkpoint on retry isn't repeated here. Backtest runs aren't logged by default (see the note below when viewing one).</p>
+    <p class="note">Prompts sent to Gemini and what came back, newest first. Failed calls are logged too; backtests aren't.</p>
     ${filterBar}
     ${scopeNote(params)}
     ${error ? errorState(error) : `${callsTable(calls, params.env)}${pager(params, nextBeforeId)}`}
