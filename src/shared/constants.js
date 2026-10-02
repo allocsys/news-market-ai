@@ -27,6 +27,25 @@ export const MAX_PORTFOLIO_STOP_RISK_PCT = 0.0075;
 // SQL loss-at-stop sum agree.
 export const FALLBACK_STOP_LOSS_PCT = 0.03;
 
+// Concentration cap (portfolio_manager.js): tickers that move together are one
+// bet, so the sum of open SAME-DIRECTION position sizes inside one group, plus
+// the new thesis, may not exceed MAX_GROUP_EXPOSURE_PCT of the book. The two
+// ceilings above only look at the whole book, so three correlated longs (AAPL,
+// MSFT, TSLA) looked like three independent bets. A static map, not a computed
+// correlation matrix: no extra price reads per decision (the backtest
+// subrequest budget is tight), reproducible, and a 20-day correlation over five
+// tickers is mostly noise. Known gap: it cannot see macro co-movement across
+// groups (USO/XAUUSD in a risk-off move); the loss-at-stop ceiling bounds that.
+// A ticker missing from the map is its own group, so it is never capped against
+// other tickers. Both numbers are untuned placeholders: 10% allows two full 5%
+// positions in one group, not a third.
+export const TICKER_GROUPS = { AAPL: "equity", MSFT: "equity", TSLA: "equity", USO: "energy", XAUUSD: "gold" };
+export const MAX_GROUP_EXPOSURE_PCT = 0.1;
+
+export function groupOfTicker(ticker) {
+  return TICKER_GROUPS[ticker] ?? ticker;
+}
+
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
 // already has an open position only REPLACES it if it points the OTHER way
 // with at least this confidence. Same direction never replaces (the open

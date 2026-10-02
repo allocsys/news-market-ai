@@ -230,23 +230,27 @@ export class RunStore {
    *                 position hit its stop. A row with no stop_loss_pct is charged
    *                 FALLBACK_STOP_LOSS_PCT (same fallback the SQL ceiling in commitThesis uses).
    * Same point-in-time bound and `excludeTicker` netting as getOpenPositionsRiskPctAsOf.
+   * `positions` ({ ticker, direction, positionSizePct } per open row, direction may be null) comes from the
+   * SAME query, for the portfolio manager's per-group concentration cap -- still no extra D1 read.
    */
   async getOpenPositionsRiskAsOf({ asOf, excludeTicker } = {}) {
     requireAsOf("getOpenPositionsRiskAsOf", asOf);
 
     const sql = excludeTicker
-      ? `SELECT position_size_pct, stop_loss_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?) AND ticker != ?`
-      : `SELECT position_size_pct, stop_loss_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`;
+      ? `SELECT ticker, direction, position_size_pct, stop_loss_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?) AND ticker != ?`
+      : `SELECT ticker, direction, position_size_pct, stop_loss_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`;
     const binds = excludeTicker ? [this.runId, asOf, asOf, excludeTicker] : [this.runId, asOf, asOf];
 
     const { results } = await this.db.prepare(sql).bind(...binds).all();
     let exposurePct = 0;
     let stopRiskPct = 0;
+    const positions = [];
     for (const r of results) {
       exposurePct += r.position_size_pct;
       stopRiskPct += r.position_size_pct * (r.stop_loss_pct ?? FALLBACK_STOP_LOSS_PCT);
+      positions.push({ ticker: r.ticker, direction: r.direction ?? null, positionSizePct: r.position_size_pct });
     }
-    return { exposurePct, stopRiskPct };
+    return { exposurePct, stopRiskPct, positions };
   }
 
   /**
