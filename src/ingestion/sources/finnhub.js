@@ -85,9 +85,14 @@ async function loadNameIndex(config, kv) {
  * One /company-news request for `ticker` over [fromStr, toStr] (YYYY-MM-DD),
  * returning Finnhub's parsed JSON body. Throws VendorError on a network/status
  * failure (retried first when transient).
+ *
+ * The symbol REQUESTED is config.finnhubSymbolMap[ticker] when set (e.g.
+ * XAUUSD -> GLD, since /company-news has no spot-gold symbol), else `ticker`.
+ * Callers still tag articles with `ticker`, never the proxy symbol.
  */
 async function requestCompanyNews(config, ticker, fromStr, toStr) {
-  const url = `${config.finnhubApiBase}?symbol=${encodeURIComponent(ticker)}&from=${fromStr}&to=${toStr}`;
+  const symbol = config.finnhubSymbolMap?.[ticker] ?? ticker;
+  const url = `${config.finnhubApiBase}?symbol=${encodeURIComponent(symbol)}&from=${fromStr}&to=${toStr}`;
 
   // Same retry-only-the-fetch convention as gdelt.js/yfinance.js: only
   // network/timeout/status failures are retried (retry.js's default
