@@ -33,9 +33,9 @@
 // SAME-DIRECTION sizes in this ticker's group (shared/constants.js TICKER_GROUPS) plus this
 // thesis may not exceed MAX_GROUP_EXPOSURE_PCT. Opposite-direction positions do not count
 // (they offset); a position with no stored direction counts (it cannot be netted). Omitting
-// any of the three skips the check. Like the drawdown breaker, RunStore#commitThesis does
-// not re-check it in SQL, so two runs racing can each let one entry through; the exposure and
-// loss-at-stop ceilings still bound the book.
+// any of the three skips the check. RunStore#commitThesis re-checks the same cap in SQL
+// (same-group peers, same direction rule, same as-of bound, this ticker excluded), so two runs
+// racing cannot both let an entry through; the SQL is authoritative over this pre-check.
 //
 // DRAWDOWN CIRCUIT BREAKER: when the caller passes `realizedPnlPct` (trailing-
 // window realized book P&L, RunStore#getRealizedPnlPctAsOf) and a positive
@@ -51,10 +51,7 @@
 // bounds. Omitting either option skips the check.
 
 import { PortfolioDecision } from "../../schemas/index.js";
-import { FALLBACK_STOP_LOSS_PCT, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
-
-// Float slack so a sum that is exactly the cap on paper (0.05 + 0.05) is never rejected by rounding.
-const GROUP_CAP_EPSILON = 1e-9;
+import { FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
 
 export function evaluatePortfolio(
   riskDecision,

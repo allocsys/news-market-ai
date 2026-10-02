@@ -41,6 +41,9 @@ export const FALLBACK_STOP_LOSS_PCT = 0.03;
 // positions in one group, not a third.
 export const TICKER_GROUPS = { AAPL: "equity", MSFT: "equity", TSLA: "equity", USO: "energy", XAUUSD: "gold" };
 export const MAX_GROUP_EXPOSURE_PCT = 0.1;
+// Float slack so a sum that is exactly the cap on paper (0.05 + 0.05) is never rejected by rounding. Used by
+// portfolio_manager.js and by RunStore#commitThesis's SQL, so both sides apply the identical tolerance.
+export const GROUP_CAP_EPSILON = 1e-9;
 
 export function groupOfTicker(ticker) {
   return TICKER_GROUPS[ticker] ?? ticker;
