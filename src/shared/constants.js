@@ -9,6 +9,24 @@
 // so they must read the same number.
 export const MAX_PORTFOLIO_RISK_PCT = 0.2;
 
+// Loss-at-stop ceiling (fraction of the book): the sum over open positions of
+// position_size_pct * stop_loss_pct, i.e. what the book loses if every open
+// position hits its stop. MAX_PORTFOLIO_RISK_PCT above only caps gross
+// EXPOSURE (sizes summed), which treats a 5% position with a 1% stop and one
+// with an 8% stop as equally risky. Both ceilings apply; this one is checked
+// in portfolio_manager.js and, with the same number, in RunStore#commitThesis's
+// SQL. A position with no stored stop is charged FALLBACK_STOP_LOSS_PCT.
+// Untuned placeholder: 0.75% of the book, above the ~0.6% that 20% exposure at
+// the 3% fallback stop implies, so with typical stops the exposure cap binds
+// first and this one only bites on wide-stop (volatile) books.
+export const MAX_PORTFOLIO_STOP_RISK_PCT = 0.0075;
+
+// Stop distance used when a position has no stop_loss_pct, or risk.js has too
+// few bars for an ATR (it is risk.js's flat fallback, and its take-profit
+// fallback is twice this). One copy so risk.js, the portfolio manager and the
+// SQL loss-at-stop sum agree.
+export const FALLBACK_STOP_LOSS_PCT = 0.03;
+
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
 // already has an open position only REPLACES it if it points the OTHER way
 // with at least this confidence. Same direction never replaces (the open
