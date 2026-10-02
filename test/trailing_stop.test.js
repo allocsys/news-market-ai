@@ -188,7 +188,8 @@ test("peakPrice never worse than entry and not set on an exit", () => {
 
 async function seed(store, direction) {
   const id = `${direction}|t1`;
-  await store.openPosition({ id, ticker: "AAA", tradeThesisId: id, positionSizePct: 0.05, direction, entryPrice: 100, stopLossPct: 0.05, takeProfitPct: 0.1, openedAt: "2026-01-20T00:00:00.000Z" });
+  const ticker = direction === "long" ? "LNG" : "SHT"; // one open position per (run, ticker)
+  await store.openPosition({ id, ticker, tradeThesisId: id, positionSizePct: 0.05, direction, entryPrice: 100, stopLossPct: 0.05, takeProfitPct: 0.1, openedAt: "2026-01-20T00:00:00.000Z" });
   return id;
 }
 const peakOf = async (store, id) => (await store.db.prepare(`SELECT peak_price FROM positions WHERE run_id = ? AND id = ?`).bind(store.runId, id).first()).peak_price;
