@@ -1,0 +1,12 @@
+-- positions.peak_price: the best FAVORABLE price the position has reached, as of the
+-- bar-based exit cursor (positions.last_checked_at, migration 0006). Long: highest bar
+-- high seen; short: lowest bar low seen; never worse than entry_price. It is the
+-- high-water mark the break-even / trailing stop ratchets from (agents/risk_mgmt/trailing.js).
+-- Written by RunStore#advancePositionCheck in the SAME UPDATE that moves the cursor and the
+-- mark (migration 0009): the ratchet state advances atomically with the bars it was computed
+-- from, so a crash between "walk" and "write" re-walks the same bars from the same peak
+-- (no lookahead inside the re-walk), and it costs no extra D1 write or read.
+-- NULL means "no peak recorded" (break-even/trailing disabled, or never checked): the walk
+-- starts from entry_price. Raw/unadjusted like every stored bar; the split guard stops the
+-- walk before a suspected-split bar, so a split price is never written here.
+ALTER TABLE positions ADD COLUMN peak_price REAL;
