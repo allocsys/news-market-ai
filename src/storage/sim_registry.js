@@ -60,8 +60,8 @@ export async function failBacktestRun(db, { id, error, finishedAt }) {
 }
 
 /**
- * Cancels a RUNNING backtest, atomically (`WHERE status = 'running'` in the
- * same statement as the transition, so a cancel racing the run's own
+ * Cancels a RUNNING (or PAUSED) backtest, atomically (`WHERE status IN
+ * ('running','paused')` in the same statement as the transition, so a cancel racing the run's own
  * completion/failure can never resurrect or double-transition a terminal
  * row). `error` reuses the same column failBacktestRun writes to -- the
  * registry has no separate "why it stopped" field, and the dashboard's error
@@ -73,7 +73,7 @@ export async function failBacktestRun(db, { id, error, finishedAt }) {
  */
 export async function cancelBacktestRun(db, { id, finishedAt, error = "Cancelled by operator" }) {
   const result = await db
-    .prepare(`UPDATE backtest_runs SET status = 'cancelled', error = ?, finished_at = ? WHERE id = ? AND status = 'running'`)
+    .prepare(`UPDATE backtest_runs SET status = 'cancelled', error = ?, finished_at = ?, cursor = NULL WHERE id = ? AND status IN ('running', 'paused')`)
     .bind(error, finishedAt, id)
     .run();
   return (result.meta?.changes ?? 0) > 0;
