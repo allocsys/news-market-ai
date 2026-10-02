@@ -15,7 +15,7 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 import { computeRealizedReturn } from "../shared/returns.js";
-import { DEFAULT_FLIP_MIN_CONFIDENCE, FALLBACK_STOP_LOSS_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
+import { DEFAULT_FLIP_MIN_CONFIDENCE, FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, TICKER_GROUPS, TRADE_DECISION_STATUS, groupOfTicker } from "../shared/constants.js";
 import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
 import {
   ACTIVE_JOB_MAX_IDLE_MS,
@@ -501,6 +501,26 @@ export class RunStore {
          )`;
     const stopRiskBinds = [FALLBACK_STOP_LOSS_PCT, this.runId, ticker, asOf, asOf];
 
+    // P2c, the same-direction group concentration cap: (open size of this ticker's group PEERS in the same
+    // direction, as of asOf) + this position's size <= MAX_GROUP_EXPOSURE_PCT. Same as-of bound and
+    // this-ticker-excluded netting as P2/P2b, so closeOld closing this ticker's old row never changes what
+    // openNew/the decision CASE see. A peer with no stored direction counts (it cannot be netted), same as
+    // portfolio_manager.js. Skipped (empty clause, no binds) when the ticker is its own group or the thesis
+    // has no long/short direction -- the same cases the JS pre-check skips.
+    const groupPeers = Object.keys(TICKER_GROUPS).filter((t) => t !== ticker && TICKER_GROUPS[t] === groupOfTicker(ticker));
+    const checkGroup = groupPeers.length > 0 && (direction === "long" || direction === "short");
+    const groupSum = checkGroup
+      ? `(
+           SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p5
+           WHERE p5.run_id = ? AND p5.ticker IN (${groupPeers.map(() => "?").join(", ")})
+             AND p5.opened_at <= ? AND (p5.closed_at IS NULL OR p5.closed_at > ?)
+             AND (p5.direction IS NULL OR p5.direction = ?)
+         )`
+      : null;
+    const groupAllowClause = checkGroup ? ` AND ${groupSum} + ? <= ?` : "";
+    const groupRejectClause = checkGroup ? ` OR ${groupSum} + ? > ?` : "";
+    const groupBinds = checkGroup ? [this.runId, ...groupPeers, asOf, asOf, direction, positionSizePct, MAX_GROUP_EXPOSURE_PCT + GROUP_CAP_EPSILON] : [];
+
     const closeOld = this.db
       .prepare(
         `UPDATE positions
@@ -516,10 +536,10 @@ export class RunStore {
              SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
              WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
            ) + ? <= ?
-           AND ${stopRiskSum} + ? <= ?
+           AND ${stopRiskSum} + ? <= ?${groupAllowClause}
            AND NOT ${holdExists}`
       )
-      .bind(asOf, direction, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT, ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT, ...holdBinds);
+      .bind(asOf, direction, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT, ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT, ...groupBinds, ...holdBinds);
 
     const openNew = this.db
       .prepare(
@@ -533,7 +553,7 @@ export class RunStore {
            SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
            WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
          ) + ? <= ?
-         AND ${stopRiskSum} + ? <= ?
+         AND ${stopRiskSum} + ? <= ?${groupAllowClause}
          AND NOT ${holdExists}`
       )
       .bind(
@@ -541,6 +561,7 @@ export class RunStore {
         this.runId, ticker, asOf,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT,
+        ...groupBinds,
         ...holdBinds
       );
 
@@ -557,7 +578,7 @@ export class RunStore {
              WHEN (
                SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
                WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
-             ) + ? > ? OR ${stopRiskSum} + ? > ? THEN '${TRADE_DECISION_STATUS.REJECTED}'
+             ) + ? > ? OR ${stopRiskSum} + ? > ?${groupRejectClause} THEN '${TRADE_DECISION_STATUS.REJECTED}'
              ELSE '${TRADE_DECISION_STATUS.OPENED}'
            END),
            ?, ?, ?)
@@ -571,6 +592,7 @@ export class RunStore {
         ...holdBinds,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT,
+        ...groupBinds,
         opinions != null ? JSON.stringify(opinions) : null,
         debate != null ? JSON.stringify(debate) : null,
         createdAt
