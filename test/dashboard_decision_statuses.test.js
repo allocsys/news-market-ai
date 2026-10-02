@@ -58,11 +58,16 @@ test("renderSummaryCards with only non-approved statuses shows a dash, not a bog
   assert.match(html, /\u2014/, "approval-rate card shows an em dash when nothing was decided");
 });
 
-test("Book charts' approval donut reads the 'opened' total", () => {
+test("Book panel's decision bar reads the 'opened' total, with every share out of all decisions", () => {
   const html = renderBookCharts({
     openPositions: [], decisionStats: { totals: TOTALS, daily: [] }, totalExposurePct: 0,
   });
-  assert.match(html, /67%/);
+  assert.match(html, /ov-book/);
+  assert.doesNotMatch(html, /chart-row-3/);
+  // TOTALS = opened 2, rejected 1, held 2 + superseded 1 (other 3): 6 decisions in all.
+  assert.match(html, /Approved <b>2<\/b> <span class="stack-pct">33%/);
+  assert.match(html, /Rejected <b>1<\/b> <span class="stack-pct">17%/);
+  assert.match(html, /Other <b>3<\/b> <span class="stack-pct">50%/);
 });
 
 test("Snapshot view shows the recently-closed table and no longer duplicates Overview's cards and charts", () => {
