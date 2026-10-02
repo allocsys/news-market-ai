@@ -80,6 +80,65 @@ export async function cancelBacktestRun(db, { id, finishedAt, error = "Cancelled
 }
 
 /**
+ * Pauses a backtest run, atomically (`WHERE status IN ('running','paused')`,
+ * so a pause racing the run's own completion/failure/cancel can never
+ * resurrect a terminal row). Two callers:
+ *  - the operator's Pause button (no cursor: the run's continuation message
+ *    is in the queue, not in this process), and
+ *  - the worker itself (an auto-pause on a quota trigger, or the in-flight
+ *    continuation message arriving for an already-paused run), which HAS the
+ *    cursor and persists it so the pause can outlast the queue message.
+ * Re-pausing an already paused run keeps its original reason/paused_at/
+ * resume_after (an operator pause is not relabelled by the worker saving the
+ * cursor afterwards); a non-null `cursor` always wins over a stored one.
+ * Returns whether THIS call changed a row.
+ */
+export async function pauseBacktestRun(db, { id, reason, cursor = null, pausedAt, resumeAfter = null }) {
+  const result = await db
+    .prepare(
+      `UPDATE backtest_runs SET
+         cursor = COALESCE(?, cursor),
+         paused_reason = CASE WHEN status = 'paused' THEN paused_reason ELSE ? END,
+         paused_at = CASE WHEN status = 'paused' THEN paused_at ELSE ? END,
+         resume_after = CASE WHEN status = 'paused' THEN resume_after ELSE ? END,
+         status = 'paused'
+       WHERE id = ? AND status IN ('running', 'paused')`
+    )
+    .bind(cursor === null ? null : JSON.stringify(cursor), reason, pausedAt, resumeAfter, id)
+    .run();
+  return (result.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * Claims a paused run for resuming: one atomic CAS (`status = 'paused' AND
+ * cursor IS NOT NULL`) that flips it back to 'running', clears the pause
+ * fields AND the stored cursor (a stale cursor must never survive into the next
+ * pause: the operator-pause path stores none, and resume treats a non-null
+ * cursor as "the chain is parked"), and returns the cursor to continue from.
+ *
+ * `{ ok: false, reason }` otherwise: 'not_found', 'not_paused', or 'pausing'
+ * (paused, but the in-flight continuation message has not arrived yet to save
+ * its cursor -- the caller should retry shortly, never guess a cursor).
+ * If the caller then fails to enqueue, it must hand the returned cursor back
+ * through pauseBacktestRun to re-park the run.
+ */
+export async function resumeBacktestRun(db, { id }) {
+  const row = await db.prepare(`SELECT status, cursor, paused_reason, resume_after FROM backtest_runs WHERE id = ?`).bind(id).first();
+  if (!row) return { ok: false, reason: "not_found" };
+  if (row.status !== "paused") return { ok: false, reason: "not_paused" };
+  if (row.cursor === null || row.cursor === undefined) return { ok: false, reason: "pausing" };
+  const result = await db
+    .prepare(
+      `UPDATE backtest_runs SET status = 'running', cursor = NULL, paused_reason = NULL, paused_at = NULL, resume_after = NULL
+       WHERE id = ? AND status = 'paused' AND cursor IS NOT NULL`
+    )
+    .bind(id)
+    .run();
+  if (!((result.meta?.changes ?? 0) > 0)) return { ok: false, reason: "not_paused" };
+  return { ok: true, cursor: JSON.parse(row.cursor), pausedReason: row.paused_reason, resumeAfter: row.resume_after };
+}
+
+/**
  * Ids (+ status) of TERMINAL ('complete' | 'failed' | 'cancelled') runs
  * started more than `olderThanDays` ago, oldest first, up to `limit` -- the
  * candidate set for backtest/cleanup.js#cleanupOldRuns's bulk "clean up old
@@ -171,6 +230,9 @@ function rowToRun(r) {
     error: r.error,
     startedAt: r.started_at,
     finishedAt: r.finished_at,
+    pausedReason: r.paused_reason ?? null,
+    pausedAt: r.paused_at ?? null,
+    resumeAfter: r.resume_after ?? null,
   };
 }
 
@@ -181,7 +243,7 @@ function rowToRun(r) {
  * must fall back to 'live', not surface a raw SQL/D1 error to the page.
  */
 export async function getBacktestRun(db, id) {
-  const row = await db.prepare(`SELECT id, tickers, test_start, test_end, train_days, test_days, grace_days, status, result, error, started_at, finished_at FROM backtest_runs WHERE id = ?`).bind(id).first();
+  const row = await db.prepare(`SELECT id, tickers, test_start, test_end, train_days, test_days, grace_days, status, result, error, started_at, finished_at, paused_reason, paused_at, resume_after FROM backtest_runs WHERE id = ?`).bind(id).first();
   return row ? rowToRun(row) : null;
 }
 
@@ -189,7 +251,7 @@ export async function getBacktestRun(db, id) {
 export async function getRecentBacktestRuns(db, { limit = 10 } = {}) {
   const { results } = await db
     .prepare(
-      `SELECT id, tickers, test_start, test_end, train_days, test_days, grace_days, status, result, error, started_at, finished_at
+      `SELECT id, tickers, test_start, test_end, train_days, test_days, grace_days, status, result, error, started_at, finished_at, paused_reason, paused_at, resume_after
        FROM backtest_runs ORDER BY started_at DESC LIMIT ?`
     )
     .bind(limit)
