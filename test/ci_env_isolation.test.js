@@ -173,23 +173,26 @@ async function schemaOf(db) {
   return results;
 }
 
-test("live and sim schemas are identical, except sim also has the backtest_runs registry (and its index) -- nothing else", async () => {
+// The sim-only objects (migrations/sim): the run registry and the daily quota ledger.
+const SIM_ONLY_TABLES = ["backtest_runs", "quota_usage"];
+
+test("live and sim schemas are identical, except sim also has the backtest_runs registry (and its index) and the quota_usage ledger -- nothing else", async () => {
   const live = await schemaOf(createTestD1([STATE_DIR]));
   const sim = await schemaOf(createTestD1([STATE_DIR, SIM_DIR]));
 
-  const registry = sim.filter((r) => r.tbl_name === "backtest_runs");
-  assert.deepEqual(registry.map((r) => `${r.type}:${r.name}`).sort(), ["index:idx_backtest_runs_started_at", "table:backtest_runs"]);
-  const simMinusRegistry = sim.filter((r) => r.tbl_name !== "backtest_runs");
-  assert.deepEqual(simMinusRegistry, live, "every state table/index is defined identically on live and sim");
+  const simOnly = sim.filter((r) => SIM_ONLY_TABLES.includes(r.tbl_name));
+  assert.deepEqual(simOnly.map((r) => `${r.type}:${r.name}`).sort(), ["index:idx_backtest_runs_started_at", "table:backtest_runs", "table:quota_usage"]);
+  const simMinusSimOnly = sim.filter((r) => !SIM_ONLY_TABLES.includes(r.tbl_name));
+  assert.deepEqual(simMinusSimOnly, live, "every state table/index is defined identically on live and sim");
   assert.ok(live.length > 0 && live.some((r) => r.name === "positions"), "sanity: the schema was actually read");
-  assert.ok(!live.some((r) => r.tbl_name === "backtest_runs"), "the registry must NOT exist on live");
+  for (const name of SIM_ONLY_TABLES) assert.ok(!live.some((r) => r.tbl_name === name), `${name} must NOT exist on live`);
 });
 
 test("the schema-equality check detects drift (a state table altered on sim only)", async () => {
   const live = await schemaOf(createTestD1([STATE_DIR]));
   const simDb = createTestD1([STATE_DIR, SIM_DIR]);
   await simDb.prepare("ALTER TABLE positions ADD COLUMN sim_only_drift TEXT").run();
-  const sim = (await schemaOf(simDb)).filter((r) => r.tbl_name !== "backtest_runs");
+  const sim = (await schemaOf(simDb)).filter((r) => !SIM_ONLY_TABLES.includes(r.tbl_name));
   assert.notDeepEqual(sim, live);
 });
 
