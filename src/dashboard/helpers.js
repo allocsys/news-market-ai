@@ -612,20 +612,37 @@ export function renderSummaryCards({ openPositions, closedPositions, decisionSta
   </div>`;
 }
 
-// The 3-chart row (book composition, open exposure, decision outcomes) shared by
+// One compact panel (open positions by direction, open exposure, decision outcomes) shared by
 // Overview and any other page that wants it -- extracted from the identical copies
 // that used to live in views/overview.js and views/snapshot.js. Counts of open
 // positions by direction only: there is deliberately no "cash" slice (cash is an
 // exposure quantity, not a position count). Exposure gauge bands (<50% green,
 // 50-80% amber, >80% red) are a visual heuristic, not a formal risk policy.
+// One stacked share bar with a title and inline legend. Zero-count parts are skipped;
+// every share is out of the same `total` so the numbers agree with each other.
+function bookStackBar(title, parts, total) {
+  const live = parts.filter((p) => p.count > 0);
+  const segs = live
+    .map((p) => `<div class="stack-seg" style="width:${fmtShare(p.count, total, 1)};background:${p.color}" role="img" aria-label="${escapeHtml(p.name)}: ${p.count} of ${total} (${fmtShare(p.count, total)})"></div>`)
+    .join("");
+  const legend = live.length > 0
+    ? live.map((p) => `<span class="stack-key"><span class="stack-dot" style="background:${p.color}"></span>${escapeHtml(p.name)} <b>${p.count}</b> <span class="stack-pct">${fmtShare(p.count, total)}</span></span>`).join("")
+    : `<span class="stack-key">none yet</span>`;
+  return `<div class="stack">
+    <div class="stack-title">${escapeHtml(title)}</div>
+    <div class="stack-bar">${segs}</div>
+    <div class="stack-legend">${legend}</div>
+  </div>`;
+}
+
 export function renderBookCharts({ openPositions, decisionStats, totalExposurePct }) {
   const longCount = openPositions.filter((p) => p.direction === "long").length;
   const shortCount = openPositions.filter((p) => p.direction === "short").length;
   const otherCount = openPositions.length - longCount - shortCount;
-  const compositionSegments = [
-    { label: `Long (${longCount})`, value: longCount, color: "var(--color-success-text)" },
-    { label: `Short (${shortCount})`, value: shortCount, color: "var(--color-danger-text)" },
-    ...(otherCount > 0 ? [{ label: `Other (${otherCount})`, value: otherCount, color: "var(--color-warning-text)" }] : []),
+  const compositionParts = [
+    { name: "Long", count: longCount, color: "var(--color-success-text)" },
+    { name: "Short", count: shortCount, color: "var(--color-danger-text)" },
+    { name: "Other", count: otherCount, color: "var(--color-warning-text)" },
   ];
 
   const exposureFraction = Math.max(0, Math.min(1, totalExposurePct / 100));
@@ -637,18 +654,25 @@ export function renderBookCharts({ openPositions, decisionStats, totalExposurePc
   const otherDecisions = Object.entries(decisionStats.totals)
     .filter(([status]) => status !== DECISION_APPROVED_STATUS && status !== "rejected")
     .reduce((sum, [, count]) => sum + count, 0);
-  const decidedTotal = approved + rejected;
-  const approvalRatePct = decidedTotal > 0 ? Math.round((approved / decidedTotal) * 100) : null;
-  const approvalSegments = [
-    { label: "Approved", value: approved, color: "var(--color-success-text)" },
-    { label: "Rejected", value: rejected, color: "var(--color-danger-text)" },
-    ...(otherDecisions > 0 ? [{ label: "Other", value: otherDecisions, color: "var(--chart-6)" }] : []),
+  const decisionTotal = approved + rejected + otherDecisions;
+  const decisionParts = [
+    { name: "Approved", count: approved, color: "var(--color-success-text)" },
+    { name: "Rejected", count: rejected, color: "var(--color-danger-text)" },
+    { name: "Other", count: otherDecisions, color: "var(--chart-6)" },
   ];
 
-  return `<div class="chart-row-3">
-    ${donutChart(compositionSegments, { centerValue: String(openPositions.length), centerLabel: "open", title: "Book composition", subtitle: "open positions by direction" })}
-    ${gaugeChart(exposureFraction, { valueLabel: totalExposurePct.toFixed(1) + "%", label: "total exposure", title: "Open exposure", subtitle: "sum of position size %", accent: exposureAccent })}
-    ${donutChart(approvalSegments, { centerValue: approvalRatePct !== null ? approvalRatePct + "%" : "--", centerLabel: "approval", title: "Decision outcomes", subtitle: "all-time, all statuses" })}
+  const exposureBar = `<div class="stack">
+    <div class="stack-title">Exposure</div>
+    <div class="stack-bar"><div class="stack-seg" style="width:${(exposureFraction * 100).toFixed(1)}%;background:${exposureAccent}" role="img" aria-label="Open exposure ${totalExposurePct.toFixed(1)}% of book"></div></div>
+    <div class="stack-legend"><span class="stack-key"><span class="stack-dot" style="background:${exposureAccent}"></span>Open <b>${totalExposurePct.toFixed(1)}%</b> <span class="stack-pct">of book</span></span></div>
+  </div>`;
+
+  return `<div class="panel ov-book">
+    <div class="panel-body">
+      ${bookStackBar("Open positions", compositionParts, openPositions.length)}
+      ${exposureBar}
+      ${bookStackBar("Decisions (all-time)", decisionParts, decisionTotal)}
+    </div>
   </div>`;
 }
 
