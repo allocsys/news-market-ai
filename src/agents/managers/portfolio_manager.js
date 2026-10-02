@@ -40,11 +40,11 @@
 // bounds. Omitting either option skips the check.
 
 import { PortfolioDecision } from "../../schemas/index.js";
-import { MAX_PORTFOLIO_RISK_PCT } from "../../shared/constants.js"; // placeholder value: no real cross-position exposure data yet
+import { FALLBACK_STOP_LOSS_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
 
 export function evaluatePortfolio(
   riskDecision,
-  { openPositionsRiskPct = 0, isReplacingPosition = false, realizedPnlPct = null, drawdownBreakerPct = 0 } = {}
+  { openPositionsRiskPct = 0, openPositionsStopRiskPct = 0, isReplacingPosition = false, realizedPnlPct = null, drawdownBreakerPct = 0 } = {}
 ) {
   if (!riskDecision.approved) {
     return PortfolioDecision.parse({
@@ -66,17 +66,30 @@ export function evaluatePortfolio(
   }
 
   const wouldBeTotalRiskPct = openPositionsRiskPct + riskDecision.positionSizePct;
-  const approvedForExecution = wouldBeTotalRiskPct <= MAX_PORTFOLIO_RISK_PCT;
+  const exposureOk = wouldBeTotalRiskPct <= MAX_PORTFOLIO_RISK_PCT;
+  // Loss-at-stop: what the book loses if every open position (other tickers) plus this one hit their stops.
+  // `openPositionsStopRiskPct` defaults to 0, so a caller that does not pass it keeps the exposure-only check.
+  const newStopRiskPct = riskDecision.positionSizePct * (riskDecision.stopLossPct ?? FALLBACK_STOP_LOSS_PCT);
+  const wouldBeStopRiskPct = openPositionsStopRiskPct + newStopRiskPct;
+  const stopRiskOk = wouldBeStopRiskPct <= MAX_PORTFOLIO_STOP_RISK_PCT;
+  const approvedForExecution = exposureOk && stopRiskOk;
   const netNote = isReplacingPosition
     ? " (openPositionsRiskPct already excludes this ticker's existing position, which is being replaced)"
     : "";
+
+  let reason;
+  if (approvedForExecution) {
+    reason = `combined portfolio risk ${wouldBeTotalRiskPct} <= ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote}`;
+  } else if (!exposureOk) {
+    reason = `combined portfolio risk ${wouldBeTotalRiskPct} would exceed ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote} -- rejected`;
+  } else {
+    reason = `combined loss-at-stop ${wouldBeStopRiskPct} would exceed ceiling ${MAX_PORTFOLIO_STOP_RISK_PCT}${netNote} -- rejected`;
+  }
 
   return PortfolioDecision.parse({
     tradeThesisId: riskDecision.tradeThesisId,
     approvedForExecution,
     finalPositionSizePct: approvedForExecution ? riskDecision.positionSizePct : 0,
-    reason: approvedForExecution
-      ? `combined portfolio risk ${wouldBeTotalRiskPct} <= ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote}`
-      : `combined portfolio risk ${wouldBeTotalRiskPct} would exceed ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote} -- rejected`,
+    reason,
   });
 }
