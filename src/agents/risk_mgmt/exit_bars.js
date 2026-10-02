@@ -91,8 +91,9 @@ export function exitLevels({ direction, entryPrice, stopLossPct, takeProfitPct }
  *   split              null, or { kind, factor, ratio, barOpenMs, barKind } when the walk stopped at a suspected split
  *
  *   peakPrice          best favorable price reached, INCLUDING the walked bars and never worse than entry
- *                      (what advancePositionCheck persists to positions.peak_price); null when `trailing` is off.
- *                      Not set on an exit (the position is closing, nothing persists it).
+ *                      (what advancePositionCheck persists to positions.peak_price). The key is ABSENT unless `trailing`
+ *                      is on (the static walk's result shape is unchanged). Not set on an exit (the position is closing,
+ *                      nothing persists it) or when no bar was walked.
  *
  * `splitGuardTolerance` 0/absent disables the guard (detectSplitJump contract).
  *
@@ -106,7 +107,7 @@ export function exitLevels({ direction, entryPrice, stopLossPct, takeProfitPct }
  * With no computable levels (see exitLevels) nothing is walked and every field is empty.
  */
 export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trailing = null } = {}) {
-  const empty = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, lastClose: null, barsWalked: 0, invalidBars: 0, split: null, peakPrice: null };
+  const empty = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, lastClose: null, barsWalked: 0, invalidBars: 0, split: null };
   const levels = exitLevels(position);
   if (!levels || !Array.isArray(bars) || bars.length === 0) return empty;
 
@@ -143,7 +144,7 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trail
         barsWalked,
         invalidBars,
         split: { kind: split.kind, factor: split.factor, ratio: split.ratio, barOpenMs: bar.openMs, barKind: bar.kind },
-        peakPrice: trailing ? peak : null,
+        ...(trailing ? { peakPrice: peak } : {}),
       };
     }
 
@@ -201,5 +202,5 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trail
     }
   }
 
-  return { exit: null, maePct, mfePct, lastBarAvailableAt, lastClose, barsWalked, invalidBars, split: null, peakPrice: trailing ? peak : null };
+  return { exit: null, maePct, mfePct, lastBarAvailableAt, lastClose, barsWalked, invalidBars, split: null, ...(trailing ? { peakPrice: peak } : {}) };
 }
