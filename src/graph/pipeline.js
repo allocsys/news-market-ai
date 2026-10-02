@@ -168,11 +168,15 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     // this thesis's OWN already-opened position, which is not a replacement.
     const tradeThesisId = state.riskDecision.tradeThesisId;
     const existingPosition = await store.getOpenPositionForTickerAsOf({ ticker, asOf });
-    const { exposurePct: openPositionsRiskPct, stopRiskPct: openPositionsStopRiskPct } = await store.getOpenPositionsRiskAsOf({ asOf, excludeTicker: ticker });
+    const { exposurePct: openPositionsRiskPct, stopRiskPct: openPositionsStopRiskPct, positions: openPositions } = await store.getOpenPositionsRiskAsOf({ asOf, excludeTicker: ticker });
     const breakerOptions = await loadDrawdownBreakerOptions(store, config, { asOf });
     state.portfolioDecision = evaluatePortfolio(state.riskDecision, {
       openPositionsRiskPct,
       openPositionsStopRiskPct,
+      // Concentration cap inputs: the SAME read as the two sums above (other tickers only), no extra D1 call.
+      ticker,
+      direction: state.thesis.direction,
+      openPositions,
       isReplacingPosition: existingPosition !== null && existingPosition.id !== tradeThesisId,
       ...breakerOptions,
     });
