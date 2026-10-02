@@ -302,13 +302,27 @@ export function fmtExcursion(v) {
   return `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%`;
 }
 
+/** Long/short as a colored pill (green long, red short); anything else renders neutral. */
+export function directionPill(direction) {
+  if (!direction) return "\u2014";
+  const cls = direction === "long" ? "status-approved" : direction === "short" ? "status-rejected" : "status-neutral";
+  return `<span class="status ${cls}">${escapeHtml(direction)}</span>`;
+}
+
+/** Close reason as a pill with underscores removed ("time_based" -> "time based"): green for take profit, red for stop loss, neutral otherwise. */
+export function closeReasonPill(reason) {
+  if (!reason) return "\u2014";
+  const cls = reason === "take_profit" ? "status-approved" : reason === "stop_loss" ? "status-rejected" : "status-neutral";
+  return `<span class="status ${cls}">${escapeHtml(String(reason).replace(/_/g, " "))}</span>`;
+}
+
 export function positionsTable(positions, { closed = false } = {}) {
   if (positions.length === 0) return `<p class="empty">None.</p>`;
   const rows = positions
     .map(
       (p) => `<tr>
         <td class="ticker cell-title">${escapeHtml(p.ticker)}</td>
-        <td data-label="Direction">${escapeHtml(p.direction ?? "\u2014")}</td>
+        <td data-label="Direction">${directionPill(p.direction)}</td>
         <td class="num" data-label="Size">${(p.positionSizePct * 100).toFixed(1)}%</td>
         <td class="num" data-label="Entry">${p.entryPrice != null ? "$" + Number(p.entryPrice).toFixed(2) : "\u2014"}</td>
         <td class="num" data-label="MAE" title="Worst gross return seen while open (sampled at exit checks)">${fmtExcursion(p.maePct)}</td>
@@ -316,7 +330,7 @@ export function positionsTable(positions, { closed = false } = {}) {
         ${closed ? `<td class="num" data-label="Exit">${p.exitPrice != null ? "$" + Number(p.exitPrice).toFixed(2) : "\u2014"}</td>` : ""}
         ${closed ? `<td class="num ${p.realizedReturn > 0 ? "status-approved" : p.realizedReturn < 0 ? "status-rejected" : "status-neutral"}" data-label="P&amp;L" title="${p.returnIsNet === false ? "Gross return (this run predates the cost model)" : "Return net of round-trip trading costs"}">${fmtExcursion(p.realizedReturn)}</td>` : ""}
         <td class="num" data-label="Opened">${fmtTime(p.openedAt)}</td>
-        ${closed ? `<td class="num" data-label="Closed">${fmtTime(p.closedAt)}</td><td data-label="Reason">${escapeHtml(p.closeReason ?? "\u2014")}</td>` : ""}
+        ${closed ? `<td class="num" data-label="Closed">${fmtTime(p.closedAt)}</td><td data-label="Reason">${closeReasonPill(p.closeReason)}</td>` : ""}
       </tr>`
     )
     .join("\n");

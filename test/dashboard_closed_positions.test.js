@@ -28,6 +28,16 @@ test("open and closed tables show MAE/MFE as signed percents, and a dash for a p
   assert.match(positionsTable([{ ...closed, maePct: 0, mfePct: 0 }]), /data-label="MFE"[^>]*>0\.0%</, "a real zero is shown, not treated as missing");
 });
 
+test("direction and exit reason render as pills, with underscores removed from the reason", () => {
+  const html = positionsTable([closed, { ...closed, direction: "short", closeReason: "time_based" }, { ...closed, closeReason: "stop_loss" }], { closed: true });
+  assert.match(html, /data-label="Direction"><span class="status status-approved">long</);
+  assert.match(html, /data-label="Direction"><span class="status status-rejected">short</);
+  assert.match(html, /data-label="Reason"><span class="status status-approved">take profit</);
+  assert.match(html, /data-label="Reason"><span class="status status-rejected">stop loss</);
+  assert.match(html, /data-label="Reason"><span class="status status-neutral">time based</);
+  assert.match(positionsTable([{ ...closed, direction: null, closeReason: null }], { closed: true }), /data-label="Direction">\u2014</);
+});
+
 test("the Positions page no longer claims exit prices are not recorded", () => {
   const html = renderPositionsView({ openPositions: [], openPositionsError: null, closedPositions: [closed], closedPositionsError: null, params: { positionsLimit: 50, env: "live" }, totalExposurePct: 0 });
   assert.doesNotMatch(html, /No exit price is recorded/);

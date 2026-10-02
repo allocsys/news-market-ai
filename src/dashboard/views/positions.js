@@ -5,7 +5,7 @@ import {
 
 export function renderPositionsView({ openPositions, openPositionsError, closedPositions, closedPositionsError, params, totalExposurePct }) {
   const positionsFilterBar = `<div class="filter-bar">
-    ${pillLinks("Rows", POSITIONS_LIMIT_OPTIONS, params.positionsLimit, "positionsLimit", params)}
+    ${pillLinks("Open rows", POSITIONS_LIMIT_OPTIONS, params.positionsLimit, "positionsLimit", params)}
   </div>`;
 
   // --- Direction donut for OPEN positions --------------------------------------
@@ -91,7 +91,7 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
       <h2>Open positions${openPositionsError ? "" : ` <span class="h2-count">${openPositions.length}</span>`}</h2>
       ${positionsFilterBar}
       ${openPositionsError ? errorState(openPositionsError) : `
-        <div class="chart-row-2" style="margin-bottom:1.5rem">
+        <div class="chart-row-2 chart-row-gap">
           ${openDirectionDonut}
           ${exposureGauge}
         </div>
@@ -102,7 +102,7 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
       <h2>Recently closed${closedPositionsError ? "" : ` <span class="h2-count">${closedPositions.length}</span>`}</h2>
       <p class="note">The exit price is recorded on close (a dash means none was available, e.g. a time-based exit with no price data).</p>
       ${closedPositionsError ? errorState(closedPositionsError) : `
-        <div class="chart-row-2" style="margin-bottom:1.5rem">
+        <div class="chart-row-2 chart-row-gap">
           ${closeReasonsDonut}
           <div class="panel">
             <div class="panel-header"><span class="panel-title">Exit quality</span></div>
