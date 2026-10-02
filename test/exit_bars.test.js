@@ -24,7 +24,7 @@ function bar(i, open, high, low, close, extra = {}) {
 const LONG = { direction: "long", entryPrice: 100, stopLossPct: 0.05, takeProfitPct: 0.1 };
 const SHORT = { direction: "short", entryPrice: 100, stopLossPct: 0.05, takeProfitPct: 0.1 };
 
-const EMPTY = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, barsWalked: 0, invalidBars: 0, split: null };
+const EMPTY = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, lastClose: null, barsWalked: 0, invalidBars: 0, split: null };
 
 // ---------------------------------------------------------------------------
 // exitLevels

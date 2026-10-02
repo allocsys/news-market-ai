@@ -1,0 +1,12 @@
+-- positions.last_price: the position's latest mark price (graph/exit_check.js).
+-- Meaning: the CLOSE of the last valid price bar the exit check evaluated for this
+-- position, as of positions.last_checked_at (the cursor, migration 0006): the mark
+-- is only as fresh as that cursor. Written by RunStore#advancePositionCheck in the
+-- SAME UPDATE that moves the cursor, so it costs no extra D1 write or read.
+-- NULL means "never marked" (no check has evaluated a valid bar yet): consumers
+-- treat the position as marked at its entry price (zero unrealized P&L).
+-- Raw/unadjusted like every stored bar; the split guard stops the walk before a
+-- suspected-split bar, so a split price is never written here.
+-- Point-in-time: a consumer standing at `asOf` must ignore the mark when
+-- last_checked_at > asOf (RunStore#getBookPnlPctAsOf does).
+ALTER TABLE positions ADD COLUMN last_price REAL;

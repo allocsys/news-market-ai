@@ -82,6 +82,9 @@ export function exitLevels({ direction, entryPrice, stopLossPct, takeProfitPct }
  *                      null when no bar was evaluated. Invalid bars (non-finite OHLC)
  *                      are skipped but still advance it: bad data is never fabricated
  *                      into a price, and never re-read forever.
+ *   lastClose          close of the last VALID bar evaluated (the position's mark price as of
+ *                      lastBarAvailableAt, when that bar was valid); null when no valid bar was
+ *                      evaluated. Never the split bar, never an invalid bar.
  *   barsWalked         bars evaluated (valid or not), excluding the split bar
  *   invalidBars        bars skipped for non-finite / inverted OHLC
  *   split              null, or { kind, factor, ratio, barOpenMs, barKind } when the walk stopped at a suspected split
@@ -90,7 +93,7 @@ export function exitLevels({ direction, entryPrice, stopLossPct, takeProfitPct }
  * With no computable levels (see exitLevels) nothing is walked and every field is empty.
  */
 export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}) {
-  const empty = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, barsWalked: 0, invalidBars: 0, split: null };
+  const empty = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, lastClose: null, barsWalked: 0, invalidBars: 0, split: null };
   const levels = exitLevels(position);
   if (!levels || !Array.isArray(bars) || bars.length === 0) return empty;
 
@@ -100,6 +103,7 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
   let maePct = null;
   let mfePct = null;
   let lastBarAvailableAt = null;
+  let lastClose = null;
   let barsWalked = 0;
   let invalidBars = 0;
 
@@ -120,6 +124,7 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
         maePct,
         mfePct,
         lastBarAvailableAt,
+        lastClose,
         barsWalked,
         invalidBars,
         split: { kind: split.kind, factor: split.factor, ratio: split.ratio, barOpenMs: bar.openMs, barKind: bar.kind },
@@ -135,6 +140,7 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
 
     barsWalked += 1;
     lastBarAvailableAt = bar.availableAt;
+    lastClose = bar.close;
 
     const stopHit = levels.stop != null && (isLong ? bar.low <= levels.stop : bar.high >= levels.stop);
     if (stopHit) {
@@ -147,6 +153,7 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
         lastBarAvailableAt,
         barsWalked,
         invalidBars,
+        lastClose,
         split: null,
       };
     }
@@ -162,10 +169,11 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0 } = {}
         lastBarAvailableAt,
         barsWalked,
         invalidBars,
+        lastClose,
         split: null,
       };
     }
   }
 
-  return { exit: null, maePct, mfePct, lastBarAvailableAt, barsWalked, invalidBars, split: null };
+  return { exit: null, maePct, mfePct, lastBarAvailableAt, lastClose, barsWalked, invalidBars, split: null };
 }

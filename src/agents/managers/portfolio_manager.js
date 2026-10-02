@@ -34,8 +34,11 @@
 // `drawdownBreakerPct`, a P&L at or below -drawdownBreakerPct rejects the thesis
 // (no new entries). Exits are untouched, so open positions still stop out; a
 // would-be flip is blocked too, leaving the open position to its own stops.
-// HONEST SCOPE: realized P&L only (open positions are not marked to market), and
-// RunStore#commitThesis does not re-check it in SQL -- two runs racing across
+// HONEST SCOPE: the P&L the caller passes is realized closes in the window plus open
+// positions marked at their last exit-check close (RunStore#getRealizedPnlPctAsOf with
+// includeUnrealized; a never-marked position counts as flat), so its freshness is the exit
+// check's (15 min live, once per simulated day in a backtest). RunStore#commitThesis does not
+// re-check it in SQL -- two runs racing across
 // the threshold can each let one entry through, which the risk ceiling still
 // bounds. Omitting either option skips the check.
 

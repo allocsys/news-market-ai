@@ -257,9 +257,11 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     }
 
     // Window evaluated, nothing fired: move the cursor to the last bar walked (never past a
-    // suspected split bar -- walk.lastBarAvailableAt stops before it).
+    // suspected split bar -- walk.lastBarAvailableAt stops before it). The same UPDATE stores that
+    // window's last valid close as the position's mark (positions.last_price), for the breaker's
+    // unrealized P&L: no extra D1 call, and never a split-suspected price.
     if (walk?.lastBarAvailableAt) {
-      await store.advancePositionCheck({ id: position.id, lastCheckedAt: walk.lastBarAvailableAt });
+      await store.advancePositionCheck({ id: position.id, lastCheckedAt: walk.lastBarAvailableAt, lastPrice: walk.lastClose });
     }
   }
 
