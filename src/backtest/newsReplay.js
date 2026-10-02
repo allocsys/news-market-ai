@@ -202,10 +202,13 @@ async function runDecisionForOpinions(env, config, { inputs, store }, { ticker, 
   const thesis = await runTrader(env, config, verdict);
   const riskDecision = evaluateRisk(thesis, verdict, bars);
   const existingPosition = await store.getOpenPositionForTickerAsOf({ ticker, asOf });
-  const { exposurePct: openPositionsRiskPct, stopRiskPct: openPositionsStopRiskPct } = await store.getOpenPositionsRiskAsOf({ asOf, excludeTicker: ticker });
+  const { exposurePct: openPositionsRiskPct, stopRiskPct: openPositionsStopRiskPct, positions: openPositions } = await store.getOpenPositionsRiskAsOf({ asOf, excludeTicker: ticker });
   const portfolioDecision = evaluatePortfolio(riskDecision, {
     openPositionsRiskPct,
     openPositionsStopRiskPct,
+    ticker,
+    direction: thesis.direction,
+    openPositions,
     isReplacingPosition: existingPosition !== null && existingPosition.id !== riskDecision.tradeThesisId,
   });
 
