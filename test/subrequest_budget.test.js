@@ -118,7 +118,29 @@ test("snapshot reports counters, the d1/kv split, limits and per-kind unit count
   b.chargeInternal("kv");
   b.chargeExternal();
   b.recordUnit("item", before);
-  assert.deepEqual(b.snapshot(), { external: 1, total: 3, kv: 1, d1: 1, rowsWritten: 0, externalLimit: 40, totalLimit: 60, units: { item: 1 } });
+  assert.deepEqual(b.snapshot(), { external: 1, total: 3, kv: 1, d1: 1, rowsWritten: 0, rowsRead: 0, kvReads: 0, kvWrites: 0, geminiCounts: {}, externalLimit: 40, totalLimit: 60, units: { item: 1 } });
+});
+
+test("chargeGemini counts per model|key and never refuses; chargeRowsRead/chargeRowsWritten ignore non-positive and non-finite values", () => {
+  const b = new SubrequestBudget({ externalLimit: 1, totalLimit: 1 });
+  b.chargeExternal(); // budget fully spent
+  b.chargeGemini("lite", 0);
+  b.chargeGemini("lite", 0);
+  b.chargeGemini("lite", 1);
+  b.chargeGemini("pro", 0);
+  assert.deepEqual(b.geminiCounts, { "lite|0": 2, "lite|1": 1, "pro|0": 1 });
+  assert.equal(b.total, 1, "chargeGemini is counting only (the fetch was charged by chargeExternal)");
+  b.chargeRowsRead(5);
+  b.chargeRowsRead(0);
+  b.chargeRowsRead(-3);
+  b.chargeRowsRead(NaN);
+  b.chargeRowsWritten(7);
+  b.chargeRowsWritten(undefined);
+  assert.equal(b.rowsRead, 5);
+  assert.equal(b.rowsWritten, 7);
+  assert.deepEqual(b.snapshot().geminiCounts, { "lite|0": 2, "lite|1": 1, "pro|0": 1 });
+  b.snapshot().geminiCounts["lite|0"] = 99;
+  assert.equal(b.geminiCounts["lite|0"], 2, "the snapshot copy is detached");
 });
 
 // ---------------------------------------------------------------------------
@@ -170,10 +192,48 @@ test("countedD1 counts exec as one subrequest", async () => {
   assert.deepEqual(seen, ["SELECT 1"]);
 });
 
+test("countedD1 accumulates D1 billing meta: rows_written (falling back to changes) and rows_read, from run/all/batch but not first", async () => {
+  const b = new SubrequestBudget({ externalLimit: 40, totalLimit: 40 });
+  const meta = (m) => ({ results: [], meta: m });
+  const stmt = (m) => ({ bind() { return this; }, run: async () => meta(m), all: async () => meta(m), first: async () => ({ x: 1 }), raw: async () => [] });
+  const fake = {
+    prepare: (sql) => stmt(sql === "w" ? { rows_written: 4, rows_read: 2 } : { changes: 3 }),
+    batch: async (statements) => statements.map(() => meta({ rows_written: 10, rows_read: 20 })),
+    exec: () => {},
+  };
+  const counted = countedD1(fake, b);
+  await counted.prepare("w").run();
+  assert.equal(b.rowsWritten, 4);
+  assert.equal(b.rowsRead, 2);
+  await counted.prepare("c").run();
+  assert.equal(b.rowsWritten, 7, "falls back to meta.changes when a driver reports no rows_written");
+  await counted.prepare("w").all();
+  assert.equal(b.rowsRead, 4);
+  await counted.prepare("w").first();
+  assert.equal(b.rowsWritten, 11, "all() charged rows_written=4 too; first() added nothing");
+  const before = { w: b.rowsWritten, r: b.rowsRead };
+  await counted.batch([counted.prepare("w"), counted.prepare("w")]);
+  assert.equal(b.rowsWritten, before.w + 20);
+  assert.equal(b.rowsRead, before.r + 40);
+});
+
 // ---------------------------------------------------------------------------
 // countedKv + cooldownMemoKv
 // ---------------------------------------------------------------------------
 
+test("countedKv splits KV billing classes: get/list are reads, put/delete are writes; kv stays the total", async () => {
+  const b = new SubrequestBudget({ externalLimit: 40, totalLimit: 40 });
+  const kv = countedKv(fakeKv({ a: "1" }), b);
+  await kv.get("a");
+  await kv.list({ prefix: "a" });
+  await kv.put("b", "2");
+  await kv.delete("b");
+  await kv.put("c", "3");
+  assert.equal(b.kvReads, 2);
+  assert.equal(b.kvWrites, 3);
+  assert.equal(b.kv, 5);
+  assert.equal(b.total, 5);
+});
 function fakeKv(initial = {}) {
   const store = new Map(Object.entries(initial));
   const calls = [];
