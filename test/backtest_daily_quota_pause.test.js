@@ -96,7 +96,7 @@ test("a DAILY quota exhaustion ends the part with 'continue' flagged dailyQuota 
 
 test("retryAfterSeconds is null when the error carries no hint", async () => {
   const ctx = await seeded();
-  const out = await part(ctx, { error: dailyQuota(undefined) });
+  const out = await part(ctx, { error: dailyQuota(null) }); // null, not undefined: undefined would pick the helper's 3600 default
   assert.equal(out.status, "continue", out.error);
   assert.equal(out.dailyQuota, true);
   assert.equal(out.retryAfterSeconds, null);
