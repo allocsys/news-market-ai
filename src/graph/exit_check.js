@@ -49,6 +49,7 @@
 import { resolveCurrentPrice } from "./price_resolution.js";
 import { evaluateExit, timeExitDueAt } from "../agents/risk_mgmt/exit.js";
 import { exitLevels, walkBarsForExit } from "../agents/risk_mgmt/exit_bars.js";
+import { resolveTrailingConfig } from "../agents/risk_mgmt/trailing.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 import { getDailyBarsWindowAsOf, getIntradayBarsWindowAsOf } from "../storage/inputs_view.js";
@@ -64,7 +65,7 @@ import { PENDING_ENTRY_EXPIRY_MS } from "../shared/entry_timing.js";
  * opened_at that does not parse (logged; a date that cannot be computed is never
  * turned into "the beginning of time").
  */
-async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance }) {
+async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance, trailing = null }) {
   if (!exitLevels(position)) return null;
 
   const start = exitWindowStart({ openedAt: position.openedAt, lastCheckedAt: position.lastCheckedAt });
@@ -103,7 +104,7 @@ async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance })
     });
   }
 
-  return walkBarsForExit(position, bars, { splitGuardTolerance });
+  return walkBarsForExit(position, bars, { splitGuardTolerance, trailing });
 }
 
 /**
@@ -161,6 +162,10 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
   config = withLlmLogContext(config, { store });
   const openPositions = await store.getOpenPositionsAsOf({ asOf });
   const closed = [];
+  // Break-even / trailing stop (config.breakEvenTriggerR / trailActivationR / trailDistanceR); null = off, and the
+  // walk below is then exactly the static stop/target walk. recordExcursionBeforeClose deliberately walks WITHOUT it:
+  // it only records excursions, which must not be cut short by a ratcheted stop.
+  const trailing = resolveTrailingConfig(config);
 
   for (const position of openPositions) {
     // Once the time exit is due, the price walk stops at that instant: bars after it must not be
@@ -168,7 +173,7 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     // backtest walk the due day's own bars are visible by the time the exit is priced).
     const dueAt = config.maxPositionHoldDays != null ? timeExitDueAt(position.openedAt, config.maxPositionHoldDays) : null;
     const timeDue = dueAt != null && Date.parse(dueAt) <= Date.parse(asOf);
-    const walk = await walkPositionBars(inputs, position, { asOf: timeDue ? dueAt : asOf, splitGuardTolerance: config.splitGuardTolerance });
+    const walk = await walkPositionBars(inputs, position, { asOf: timeDue ? dueAt : asOf, splitGuardTolerance: config.splitGuardTolerance, trailing });
 
     // Split guard: bars are raw/unadjusted, so a split looks like a crash. The walk already
     // stopped before the suspicious bar; log loudly on every check (Adopted Pattern #11) so an
@@ -258,10 +263,11 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
 
     // Window evaluated, nothing fired: move the cursor to the last bar walked (never past a
     // suspected split bar -- walk.lastBarAvailableAt stops before it). The same UPDATE stores that
-    // window's last valid close as the position's mark (positions.last_price), for the breaker's
-    // unrealized P&L: no extra D1 call, and never a split-suspected price.
+    // window's last valid close as the position's mark (positions.last_price, for the breaker's unrealized P&L)
+    // and, when break-even/trailing is on, the new high-water mark (positions.peak_price): no extra D1 call, and
+    // never a split-suspected price.
     if (walk?.lastBarAvailableAt) {
-      await store.advancePositionCheck({ id: position.id, lastCheckedAt: walk.lastBarAvailableAt, lastPrice: walk.lastClose });
+      await store.advancePositionCheck({ id: position.id, lastCheckedAt: walk.lastBarAvailableAt, lastPrice: walk.lastClose, peakPrice: walk.peakPrice });
     }
   }
 

@@ -153,6 +153,7 @@ test("openPosition stores direction/entryPrice/stopLossPct/takeProfitPct, and ge
     lastCheckedAt: null, // bar-based exit cursor: never checked yet
     maePct: null, // running excursion extremes: never sampled yet
     mfePct: null,
+    peakPrice: null, // break-even/trailing high-water mark: none recorded yet
   });
 });
 

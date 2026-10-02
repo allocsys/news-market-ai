@@ -173,17 +173,24 @@ export class RunStore {
    * exit was found, so a crash between "exit found" and closePosition re-finds the
    * same exit next run. Returns true only if the cursor moved.
    */
-  async advancePositionCheck({ id, lastCheckedAt, lastPrice = null }) {
+  async advancePositionCheck({ id, lastCheckedAt, lastPrice = null, peakPrice = null }) {
     if (!lastCheckedAt) return false;
     // The mark (positions.last_price, migration 0009) rides in the SAME UPDATE as the cursor: no extra D1 call.
     // A missing/non-finite price keeps the previous mark (COALESCE), never writes NULL/NaN over a real one.
     const price = Number.isFinite(lastPrice) && lastPrice > 0 ? lastPrice : null;
+    // Same for the high-water mark (positions.peak_price, migration 0010): it only ever improves (long: MAX,
+    // short: MIN, per the row's own direction), so a stale or out-of-order value can never loosen the ratchet;
+    // null/non-finite (trailing off) leaves the column alone.
+    const peak = Number.isFinite(peakPrice) && peakPrice > 0 ? peakPrice : null;
     const res = await this.db
       .prepare(
-        `UPDATE positions SET last_checked_at = ?, last_price = COALESCE(?, last_price)
+        `UPDATE positions SET last_checked_at = ?, last_price = COALESCE(?, last_price),
+           peak_price = CASE WHEN ? IS NULL THEN peak_price
+                             WHEN direction = 'short' THEN MIN(COALESCE(peak_price, ?), ?)
+                             ELSE MAX(COALESCE(peak_price, ?), ?) END
          WHERE run_id = ? AND id = ? AND closed_at IS NULL AND (last_checked_at IS NULL OR last_checked_at < ?)`
       )
-      .bind(lastCheckedAt, price, this.runId, id, lastCheckedAt)
+      .bind(lastCheckedAt, price, peak, peak, peak, peak, peak, this.runId, id, lastCheckedAt)
       .run();
     return (res?.meta?.changes ?? 0) > 0;
   }
@@ -193,7 +200,7 @@ export class RunStore {
 
     const { results } = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at, mae_pct, mfe_pct
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at, mae_pct, mfe_pct, peak_price
          FROM positions
          WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`
       )
@@ -215,6 +222,8 @@ export class RunStore {
       // Running gross excursion extremes so far (recordPositionExcursion*); null = never sampled.
       maePct: r.mae_pct ?? null,
       mfePct: r.mfe_pct ?? null,
+      // Break-even/trailing high-water mark (advancePositionCheck, migration 0010); null = none recorded, entry is the baseline.
+      peakPrice: r.peak_price ?? null,
     }));
   }
 

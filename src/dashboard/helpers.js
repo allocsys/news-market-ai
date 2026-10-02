@@ -587,12 +587,14 @@ export function renderSummaryCards({ openPositions, closedPositions, decisionSta
 
   const stopLosses = closedPositions.filter((p) => p.closeReason === "stop_loss").length;
   const takeProfits = closedPositions.filter((p) => p.closeReason === "take_profit").length;
+  // Ratcheted stops (break-even / trailing, off by default) are not plain stop-losses; shown only when present.
+  const ratchetStops = closedPositions.filter((p) => p.closeReason === "breakeven_stop" || p.closeReason === "trailing_stop").length;
 
   return `<div class="stat-grid">
     ${statCard(openPositions.length, "Open positions", `${longCount} long / ${shortCount} short`, "var(--accent)")}
     ${statCard(totalExposurePct.toFixed(1) + "%", "Total open exposure", "sum of position size %", "var(--color-success-text)")}
     ${statCard(approvalRate, "Approval rate (all-time)", `${approved} approved / ${rejected} rejected${otherCount ? ` / ${otherCount} other` : ""}`, "var(--color-info-text)")}
-    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit`, "var(--color-danger-text)")}
+    ${statCard(closedPositions.length, "Recently closed", `${stopLosses} stop-loss / ${takeProfits} take-profit${ratchetStops ? ` / ${ratchetStops} trailing` : ""}`, "var(--color-danger-text)")}
   </div>`;
 }
 

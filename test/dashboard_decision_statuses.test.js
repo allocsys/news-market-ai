@@ -104,3 +104,20 @@ test("Positions exit donut labels flipped / replaced / time_based closes instead
     assert.match(html, new RegExp(label), `${label} slice`);
   }
 });
+
+test("break-even / trailing stop closes get their own donut slices and a summary-card count, not Other / stop-loss", () => {
+  const closed = ["stop_loss", "breakeven_stop", "trailing_stop", "trailing_stop"].map((closeReason, i) => ({
+    id: `r${i}`, ticker: "AAPL", direction: "long", positionSizePct: 0.05, entryPrice: 100, exitPrice: 101,
+    openedAt: "2026-01-01T00:00:00.000Z", closedAt: "2026-01-02T00:00:00.000Z", closeReason,
+  }));
+  const view = renderPositionsView({
+    openPositions: [], openPositionsError: null, closedPositions: closed, closedPositionsError: null, params: PARAMS, totalExposurePct: 0,
+  });
+  assert.match(view, /Break-even stop/);
+  assert.match(view, /Trailing stop/);
+  assert.doesNotMatch(view, />Other</, "ratcheted stops are not lumped into Other");
+  const cards = renderSummaryCards({ openPositions: [], closedPositions: closed, decisionStats: { totals: TOTALS, daily: [] }, totalExposurePct: 0 });
+  assert.match(cards, /1 stop-loss \/ 0 take-profit \/ 3 trailing/);
+  const none = renderSummaryCards({ openPositions: [], closedPositions: [], decisionStats: { totals: TOTALS, daily: [] }, totalExposurePct: 0 });
+  assert.doesNotMatch(none, /trailing/, "no ratcheted closes: summary text unchanged");
+});

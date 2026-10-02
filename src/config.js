@@ -185,6 +185,18 @@ export function loadConfig(env) {
     // common split ratios. Untuned placeholder, see constants.js; 0 disables.
     // Consumers handed a config without it (unit tests) run unguarded.
     splitGuardTolerance: nonNegativeNumberOrDefault(env.SPLIT_GUARD_TOLERANCE, DEFAULT_SPLIT_GUARD_TOLERANCE),
+    // Break-even / trailing stop (agents/risk_mgmt/trailing.js), in R = the position's initial stop distance
+    // (positions.stop_loss_pct). ALL DEFAULT 0 = OFF: the exit walk is then exactly the static stop/target walk,
+    // so existing runs are unchanged until a knob is set. No tuned value exists yet (needs the >= 500-trade
+    // sample in docs/rollout.md), so there is deliberately no non-zero default.
+    //   breakEvenTriggerR   once the peak is >= this many R in favor, the stop moves to entry (net of costs)
+    //   trailActivationR    once the peak is >= this many R in favor, a trailing stop starts
+    //   trailDistanceR      the trail sits this many R behind the peak (needs trailActivationR > 0)
+    //   trailRemovesTarget  1 = once the trail is the binding stop, ignore the fixed take-profit (let winners run)
+    breakEvenTriggerR: nonNegativeNumberOrDefault(env.BREAKEVEN_TRIGGER_R, 0),
+    trailActivationR: nonNegativeNumberOrDefault(env.TRAIL_ACTIVATION_R, 0),
+    trailDistanceR: nonNegativeNumberOrDefault(env.TRAIL_DISTANCE_R, 0),
+    trailRemovesTarget: nonNegativeNumberOrDefault(env.TRAIL_REMOVES_TARGET, 0),
     // Drawdown circuit breaker (portfolio_manager.js): reject new entries when
     // the trailing-window realized P&L is at or below -pct of the book. Untuned
     // placeholders, see constants.js; pct 0 disables. Consumers handed a config
