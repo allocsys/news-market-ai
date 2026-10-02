@@ -468,6 +468,17 @@ export class RunStore {
            )`;
     const holdBinds = [this.runId, ticker, id, direction, confidence, flipMinConfidence];
 
+    // P2b, the loss-at-stop ceiling: (every OTHER ticker's size * stop, as of asOf) + this position's
+    // size * stop <= MAX_PORTFOLIO_STOP_RISK_PCT. Same other-tickers netting and as-of bound as P2; a
+    // row with no stored stop is charged FALLBACK_STOP_LOSS_PCT (same as getOpenPositionsRiskAsOf).
+    // Evaluated in the same three places as P2 and, like it, authoritative over the JS pre-check.
+    const newStopRisk = positionSizePct * (stopLossPct ?? FALLBACK_STOP_LOSS_PCT);
+    const stopRiskSum = `(
+           SELECT COALESCE(SUM(position_size_pct * COALESCE(stop_loss_pct, ?)), 0) FROM positions p4
+           WHERE p4.run_id = ? AND p4.ticker != ? AND p4.opened_at <= ? AND (p4.closed_at IS NULL OR p4.closed_at > ?)
+         )`;
+    const stopRiskBinds = [FALLBACK_STOP_LOSS_PCT, this.runId, ticker, asOf, asOf];
+
     const closeOld = this.db
       .prepare(
         `UPDATE positions
@@ -483,9 +494,10 @@ export class RunStore {
              SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
              WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
            ) + ? <= ?
+           AND ${stopRiskSum} + ? <= ?
            AND NOT ${holdExists}`
       )
-      .bind(asOf, direction, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT, ...holdBinds);
+      .bind(asOf, direction, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT, ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT, ...holdBinds);
 
     const openNew = this.db
       .prepare(
@@ -499,12 +511,14 @@ export class RunStore {
            SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
            WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
          ) + ? <= ?
+         AND ${stopRiskSum} + ? <= ?
          AND NOT ${holdExists}`
       )
       .bind(
         this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf, confidence, entryPriceSource, entryPriceBarTs,
         this.runId, ticker, asOf,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
+        ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT,
         ...holdBinds
       );
 
@@ -521,7 +535,7 @@ export class RunStore {
              WHEN (
                SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
                WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
-             ) + ? > ? THEN '${TRADE_DECISION_STATUS.REJECTED}'
+             ) + ? > ? OR ${stopRiskSum} + ? > ? THEN '${TRADE_DECISION_STATUS.REJECTED}'
              ELSE '${TRADE_DECISION_STATUS.OPENED}'
            END),
            ?, ?, ?)
@@ -534,6 +548,7 @@ export class RunStore {
         this.runId, ticker, asOf,
         ...holdBinds,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
+        ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT,
         opinions != null ? JSON.stringify(opinions) : null,
         debate != null ? JSON.stringify(debate) : null,
         createdAt
