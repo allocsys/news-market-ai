@@ -3,6 +3,17 @@ import {
   errorState, emptyState, fmtShare, donutChart, escapeHtml,
 } from "../helpers.js";
 
+const DECISIONS_INTRO = `<p class="note">Thesis, risk and portfolio sign-off for each decision. Expand "LLM reasoning" on a row for the analyst opinions, bull/bear debate and verdict; older rows show "not recorded".</p>`;
+
+/** One horizontal share bar: label, filled track, "count (share)". Colors are CSS vars; widths/aria carry the numbers. */
+function splitBar(name, count, total, color) {
+  return `<div class="split-row">
+    <span class="split-label">${escapeHtml(name)}</span>
+    <div class="split-track" role="img" aria-label="${escapeHtml(name)}: ${count} of ${total} (${fmtShare(count, total)})"><div class="split-fill" style="width:${fmtShare(count, total, 1)};background:${color}"></div></div>
+    <span class="split-value">${count} (${fmtShare(count, total)})</span>
+  </div>`;
+}
+
 export function renderDecisionsView({ decisions, params, error }) {
   const decisionsFilterBar = `<div class="filter-bar">
     ${pillLinks("Status", DECISION_STATUS_OPTIONS, params.decisionStatus, "decisionStatus", params)}
@@ -12,9 +23,18 @@ export function renderDecisionsView({ decisions, params, error }) {
   if (error) {
     return `<section id="decisions">
       <h2>Recent trade decisions</h2>
-      <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Expand "LLM reasoning" on a row to see the Analyst Team's opinions, the bull/bear debate, the judge's verdict, and the trader's rationale that produced it -- rows from before this feature shipped show "not recorded" instead.</p>
+      ${DECISIONS_INTRO}
       ${decisionsFilterBar}
       ${errorState(error)}
+    </section>`;
+  }
+
+  if (decisions.length === 0) {
+    return `<section id="decisions">
+      <h2>Recent trade decisions <span class="h2-count">0</span></h2>
+      ${DECISIONS_INTRO}
+      ${decisionsFilterBar}
+      ${emptyState("No decisions match this filter.", { href: "/dashboard/decisions", label: "Clear filters" })}
     </section>`;
   }
 
@@ -35,32 +55,32 @@ export function renderDecisionsView({ decisions, params, error }) {
       ...(otherCount > 0 ? [{ label: "Other", value: otherCount, color: "var(--chart-6)" }] : []),
     ],
     {
-      centerValue: approvalPct !== null ? approvalPct + "%" : "--",
+      centerValue: approvalPct !== null ? approvalPct + "%" : "\u2014",
       centerLabel: "approved",
       title: "This view",
       subtitle: "of currently visible decisions",
     }
   );
 
+  const longs = decisions.filter((d) => d.thesis?.direction === "long").length;
+  const shorts = decisions.filter((d) => d.thesis?.direction === "short").length;
+  const neutral = decisions.length - longs - shorts; // neutral OR no thesis recorded
+  const total = decisions.length;
+  const directionBars =
+    splitBar("Long", longs, total, "var(--color-success-text)") +
+    splitBar("Short", shorts, total, "var(--color-danger-text)") +
+    (neutral > 0 ? splitBar("Neutral", neutral, total, "var(--chart-6)") : "");
+
   return `<section id="decisions">
     <h2>Recent trade decisions <span class="h2-count">${decisions.length}</span></h2>
-    <p class="note">Full decision chain (thesis + risk + portfolio sign-off) for every completed run. Expand "LLM reasoning" on a row to see the Analyst Team's opinions, the bull/bear debate, the judge's verdict, and the trader's rationale that produced it -- rows from before this feature shipped show "not recorded" instead.</p>
+    ${DECISIONS_INTRO}
     ${decisionsFilterBar}
 
     <div class="chart-row-2">
       ${approvalDonut}
       <div class="panel">
         <div class="panel-header"><span class="panel-title">Direction split</span></div>
-        <div class="panel-body">
-          ${decisions.length === 0 ? emptyState("No decisions match this filter.", { href: "/dashboard/decisions", label: "Clear filters" }) : (() => {
-            const longs = decisions.filter((d) => d.thesis?.direction === "long").length;
-            const shorts = decisions.filter((d) => d.thesis?.direction === "short").length;
-            const neutral = decisions.length - longs - shorts; // "other": neutral OR no thesis recorded
-            const total = decisions.length || 1;
-            const bar = (count, color) => { const name = color === "var(--color-success-text)" ? "Long" : color === "var(--color-danger-text)" ? "Short" : "Other"; return `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.6rem"><span style="font-size:0.75rem;color:var(--text-muted);min-width:60px">${escapeHtml(name)}</span><div role="img" aria-label="${escapeHtml(name)}: ${count} of ${decisions.length} (${fmtShare(count, total)})" style="flex:1;height:8px;background:var(--bg-elevated);border-radius:4px;overflow:hidden"><div style="width:${fmtShare(count, total, 1)};height:100%;background:${color};border-radius:4px"></div></div><span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-main);min-width:48px;text-align:right">${count} (${fmtShare(count, total)})</span></div>`; };
-            return bar(longs, "var(--color-success-text)") + bar(shorts, "var(--color-danger-text)") + (neutral > 0 ? bar(neutral, "var(--chart-6)") : "");
-          })()}
-        </div>
+        <div class="panel-body">${directionBars}</div>
       </div>
     </div>
 

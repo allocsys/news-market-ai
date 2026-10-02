@@ -926,6 +926,14 @@ const STYLE = `
 
   .chart-row-2.chart-row-gap { margin-bottom: 1.5rem; }
 
+  /* ---- Horizontal split bars (Decisions: direction split) ---- */
+  .split-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.6rem; }
+  .split-row:last-child { margin-bottom: 0; }
+  .split-label { font-size: 0.75rem; color: var(--text-muted); min-width: 3.75rem; }
+  .split-track { flex: 1; height: 8px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; }
+  .split-fill { height: 100%; border-radius: 4px; }
+  .split-value { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-main); min-width: 4.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+
   .ov-alert-panel { margin-bottom: 1.75rem; }
   .ov-ok-panel-body { display: flex; align-items: center; gap: 0.6rem; }
   .ov-alert-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
