@@ -58,8 +58,8 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
   const s = tradeTimelineSummary(series, positions);
   const llmHref = `/dashboard/llm${llmQuery({ env: run.id }, { llmJob: run.id })}`;
 
-  const intro = `<p class="note"><span class="ticker">${escapeHtml(run.tickers.join(", "))}</span> &middot; ${fmtTime(run.testStart)} &rarr; ${fmtTime(run.testEnd)} &middot; ${statusBadge(semantic, BACKTEST_STATUS_LABEL[run.status] ?? run.status)}
-    &middot; <a href="${escapeHtml(llmHref)}">View every LLM call this run made &rarr;</a></p>`;
+  const intro = `<p class="note"><a href="/dashboard/backtest">&larr; Runs</a> &middot; <span class="ticker">${escapeHtml(run.tickers.join(", "))}</span> &middot; ${fmtTime(run.testStart)} &rarr; ${fmtTime(run.testEnd)} &middot; ${statusBadge(semantic, BACKTEST_STATUS_LABEL[run.status] ?? run.status)}
+    &middot; <a href="${escapeHtml(llmHref)}">LLM calls &rarr;</a></p>`;
 
   let chartBody;
   if (run.status === "failed") chartBody = `<p class="empty">${escapeHtml(run.error ?? "failed with no recorded error message")}</p>`;
@@ -68,13 +68,13 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
     // deleted by that route's own cleanup (backtest/cleanup.js#
     // cleanupCancelledRun), so there is nothing left to chart, same as a
     // failed run. `positions` below will be empty for the same reason.
-    chartBody = `<p class="empty">${escapeHtml(run.error ?? "cancelled by operator")} -- its data was deleted, so there is no equity curve to draw.</p>`;
+    chartBody = `<p class="empty">${escapeHtml(run.error ?? "cancelled by operator")} -- data deleted, no equity curve.</p>`;
   }
   else if (run.status !== "complete") {
     // renderJobProgressPanel returns "" for a job with no id, so fall back to
     // the static text on that too -- not just when there is no job at all --
     // rather than leaving the chart area blank.
-    chartBody = (activeJob && renderJobProgressPanel(activeJob)) || `<p class="empty">Still running -- the equity curve is drawn once scoring finishes. Positions opened so far are listed below; reload to update.</p>`;
+    chartBody = (activeJob && renderJobProgressPanel(activeJob)) || `<p class="empty">Still running -- the equity curve appears when scoring finishes. Reload to update.</p>`;
   }
   else chartBody = tradeTimelineChart(series, positions);
 
@@ -96,7 +96,6 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
     : "";
 
   return `<section id="backtest-detail">
-    ${back}
     ${head}
     ${intro}
     ${headline}
@@ -105,7 +104,7 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
       <div class="panel-body">${stats}${chartBody}</div>
     </div>
     <h2>Positions${positionsError ? "" : ` <span class="h2-count">${positions.length}</span>`}</h2>
-    ${truncated ? `<p class="note">Showing the first ${positions.length} positions only -- this run opened more.</p>` : ""}
+    ${truncated ? `<p class="note">Showing the first ${positions.length} positions only.</p>` : ""}
     ${positionsError ? errorState(positionsError) : tradeTimelineTable(positions)}
   </section>`;
 }
