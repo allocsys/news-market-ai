@@ -537,6 +537,7 @@ const STYLE = `
     padding: 0.18rem 0.5rem; border-radius: 999px;
     letter-spacing: 0.04em; text-transform: uppercase;
     border: 1px solid transparent;
+    flex-shrink: 0; white-space: nowrap; align-self: flex-start;
   }
   .stale-flag {
     color: var(--color-warning-text); background: var(--color-warning-bg);
@@ -923,6 +924,30 @@ const STYLE = `
     margin-bottom: 1.75rem;
   }
 
+  .ov-alert-panel { margin-bottom: 1.75rem; }
+  .ov-ok-panel-body { display: flex; align-items: center; gap: 0.6rem; }
+  .ov-alert-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
+  .ov-alert-text { color: var(--text-main); font-size: 0.8125rem; min-width: 0; overflow-wrap: anywhere; }
+  .ov-ok-panel-body .ov-alert-text { color: var(--text-muted); }
+  .stale-flag--danger { color: var(--color-danger-text); background: var(--color-danger-bg); border-color: rgba(239, 68, 68, 0.28); }
+
+  .ov-panel-meta { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--text-muted); }
+
+  .ov-decision-header-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .ov-decision-ticker { font-family: var(--font-mono); font-weight: 600; }
+  .ov-decision-sub { color: var(--text-muted); font-size: 0.8125rem; }
+  .ov-decision-note { margin-bottom: 0.75rem; }
+
+  .ov-pulse-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border-subtle); }
+  .ov-pulse-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .ov-dot--stale { background: var(--color-warning-text); }
+  .ov-dot--ok { background: var(--color-success-text); }
+  .ov-pulse-ticker { font-family: var(--font-mono); font-weight: 600; min-width: 64px; }
+  .ov-pulse-stage { flex: 1; color: var(--text-muted); font-size: 0.8125rem; }
+  .ov-pulse-time { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-subtle); }
+
+  .ov-quick-links { margin-top: 0.25rem; }
+
   /* Mobile header & bottom nav (hidden on desktop) */
   .mobile-header { display: none; }
   .bottom-nav { display: none; }
@@ -976,6 +1001,21 @@ const STYLE = `
 
   /* Mobile (< 768px) */
   @media (max-width: 767px) {
+    #overview { display: flex; flex-direction: column; }
+    #overview > h2 { order: 1; }
+    #overview > .note { order: 2; }
+    .ov-alert { order: 3; }
+    .ov-cards { order: 4; }
+    .ov-panels { order: 5; }
+    .ov-charts { order: 6; }
+    .ov-links { order: 7; }
+
+    .ov-pulse-row { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
+    .ov-pulse-ticker { order: 1; }
+    .ov-pulse-time { order: 2; margin-left: auto; }
+    .ov-pulse-dot { order: 0; }
+    .ov-pulse-stage { order: 3; flex: 0 0 100%; width: 100%; }
+
     .shell { flex-direction: column; }
     .rail { display: none; }
     .mobile-header {
