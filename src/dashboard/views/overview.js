@@ -132,11 +132,11 @@ export function renderOverviewView({
     <h2>Overview</h2>
     <p class="note">Open risk, recent decision outcomes, source and pipeline health, and the latest decision. Each panel loads independently.</p>
 
+    <div class="ov-charts">${renderBookCharts({ openPositions, decisionStats, totalExposurePct })}</div>
+
     <div class="ov-alert">${renderAlertStrip({ health, checkpoints, snapshotError, healthError, pipelineError, latestDecisionError })}</div>
 
     <div class="ov-cards">${renderSummaryCards({ openPositions, closedPositions, decisionStats, totalExposurePct })}</div>
-
-    <div class="ov-charts">${renderBookCharts({ openPositions, decisionStats, totalExposurePct })}</div>
 
     <div class="ov-panels chart-row-2">
       ${renderLatestDecisionPanel(latestDecision, latestDecisionError, resolvedEnv)}
