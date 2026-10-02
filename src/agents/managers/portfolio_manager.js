@@ -25,9 +25,17 @@
 // true -- see that file for the actual replace logic).
 //
 // Two things are still placeholders, though: (1) MAX_PORTFOLIO_RISK_PCT
-// (shared/constants.js) is not tuned against anything real yet, and (2) there's still no
-// correlation/cross-asset-exposure check -- this is a flat total-risk-
-// budget check only.
+// (shared/constants.js) is not tuned against anything real yet, and (2) the
+// concentration cap below is a static ticker->group map, not a computed correlation.
+//
+// CONCENTRATION CAP: when the caller passes `ticker`, `direction` and `openPositions`
+// (RunStore#getOpenPositionsRiskAsOf's `positions`, other tickers only), the sum of open
+// SAME-DIRECTION sizes in this ticker's group (shared/constants.js TICKER_GROUPS) plus this
+// thesis may not exceed MAX_GROUP_EXPOSURE_PCT. Opposite-direction positions do not count
+// (they offset); a position with no stored direction counts (it cannot be netted). Omitting
+// any of the three skips the check. Like the drawdown breaker, RunStore#commitThesis does
+// not re-check it in SQL, so two runs racing can each let one entry through; the exposure and
+// loss-at-stop ceilings still bound the book.
 //
 // DRAWDOWN CIRCUIT BREAKER: when the caller passes `realizedPnlPct` (trailing-
 // window realized book P&L, RunStore#getRealizedPnlPctAsOf) and a positive
@@ -43,11 +51,23 @@
 // bounds. Omitting either option skips the check.
 
 import { PortfolioDecision } from "../../schemas/index.js";
-import { FALLBACK_STOP_LOSS_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
+import { FALLBACK_STOP_LOSS_PCT, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
+
+// Float slack so a sum that is exactly the cap on paper (0.05 + 0.05) is never rejected by rounding.
+const GROUP_CAP_EPSILON = 1e-9;
 
 export function evaluatePortfolio(
   riskDecision,
-  { openPositionsRiskPct = 0, openPositionsStopRiskPct = 0, isReplacingPosition = false, realizedPnlPct = null, drawdownBreakerPct = 0 } = {}
+  {
+    openPositionsRiskPct = 0,
+    openPositionsStopRiskPct = 0,
+    isReplacingPosition = false,
+    realizedPnlPct = null,
+    drawdownBreakerPct = 0,
+    ticker = null,
+    direction = null,
+    openPositions = null,
+  } = {}
 ) {
   if (!riskDecision.approved) {
     return PortfolioDecision.parse({
@@ -75,7 +95,20 @@ export function evaluatePortfolio(
   const newStopRiskPct = riskDecision.positionSizePct * (riskDecision.stopLossPct ?? FALLBACK_STOP_LOSS_PCT);
   const wouldBeStopRiskPct = openPositionsStopRiskPct + newStopRiskPct;
   const stopRiskOk = wouldBeStopRiskPct <= MAX_PORTFOLIO_STOP_RISK_PCT;
-  const approvedForExecution = exposureOk && stopRiskOk;
+  // Concentration: same-direction exposure already open in this ticker's group (callers exclude this ticker's own position).
+  let groupExposurePct = 0;
+  let groupOk = true;
+  const groupId = ticker ? groupOfTicker(ticker) : null;
+  const checkGroup = groupId !== null && (direction === "long" || direction === "short") && Array.isArray(openPositions);
+  if (checkGroup) {
+    for (const p of openPositions) {
+      if (p.ticker === ticker || groupOfTicker(p.ticker) !== groupId) continue;
+      if (p.direction && p.direction !== direction) continue;
+      groupExposurePct += p.positionSizePct;
+    }
+    groupOk = groupExposurePct + riskDecision.positionSizePct <= MAX_GROUP_EXPOSURE_PCT + GROUP_CAP_EPSILON;
+  }
+  const approvedForExecution = exposureOk && stopRiskOk && groupOk;
   const netNote = isReplacingPosition
     ? " (openPositionsRiskPct already excludes this ticker's existing position, which is being replaced)"
     : "";
@@ -85,8 +118,10 @@ export function evaluatePortfolio(
     reason = `combined portfolio risk ${wouldBeTotalRiskPct} <= ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote}`;
   } else if (!exposureOk) {
     reason = `combined portfolio risk ${wouldBeTotalRiskPct} would exceed ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote} -- rejected`;
-  } else {
+  } else if (!stopRiskOk) {
     reason = `combined loss-at-stop ${wouldBeStopRiskPct} would exceed ceiling ${MAX_PORTFOLIO_STOP_RISK_PCT}${netNote} -- rejected`;
+  } else {
+    reason = `concentration: open ${direction} exposure in group "${groupId}" ${groupExposurePct} + this thesis ${riskDecision.positionSizePct} would exceed the group cap ${MAX_GROUP_EXPOSURE_PCT} -- rejected`;
   }
 
   return PortfolioDecision.parse({
