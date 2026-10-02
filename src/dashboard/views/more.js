@@ -14,12 +14,12 @@ const MORE_ICONS = {
 MORE_ICONS.controls = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
 
 const MORE_SECTIONS = [
-  { id: "controls", title: "Pause switches", desc: "Pause ingestion, trading, LLM calls or backtests to free headroom for backfill.", icon: MORE_ICONS.controls },
-  { id: "activity", title: "Activity", desc: "Trade decisions per UTC calendar day, stacked by status.", icon: MORE_ICONS.activity },
-  { id: "charts", title: "Charts", desc: "Recent daily closes (unadjusted) for watchlist tickers.", icon: MORE_ICONS.charts },
-  { id: "llm", title: "LLM calls", desc: "Every prompt sent to Gemini and what came back -- live pipeline; backtests aren't logged by default.", icon: MORE_ICONS.llm },
-  { id: "backfill", title: "Backfill", desc: "Triggers historical news backfill (Finnhub company-news).", icon: MORE_ICONS.backfill },
-  { id: "backtest", title: "Backtest", desc: "Manual backtest harness (Signal ON vs buy & hold).", icon: MORE_ICONS.backtest },
+  { id: "controls", title: "Pause switches", desc: "Pause ingestion, trading, LLM calls or backtests.", icon: MORE_ICONS.controls },
+  { id: "activity", title: "Activity", desc: "Trade decisions per UTC day, by status.", icon: MORE_ICONS.activity },
+  { id: "charts", title: "Charts", desc: "Recent daily closes for watchlist tickers.", icon: MORE_ICONS.charts },
+  { id: "llm", title: "LLM calls", desc: "Every Gemini prompt and response (live only).", icon: MORE_ICONS.llm },
+  { id: "backfill", title: "Backfill", desc: "Historical news backfill (Finnhub).", icon: MORE_ICONS.backfill },
+  { id: "backtest", title: "Backtest", desc: "Manual run: Signal ON vs buy & hold.", icon: MORE_ICONS.backtest },
 ];
 
 export function renderMoreView() {
@@ -31,14 +31,13 @@ export function renderMoreView() {
       </div>
     </a>`).join("\n");
   return `<section id="more">
-    <h2>More views &amp; actions</h2>
-    <p class="note">Additional operational sections and administrative actions not pinned to the mobile bottom nav.</p>
+    <h2>More</h2>
     <div class="more-grid">${cards}</div>
     <style>
-      .more-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:1rem; }
+      .more-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:0.6rem; }
       .more-card {
-        display:flex; align-items:flex-start; gap:0.85rem;
-        padding:1.1rem 1.25rem;
+        display:flex; align-items:center; gap:0.75rem;
+        padding:0.75rem 1rem;
         background: var(--bg-surface);
         border: 1px solid var(--border-color);
         border-radius: var(--radius-md);
