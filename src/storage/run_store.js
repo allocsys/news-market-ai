@@ -405,6 +405,10 @@ export class RunStore {
    *      against OTHER tickers only -- **decided 2026-09-19** (plan.md):
    *      a ticker's new position replacing its own old one is not double-
    *      counted against the ceiling.
+   *   P2b/P2c/P2d (same three places, same as-of bound): loss-at-stop ceiling, same-direction group
+   *      concentration cap, and the drawdown circuit breaker (trailing-window net P&L incl. marked open
+   *      positions must stay above -drawdownBreakerPct; skipped when the caller passes no window).
+   *      Details at each fragment below.
    * (1) never closes the row it is about to (re)insert (`id != ?`): a
    * checkpoint-resumed or queue-retried re-run of the portfolio stage (crash
    * between this batch and the checkpoint write) must be a no-op, not close
