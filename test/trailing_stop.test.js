@@ -123,11 +123,11 @@ test("trailing off: walk is the static walk and the result has no peakPrice key"
 
 test("NO LOOKAHEAD: a bar that spikes to a new high and falls back is judged by the level from before the bar", () => {
   const t = resolveTrailingConfig({ breakEvenTriggerR: 1 });
-  // Bar spikes to 110 (2R) and closes back at 100 with a low of 99. Break-even (~100) would catch the low
-  // IF the spike's own peak counted; it must not, the bar is judged against the 95 stop.
-  const r = walkBarsForExit(LONG, [bar(0, 100, 110, 99, 100)], { trailing: t });
+  // Bar spikes to 109 (1.8R, under the 110 target) and closes back at 100 with a low of 99. Break-even (~100)
+  // would catch the low IF the spike's own peak counted; it must not, the bar is judged against the 95 stop.
+  const r = walkBarsForExit(LONG, [bar(0, 100, 109, 99, 100)], { trailing: t });
   assert.equal(r.exit, null);
-  assert.equal(r.peakPrice, 110, "the bar's own high is folded in only afterwards, for the next bar");
+  assert.equal(r.peakPrice, 109, "the bar's own high is folded in only afterwards, for the next bar");
 });
 
 test("the NEXT bar is stopped at the break-even level the previous bar created", () => {
@@ -175,8 +175,8 @@ test("trailRemovesTarget: the take-profit is ignored once the trail binds; other
 
 test("peakPrice never worse than entry and not set on an exit", () => {
   const t = resolveTrailingConfig({ breakEvenTriggerR: 1 });
-  const down = walkBarsForExit(LONG, [bar(0, 100, 100.5, 97, 98)], { trailing: t });
-  assert.equal(down.peakPrice, 100, "baseline is entry, never the bar's lower high");
+  const down = walkBarsForExit(LONG, [bar(0, 99, 99.5, 97, 98)], { trailing: t });
+  assert.equal(down.peakPrice, 100, "baseline is entry, never a bar high below it");
   const stopped = walkBarsForExit(LONG, [bar(0, 100, 101, 94, 95)], { trailing: t });
   assert.equal(stopped.exit.reason, CLOSE_REASON.STOP_LOSS);
   assert.equal("peakPrice" in stopped, false);
