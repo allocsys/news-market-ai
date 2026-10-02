@@ -21,7 +21,7 @@
 // failure instead of after (keys.length) failures, so a capped budget
 // actually gets to a model that might work.
 
-import { isCoolingDown, setCooldown, parseRetryDelaySeconds, classifyRateLimit, dailyQuotaCooldownSeconds } from "../../shared/cooldown.js";
+import { getCooldown, setCooldown, parseRetryDelaySeconds, classifyRateLimit, dailyQuotaCooldownSeconds } from "../../shared/cooldown.js";
 import { VendorError } from "../../shared/errors.js";
 
 const DEFAULT_COOLDOWN_SECONDS = 60;
@@ -85,15 +85,22 @@ function retryAfterFor(cooldownSeconds) {
  * status/transient are inherited from the error it stands in for, so callers
  * that branch on them ("is this worth a pause?") behave as before; a transient
  * one also carries `retryAfterSeconds`.
+ *
+ * `dailyQuota` is set when EVERY attempt the cascade made or skipped was a DAILY
+ * quota cooldown (a fresh PerDay 429, or a skip of a `daily:` cooldown): then
+ * retryAfterSeconds is the shortest remaining daily cooldown (hours, not the 60s
+ * floor), and the backtest pauses for the day instead of stalling out.
  */
 function cascadeExhaustedError({ realErr, lastErr, attempts, elapsedMs, cooldownSeconds }) {
   const cause = realErr ?? lastErr;
   const transient = cause?.transient === true;
+  const dailyQuota = transient && attempts.length > 0 && attempts.every((a) => a.daily === true);
   const tail = realErr ? `; last error: ${realErr.message}` : "; every model/key was in a recorded cooldown";
   return new VendorError("gemini", `Gemini cascade exhausted after ${elapsedMs}ms with no usable model [${summarizeAttempts(attempts)}]${tail}`, {
     status: cause?.status,
     transient,
     ...(transient ? { retryAfterSeconds: retryAfterFor(cooldownSeconds) } : {}),
+    ...(dailyQuota ? { dailyQuota: true } : {}),
   });
 }
 
@@ -236,14 +243,16 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         throw cappedErr;
       }
 
-      if (await isCoolingDown(kv, model, ki)) {
-        console.log(`[gemini] model "${model}" key #${ki} skipped (cooldown active), elapsed=${elapsedMs}ms`);
+      const cooling = await getCooldown(kv, model, ki);
+      if (cooling) {
+        console.log(`[gemini] model "${model}" key #${ki} skipped (${cooling.daily ? "daily-quota " : ""}cooldown active), elapsed=${elapsedMs}ms`);
         lastErr = new VendorError("gemini", `model "${model}" key #${ki} is in a recorded cooldown`, {
           status: 429,
           transient: true,
         });
-        note({ model, keyIndex: ki, outcome: "skipped", detail: "cooldown active" });
-        cooldownSeconds.push(DEFAULT_COOLDOWN_SECONDS);
+        note({ model, keyIndex: ki, outcome: "skipped", detail: cooling.daily ? "daily quota cooldown active" : "cooldown active", ...(cooling.daily ? { daily: true } : {}) });
+        // A daily cooldown's real remaining time (known from its stored expiry) instead of the flat default.
+        cooldownSeconds.push(cooling.daily && cooling.remainingSeconds ? cooling.remainingSeconds : DEFAULT_COOLDOWN_SECONDS);
         continue;
       }
 
@@ -257,6 +266,8 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
       try {
         const data = await callOnce(config, model, apiKey, body, ki);
         note({ model, keyIndex: ki, outcome: "ok" });
+        // Quota ledger (storage/quota_usage.js): one successful request against this model/key's daily RPD.
+        config.subrequestBudget?.chargeGemini?.(model, ki);
         if (trace) {
           trace.modelUsed = model;
           trace.keyIndex = ki;
@@ -297,10 +308,14 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
 
         let seconds = DEFAULT_COOLDOWN_SECONDS;
+        let daily = false;
         if (isRateLimited) {
           const kind = classifyRateLimit(err.message, err.quotaId);
-          seconds = kind === "daily" ? dailyQuotaCooldownSeconds() : parseRetryDelaySeconds(err.message) ?? DEFAULT_COOLDOWN_SECONDS;
+          daily = kind === "daily";
+          seconds = daily ? dailyQuotaCooldownSeconds() : parseRetryDelaySeconds(err.message) ?? DEFAULT_COOLDOWN_SECONDS;
           console.log(`[gemini] 429 classified ${kind}: model="${model}" key=#${ki} quotaId=${err.quotaId ?? "n/a"} cooldown=${seconds}s`);
+          // The attempt object is shared with opts.trace, so this tags both.
+          if (daily) attempts[attempts.length - 1].daily = true;
         }
         // `seconds` still feeds the exhaustion error's retryAfterSeconds hint for
         // every kind of failure, but a 5xx other than 503 (500 "Internal error",
@@ -308,7 +323,7 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         // NO cooldown, so the next call may try that model again immediately.
         cooldownSeconds.push(seconds);
         const writesCooldown = !(isOverloaded && err.status !== 503);
-        if (writesCooldown) await setCooldown(kv, model, ki, seconds);
+        if (writesCooldown) await setCooldown(kv, model, ki, seconds, { daily });
         if (isLastCombination) throw cascadeExhausted();
         // otherwise fall through to next model, or (via outer loop) next key
       }
