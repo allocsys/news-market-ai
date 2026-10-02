@@ -924,6 +924,8 @@ const STYLE = `
     margin-bottom: 1.75rem;
   }
 
+  .chart-row-2.chart-row-gap { margin-bottom: 1.5rem; }
+
   .ov-alert-panel { margin-bottom: 1.75rem; }
   .ov-ok-panel-body { display: flex; align-items: center; gap: 0.6rem; }
   .ov-alert-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
