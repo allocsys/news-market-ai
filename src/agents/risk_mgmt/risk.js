@@ -8,6 +8,7 @@
 
 import { RiskDecision } from "../../schemas/index.js";
 import { computeATR } from "../analysts/technicalIndicators.js";
+import { FALLBACK_STOP_LOSS_PCT } from "../../shared/constants.js";
 
 const MAX_POSITION_PCT = 0.05; // never risk more than 5% of portfolio on one thesis
 const MIN_CONFIDENCE_TO_ACT = 0.6;
@@ -18,7 +19,8 @@ const MIN_CONFIDENCE_TO_ACT = 0.6;
 // used for every ticker before ATR-based sizing; kept as a safety net rather
 // than removed, so a data gap degrades to the old known-safe behavior
 // instead of leaving stop/target undefined.
-const FALLBACK_STOP_LOSS_PCT = 0.03;
+// FALLBACK_STOP_LOSS_PCT (3%) lives in shared/constants.js so the portfolio
+// loss-at-stop sum charges the same distance to a position with no stored stop.
 const FALLBACK_TAKE_PROFIT_PCT = 0.06;
 
 // ATR-based dynamic sizing: stop/target now scale with the ticker's OWN
