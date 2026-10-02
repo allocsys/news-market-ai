@@ -1032,10 +1032,10 @@ const STYLE = `
     #overview { display: flex; flex-direction: column; }
     #overview > h2 { order: 1; }
     #overview > .note { order: 2; }
-    .ov-alert { order: 3; }
-    .ov-cards { order: 4; }
-    .ov-panels { order: 5; }
-    .ov-charts { order: 6; }
+    .ov-charts { order: 3; }
+    .ov-alert { order: 4; }
+    .ov-cards { order: 5; }
+    .ov-panels { order: 6; }
     .ov-links { order: 7; }
 
     .ov-pulse-row { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
