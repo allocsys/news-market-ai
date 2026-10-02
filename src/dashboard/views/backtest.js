@@ -66,7 +66,7 @@ function backtestPurgeForm() {
 export function renderBacktestView({ backtestRuns, error, replayJobs, replayError }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
-    <p class="note">Signal ON (real pipeline over already-backfilled news) vs. signal OFF (naive buy &amp; hold), manually triggered -- never automatic. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. A window with no backfilled news for it (see <code>POST /backfill</code>) will show a thin/empty "on" side, not an error.</p>
+    <p class="note">Signal ON (real pipeline) vs. OFF (buy &amp; hold). Manual only; needs login. No backfilled news in the window = empty ON side.</p>
 
     <div class="panel" style="margin-bottom:1.5rem">
       <div class="panel-header"><span class="panel-title">Trigger a new run</span></div>
@@ -78,9 +78,9 @@ export function renderBacktestView({ backtestRuns, error, replayJobs, replayErro
     <div class="panel" style="margin-bottom:1.5rem">
       <div class="panel-header"><span class="panel-title">Clean up old runs</span></div>
       <div class="panel-body">
-        <p class="note">Frees D1 storage by deleting positions/decisions/LLM-call data for old finished runs. Each run's headline result and its "running"/"complete"/"failed"/"cancelled" status stay in the Recent runs list below -- only the per-trade timeline is removed, and only for runs that already finished. A currently-running run is never touched here; terminate it from its own entry below instead.</p>
+        <p class="note">Deletes per-trade data of finished runs; summaries stay. Running runs are never touched.</p>
         ${backtestCleanupForm()}
-        <p class="note" style="margin-top:1rem">To remove failed and cancelled runs completely -- their rows in Recent runs and their error history too -- use the button below. Complete and running runs are never touched.</p>
+        <p class="note" style="margin-top:1rem">Or remove failed/cancelled runs entirely, including error history.</p>
         ${backtestPurgeForm()}
       </div>
     </div>
@@ -95,7 +95,7 @@ export function renderBacktestView({ backtestRuns, error, replayJobs, replayErro
     <div class="panel" style="margin-top:1.5rem">
       <div class="panel-header"><span class="panel-title">News replay comparison</span></div>
       <div class="panel-body">
-        <p class="note">Pick one or a few already-ingested news items and see, side by side, what the pre-#132 parallel analyst calls versus the current batched call would each have decided for the resulting trade -- a way to check #132's cost/quality trade-off against real historical items instead of only the test suite. Read-only: no position or trade decision is ever written.</p>
+        <p class="note">Compare old parallel vs. current batched analyst calls on ingested news items. Read-only.</p>
         ${replayTriggerForm()}
       </div>
     </div>
@@ -112,7 +112,7 @@ export function renderBacktestView({ backtestRuns, error, replayJobs, replayErro
 export function renderBacktestConfirmPage({ testStart, testEnd, tickers, graceDays }) {
   return `<section id="backtest-confirm">
     <h2>Confirm manual backtest</h2>
-    <p class="note">You are about to run a manual backtest with the following parameters:</p>
+    <p class="note">Manual backtest parameters:</p>
     <div class="llm-answer-body" style="max-width:none; margin-bottom: 1.5rem;">
       <div class="llm-block"><span class="llm-agent">Tickers</span> <span class="ticker">${escapeHtml(tickers ?? "Watchlist")}</span></div>
       <div class="llm-block"><span class="llm-agent">Test Start</span> <span class="num">${escapeHtml(testStart)}</span></div>
@@ -127,7 +127,7 @@ export function renderBacktestConfirmPage({ testStart, testEnd, tickers, graceDa
       ${graceDays ? `<input type="hidden" name="graceDays" value="${escapeHtml(graceDays)}">` : ""}
       <label class="filter-group" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
         <input type="checkbox" name="enableLlmLog" value="1">
-        <span>Enable LLM call logging for this run <span class="chart-axis-label">(off by default to save D1 write budget -- turns on the "LLM calls" page for just this run)</span></span>
+        <span>Enable LLM call logging <span class="chart-axis-label">(off by default to save D1 writes)</span></span>
       </label>
       <div class="filter-group">
         <button type="submit" class="btn">Confirm and run backtest</button>
