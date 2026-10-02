@@ -291,6 +291,10 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
           exitPrice: currentPrice,
           confidence: state.verdict.confidence,
           flipMinConfidence: config.flipMinConfidence,
+          // Arms the SQL re-check of the drawdown breaker (same inputs loadDrawdownBreakerOptions used above).
+          drawdownBreakerPct: config.drawdownBreakerPct,
+          drawdownBreakerWindowDays: config.drawdownBreakerWindowDays,
+          tradeCostBps: config.tradeCostBps,
           // Fold the marker into the commit ONLY when this ticker had no open position: then nothing can have been
           // replaced, so there is nothing to settle below. With an existing position (a possible replace, or this
           // thesis's own position on a retry) the marker stays AFTER the settle loop, so a crash in between re-runs
