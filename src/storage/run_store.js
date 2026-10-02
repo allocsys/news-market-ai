@@ -15,7 +15,7 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 import { computeRealizedReturn } from "../shared/returns.js";
-import { DEFAULT_FLIP_MIN_CONFIDENCE, MAX_PORTFOLIO_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
+import { DEFAULT_FLIP_MIN_CONFIDENCE, FALLBACK_STOP_LOSS_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
 import {
   ACTIVE_JOB_MAX_IDLE_MS,
@@ -217,14 +217,33 @@ export class RunStore {
 
   async getOpenPositionsRiskPctAsOf({ asOf, excludeTicker } = {}) {
     requireAsOf("getOpenPositionsRiskPctAsOf", asOf);
+    return (await this.getOpenPositionsRiskAsOf({ asOf, excludeTicker })).exposurePct;
+  }
+
+  /**
+   * Both open-book risk numbers from ONE query (no extra D1 read per decision):
+   *   exposurePct   sum of position_size_pct (gross exposure, the original ceiling's unit);
+   *   stopRiskPct   sum of position_size_pct * stop_loss_pct, i.e. the book loss if every open
+   *                 position hit its stop. A row with no stop_loss_pct is charged
+   *                 FALLBACK_STOP_LOSS_PCT (same fallback the SQL ceiling in commitThesis uses).
+   * Same point-in-time bound and `excludeTicker` netting as getOpenPositionsRiskPctAsOf.
+   */
+  async getOpenPositionsRiskAsOf({ asOf, excludeTicker } = {}) {
+    requireAsOf("getOpenPositionsRiskAsOf", asOf);
 
     const sql = excludeTicker
-      ? `SELECT position_size_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?) AND ticker != ?`
-      : `SELECT position_size_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`;
+      ? `SELECT position_size_pct, stop_loss_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?) AND ticker != ?`
+      : `SELECT position_size_pct, stop_loss_pct FROM positions WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`;
     const binds = excludeTicker ? [this.runId, asOf, asOf, excludeTicker] : [this.runId, asOf, asOf];
 
     const { results } = await this.db.prepare(sql).bind(...binds).all();
-    return results.reduce((sum, r) => sum + r.position_size_pct, 0);
+    let exposurePct = 0;
+    let stopRiskPct = 0;
+    for (const r of results) {
+      exposurePct += r.position_size_pct;
+      stopRiskPct += r.position_size_pct * (r.stop_loss_pct ?? FALLBACK_STOP_LOSS_PCT);
+    }
+    return { exposurePct, stopRiskPct };
   }
 
   /**
