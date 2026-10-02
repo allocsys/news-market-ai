@@ -32,6 +32,32 @@ function parseList(value) {
 }
 
 /**
+ * Parses "TICKER:SYMBOL,TICKER:SYMBOL,..." into `{ TICKER: SYMBOL }`. Malformed
+ * entries (no ":", or an empty side) are skipped.
+ */
+function parseSymbolMap(value) {
+  const map = {};
+  for (const entry of parseList(value)) {
+    const i = entry.indexOf(":");
+    if (i === -1) continue;
+    const ticker = entry.slice(0, i).trim();
+    const symbol = entry.slice(i + 1).trim();
+    if (ticker && symbol) map[ticker] = symbol;
+  }
+  return map;
+}
+
+/**
+ * Finnhub /company-news only serves company/ETF symbols, so a watchlist entry
+ * with no such symbol (spot gold, an FX pair) returns an empty list. This maps
+ * the watchlist ticker to the symbol to REQUEST; articles are still tagged with
+ * the watchlist ticker. XAUUSD -> GLD (SPDR Gold Shares), same proxy idea as
+ * USO for oil. Override with FINNHUB_SYMBOL_MAP ("XAUUSD:GLD,..."; set it to an
+ * empty string for no mapping).
+ */
+const DEFAULT_FINNHUB_SYMBOL_MAP = { XAUUSD: "GLD" };
+
+/**
  * Parses "TICKER|url,TICKER|url,..." into `[{ ticker, url }]`, same shape
  * as watchlist's `{ ticker, query }` pairs. An entry with no "|" (just a
  * bare url) is allowed -- ticker comes back as "" -- for feeds/pages that
@@ -238,6 +264,9 @@ export function loadConfig(env) {
     // already gives every other news source.
     finnhubApiKey: env.FINNHUB_API_KEY || "",
     finnhubApiBase: env.FINNHUB_API_BASE || "https://finnhub.io/api/v1/company-news",
+    // Watchlist ticker -> symbol actually requested from /company-news (see
+    // DEFAULT_FINNHUB_SYMBOL_MAP above). Unset -> default; set -> parsed as given.
+    finnhubSymbolMap: env.FINNHUB_SYMBOL_MAP === undefined ? { ...DEFAULT_FINNHUB_SYMBOL_MAP } : parseSymbolMap(env.FINNHUB_SYMBOL_MAP),
     // Paces finnhub.js#fetchLatest's per-ticker loop (shared/throttle.js).
     // Finnhub's free tier is documented at 60 requests/minute -- 1100ms
     // (~54/min) leaves a small safety margin under that ceiling, same
