@@ -85,14 +85,21 @@ export class SubrequestBudget {
     this.total = 0;
     this.kv = 0;
     this.d1 = 0;
-    // Cumulative D1 rows actually written this invocation (SUM of every
-    // write statement's meta.changes -- run()/batch() only, never first()/
-    // all()/raw()), tracked here but NOT enforced by this class: it feeds
-    // BACKTEST_DAILY_WRITE_BUDGET (config.js), a cross-invocation, cross-run
-    // DAILY cap checked once per part by backtest-worker.js against
-    // storage/sim_registry.js#getBacktestRowsWrittenToday, not a per-
-    // invocation limit this budget itself refuses against.
+    // Cumulative D1 rows actually written this invocation, in D1's BILLING unit
+    // (meta.rows_written: includes index writes; falls back to meta.changes where
+    // a driver reports no rows_written) -- run()/batch() only, never first()/
+    // all()/raw(). Tracked here but NOT enforced by this class: it feeds the
+    // cross-invocation, cross-run DAILY quota ledger (storage/quota_usage.js,
+    // BACKTEST_DAILY_WRITE_BUDGET in config.js) checked once per part by
+    // backtest-worker.js, not a per-invocation limit this budget refuses against.
     this.rowsWritten = 0;
+    // Cumulative D1 rows read (meta.rows_read of all()/run()/batch() results).
+    // A LOWER BOUND: D1's first() returns the bare row and no meta, so reads
+    // made through first() are not seen here.
+    this.rowsRead = 0;
+    // KV operations by billing class (this.kv stays the reads+writes total).
+    this.kvReads = 0;
+    this.kvWrites = 0;
     this.halted = false;
     this.suspendDepth = 0;
     this.unitsCompleted = 0;
@@ -132,7 +139,13 @@ export class SubrequestBudget {
     if (!this.suspended && this.total + 1 > this.totalLimit) this.#refuse(`total subrequest limit reached (${kind})`);
     this.total++;
     if (kind === "kv") this.kv++;
-    else if (kind === "d1") this.d1++;
+    else if (kind === "kv_read") {
+      this.kv++;
+      this.kvReads++;
+    } else if (kind === "kv_write") {
+      this.kv++;
+      this.kvWrites++;
+    } else if (kind === "d1") this.d1++;
   }
 
   /**
@@ -142,6 +155,11 @@ export class SubrequestBudget {
    */
   chargeRowsWritten(changes) {
     if (Number.isFinite(changes) && changes > 0) this.rowsWritten += changes;
+  }
+
+  /** Adds `rows` (a result's meta.rows_read) to this invocation's rowsRead total. Never refuses. */
+  chargeRowsRead(rows) {
+    if (Number.isFinite(rows) && rows > 0) this.rowsRead += rows;
   }
 
   suspend() {
@@ -202,6 +220,9 @@ export class SubrequestBudget {
       kv: this.kv,
       d1: this.d1,
       rowsWritten: this.rowsWritten,
+      rowsRead: this.rowsRead,
+      kvReads: this.kvReads,
+      kvWrites: this.kvWrites,
       externalLimit: this.externalLimit,
       totalLimit: this.totalLimit,
       units: { ...this.unitCounts },
