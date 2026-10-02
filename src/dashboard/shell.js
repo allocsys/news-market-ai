@@ -934,6 +934,24 @@ const STYLE = `
   .split-fill { height: 100%; border-radius: 4px; }
   .split-value { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-main); min-width: 4.5rem; text-align: right; font-variant-numeric: tabular-nums; }
 
+  /* ---- Stacked share bars (Decisions summary) ---- */
+  .decisions-summary { margin-bottom: 1.25rem; }
+  .decisions-summary .panel-body { display: flex; flex-direction: column; gap: 1rem; }
+  .stack-title { font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem; }
+  .stack-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-elevated); gap: 2px; }
+  .stack-seg { height: 100%; min-width: 3px; }
+  .stack-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin-top: 0.45rem; font-size: 0.75rem; color: var(--text-muted); }
+  .stack-key { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+  .stack-key b { color: var(--text-main); font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stack-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .stack-pct { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  /* ---- Filter bar that scrolls sideways in one row instead of wrapping ---- */
+  .filter-bar-scroll .filter-group { min-width: 0; max-width: 100%; }
+  .filter-bar-scroll .pill-row { display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+  .filter-bar-scroll .pill-row::-webkit-scrollbar { display: none; }
+  .filter-bar-scroll .pill { flex: 0 0 auto; white-space: nowrap; }
+
   .ov-alert-panel { margin-bottom: 1.75rem; }
   .ov-ok-panel-body { display: flex; align-items: center; gap: 0.6rem; }
   .ov-alert-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
