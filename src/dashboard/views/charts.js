@@ -12,7 +12,7 @@ export function renderChartsView({ priceBarsByTicker, error }) {
   const tickerCount = error ? 0 : Object.values(priceBarsByTicker).filter((b) => b && b.length >= 2).length;
   return `<section id="charts">
     <h2>Price charts${error ? "" : ` <span class="h2-count">${tickerCount}</span>`}</h2>
-    <p class="note">Recent daily closes (yfinance, unadjusted) for tickers with an open position, up to ${PRICE_CHART_TICKER_LIMIT} charted. Not point-in-time-gated -- this is "what the price actually is right now", same convention as the rest of this dashboard. Each cell shows a sparkline of the last 30 closes plus the latest price and percent change over that window.</p>
+    <p class="note">Last 30 daily closes for open-position tickers (max ${PRICE_CHART_TICKER_LIMIT}). Latest prices, not point-in-time.</p>
     ${error ? errorState(error) : priceChartsGrid(priceBarsByTicker)}
   </section>`;
 }
