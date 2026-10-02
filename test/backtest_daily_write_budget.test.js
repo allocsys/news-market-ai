@@ -1,18 +1,20 @@
-// Covers BACKTEST_DAILY_WRITE_BUDGET end to end (plan.md #6):
+// Covers the daily quota guard end to end (plan.md #6, now pause/resume + the quota_usage ledger):
 //   - sim_registry.js: addBacktestRunRowsWritten / getBacktestRowsWrittenToday
-//   - backtest-worker.js: the two refusal points (before a continuation part
-//     starts, and right after a part's own writes land) and that a run's
-//     rows_written is persisted every part regardless of outcome.
-// Real sqlite SIM_DB (state + sim schema) -- same convention as
-// backtest_worker.test.js -- so migrations/sim/0002_add_rows_written.sql is
-// exercised for real, not just the JS.
+//   - quotaTrigger (backtest-worker.js): which daily share trips, at what percent
+//   - backtest-worker.js: the refusal point before a continuation part starts now PARKS the run
+//     (status 'paused', data + cursor kept, manual resume) instead of failing it; part 1 is never
+//     refused; a part's counts land in today's ledger row; a paused run's redelivered continuation
+//     saves its cursor and is acked.
+// Real sqlite SIM_DB (state + sim schema) -- same convention as backtest_worker.test.js -- so
+// migrations/sim/0002 and 0003 are exercised for real, not just the JS.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker from "../src/backtest-worker.js";
+import worker, { quotaTrigger } from "../src/backtest-worker.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR, SIM_DIR, seedBar } from "./helpers/engine_ctx.js";
-import { insertBacktestRun, addBacktestRunRowsWritten, getBacktestRowsWrittenToday } from "../src/storage/sim_registry.js";
+import { insertBacktestRun, addBacktestRunRowsWritten, getBacktestRowsWrittenToday, pauseBacktestRun } from "../src/storage/sim_registry.js";
+import { getQuotaUsage, quotaUsageUpsertStatement, utcDay, nextUtcMidnightIso } from "../src/storage/quota_usage.js";
 
 function engineBindings() {
   return { SIM_DB: createTestD1([STATE_DIR, SIM_DIR]), INPUTS_DB: createTestD1([INPUTS_DIR]) };
@@ -36,6 +38,18 @@ async function seedOffSideBars(inputsDb) {
   await seedBar(inputsDb, { ticker: "AAPL", date: "2026-01-01", close: 100 });
   await seedBar(inputsDb, { ticker: "AAPL", date: "2026-01-03", close: 110 });
 }
+
+/** Pre-seeds today's quota_usage row, as earlier parts/runs of the day would have. */
+async function seedLedger(db, counts) {
+  await quotaUsageUpsertStatement(db, { day: utcDay(), ...counts }).run();
+}
+
+/** The registry row a continuation always has (backtest-worker.js: part > 1 with no row is treated as deleted). */
+async function seedRunningRun(db) {
+  await insertBacktestRun(db, { id: "bt-budget", tickers: ["AAPL"], testStart: OK_JOB.testStart, testEnd: OK_JOB.testEnd, trainDays: 0, testDays: 2, graceDays: 1, startedAt: new Date().toISOString() });
+}
+
+const PAUSE_COLUMNS = "status, error, paused_reason, paused_at, resume_after, cursor, rows_written";
 
 // ---------------------------------------------------------------------------
 // sim_registry.js
@@ -75,10 +89,51 @@ test("getBacktestRowsWrittenToday returns 0 when nothing was written today", asy
 });
 
 // ---------------------------------------------------------------------------
-// backtest-worker.js: enforcement
+// quotaTrigger
 // ---------------------------------------------------------------------------
 
-test("queue(): rows_written is persisted to the registry after a part completes, even when the daily budget is disabled (0)", async (t) => {
+const TRIGGER_CONFIG = { quotaPausePct: 90, backtestDailyWriteBudget: 1000, backtestDailyReadBudget: 2000, backtestDailyKvWriteBudget: 500, backtestDailyKvReadBudget: 50000 };
+const ZERO_USAGE = { d1Written: 0, d1Read: 0, kvReads: 0, kvWrites: 0 };
+
+test("quotaTrigger: null below every threshold; trips AT quotaPausePct percent of a share, not before", () => {
+  assert.equal(quotaTrigger(TRIGGER_CONFIG, ZERO_USAGE), null);
+  assert.equal(quotaTrigger(TRIGGER_CONFIG, { ...ZERO_USAGE, d1Written: 899 }), null, "899 < 90% of 1000");
+  const hit = quotaTrigger(TRIGGER_CONFIG, { ...ZERO_USAGE, d1Written: 900 });
+  assert.equal(hit.reason, "d1_write_budget");
+  assert.match(hit.detail, /D1 rows written today: 900 of our 1000\/day share \(pause at 90%\)/);
+});
+
+test("quotaTrigger: D1 writes report d1_write_budget; the other counters report quota_threshold", () => {
+  assert.equal(quotaTrigger(TRIGGER_CONFIG, { ...ZERO_USAGE, d1Read: 1800 }).reason, "quota_threshold");
+  assert.match(quotaTrigger(TRIGGER_CONFIG, { ...ZERO_USAGE, d1Read: 1800 }).detail, /D1 rows read/);
+  assert.match(quotaTrigger(TRIGGER_CONFIG, { ...ZERO_USAGE, kvWrites: 450 }).detail, /KV writes/);
+  assert.match(quotaTrigger(TRIGGER_CONFIG, { ...ZERO_USAGE, kvReads: 45000 }).detail, /KV reads/);
+  assert.equal(quotaTrigger(TRIGGER_CONFIG, { ...ZERO_USAGE, kvReads: 45000 }).reason, "quota_threshold");
+});
+
+test("quotaTrigger: a share of 0 disables that counter", () => {
+  const cfg = { ...TRIGGER_CONFIG, backtestDailyReadBudget: 0, backtestDailyKvReadBudget: 0 };
+  assert.equal(quotaTrigger(cfg, { ...ZERO_USAGE, d1Read: 10 ** 9, kvReads: 10 ** 9 }), null);
+  assert.equal(quotaTrigger({ ...cfg, backtestDailyWriteBudget: 0 }, { ...ZERO_USAGE, d1Written: 10 ** 9 }), null);
+});
+
+test("quotaTrigger: quotaPausePct 0 disables the percent checks, but the D1 write share still applies at 100%", () => {
+  const cfg = { ...TRIGGER_CONFIG, quotaPausePct: 0 };
+  assert.equal(quotaTrigger(cfg, { ...ZERO_USAGE, d1Written: 999 }), null);
+  assert.equal(quotaTrigger(cfg, { ...ZERO_USAGE, d1Written: 1000 }).reason, "d1_write_budget");
+  assert.equal(quotaTrigger(cfg, { ...ZERO_USAGE, d1Read: 10 ** 9, kvWrites: 10 ** 9, kvReads: 10 ** 9 }), null, "no percent -> no other counter is checked");
+});
+
+test("quotaTrigger: the first counter in D1-write, D1-read, KV-write, KV-read order wins when several are over", () => {
+  const hit = quotaTrigger(TRIGGER_CONFIG, { d1Written: 5000, d1Read: 5000, kvWrites: 5000, kvReads: 500000 });
+  assert.equal(hit.reason, "d1_write_budget");
+});
+
+// ---------------------------------------------------------------------------
+// backtest-worker.js: ledger + enforcement
+// ---------------------------------------------------------------------------
+
+test("queue(): rows_written is persisted to the registry and the part's counts land in today's quota ledger, even when the daily write budget is disabled (0)", async (t) => {
   const bindings = engineBindings();
   await seedOffSideBars(bindings.INPUTS_DB);
   // rows_written only accumulates when the per-invocation SubrequestBudget is
@@ -93,9 +148,11 @@ test("queue(): rows_written is persisted to the registry after a part completes,
   const run = await bindings.SIM_DB.prepare("SELECT status, rows_written FROM backtest_runs WHERE id = 'bt-budget'").first();
   assert.equal(run.status, "complete");
   assert.ok(run.rows_written > 0, "a completed run should have written at least some rows");
+  const ledger = await getQuotaUsage(bindings.SIM_DB);
+  assert.ok(ledger.d1Written > 0, "today's ledger row was created and charged this part's D1 writes");
 });
 
-test("queue(): a CONTINUATION is refused once today's cross-run total is already at/over the budget -- run fails, message still acks, no BACKTEST send", async (t) => {
+test("queue(): a CONTINUATION that would start over today's D1 write share PARKS the run -- status paused, cursor envelope kept, resume_after next UTC midnight, acked, no BACKTEST send, nothing deleted", async (t) => {
   const bindings = engineBindings();
   await seedOffSideBars(bindings.INPUTS_DB);
   const sent = [];
@@ -103,37 +160,113 @@ test("queue(): a CONTINUATION is refused once today's cross-run total is already
   t.mock.method(console, "log", () => {});
   t.mock.method(console, "error", () => {});
 
-  // Pre-seed the run's registry row (a continuation always has one, per
-  // backtest-worker.js's own comment) already over budget from an earlier part.
-  await insertBacktestRun(bindings.SIM_DB, { id: "bt-budget", tickers: ["AAPL"], testStart: OK_JOB.testStart, testEnd: OK_JOB.testEnd, trainDays: 0, testDays: 2, graceDays: 1, startedAt: new Date().toISOString() });
-  await addBacktestRunRowsWritten(bindings.SIM_DB, { id: "bt-budget", rows: 10 });
+  await seedRunningRun(bindings.SIM_DB);
+  // Today's ledger is already at the share (10 of 10; the pause threshold is 90% of it).
+  await seedLedger(bindings.SIM_DB, { d1Written: 10 });
 
   const message = new FakeMessage({ ...OK_JOB, part: 2, cursor: { dayIndex: 1 } });
   await worker.queue(batchOf(message), env);
 
   assert.equal(message.acked, true);
   assert.equal(message.retried, false);
-  assert.equal(sent.length, 0, "no continuation should be enqueued once the daily budget is exhausted");
-  const run = await bindings.SIM_DB.prepare("SELECT status, error FROM backtest_runs WHERE id = 'bt-budget'").first();
-  assert.equal(run.status, "failed");
-  assert.match(run.error, /Daily backtest write budget exhausted/);
-  assert.match(run.error, /BACKTEST_DAILY_WRITE_BUDGET=10/);
+  assert.equal(sent.length, 0, "no continuation is enqueued while parked");
+  const run = await bindings.SIM_DB.prepare(`SELECT ${PAUSE_COLUMNS} FROM backtest_runs WHERE id = 'bt-budget'`).first();
+  assert.equal(run.status, "paused", "paused, NOT failed (a failed run's data would be deleted)");
+  assert.equal(run.error, null);
+  assert.equal(run.paused_reason, "d1_write_budget");
+  assert.ok(run.paused_at, "paused_at is stamped");
+  assert.equal(run.resume_after, nextUtcMidnightIso());
+  assert.deepEqual(JSON.parse(run.cursor), {
+    part: 2,
+    cursor: { dayIndex: 1 },
+    job: { id: "bt-budget", tickers: ["AAPL"], testStart: OK_JOB.testStart, testEnd: OK_JOB.testEnd, graceDays: 1 },
+  });
 });
 
-test("queue(): part 1 of a brand-new run is never refused by the daily budget, even if the budget is already exhausted by other runs (progress guarantee)", async (t) => {
+test("queue(): a part-2 continuation under the threshold is NOT parked by the ledger check (the other counters only trip at their own share)", async (t) => {
   const bindings = engineBindings();
   await seedOffSideBars(bindings.INPUTS_DB);
-  const env = { ...bindings, BACKTEST_DAILY_WRITE_BUDGET: "1" };
+  const env = { ...bindings, BACKTEST_DAILY_WRITE_BUDGET: "1000000", BACKTEST: { send: async () => {} } };
   t.mock.method(console, "log", () => {});
+  t.mock.method(console, "error", () => {});
 
-  // A different run already blew the tiny budget today.
-  await insertBacktestRun(bindings.SIM_DB, { id: "bt-other", tickers: ["AAPL"], testStart: "a", testEnd: "b", trainDays: 0, testDays: 1, startedAt: new Date().toISOString() });
-  await addBacktestRunRowsWritten(bindings.SIM_DB, { id: "bt-other", rows: 1000 });
+  await seedRunningRun(bindings.SIM_DB);
+  await seedLedger(bindings.SIM_DB, { d1Written: 5 });
+
+  const message = new FakeMessage({ ...OK_JOB, part: 2, cursor: null });
+  await worker.queue(batchOf(message), env);
+
+  const run = await bindings.SIM_DB.prepare(`SELECT ${PAUSE_COLUMNS} FROM backtest_runs WHERE id = 'bt-budget'`).first();
+  assert.notEqual(run.status, "paused");
+  assert.equal(run.paused_reason, null);
+});
+
+test("queue(): part 1 of a brand-new run is never parked by the daily quota, even if today's ledger is already far over (progress guarantee)", async (t) => {
+  const bindings = engineBindings();
+  await seedOffSideBars(bindings.INPUTS_DB);
+  // The budget must be ENGAGED (BACKTEST bound) for the ledger to be consulted at all.
+  const env = { ...bindings, BACKTEST_DAILY_WRITE_BUDGET: "1", BACKTEST: { send: async () => {} } };
+  t.mock.method(console, "log", () => {});
+  t.mock.method(console, "error", () => {});
+
+  await seedLedger(bindings.SIM_DB, { d1Written: 1000, d1Read: 10 ** 9, kvWrites: 10 ** 6, kvReads: 10 ** 9 });
 
   const message = new FakeMessage(OK_JOB); // part 1 (implicit)
   await worker.queue(batchOf(message), env);
 
-  const run = await bindings.SIM_DB.prepare("SELECT status FROM backtest_runs WHERE id = 'bt-budget'").first();
-  assert.notEqual(run.status, undefined, "part 1 must have been allowed to run and create/finish its own registry row");
-  assert.notEqual(run.error, "Daily backtest write budget exhausted", "part 1 is never refused by the daily cap");
+  const run = await bindings.SIM_DB.prepare(`SELECT ${PAUSE_COLUMNS} FROM backtest_runs WHERE id = 'bt-budget'`).first();
+  assert.equal(run.status, "complete", "part 1 ran to the end instead of parking");
+  assert.equal(run.paused_reason, null);
+});
+
+// ---------------------------------------------------------------------------
+// backtest-worker.js: an operator-paused run's in-flight continuation
+// ---------------------------------------------------------------------------
+
+test("queue(): a continuation arriving for an operator-PAUSED run saves its cursor into the envelope, keeps the original pause stamp, and is acked without running", async (t) => {
+  const bindings = engineBindings();
+  await seedOffSideBars(bindings.INPUTS_DB);
+  const sent = [];
+  const env = { ...bindings, BACKTEST: { send: async (msg, opts) => sent.push({ msg, opts }) } };
+  t.mock.method(console, "log", () => {});
+
+  await seedRunningRun(bindings.SIM_DB);
+  // POST /backtest/:id/pause: flips the row but cannot know the in-flight message's cursor.
+  const changed = await pauseBacktestRun(bindings.SIM_DB, { id: "bt-budget", reason: "operator", pausedAt: "2026-05-10T10:00:00.000Z" });
+  assert.equal(changed, true);
+
+  const message = new FakeMessage({ ...OK_JOB, part: 2, cursor: { dayIndex: 1 } });
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  assert.equal(message.retried, false);
+  assert.equal(sent.length, 0);
+  const run = await bindings.SIM_DB.prepare(`SELECT ${PAUSE_COLUMNS} FROM backtest_runs WHERE id = 'bt-budget'`).first();
+  assert.equal(run.status, "paused");
+  assert.equal(run.paused_reason, "operator");
+  assert.equal(run.paused_at, "2026-05-10T10:00:00.000Z", "the original pause time is kept");
+  assert.deepEqual(JSON.parse(run.cursor), {
+    part: 2,
+    cursor: { dayIndex: 1 },
+    job: { id: "bt-budget", tickers: ["AAPL"], testStart: OK_JOB.testStart, testEnd: OK_JOB.testEnd, graceDays: 1 },
+  });
+  const ledger = await getQuotaUsage(bindings.SIM_DB);
+  assert.equal(ledger.d1Written, 0, "a skipped part spends no quota and writes no ledger row");
+});
+
+test("queue(): a part-1 redelivery for a paused run (no cursor to save) is acked and leaves the row untouched", async (t) => {
+  const bindings = engineBindings();
+  const env = { ...bindings, BACKTEST: { send: async () => {} } };
+  t.mock.method(console, "log", () => {});
+
+  await seedRunningRun(bindings.SIM_DB);
+  await pauseBacktestRun(bindings.SIM_DB, { id: "bt-budget", reason: "operator", pausedAt: "2026-05-10T10:00:00.000Z" });
+
+  const message = new FakeMessage(OK_JOB);
+  await worker.queue(batchOf(message), env);
+
+  assert.equal(message.acked, true);
+  const run = await bindings.SIM_DB.prepare(`SELECT ${PAUSE_COLUMNS} FROM backtest_runs WHERE id = 'bt-budget'`).first();
+  assert.equal(run.status, "paused");
+  assert.equal(run.cursor, null);
 });
