@@ -75,7 +75,7 @@ function scopeNote(params) {
 // wonder if the calls will "show up once it's done".
 function backtestLoggingNote(params) {
   if (!params.env || params.env === "live") return "";
-  return `<div class="note llm-backtest-note" role="status"><strong>No calls are logged for backtest <code>${escapeHtml(params.env)}</code>.</strong> Logging is off for backtests to save D1 writes. <a href="/dashboard/llm">View live calls &rarr;</a></div>`;
+  return `<div class="note llm-backtest-note" role="status"><strong>No calls are logged for backtest <code>${escapeHtml(params.env)}</code>.</strong> Logging is off by default for backtest runs, to save D1 writes. <a href="/dashboard/llm">View live calls &rarr;</a></div>`;
 }
 
 function callsTable(calls, env) {
