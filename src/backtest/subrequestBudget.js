@@ -100,6 +100,9 @@ export class SubrequestBudget {
     // KV operations by billing class (this.kv stays the reads+writes total).
     this.kvReads = 0;
     this.kvWrites = 0;
+    // Successful Gemini requests this invocation by "<model>|<key index>" (llm/gemini/client.js
+    // calls chargeGemini on every ok response): the per-day RPD the quota ledger tracks.
+    this.geminiCounts = {};
     this.halted = false;
     this.suspendDepth = 0;
     this.unitsCompleted = 0;
@@ -155,6 +158,12 @@ export class SubrequestBudget {
    */
   chargeRowsWritten(changes) {
     if (Number.isFinite(changes) && changes > 0) this.rowsWritten += changes;
+  }
+
+  /** One SUCCESSFUL Gemini request on `model` / key index `keyIndex` (counts only, never refuses; the fetch itself was charged by chargeExternal). */
+  chargeGemini(model, keyIndex) {
+    const key = `${model}|${keyIndex}`;
+    this.geminiCounts[key] = (this.geminiCounts[key] ?? 0) + 1;
   }
 
   /** Adds `rows` (a result's meta.rows_read) to this invocation's rowsRead total. Never refuses. */
@@ -223,6 +232,7 @@ export class SubrequestBudget {
       rowsRead: this.rowsRead,
       kvReads: this.kvReads,
       kvWrites: this.kvWrites,
+      geminiCounts: { ...this.geminiCounts },
       externalLimit: this.externalLimit,
       totalLimit: this.totalLimit,
       units: { ...this.unitCounts },
