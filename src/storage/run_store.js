@@ -14,7 +14,7 @@
 // deleted d1.js; the backtest_runs registry is storage/sim_registry.js.
 
 import { LookaheadViolationError } from "../shared/errors.js";
-import { computeRealizedReturn } from "../shared/returns.js";
+import { computeRealizedReturn, roundTripCostFraction } from "../shared/returns.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE, FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, TICKER_GROUPS, TRADE_DECISION_STATUS, groupOfTicker } from "../shared/constants.js";
 import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
 import {
@@ -445,6 +445,9 @@ export class RunStore {
     exitPrice = null,
     confidence = null,
     flipMinConfidence = DEFAULT_FLIP_MIN_CONFIDENCE,
+    drawdownBreakerPct = 0,
+    drawdownBreakerWindowDays = null,
+    tradeCostBps = 0,
     thesis,
     riskDecision,
     portfolioDecision = null,
@@ -521,6 +524,46 @@ export class RunStore {
     const groupRejectClause = checkGroup ? ` OR ${groupSum} + ? > ?` : "";
     const groupBinds = checkGroup ? [this.runId, ...groupPeers, asOf, asOf, direction, positionSizePct, MAX_GROUP_EXPOSURE_PCT + GROUP_CAP_EPSILON] : [];
 
+    // P2d, the drawdown circuit breaker: trailing-window book P&L (same definition as getRealizedPnlPctAsOf with
+    // includeUnrealized: net realized closes in (asOf - window, asOf] plus positions open as of asOf marked at
+    // last_price when last_checked_at <= asOf, a never-marked position counting as flat) must stay above
+    // -drawdownBreakerPct. Evaluated in the same three places as P2, so a close or mark that lands between the
+    // pipeline's read and this commit still blocks the entry. It is NOT netted by ticker like P2/P2b/P2c: this
+    // ticker's positions count too, but a row of this ticker closed at exactly `asOf` (what closeOld itself does)
+    // keeps its last mark instead of switching to its exit price, so closeOld closing this ticker's old row never
+    // changes what openNew/the decision CASE see. Skipped (empty clause, no binds) when the breaker is off or
+    // the caller passes no window -- entry_fill.js passes none, its breaker was decided at signal time.
+    const asOfMs = new Date(asOf).getTime();
+    const checkBreaker = drawdownBreakerPct > 0 && Number.isFinite(drawdownBreakerWindowDays) && drawdownBreakerWindowDays > 0 && Number.isFinite(asOfMs);
+    const breakerSum = `(
+           SELECT COALESCE(SUM(q.sz * (CASE q.d WHEN 'long' THEN (q.px - q.e) / q.e WHEN 'short' THEN (q.e - q.px) / q.e END - ?)), 0)
+           FROM (
+             SELECT p6.position_size_pct AS sz, p6.direction AS d, p6.entry_price AS e,
+               CASE
+                 WHEN p6.closed_at IS NOT NULL AND p6.closed_at <= ? AND NOT (p6.ticker = ? AND p6.closed_at = ?) THEN p6.exit_price
+                 WHEN p6.last_price IS NOT NULL AND p6.last_checked_at IS NOT NULL AND p6.last_checked_at <= ? THEN p6.last_price
+               END AS px
+             FROM positions p6
+             WHERE p6.run_id = ? AND (
+               (p6.closed_at IS NOT NULL AND p6.closed_at <= ? AND p6.closed_at > ? AND NOT (p6.ticker = ? AND p6.closed_at = ?))
+               OR (p6.opened_at <= ? AND (p6.closed_at IS NULL OR p6.closed_at > ? OR (p6.ticker = ? AND p6.closed_at = ?)))
+             )
+           ) q
+         )`;
+    const breakerAllowClause = checkBreaker ? ` AND ${breakerSum} > ?` : "";
+    const breakerRejectClause = checkBreaker ? ` OR ${breakerSum} <= ?` : "";
+    const breakerWindowStart = checkBreaker ? new Date(asOfMs - drawdownBreakerWindowDays * 86400000).toISOString() : null;
+    const breakerBinds = checkBreaker
+      ? [
+          roundTripCostFraction(tradeCostBps),
+          asOf, ticker, asOf, asOf,
+          this.runId,
+          asOf, breakerWindowStart, ticker, asOf,
+          asOf, asOf, ticker, asOf,
+          -drawdownBreakerPct,
+        ]
+      : [];
+
     const closeOld = this.db
       .prepare(
         `UPDATE positions
@@ -536,10 +579,10 @@ export class RunStore {
              SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
              WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
            ) + ? <= ?
-           AND ${stopRiskSum} + ? <= ?${groupAllowClause}
+           AND ${stopRiskSum} + ? <= ?${groupAllowClause}${breakerAllowClause}
            AND NOT ${holdExists}`
       )
-      .bind(asOf, direction, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT, ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT, ...groupBinds, ...holdBinds);
+      .bind(asOf, direction, exitPrice, this.runId, ticker, id, this.runId, ticker, asOf, this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT, ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT, ...groupBinds, ...breakerBinds, ...holdBinds);
 
     const openNew = this.db
       .prepare(
@@ -553,7 +596,7 @@ export class RunStore {
            SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
            WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
          ) + ? <= ?
-         AND ${stopRiskSum} + ? <= ?${groupAllowClause}
+         AND ${stopRiskSum} + ? <= ?${groupAllowClause}${breakerAllowClause}
          AND NOT ${holdExists}`
       )
       .bind(
@@ -562,6 +605,7 @@ export class RunStore {
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT,
         ...groupBinds,
+        ...breakerBinds,
         ...holdBinds
       );
 
@@ -578,7 +622,7 @@ export class RunStore {
              WHEN (
                SELECT COALESCE(SUM(position_size_pct), 0) FROM positions p3
                WHERE p3.run_id = ? AND p3.ticker != ? AND p3.opened_at <= ? AND (p3.closed_at IS NULL OR p3.closed_at > ?)
-             ) + ? > ? OR ${stopRiskSum} + ? > ?${groupRejectClause} THEN '${TRADE_DECISION_STATUS.REJECTED}'
+             ) + ? > ? OR ${stopRiskSum} + ? > ?${groupRejectClause}${breakerRejectClause} THEN '${TRADE_DECISION_STATUS.REJECTED}'
              ELSE '${TRADE_DECISION_STATUS.OPENED}'
            END),
            ?, ?, ?)
@@ -593,6 +637,7 @@ export class RunStore {
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT,
         ...groupBinds,
+        ...breakerBinds,
         opinions != null ? JSON.stringify(opinions) : null,
         debate != null ? JSON.stringify(debate) : null,
         createdAt
