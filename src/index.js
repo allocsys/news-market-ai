@@ -51,7 +51,7 @@ import { getNewsItemsInRange } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { SimClock } from "./backtest/simClock.js";
 import { parseKnobOverrides } from "./backtest/knobOverrides.js";
-import { cancelBacktestRun, getBacktestRun } from "./storage/sim_registry.js";
+import { cancelBacktestRun, getBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
 import { cleanupCancelledRun, cleanupOldRuns, purgeFailedAndCancelledRuns } from "./backtest/cleanup.js";
 import { BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import {
@@ -463,7 +463,77 @@ if (pathname === "/backtest/replay/run" && request.method === "POST") {
   }
 }
 
-// POST /backtest/:id/cancel -- terminate a RUNNING backtest. Cooperative,
+// POST /backtest/:id/pause -- park a RUNNING backtest (backtest-worker.js's PAUSE / RESUME
+    // header). Flips backtest_runs to 'paused' (reason 'operator'); all data is kept. The
+    // continuation message already in the queue then arrives, sees 'paused', saves its cursor
+    // into the resume envelope and acks without running. Cooperative like cancel: a part that is
+    // executing right now finishes first. Idempotent on an already-paused run.
+    if (pathname.startsWith("/backtest/") && pathname.endsWith("/pause") && request.method === "POST") {
+      const id = pathname.slice("/backtest/".length, pathname.length - "/pause".length);
+      if (!BACKTEST_ID_RE.test(id)) {
+        return jsonResponse({ error: "backtest run id is malformed" }, { status: 400 });
+      }
+      let changed;
+      try {
+        changed = await pauseBacktestRun(env.SIM_DB, { id, reason: "operator", pausedAt: new Date().toISOString() });
+      } catch (err) {
+        console.error("backtest pause failed", { id, message: err.message });
+        return jsonResponse({ error: "backtest pause failed", message: err.message }, { status: 500 });
+      }
+      if (!changed) {
+        const row = await getBacktestRun(env.SIM_DB, id).catch(() => null);
+        if (!row) return jsonResponse({ error: "backtest run not found" }, { status: 404 });
+        return jsonResponse({ error: `backtest run is already ${row.status}, not running` }, { status: 409 });
+      }
+      console.log("backtest run paused by operator", { id });
+      return jsonResponse({ paused: true, id });
+    }
+
+    // POST /backtest/:id/resume -- manually resume a PAUSED backtest (operator pause or an automatic
+    // quota pause; resume is never automatic). resumeBacktestRun flips paused -> running and hands
+    // back the resume envelope {part, cursor, job}; the next part is re-enqueued from it. Same pause
+    // gate as POST /backtest/run. If the enqueue fails the run is re-parked with the same envelope,
+    // so nothing is lost and the operator can simply retry. 'pausing' = the pause was just requested
+    // and the in-flight message has not saved its cursor yet: retry in a moment.
+    if (pathname.startsWith("/backtest/") && pathname.endsWith("/resume") && request.method === "POST") {
+      const id = pathname.slice("/backtest/".length, pathname.length - "/resume".length);
+      if (!BACKTEST_ID_RE.test(id)) {
+        return jsonResponse({ error: "backtest run id is malformed" }, { status: 400 });
+      }
+      const pauseGate = await getPauseFlags(env.LIVE_DB);
+      if (pauseGate.flags.backtests || pauseGate.flags.llm) {
+        return jsonResponse({ error: `backtests are paused (${pauseGate.flags.backtests ? "Backtests" : "LLM calls"} switch is on) -- resume it on /dashboard/controls` }, { status: 409 });
+      }
+      let resumed;
+      try {
+        resumed = await resumeBacktestRun(env.SIM_DB, { id });
+      } catch (err) {
+        console.error("backtest resume failed", { id, message: err.message });
+        return jsonResponse({ error: "backtest resume failed", message: err.message }, { status: 500 });
+      }
+      if (!resumed.ok) {
+        if (resumed.reason === "not_found") return jsonResponse({ error: "backtest run not found" }, { status: 404 });
+        if (resumed.reason === "pausing") return jsonResponse({ error: "backtest run is still pausing (its in-flight part has not saved the resume point yet) -- retry in a few seconds" }, { status: 409 });
+        return jsonResponse({ error: "backtest run is not paused" }, { status: 409 });
+      }
+      const envelope = resumed.cursor;
+      if (!envelope || !envelope.job || !Number.isInteger(envelope.part)) {
+        // Not a resume envelope we wrote: do not guess. Re-park it untouched and surface the error.
+        await pauseBacktestRun(env.SIM_DB, { id, reason: resumed.pausedReason ?? "operator", cursor: envelope ?? null, pausedAt: new Date().toISOString(), resumeAfter: resumed.resumeAfter ?? null }).catch(() => {});
+        return jsonResponse({ error: "backtest run has no valid resume envelope" }, { status: 500 });
+      }
+      try {
+        await env.BACKTEST.send({ type: "backtest", ...envelope.job, part: envelope.part, cursor: envelope.cursor });
+      } catch (err) {
+        console.error("backtest resume enqueue failed, re-parking", { id, message: err.message });
+        await pauseBacktestRun(env.SIM_DB, { id, reason: resumed.pausedReason ?? "operator", cursor: envelope, pausedAt: new Date().toISOString(), resumeAfter: resumed.resumeAfter ?? null }).catch(() => {});
+        return jsonResponse({ error: "backtest resume enqueue failed", message: err.message }, { status: 500 });
+      }
+      console.log("backtest run resumed by operator", { id, part: envelope.part, previousReason: resumed.pausedReason });
+      return jsonResponse({ resumed: true, id, part: envelope.part, previousReason: resumed.pausedReason ?? null });
+    }
+
+    // POST /backtest/:id/cancel -- terminate a RUNNING backtest. Cooperative,
     // not preemptive: the backtest Worker's own invocation (if one is active
     // right now, mid-part) keeps running until it next checks in -- there is
     // no way to kill a live Workers invocation from here. What this DOES do,

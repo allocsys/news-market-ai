@@ -55,20 +55,39 @@ export async function setVendorCooldown(kv, vendor, key, seconds) {
 }
 
 export async function isCoolingDown(kv, model, keyIndex) {
-  if (!kv) return false;
+  return (await getCooldown(kv, model, keyIndex)) !== null;
+}
+
+// A DAILY-quota cooldown is stored as `daily:<expiry epoch ms>` (a per-minute
+// one stays "1", as before -- old keys keep working), so the NEXT cascade that
+// skips it can tell it is a daily one and how long is left, from the single
+// get() it already makes (KV cannot return a key's TTL). That is what lets the
+// backtest see "every model/key is out for the day" (VendorError.dailyQuota)
+// instead of the flat 60s hint every skipped combination used to produce.
+const DAILY_PREFIX = "daily:";
+
+/** `null` when (model, key) is not cooling down, else `{ daily, remainingSeconds }` (remaining is null when unknown, e.g. a legacy "1" value). Fails open like isCoolingDown. */
+export async function getCooldown(kv, model, keyIndex, now = Date.now()) {
+  if (!kv) return null;
   try {
     const value = await kv.get(cooldownKey(model, keyIndex));
-    return value != null;
+    if (value == null) return null;
+    const text = String(value);
+    if (text.startsWith(DAILY_PREFIX)) {
+      const expiresAt = Number(text.slice(DAILY_PREFIX.length));
+      return { daily: true, remainingSeconds: Number.isFinite(expiresAt) ? Math.max(KV_MIN_TTL_SECONDS, Math.ceil((expiresAt - now) / 1000)) : null };
+    }
+    return { daily: false, remainingSeconds: null };
   } catch {
-    return false;
+    return null;
   }
 }
 
-export async function setCooldown(kv, model, keyIndex, seconds) {
+export async function setCooldown(kv, model, keyIndex, seconds, { daily = false, now = Date.now() } = {}) {
   if (!kv) return;
   const ttl = Math.max(KV_MIN_TTL_SECONDS, Math.floor(seconds ?? DEFAULT_COOLDOWN_SECONDS));
   try {
-    await kv.put(cooldownKey(model, keyIndex), "1", { expirationTtl: ttl });
+    await kv.put(cooldownKey(model, keyIndex), daily ? `${DAILY_PREFIX}${now + ttl * 1000}` : "1", { expirationTtl: ttl });
   } catch {
     // best-effort only -- see file header
   }

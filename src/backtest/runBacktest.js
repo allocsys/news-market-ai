@@ -278,7 +278,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
           force: true,
         }),
       );
-      return { id, status: "continue", reason, ...(extra.delaySeconds ? { delaySeconds: extra.delaySeconds } : {}), cursor: { clockNow: clock.now(), ...state, completed: completedSteps, ...(skipped.count ? { skipped } : {}) } };
+      return { id, status: "continue", reason, ...(extra.delaySeconds ? { delaySeconds: extra.delaySeconds } : {}), ...(extra.dailyQuota ? { dailyQuota: true, retryAfterSeconds: extra.retryAfterSeconds ?? null } : {}), cursor: { clockNow: clock.now(), ...state, completed: completedSteps, ...(skipped.count ? { skipped } : {}) } };
     };
 
     // WALK: windows in order, each one leaving its positions in the store.
@@ -315,6 +315,17 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
             // not passing, and only then does the run fail (with the first outage's
             // trace, since the later parts mostly see nothing but cooldown skips).
             const cur = res.cursor;
+            // Every model/key is on a DAILY quota cooldown (llm/gemini/client.js sets dailyQuota): retrying in
+            // minutes cannot help, so hand the pause to the worker, which parks the run (manual resume) with
+            // the cooldown's remaining time as its resume-after hint. Not counted as a stall: the stall counter
+            // is for outages that should pass within minutes.
+            if (res.error?.dailyQuota) {
+              return await yieldPart({ phase: "walk", window: wi, walk: cur, stall: cursor?.stall }, "transient", {
+                dailyQuota: true,
+                retryAfterSeconds: res.retryAfterSeconds ?? null,
+                detail: "Gemini daily quota exhausted; paused until it resets",
+              });
+            }
             const key = `${wi}|${cur.day}|${cur.ticker}|${cur.after?.id ?? ""}`;
             const prev = cursor?.stall?.key === key ? cursor.stall : null;
             const count = (prev?.count ?? 0) + 1;

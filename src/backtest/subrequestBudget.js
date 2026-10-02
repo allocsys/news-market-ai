@@ -85,14 +85,24 @@ export class SubrequestBudget {
     this.total = 0;
     this.kv = 0;
     this.d1 = 0;
-    // Cumulative D1 rows actually written this invocation (SUM of every
-    // write statement's meta.changes -- run()/batch() only, never first()/
-    // all()/raw()), tracked here but NOT enforced by this class: it feeds
-    // BACKTEST_DAILY_WRITE_BUDGET (config.js), a cross-invocation, cross-run
-    // DAILY cap checked once per part by backtest-worker.js against
-    // storage/sim_registry.js#getBacktestRowsWrittenToday, not a per-
-    // invocation limit this budget itself refuses against.
+    // Cumulative D1 rows actually written this invocation, in D1's BILLING unit
+    // (meta.rows_written: includes index writes; falls back to meta.changes where
+    // a driver reports no rows_written) -- run()/batch() only, never first()/
+    // all()/raw(). Tracked here but NOT enforced by this class: it feeds the
+    // cross-invocation, cross-run DAILY quota ledger (storage/quota_usage.js,
+    // BACKTEST_DAILY_WRITE_BUDGET in config.js) checked once per part by
+    // backtest-worker.js, not a per-invocation limit this budget refuses against.
     this.rowsWritten = 0;
+    // Cumulative D1 rows read (meta.rows_read of all()/run()/batch() results).
+    // A LOWER BOUND: D1's first() returns the bare row and no meta, so reads
+    // made through first() are not seen here.
+    this.rowsRead = 0;
+    // KV operations by billing class (this.kv stays the reads+writes total).
+    this.kvReads = 0;
+    this.kvWrites = 0;
+    // Successful Gemini requests this invocation by "<model>|<key index>" (llm/gemini/client.js
+    // calls chargeGemini on every ok response): the per-day RPD the quota ledger tracks.
+    this.geminiCounts = {};
     this.halted = false;
     this.suspendDepth = 0;
     this.unitsCompleted = 0;
@@ -132,7 +142,13 @@ export class SubrequestBudget {
     if (!this.suspended && this.total + 1 > this.totalLimit) this.#refuse(`total subrequest limit reached (${kind})`);
     this.total++;
     if (kind === "kv") this.kv++;
-    else if (kind === "d1") this.d1++;
+    else if (kind === "kv_read") {
+      this.kv++;
+      this.kvReads++;
+    } else if (kind === "kv_write") {
+      this.kv++;
+      this.kvWrites++;
+    } else if (kind === "d1") this.d1++;
   }
 
   /**
@@ -142,6 +158,17 @@ export class SubrequestBudget {
    */
   chargeRowsWritten(changes) {
     if (Number.isFinite(changes) && changes > 0) this.rowsWritten += changes;
+  }
+
+  /** One SUCCESSFUL Gemini request on `model` / key index `keyIndex` (counts only, never refuses; the fetch itself was charged by chargeExternal). */
+  chargeGemini(model, keyIndex) {
+    const key = `${model}|${keyIndex}`;
+    this.geminiCounts[key] = (this.geminiCounts[key] ?? 0) + 1;
+  }
+
+  /** Adds `rows` (a result's meta.rows_read) to this invocation's rowsRead total. Never refuses. */
+  chargeRowsRead(rows) {
+    if (Number.isFinite(rows) && rows > 0) this.rowsRead += rows;
   }
 
   suspend() {
@@ -202,6 +229,10 @@ export class SubrequestBudget {
       kv: this.kv,
       d1: this.d1,
       rowsWritten: this.rowsWritten,
+      rowsRead: this.rowsRead,
+      kvReads: this.kvReads,
+      kvWrites: this.kvWrites,
+      geminiCounts: { ...this.geminiCounts },
       externalLimit: this.externalLimit,
       totalLimit: this.totalLimit,
       units: { ...this.unitCounts },
@@ -222,6 +253,14 @@ export class SubrequestBudget {
  */
 export function countedD1(db, budget) {
   const inner = new WeakMap();
+  // D1's billing meta: rows_written (index writes included) with a fallback to
+  // changes for drivers that report no rows_written, and rows_read. first()
+  // returns the bare row and no meta, so it cannot be charged here.
+  const chargeResult = (result) => {
+    budget.chargeRowsWritten(result?.meta?.rows_written ?? result?.meta?.changes ?? 0);
+    budget.chargeRowsRead(result?.meta?.rows_read ?? 0);
+    return result;
+  };
 
   const wrapStatement = (stmt) => {
     const wrapped = {
@@ -232,14 +271,11 @@ export function countedD1(db, budget) {
       },
       all: (...args) => {
         budget.chargeInternal("d1");
-        return stmt.all(...args);
+        return Promise.resolve(stmt.all(...args)).then(chargeResult);
       },
       run: (...args) => {
         budget.chargeInternal("d1");
-        return Promise.resolve(stmt.run(...args)).then((result) => {
-          budget.chargeRowsWritten(result?.meta?.changes ?? 0);
-          return result;
-        });
+        return Promise.resolve(stmt.run(...args)).then(chargeResult);
       },
       raw: (...args) => {
         budget.chargeInternal("d1");
@@ -255,7 +291,7 @@ export function countedD1(db, budget) {
     batch: (statements) => {
       budget.chargeInternal("d1");
       return Promise.resolve(db.batch(statements.map((s) => inner.get(s) ?? s))).then((results) => {
-        for (const r of results) budget.chargeRowsWritten(r?.meta?.changes ?? 0);
+        for (const r of results) chargeResult(r);
         return results;
       });
     },
@@ -274,19 +310,19 @@ export function countedD1(db, budget) {
 export function countedKv(kv, budget) {
   return {
     get: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_read");
       return kv.get(...args);
     },
     put: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_write");
       return kv.put(...args);
     },
     delete: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_write");
       return kv.delete(...args);
     },
     list: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_read");
       return kv.list(...args);
     },
   };

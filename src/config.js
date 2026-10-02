@@ -113,6 +113,18 @@ export function loadConfig(env) {
     // ~60K/day headroom for live ingestion/trading on the same shared cap.
     // '0' disables the check (same convention as the subrequest budget).
     backtestDailyWriteBudget: intOrDefault(env.BACKTEST_DAILY_WRITE_BUDGET, 40000),
+    // QUOTA GUARD (storage/quota_usage.js ledger, backtest-worker.js): a backtest
+    // PAUSES (manual resume) instead of failing once its own usage today reaches
+    // this percent of ANY of the daily shares below. The shares are OUR slice of
+    // the platform's daily caps, which live ingestion/trading share (we only see
+    // backtest usage): D1 free = 100K writes / 5M reads per day, KV free = 1K
+    // writes / 100K reads per day. D1 writes reuse BACKTEST_DAILY_WRITE_BUDGET
+    // above. D1 reads are a LOWER bound (first() returns no meta). '0' disables
+    // the percent check (a share of '0' disables just that counter).
+    quotaPausePct: intOrDefault(env.QUOTA_PAUSE_PCT, 90),
+    backtestDailyReadBudget: intOrDefault(env.BACKTEST_DAILY_READ_BUDGET, 2000000),
+    backtestDailyKvWriteBudget: intOrDefault(env.BACKTEST_DAILY_KV_WRITE_BUDGET, 500),
+    backtestDailyKvReadBudget: intOrDefault(env.BACKTEST_DAILY_KV_READ_BUDGET, 50000),
     // Delay before a continuation part runs, and the cap on parts per run (a
     // runaway chain fails the run instead of looping forever).
     backtestContinuationDelaySeconds: intOrDefault(env.BACKTEST_CONTINUATION_DELAY_SECONDS, 15),

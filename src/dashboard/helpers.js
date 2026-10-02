@@ -380,7 +380,30 @@ export function backtestResultTable(result) {
   <p class="note">${scoring}Positive delta always means "the signal looks better on this metric" (max drawdown's sign is normalized the same way) -- see signalCompare.js#compareSignalOnOff. Pooled across ${result.perWindow.length} walk-forward window${result.perWindow.length === 1 ? "" : "s"}.</p>${backtestGateNote(result.gate)}`;
 }
 
-export const BACKTEST_STATUS_LABEL = { running: "running…", complete: "complete", failed: "failed", cancelled: "cancelled" };
+export const BACKTEST_STATUS_LABEL = { running: "running…", paused: "paused", complete: "complete", failed: "failed", cancelled: "cancelled" };
+
+// backtest_runs.paused_reason (migrations/sim/0003) -> plain-language text for the dashboard.
+const BACKTEST_PAUSE_REASON_LABEL = {
+  operator: "paused by you",
+  d1_write_budget: "daily D1 write budget reached",
+  gemini_daily_cap: "every Gemini key is at its daily limit",
+  platform_limit: "a Cloudflare platform limit was hit",
+  quota_threshold: "a daily quota threshold was reached",
+};
+
+/** POST /backtest/:id/pause (running row) or /resume (paused row), via dashboard-worker.js. Resume is always manual. */
+export function pauseResumeForm(id, action) {
+  const label = action === "resume" ? "Resume run" : "Pause run";
+  return `<form method="post" action="/backtest/${escapeHtml(encodeURIComponent(id))}/${action === "resume" ? "resume" : "pause"}"><button type="submit" class="btn">${label}</button></form>`;
+}
+
+/** One-line explanation under a paused run: why, since when, and (for quota pauses) when it makes sense to resume. */
+export function pausedNote(run) {
+  const why = BACKTEST_PAUSE_REASON_LABEL[run.pausedReason] ?? run.pausedReason ?? "paused";
+  const since = run.pausedAt ? ` since ${fmtTime(run.pausedAt)}` : "";
+  const after = run.resumeAfter ? ` Suggested resume time: ${fmtTime(run.resumeAfter)}.` : "";
+  return `<p class="note">Paused (${escapeHtml(why)})${escapeHtml(since)}. All data is kept; it only continues when you press Resume.${escapeHtml(after)}</p>`;
+}
 
 // ---------------------------------------------------------------------------
 // News replay comparison (backtest/newsReplay.js) -- "Recent replay
@@ -504,11 +527,13 @@ export function backtestRunsList(runs) {
         ? backtestResultTable(r.result)
         : r.status === "failed" || r.status === "cancelled"
           ? `<p class="empty">${escapeHtml(r.error ?? (r.status === "cancelled" ? "cancelled, no further detail recorded" : "failed with no recorded error message"))}</p>`
-          : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
+          : r.status === "paused"
+            ? pausedNote(r)
+            : `<p class="empty">Still running as of last page load -- reload to check.</p>`;
       const timelineLink = r.status === "complete" ? `<p class="note"><a href="/dashboard/backtest/${escapeHtml(encodeURIComponent(r.id))}">View trade timeline &rarr;</a></p>` : "";
       const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery({ ...parseLlmParams(null), env: r.id }, { llmJob: r.id })}">View every LLM call this run made &rarr;</a></p>`;
-      const terminate = r.status === "running" ? terminateRunForm(r.id) : "";
-      return `<details class="llm-answer" ${r.status !== "running" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${timelineLink}${llmLink}${body}${terminate}</div></details>`;
+      const terminate = r.status === "running" ? pauseResumeForm(r.id, "pause") + terminateRunForm(r.id) : r.status === "paused" ? pauseResumeForm(r.id, "resume") + terminateRunForm(r.id) : "";
+      return `<details class="llm-answer" ${r.status !== "running" && r.status !== "paused" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${timelineLink}${llmLink}${body}${terminate}</div></details>`;
     })
     .join("\n");
 }

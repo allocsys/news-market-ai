@@ -37,6 +37,24 @@
 // when the BACKTEST producer is bound and both limits are > 0; otherwise a
 // message runs start-to-finish in one invocation, as before.
 //
+// PAUSE / RESUME (migrations/sim/0003, storage/sim_registry.js): a run can be
+// PAUSED instead of failed. A paused run keeps all its data; its continuation
+// is parked in backtest_runs.cursor as a RESUME ENVELOPE
+//   { part: <the part to run next>, cursor: <runManualBacktest cursor>, job: <the message's params> }
+// (the whole job is kept because the registry row lacks enableLlmLog/knobOverrides).
+// Resume is MANUAL (POST /backtest/:id/resume re-enqueues from the envelope).
+// Triggers:
+//   - the operator's Pause button: flips the row to 'paused'; the continuation
+//     message already in the queue then arrives, sees 'paused', saves its cursor
+//     into the envelope and is acked without running.
+//   - the daily quota ledger (storage/quota_usage.js, one row per UTC day): checked at part
+//     boundaries against our shares of D1 writes/reads and KV writes/reads
+//     (config.js backtestDaily*Budget x quotaPausePct). The ledger replaces the old
+//     started_at-bucketed SUM, which did not charge a resumed run's writes to the new day.
+//   - every Gemini key on a DAILY quota cooldown (outcome.dailyQuota).
+// Each part adds its counts to the ledger in the SAME db.batch as its
+// backtest_runs.rows_written update, so the ledger costs no extra subrequest.
+//
 // max_concurrency = 1 / max_batch_size = 1 (wrangler.backtest.toml) keeps
 // runs strictly sequential: the walk is CPU/subrequest heavy and the
 // portfolio stage reads cross-ticker exposure, so racing runs buy nothing.
@@ -50,22 +68,31 @@ import { replayNewsItems } from "./backtest/newsReplay.js";
 import { getNewsItemsByIds } from "./storage/inputs_view.js";
 import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
 import { SubrequestBudget, countedD1, countedKv, cooldownMemoKv } from "./backtest/subrequestBudget.js";
-import { addBacktestRunRowsWritten, getBacktestRowsWrittenToday, failBacktestRun } from "./storage/sim_registry.js";
+import { pauseBacktestRun } from "./storage/sim_registry.js";
+import { getQuotaUsage, mergeGeminiCounts, quotaUsageUpsertStatement, utcDay, nextUtcMidnightIso } from "./storage/quota_usage.js";
+import { dailyQuotaCooldownSeconds } from "./shared/cooldown.js";
 
 /**
- * Whether today's cross-run D1 write total (backtest_runs.rows_written,
- * summed by storage/sim_registry.js#getBacktestRowsWrittenToday) has already
- * reached config.backtestDailyWriteBudget. `0` disables the check (same
- * convention as the subrequest budget's own externalLimit/totalLimit).
- * Unlike SubrequestBudget (per-invocation, refuses mid-work), this is a
- * cross-invocation, cross-run DAILY cap, so it is checked at part
- * boundaries, not per-statement -- see the two call sites below for why
- * each exists.
+ * The first daily share (config.js backtestDaily*Budget) that `usage` (today's
+ * ledger totals: {d1Written, d1Read, kvReads, kvWrites}) has reached
+ * quotaPausePct percent of, as {reason, detail}, or null. A share of 0 disables
+ * that counter. quotaPausePct 0 disables the percent check, but the D1 write
+ * share (the pre-ledger BACKTEST_DAILY_WRITE_BUDGET hard cap) still applies at 100%.
+ * `d1_write_budget` is the reason for D1 writes, `quota_threshold` for the rest.
  */
-async function dailyWriteBudgetExhausted(db, config) {
-  if (!(config.backtestDailyWriteBudget > 0)) return false;
-  const writtenToday = await getBacktestRowsWrittenToday(db);
-  return writtenToday >= config.backtestDailyWriteBudget;
+export function quotaTrigger(config, usage) {
+  const pct = config.quotaPausePct > 0 ? config.quotaPausePct : null;
+  const checks = [
+    ["d1_write_budget", "D1 rows written", usage.d1Written, config.backtestDailyWriteBudget, pct ?? 100],
+    ["quota_threshold", "D1 rows read", usage.d1Read, config.backtestDailyReadBudget, pct],
+    ["quota_threshold", "KV writes", usage.kvWrites, config.backtestDailyKvWriteBudget, pct],
+    ["quota_threshold", "KV reads", usage.kvReads, config.backtestDailyKvReadBudget, pct],
+  ];
+  for (const [reason, label, used, share, usePct] of checks) {
+    if (!(share > 0) || usePct === null) continue;
+    if (used >= (share * usePct) / 100) return { reason, detail: `${label} today: ${used} of our ${share}/day share (pause at ${usePct}%)` };
+  }
+  return null;
 }
 
 /** Per-message backtest context: SIM_DB read/write under this run's own id, INPUTS_DB read-only. Mirrors llm-worker.js's buildLiveContext shape. */
@@ -155,21 +182,49 @@ export default {
             message.ack();
             continue;
           }
-          // BACKTEST_DAILY_WRITE_BUDGET, continuation check (part > 1 only): a
-          // brand-new run's part 1 always gets to run (progress guarantee,
-          // same reasoning as SubrequestBudget#canStart -- there is no
-          // registry row yet to fail against, see commit message for why a
-          // pre-check there would have to duplicate runManualBacktest's own
-          // trainDays/testDays defaulting). A CONTINUATION always has an
-          // existing row (checked just above), so it is safe to refuse here
-          // before spending any more of today's write budget on it.
-          if (part > 1 && (await unenf(() => dailyWriteBudgetExhausted(runEnv.SIM_DB, config)))) {
-            const message_ = `Daily backtest write budget exhausted (BACKTEST_DAILY_WRITE_BUDGET=${config.backtestDailyWriteBudget}); resume after the next UTC day reset`;
-            console.error("backtest part refused: daily write budget exhausted", { id, part, budget: config.backtestDailyWriteBudget });
-            await failBacktestRun(runEnv.SIM_DB, { id, error: message_, finishedAt: new Date().toISOString() });
-            await createJobReporter(new RunStore(runEnv.SIM_DB, id), { id, type: "backtest" }).fail(message_);
+
+          // The resume envelope (see the header): everything POST /backtest/:id/resume needs to
+          // re-enqueue this run, since the registry row alone lacks enableLlmLog/knobOverrides.
+          const envelope = (nextPart, cur) => ({
+            part: nextPart,
+            cursor: cur,
+            job: { id, tickers, testStart, testEnd, graceDays, ...(job.enableLlmLog ? { enableLlmLog: true } : {}), ...(job.knobOverrides ? { knobOverrides: job.knobOverrides } : {}) },
+          });
+          // Parks the run: status 'paused' + the envelope (instead of failing and deleting the
+          // data). Unenforced, one write. `changed` is false when the row is no longer
+          // running/paused (e.g. cancelled meanwhile): then there is nothing to park.
+          const parkRun = async ({ reason, detail, resumeAfter = null, nextPart, cur }) => {
+            const changed = await unenf(() => pauseBacktestRun(runEnv.SIM_DB, { id, reason, cursor: envelope(nextPart, cur), pausedAt: new Date().toISOString(), resumeAfter }));
+            console.error("backtest paused", { id, part, reason, detail, resumeAfter, changed });
+          };
+
+          // The operator paused this run (POST /backtest/:id/pause) while this continuation was
+          // in flight: it carries the cursor the pause route could not know, so save it and stop.
+          // The original pause reason/time are kept (pauseBacktestRun does not relabel a paused
+          // row). A part-1 redelivery has no cursor and nothing to save.
+          if (existing?.status === "paused") {
+            if (cursor) await unenf(() => pauseBacktestRun(runEnv.SIM_DB, { id, reason: "operator", cursor: envelope(part, cursor), pausedAt: new Date().toISOString() }));
+            console.log("backtest job is paused, saved its cursor and acking without running", { id, part, savedCursor: Boolean(cursor) });
             message.ack();
             continue;
+          }
+
+          // Today's quota ledger row, read ONCE per part (parts are sequential): the value the
+          // thresholds are checked against, plus this part's own counts after it ran. (It replaces
+          // the old per-part SUM over backtest_runs, so a part costs no more reads than before.)
+          const ledgerDay = utcDay();
+          const ledger = budget ? await unenf(() => getQuotaUsage(runEnv.SIM_DB, ledgerDay)) : null;
+          // Continuation check (part > 1 only): a brand-new run's part 1 always gets to run
+          // (progress guarantee, same reasoning as SubrequestBudget#canStart). A continuation
+          // already carries its cursor, so a part that would start over a threshold parks instead
+          // of spending more of today's quota -- e.g. a manual resume on the same day.
+          if (budget && part > 1) {
+            const trigger = quotaTrigger(config, ledger);
+            if (trigger) {
+              await parkRun({ reason: trigger.reason, detail: trigger.detail, resumeAfter: nextUtcMidnightIso(), nextPart: part, cur: cursor });
+              message.ack();
+              continue;
+            }
           }
           // job_progress (storage/jobs.js) is the dashboard's live percent/
           // phase display -- a SEPARATE, finer-grained record from the
@@ -197,29 +252,46 @@ export default {
               maxParts: jobConfig.backtestMaxParts > 0 ? jobConfig.backtestMaxParts : Infinity,
             }
           );
-          if (budget) console.log("backtest part finished", { id, part, status: outcome.status, reason: outcome.reason, ...budget.snapshot() });
-          // Persist this part's D1 write-row count to the registry regardless
-          // of outcome (continue/complete/failed all wrote something) -- see
-          // sim_registry.js#addBacktestRunRowsWritten. Unenforced: must not be
-          // cut in half by an already-near-limit subrequest budget, same
-          // convention as reporter.complete()/fail() below.
-          if (budget && budget.rowsWritten > 0) {
-            await unenf(() => addBacktestRunRowsWritten(runEnv.SIM_DB, { id, rows: budget.rowsWritten }));
+          // This part's counts, captured BEFORE the ledger batch so the ledger's own writes are not
+          // fed back into it (they are logged separately below).
+          const counts = budget ? { d1Written: budget.rowsWritten, d1Read: budget.rowsRead, kvReads: budget.kvReads, kvWrites: budget.kvWrites, gemini: { ...budget.geminiCounts } } : null;
+          // Persist this part's counts regardless of outcome (continue/complete/failed all wrote
+          // something): the run's rows_written total and today's ledger row, in ONE db.batch (one
+          // subrequest, +1 row written). Unenforced: must not be cut in half by an already-near-limit
+          // subrequest budget, same convention as reporter.complete()/fail() below.
+          let ledgerRowsWritten = 0;
+          if (budget) {
+            const statements = [];
+            if (counts.d1Written > 0) statements.push(runEnv.SIM_DB.prepare(`UPDATE backtest_runs SET rows_written = rows_written + ? WHERE id = ?`).bind(counts.d1Written, id));
+            statements.push(quotaUsageUpsertStatement(runEnv.SIM_DB, { day: ledgerDay, ...counts, gemini: mergeGeminiCounts(ledger.gemini, counts.gemini) }));
+            const results = await unenf(() => runEnv.SIM_DB.batch(statements));
+            ledgerRowsWritten = results.reduce((sum, r) => sum + (r?.meta?.rows_written ?? r?.meta?.changes ?? 0), 0);
           }
-          if (outcome.status === "continue" && (await unenf(() => dailyWriteBudgetExhausted(runEnv.SIM_DB, config)))) {
-            // Caught right AFTER this part's own writes landed (the check above
-            // just persisted them), so a run that tips the daily total over
-            // the cap mid-part still finishes that part cleanly -- it just
-            // never gets a continuation message. Same "stop cleanly instead of
-            // looping" spirit as MAX_BACKFILL_PARTS (ingest-worker.js).
-            const message_ = `Daily backtest write budget exhausted (BACKTEST_DAILY_WRITE_BUDGET=${config.backtestDailyWriteBudget}) after part ${part}; resume after the next UTC day reset`;
-            console.error("backtest continuation refused: daily write budget exhausted", { id, part, budget: config.backtestDailyWriteBudget });
-            await unenf(() => failBacktestRun(runEnv.SIM_DB, { id, error: message_, finishedAt: new Date().toISOString() }));
-            await unenf(() => reporter.fail(message_));
-            const cleanup = await unenf(() => cleanupFailedRun(runEnv.SIM_DB, ctx.store, id));
-            console.log("backtest job finished", { id, status: "failed", reason: "daily_write_budget", tickers, part, cleanup });
-            message.ack();
-            continue;
+          if (budget) console.log("backtest part finished", { id, part, status: outcome.status, reason: outcome.reason, ...budget.snapshot(), ledgerDay, ledgerRowsWritten });
+          if (outcome.status === "continue" && budget) {
+            // Caught right AFTER this part's own writes landed, so a part that tips a daily total over
+            // its threshold still finishes cleanly -- it just parks the run (data kept, manual resume)
+            // instead of enqueuing the next part. Same "stop cleanly instead of looping" spirit as
+            // MAX_BACKFILL_PARTS (ingest-worker.js).
+            if (outcome.dailyQuota) {
+              // Every Gemini model/key is on a DAILY cooldown: retrying in minutes cannot help.
+              // resume-after = the shortest remaining cooldown (Pacific midnight at the latest).
+              const seconds = outcome.retryAfterSeconds ?? dailyQuotaCooldownSeconds();
+              await parkRun({ reason: "gemini_daily_cap", detail: "Every Gemini model/key is on a daily quota cooldown", resumeAfter: new Date(Date.now() + seconds * 1000).toISOString(), nextPart: part + 1, cur: outcome.cursor });
+              message.ack();
+              continue;
+            }
+            const trigger = quotaTrigger(config, {
+              d1Written: ledger.d1Written + counts.d1Written,
+              d1Read: ledger.d1Read + counts.d1Read,
+              kvReads: ledger.kvReads + counts.kvReads,
+              kvWrites: ledger.kvWrites + counts.kvWrites,
+            });
+            if (trigger) {
+              await parkRun({ reason: trigger.reason, detail: trigger.detail, resumeAfter: nextUtcMidnightIso(), nextPart: part + 1, cur: outcome.cursor });
+              message.ack();
+              continue;
+            }
           }
           if (outcome.status === "continue") {
             // LAST step, after runManualBacktest's forced progress update: if
