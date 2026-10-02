@@ -626,6 +626,22 @@ export default {
       });
     }
 
+    // POST /backtest/:id/pause and /backtest/:id/resume -- the dashboard's Pause / Resume buttons
+    // (helpers.js#backtestRunsList). Same shape as /cancel above: the id in the URL is the payload.
+    for (const action of ["pause", "resume"]) {
+      if (pathname.startsWith("/backtest/") && pathname.endsWith(`/${action}`) && request.method === "POST") {
+        const id = pathname.slice("/backtest/".length, pathname.length - `/${action}`.length);
+        if (!BACKTEST_ID_RE.test(id)) {
+          return jsonResponse({ error: "backtest run id is malformed" }, { status: 400 });
+        }
+        return handleTriggerRoute(request, env, config, {
+          backendPath: `/backtest/${encodeURIComponent(id)}/${action}`,
+          buildQuery: () => ({ params: {}, activeSection: "backtest" }),
+          formSubmitAccepted: () => ({}),
+        });
+      }
+    }
+
     // POST /backtest/cleanup -- bulk-delete old terminal runs' trade-level
     // data (the dashboard's "Clean up old runs" button, see
     // dashboard/views/backtest.js). `olderThanDays` is the only field the
