@@ -103,7 +103,8 @@ test("a legacy open position with no direction never holds: it is replaced ('rep
 test("a flip that would breach the ceiling is rejected and leaves the old position open", async () => {
   const { db, store } = setup();
   await store.commitThesis(args({ asOf: "t1" })); // AAPL 0.05
-  await store.commitThesis(args({ ticker: "MSFT", asOf: "t1", positionSizePct: 0.14 })); // other tickers: 0.14
+  // GOOG is outside TICKER_GROUPS, so a 14% lone position does not trip the 10% group cap; only the 20% ceiling is under test.
+  await store.commitThesis(args({ ticker: "GOOG", asOf: "t1", positionSizePct: 0.14 })); // other tickers: 0.14
   await store.commitThesis(args({ asOf: "t2", direction: "short", confidence: 0.9, positionSizePct: 0.07 })); // 0.14 + 0.07 > 0.2
 
   const aapl = (await positions(db)).filter((p) => p.id.startsWith("AAPL"));
