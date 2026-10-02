@@ -280,7 +280,7 @@ export function decisionsTable(decisions) {
     .map(
       (d) => `<tr>
         <td class="ticker cell-title">${escapeHtml(d.ticker)}</td>
-        <td data-label="Direction">${escapeHtml(d.thesis?.direction ?? "\u2014")}</td>
+        <td data-label="Direction">${directionPill(d.thesis?.direction)}</td>
         <td data-label="Status">${decisionBadge(d.status)}</td>
         <td class="num" data-label="Size">${d.riskDecision?.positionSizePct != null ? (d.riskDecision.positionSizePct * 100).toFixed(1) + "%" : "\u2014"}</td>
         <td class="cell-wide" data-label="Reason">${escapeHtml(d.portfolioDecision?.reason ?? d.riskDecision?.reason ?? "\u2014")}</td>
