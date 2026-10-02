@@ -243,6 +243,14 @@ export class SubrequestBudget {
  */
 export function countedD1(db, budget) {
   const inner = new WeakMap();
+  // D1's billing meta: rows_written (index writes included) with a fallback to
+  // changes for drivers that report no rows_written, and rows_read. first()
+  // returns the bare row and no meta, so it cannot be charged here.
+  const chargeResult = (result) => {
+    budget.chargeRowsWritten(result?.meta?.rows_written ?? result?.meta?.changes ?? 0);
+    budget.chargeRowsRead(result?.meta?.rows_read ?? 0);
+    return result;
+  };
 
   const wrapStatement = (stmt) => {
     const wrapped = {
@@ -253,14 +261,11 @@ export function countedD1(db, budget) {
       },
       all: (...args) => {
         budget.chargeInternal("d1");
-        return stmt.all(...args);
+        return Promise.resolve(stmt.all(...args)).then(chargeResult);
       },
       run: (...args) => {
         budget.chargeInternal("d1");
-        return Promise.resolve(stmt.run(...args)).then((result) => {
-          budget.chargeRowsWritten(result?.meta?.changes ?? 0);
-          return result;
-        });
+        return Promise.resolve(stmt.run(...args)).then(chargeResult);
       },
       raw: (...args) => {
         budget.chargeInternal("d1");
@@ -276,7 +281,7 @@ export function countedD1(db, budget) {
     batch: (statements) => {
       budget.chargeInternal("d1");
       return Promise.resolve(db.batch(statements.map((s) => inner.get(s) ?? s))).then((results) => {
-        for (const r of results) budget.chargeRowsWritten(r?.meta?.changes ?? 0);
+        for (const r of results) chargeResult(r);
         return results;
       });
     },
@@ -295,19 +300,19 @@ export function countedD1(db, budget) {
 export function countedKv(kv, budget) {
   return {
     get: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_read");
       return kv.get(...args);
     },
     put: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_write");
       return kv.put(...args);
     },
     delete: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_write");
       return kv.delete(...args);
     },
     list: (...args) => {
-      budget.chargeInternal("kv");
+      budget.chargeInternal("kv_read");
       return kv.list(...args);
     },
   };
