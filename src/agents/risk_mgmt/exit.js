@@ -17,6 +17,11 @@ export const CLOSE_REASON = {
   STOP_LOSS: "stop_loss",
   TAKE_PROFIT: "take_profit",
   TIME_BASED: "time_based",
+  // The ratcheted stop (agents/risk_mgmt/trailing.js) was the binding level when a bar touched it:
+  // the entry-anchored break-even stop, or the peak-anchored trailing stop. Bar-walk exits only
+  // (exit_bars.js); the single-price evaluateExit below never returns them.
+  BREAKEVEN_STOP: "breakeven_stop",
+  TRAILING_STOP: "trailing_stop",
 };
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
