@@ -1075,12 +1075,20 @@ const STYLE = `
     .stat-value { font-size: 1.5rem; }
     .filter-bar { gap: 0.85rem; }
     .page-toolbar {
-      flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 0.6rem;
-      margin-bottom: 0.6rem;
+      flex-wrap: nowrap; justify-content: flex-end; gap: 0.5rem;
+      margin-bottom: 0.5rem;
     }
     .page-toolbar .btn { height: 32px; padding: 0 0.7rem; }
-    .page-toolbar-updated { order: -1; width: 100%; }
+    /* One row of controls; the "Loaded ..." stamp is still updated by the
+       auto-refresh script but takes no line of its own on a phone, and the
+       auto-refresh toggle shrinks to its on/off dot (label stays in the DOM). */
+    .page-toolbar-updated { display: none; }
+    .auto-refresh-toggle { min-width: 32px; height: 32px; padding: 0; justify-content: center; }
+    #auto-refresh-toggle-label { display: none; }
     .page-toolbar-export-panel { right: auto; left: 0; }
+    #env-selector { margin-bottom: 0.5rem; }
+    #env-selector .filter-label { display: none; }
+    .env-note { font-size: 0.75rem; margin: 0 0 0.6rem; }
     .chart-row-2, .chart-row-3 { grid-template-columns: 1fr; }
     .donut-wrap { flex-direction: column; align-items: stretch; }
     .donut-svg { align-self: center; }
