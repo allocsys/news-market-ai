@@ -45,10 +45,12 @@
 // HONEST SCOPE: the P&L the caller passes is realized closes in the window plus open
 // positions marked at their last exit-check close (RunStore#getRealizedPnlPctAsOf with
 // includeUnrealized; a never-marked position counts as flat), so its freshness is the exit
-// check's (15 min live, once per simulated day in a backtest). RunStore#commitThesis does not
-// re-check it in SQL -- two runs racing across
-// the threshold can each let one entry through, which the risk ceiling still
-// bounds. Omitting either option skips the check.
+// check's (15 min live, once per simulated day in a backtest). RunStore#commitThesis re-checks it in
+// SQL (same window, same marks, same net-of-cost definition, same `<= -drawdownBreakerPct` trip), so a
+// close or mark landing between this pre-check and the commit still blocks the entry; the SQL is
+// authoritative over this pre-check. Omitting either option skips the check here; the SQL check runs only
+// when the committer passes drawdownBreakerPct + drawdownBreakerWindowDays (entry_fill.js does not: its
+// breaker was decided at signal time).
 
 import { PortfolioDecision } from "../../schemas/index.js";
 import { FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
