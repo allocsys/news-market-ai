@@ -4,7 +4,7 @@
 // opinions, bull/bear debate, trader rationale -- helpers.js#llmAnswerDetails).
 // Props are exactly what backend's GET /api/backtest-runs/:id returns.
 import {
-  escapeHtml, fmtTime, errorState, emptyState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery,
+  escapeHtml, fmtTime, errorState, emptyState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery, pausedNote, pauseResumeForm, terminateRunForm,
   tradeTimelineChart, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
 } from "../helpers.js";
 import { renderJobProgressPanel } from "./status.js";
@@ -69,6 +69,11 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
     // cleanupCancelledRun), so there is nothing left to chart, same as a
     // failed run. `positions` below will be empty for the same reason.
     chartBody = `<p class="empty">${escapeHtml(run.error ?? "cancelled by operator")} -- data deleted, no equity curve.</p>`;
+  }
+  else if (run.status === "paused") {
+    // Parked (operator pause or a quota pause): a progress bar would look stuck, so show why it
+    // stopped and the manual Resume button. Its data is kept, so the positions below are real.
+    chartBody = `${pausedNote(run)}<div style="display:flex;gap:0.75rem;flex-wrap:wrap">${pauseResumeForm(run.id, "resume")}${terminateRunForm(run.id)}</div>`;
   }
   else if (run.status !== "complete") {
     // renderJobProgressPanel returns "" for a job with no id, so fall back to
