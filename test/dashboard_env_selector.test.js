@@ -168,7 +168,7 @@ test("renderEnvSelector: an active env that's failed and not otherwise listed st
 
 test("renderEnvSelector: envError renders as its own note, independent of the resolvedEnv banner", () => {
   const html = renderEnvSelector({ resolvedEnv: "live", envError: "environment 'backtest-9-old' not found", pathname: "/dashboard/snapshot", search: "" });
-  assert.match(html, /<p class="note">environment &#39;backtest-9-old&#39; not found<\/p>/);
+  assert.match(html, /<p class="note env-note">environment &#39;backtest-9-old&#39; not found<\/p>/);
   assert.ok(!html.includes("simulated results"), "resolvedEnv is live here, so no simulated-data banner");
 });
 
@@ -179,7 +179,7 @@ test("renderEnvSelector: viewing a non-live env shows the 'simulated, not live' 
 
 test("renderEnvSelector: a null envError never renders as the literal string 'null'", () => {
   const html = renderEnvSelector({ resolvedEnv: "backtest-1-abc", envError: null, pathname: "/dashboard/snapshot", search: "" });
-  assert.ok(!html.includes('<p class="note">null</p>'), "a null envError must not render as the literal string 'null'");
+  assert.ok(!html.includes('<p class="note env-note">null</p>'), "a null envError must not render as the literal string 'null'");
   assert.match(html, /simulated results/);
 });
 

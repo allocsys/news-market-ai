@@ -26,21 +26,21 @@ export function renderPipelineView({ checkpoints, tickerStages = [], error }) {
     .sort((a, b) => b[1] - a[1])
     .map(([stage, count]) => {
       const pct = fmtShare(count, total || 1);
-      return `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.55rem">
-        <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-main);min-width:140px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(stage)}</span>
-        <div role="img" aria-label="${escapeHtml(stage)}: ${count} of ${total} (${pct})" style="flex:1;height:6px;background:var(--bg-elevated);border-radius:3px;overflow:hidden"><div style="width:${pct};height:100%;background:var(--accent-bright);border-radius:3px"></div></div>
-        <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-muted);min-width:36px;text-align:right">${count}</span>
+      return `<div class="stage-row">
+        <span class="stage-name" title="${escapeHtml(stage)}">${escapeHtml(stage)}</span>
+        <div class="stage-track" role="img" aria-label="${escapeHtml(stage)}: ${count} of ${total} (${pct})"><div class="stage-fill" style="width:${pct}"></div></div>
+        <span class="stage-count">${count}</span>
       </div>`;
     }).join("");
 
-  const stagePanel = total === 0 ? "" : `<div class="panel" style="margin-bottom:1.5rem">
+  const stagePanel = total === 0 ? "" : `<div class="panel stage-panel">
     <div class="panel-header"><span class="panel-title">Stage distribution</span><span style="font-size:0.6875rem;color:var(--text-muted);font-family:var(--font-mono)">${total} checkpoint${total === 1 ? "" : "s"}</span></div>
     <div class="panel-body">${stageRows || emptyState("No checkpoints recorded.", { href: "/dashboard/backtest", label: "Run a backtest" })}</div>
   </div>`;
 
   return `<section id="pipeline">
     <h2>Recent pipeline activity</h2>
-    <p class="note">Checkpoints per ticker, tallied by stage. A stuck/crashed run just stops adding to these counts, it is not shown as a failure.</p>
+    <p class="note">Checkpoints per ticker by stage. A stuck run just stops adding to the counts; it isn't shown as a failure.</p>
     ${error ? errorState(error) : `${stagePanel}${tickerStageCards(tickerStages)}`}
   </section>`;
 }

@@ -1,4 +1,4 @@
-import { healthRow, STALE_INGESTION_HOURS, errorState, donutChart, escapeHtml, fmtTime } from "../helpers.js";
+import { healthRow, STALE_INGESTION_HOURS, errorState } from "../helpers.js";
 
 export function renderHealthView({ health, error }) {
   if (error) {
@@ -8,9 +8,9 @@ export function renderHealthView({ health, error }) {
     </section>`;
   }
 
-  // Build the donut from the same per-source stat the table uses. Each source
-  // counts as 1 unit; "fresh" and "stale" are the two slices. When every source
-  // is fresh this collapses to a single green ring, which is the right signal.
+  // Each source counts as 1 unit: fresh if it ingested within the stale window.
+  // The one-line summary replaces the old donut (a 2-slice ring that took a
+  // whole screen on a phone to say "N of 3 fresh").
   const sources = [
     { label: "News (gdelt/rss/scrape)", stat: health.news },
     { label: "Price bars (yfinance)", stat: health.priceBars },
@@ -20,36 +20,19 @@ export function renderHealthView({ health, error }) {
     Date.now() - new Date(s.stat.lastIngestedAt).getTime() <= STALE_INGESTION_HOURS * 3600 * 1000
   ).length;
   const staleCount = sources.length - freshCount;
-
-  const healthDonut = donutChart(
-    [
-      { label: `Fresh (${freshCount})`, value: freshCount, color: "var(--color-success-text)" },
-      { label: `Stale (${staleCount})`, value: staleCount, color: "var(--color-warning-text)" },
-    ],
-    {
-      centerValue: `${freshCount}/${sources.length}`,
-      centerLabel: "fresh",
-      title: "Source freshness",
-      subtitle: `last ${STALE_INGESTION_HOURS}h window`,
-    }
-  );
+  const summaryClass = staleCount === 0 ? "ok-flag" : "stale-flag";
 
   return `<section id="health">
-    <h2>Ingestion health</h2>
-    <p class="note">Last-ingested timestamp + row count per source. Not a per-vendor error log (none is persisted yet) -- a stale timestamp is the strongest signal available here. "Stale" below just means no new rows in over ${STALE_INGESTION_HOURS}h, a fixed heuristic, not a per-source SLA.</p>
-
-    <div class="chart-row-2">
-      ${healthDonut}
-      <div class="panel">
-        <div class="panel-header"><span class="panel-title">Per-source detail</span></div>
-        <div class="panel-body panel-body-flush">
-          <table>
-            <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th><th>Status</th></tr></thead>
-            <tbody>
-              ${sources.map((s) => healthRow(s.label, s.stat)).join("\n        ")}
-            </tbody>
-          </table>
-        </div>
+    <h2>Ingestion health <span class="${summaryClass}">${freshCount}/${sources.length} fresh</span></h2>
+    <p class="note">Last ingest and row count per source. Stale = no new rows in over ${STALE_INGESTION_HOURS}h (a fixed heuristic, not an SLA); no per-vendor error log is kept.</p>
+    <div class="panel">
+      <div class="panel-body panel-body-flush">
+        <table>
+          <thead><tr><th>Source</th><th>Rows</th><th>Last ingested</th><th>Status</th></tr></thead>
+          <tbody>
+            ${sources.map((s) => healthRow(s.label, s.stat)).join("\n        ")}
+          </tbody>
+        </table>
       </div>
     </div>
   </section>`;

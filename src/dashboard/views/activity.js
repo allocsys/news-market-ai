@@ -1,7 +1,7 @@
 import { buildQuery, ACTIVITY_DAYS_OPTIONS, DECISION_APPROVED_STATUS, decisionsActivityChart, errorState, miniStats } from "../helpers.js";
 
 export function renderActivityView({ decisionStats, params, error }) {
-  const activityFilterBarReal = `<div class="filter-bar">
+  const activityFilterBarReal = `<div class="filter-bar filter-bar-scroll">
     <div class="filter-group">
       <span class="filter-label">Window</span>
       <div class="pill-row">
@@ -24,7 +24,6 @@ export function renderActivityView({ decisionStats, params, error }) {
   const dailyTotal = (decisionStats.daily ?? []).reduce((sum, row) => sum + (row.count ?? 0), 0);
 
   const summaryPanel = `<div class="panel">
-    <div class="panel-header"><span class="panel-title">Window totals</span></div>
     <div class="panel-body">
       ${miniStats(
         [
@@ -40,10 +39,10 @@ export function renderActivityView({ decisionStats, params, error }) {
 
   return `<section id="activity">
     <h2>Decision activity</h2>
-    <p class="note">Trade decisions per UTC calendar day, stacked by status. A zero-height day means the pipeline produced no decisions that day -- it doesn't distinguish "quiet market" from "run failed before reaching this stage" (see Recent pipeline activity below for that).</p>
+    <p class="note">Decisions per UTC day, stacked by status. An empty day means none were produced, not necessarily a failure.</p>
     ${activityFilterBarReal}
     ${error ? errorState(error) : `
-      <div style="margin-bottom:1.5rem">${summaryPanel}</div>
+      <div class="activity-summary">${summaryPanel}</div>
       ${decisionsActivityChart(decisionStats.daily, params.activityDays)}
     `}
   </section>`;
