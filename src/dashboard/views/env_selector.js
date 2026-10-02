@@ -137,7 +137,7 @@ export function renderEnvSelector({ runs = [], resolvedEnv = "live", envError = 
   const notes = [];
   if (envError) notes.push(`<p class="note">${escapeHtml(envError)}</p>`);
   if (resolvedEnv !== "live") {
-    notes.push(`<p class="note">Viewing backtest <code>${escapeHtml(resolvedEnv)}</code> &mdash; simulated results, not live trading.</p>`);
+    notes.push(`<p class="note env-note">Viewing backtest <code>${escapeHtml(resolvedEnv)}</code> &mdash; simulated results, not live trading.</p>`);
   }
   return bar + notes.join("");
 }
