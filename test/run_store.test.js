@@ -107,7 +107,9 @@ test("commitThesis with an out-of-order (late-arriving, older) asOf is supersede
 test("commitThesis rejects a thesis that would breach the portfolio risk ceiling (other tickers' exposure)", async () => {
   const store = new RunStore(liveDb(), "live");
   // Fill most of the 0.20 ceiling with two other tickers.
-  await store.commitThesis(thesisArgs({ id: "MSFT|t1", ticker: "MSFT", asOf: "t1", positionSizePct: 0.09 }));
+  // AMZN is outside TICKER_GROUPS, so the 10% group cap never applies to these fixtures (a 9% or 19% lone
+  // position would otherwise trip it); only the 20% gross ceiling is under test.
+  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.09 }));
   await store.commitThesis(thesisArgs({ id: "GOOG|t1", ticker: "GOOG", asOf: "t1", positionSizePct: 0.09 }));
 
   // 0.09 + 0.09 + 0.05 = 0.23 > 0.20 -- should be rejected.
@@ -127,25 +129,26 @@ test("commitThesis rejects a thesis that would breach the portfolio risk ceiling
 
 test("commitThesis's portfolio risk ceiling check is AS-OF asOf, not a live/current-state scan -- a position opened later than this decision's asOf does not count against it", async () => {
   const store = new RunStore(liveDb(), "live");
-  // MSFT's position is opened at "t5" -- chronologically AFTER the AAPL
+  // AMZN's position is opened at "t5" -- chronologically AFTER the AAPL
   // decision below, which is dated "t1". A plain `closed_at IS NULL` scan
   // (the pre-fix query) would count it anyway, since by the time this test
-  // calls commitThesis for AAPL, MSFT's row already physically exists in
+  // calls commitThesis for AAPL, AMZN's row already physically exists in
   // the table with closed_at IS NULL -- exactly the bug this test guards
   // against: onSignalRunner.js's backtest walk can commit decisions whose
   // insertion order doesn't match their asOf order across different
   // tickers processed the same day. The FIXED query bounds the sum to
-  // `opened_at <= asOf`, so MSFT's t5 position must be excluded from a
+  // `opened_at <= asOf`, so AMZN's t5 position must be excluded from a
   // decision dated t1.
-  await store.commitThesis(thesisArgs({ id: "MSFT|t5", ticker: "MSFT", asOf: "t5", positionSizePct: 0.19 }));
+  // (AMZN is outside TICKER_GROUPS: a 19% lone position would trip the 10% group cap otherwise.)
+  await store.commitThesis(thesisArgs({ id: "AMZN|t5", ticker: "AMZN", asOf: "t5", positionSizePct: 0.19 }));
 
-  // 0.19 (MSFT, but NOT as-of t1) + 0.05 (AAPL) would be 0.24 > 0.20 if
-  // MSFT wrongly counted -- but as-of t1, MSFT's exposure is 0, so this
+  // 0.19 (AMZN, but NOT as-of t1) + 0.05 (AAPL) would be 0.24 > 0.20 if
+  // AMZN wrongly counted -- but as-of t1, AMZN's exposure is 0, so this
   // must open fine.
   await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1", positionSizePct: 0.05 }));
 
   const aaplPosition = await store.db.prepare(`SELECT * FROM positions WHERE run_id='live' AND id='AAPL|t1'`).first();
-  assert.ok(aaplPosition, "AAPL's position should have opened -- MSFT's later position must not count against an earlier asOf");
+  assert.ok(aaplPosition, "AAPL's position should have opened -- AMZN's later position must not count against an earlier asOf");
 
   const aaplDecision = await store.db.prepare(`SELECT status FROM trade_decisions WHERE run_id='live' AND id='AAPL|t1'`).first();
   assert.equal(aaplDecision.status, "opened");
@@ -153,15 +156,16 @@ test("commitThesis's portfolio risk ceiling check is AS-OF asOf, not a live/curr
 
 test("commitThesis's portfolio risk ceiling check still excludes a position that IS open as of this decision's asOf (not a blanket ignore-everything-else regression)", async () => {
   const store = new RunStore(liveDb(), "live");
-  // MSFT opens at "t1" -- same time as (chronologically at-or-before) the
+  // AMZN opens at "t1" -- same time as (chronologically at-or-before) the
   // AAPL decision below, so it IS within scope as-of "t2".
-  await store.commitThesis(thesisArgs({ id: "MSFT|t1", ticker: "MSFT", asOf: "t1", positionSizePct: 0.19 }));
+  // (AMZN is outside TICKER_GROUPS: a 19% lone position would trip the 10% group cap otherwise.)
+  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.19 }));
 
-  // 0.19 (MSFT, correctly counted as-of t2) + 0.05 (AAPL) = 0.24 > 0.20 -- must be rejected.
+  // 0.19 (AMZN, correctly counted as-of t2) + 0.05 (AAPL) = 0.24 > 0.20 -- must be rejected.
   await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", positionSizePct: 0.05 }));
 
   const aaplPosition = await store.db.prepare(`SELECT * FROM positions WHERE run_id='live' AND id='AAPL|t2'`).first();
-  assert.equal(aaplPosition, null, "MSFT's still-open, already-existing-as-of-t2 exposure must still be counted");
+  assert.equal(aaplPosition, null, "AMZN's still-open, already-existing-as-of-t2 exposure must still be counted");
 
   const aaplDecision = await store.db.prepare(`SELECT status FROM trade_decisions WHERE run_id='live' AND id='AAPL|t2'`).first();
   assert.equal(aaplDecision.status, "rejected");
@@ -169,13 +173,13 @@ test("commitThesis's portfolio risk ceiling check still excludes a position that
 
 test("a ticker's own replaced position is not double-counted against the ceiling (2026-09-19 decision)", async () => {
   const store = new RunStore(liveDb(), "live");
-  // AAPL alone occupies almost the whole ceiling.
-  await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1", positionSizePct: 0.19 }));
-  // Re-evaluating AAPL again (replacing its own position) at the same size must NOT be
+  // AMZN (outside TICKER_GROUPS, so the 10% group cap does not apply) alone occupies almost the whole ceiling.
+  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.19 }));
+  // Re-evaluating AMZN again (replacing its own position) at the same size must NOT be
   // rejected for "double counting" its own existing exposure.
-  await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", positionSizePct: 0.19, direction: "short", confidence: 0.9 }));
+  await store.commitThesis(thesisArgs({ id: "AMZN|t2", ticker: "AMZN", asOf: "t2", positionSizePct: 0.19, direction: "short", confidence: 0.9 }));
 
-  const decision = await store.db.prepare(`SELECT status FROM trade_decisions WHERE run_id='live' AND id='AAPL|t2'`).first();
+  const decision = await store.db.prepare(`SELECT status FROM trade_decisions WHERE run_id='live' AND id='AMZN|t2'`).first();
   assert.equal(decision.status, "opened");
 });
 
