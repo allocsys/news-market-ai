@@ -189,7 +189,7 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
             }
             return;
           }
-          // GET /api/jobs/:id sets `stale` for a queued/running row idle past
+          // GET /api/jobs/:id sets "stale" for a queued/running row idle past
           // the 15-min cutoff (its terminal write never landed, or a backtest
           // is paused: job_progress stays frozen then). Stop polling and say so
           // instead of showing a live bar forever; a reload re-checks (a live
