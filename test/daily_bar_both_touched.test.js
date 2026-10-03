@@ -22,19 +22,20 @@ const daily = (...ohlc) => bar("daily", ...ohlc);
 const intraday = (...ohlc) => bar("intraday", ...ohlc);
 
 const walk = (position, b, nearest) => walkBarsForExit(position, [b], { dailyBothTouchedNearestOpen: nearest });
+const near = (actual, expected, msg) => assert.ok(Number.isFinite(actual) && Math.abs(actual - expected) < 1e-9, `${msg ?? "price"}: expected ~${expected}, got ${actual}`);
 
 test("default: a daily bar touching both resolves as a stop, flagged ambiguous", () => {
   const r = walk(LONG, daily(108, 111, 94, 100), 0);
   assert.equal(r.exit.reason, "stop_loss");
   assert.equal(r.exit.ambiguous, true);
-  assert.equal(r.exit.exitPrice, 95);
+  near(r.exit.exitPrice, 95);
 });
 
 test("nearest-to-open: the target wins when the open is nearer the target", () => {
   const r = walk(LONG, daily(108, 111, 94, 100), 1);
   assert.equal(r.exit.reason, "take_profit");
   assert.equal(r.exit.ambiguous, true);
-  assert.equal(r.exit.exitPrice, 110);
+  near(r.exit.exitPrice, 110);
 });
 
 test("nearest-to-open: the stop wins when the open is nearer the stop, and on an exact tie", () => {
@@ -45,16 +46,16 @@ test("nearest-to-open: the stop wins when the open is nearer the stop, and on an
 test("nearest-to-open: a level the bar opened through (a gap) wins outright, at the open", () => {
   const gapDown = walk(LONG, daily(94, 111, 93, 100), 1); // opened below the stop
   assert.equal(gapDown.exit.reason, "stop_loss");
-  assert.equal(gapDown.exit.exitPrice, 94);
+  near(gapDown.exit.exitPrice, 94);
   const gapUp = walk(LONG, daily(112, 113, 94, 100), 1); // opened above the target
   assert.equal(gapUp.exit.reason, "take_profit");
-  assert.equal(gapUp.exit.exitPrice, 112);
+  near(gapUp.exit.exitPrice, 112);
 });
 
 test("nearest-to-open works for a short (stop above, target below)", () => {
   const r = walk(SHORT, daily(91, 106, 89, 100), 1); // open 91 is 1 from the target 90, 14 from the stop 105
   assert.equal(r.exit.reason, "take_profit");
-  assert.equal(r.exit.exitPrice, 90);
+  near(r.exit.exitPrice, 90);
   assert.equal(r.exit.ambiguous, true);
   assert.equal(walk(SHORT, daily(91, 106, 89, 100), 0).exit.reason, "stop_loss");
 });
@@ -107,7 +108,7 @@ test("exit_check default (knob absent/0): stop-first, and the ambiguous exit is 
   const { closed, logs } = await run(ctx, {});
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   assert.ok(logs.some((l) => /touched both stop and target/.test(l)), "ambiguity logged");
-  assert.equal((await stateRows(ctx.stateDb, "positions"))[0].exit_price, 97);
+  near((await stateRows(ctx.stateDb, "positions"))[0].exit_price, 97);
 });
 
 test("exit_check with dailyBothTouchedNearestOpen=1: the nearer level (target) wins, still logged", async () => {
@@ -115,7 +116,7 @@ test("exit_check with dailyBothTouchedNearestOpen=1: the nearer level (target) w
   const { closed, logs } = await run(ctx, { dailyBothTouchedNearestOpen: 1 });
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "take_profit" }]);
   assert.ok(logs.some((l) => /touched both stop and target/.test(l)));
-  assert.equal((await stateRows(ctx.stateDb, "positions"))[0].exit_price, 106); // max(open 105, target 106)
+  near((await stateRows(ctx.stateDb, "positions"))[0].exit_price, 106); // max(open 105, target 106)
 });
 
 // ---------------------------------------------------------------------------
