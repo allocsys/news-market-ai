@@ -157,9 +157,9 @@ Edge-native SSR dashboard (`src/dashboard/*`), done: five nav groups (Overview/B
 ## Known Gaps / Backlog
 - **Entity resolution:** SEC-backed name matching exists but is **off** (`ENTITY_RESOLUTION_USE_NAME_INDEX`), suspected cause of an earlier CPU-limit incident; never validated on live data.
 - **News sources:** Finnhub primary and backfill-capable. `gdelt.js` unwired. RSS/HTML-scrape are live-only; scrape can't handle bot-challenge sites (Reuters/WSJ) and falls back to fetch-time when a page has no published-time meta.
-- **yfinance** deprecated. **EDGAR** gives only reported `us-gaap` tags, paced at 110ms; no shared cross-vendor rate limiter; no delta fetching for price/fundamentals.
+- **yfinance** deprecated. **EDGAR** gives only reported `us-gaap` tags, paced at 110ms; a D1-persisted per-vendor daily counter exists (`shared/d1_rate_limiter.js`) but only Twelve Data uses it; no delta fetching for price/fundamentals.
 - **Untuned placeholders:** exposure 20%, loss-at-stop 0.75%, group cap 10%, drawdown breaker 2% over 14 days, `FLIP_MIN_CONFIDENCE` 0.75, `TRADE_COST_BPS` 5, `config.maxPositionHoldDays` (10), intraday gate thresholds. Cross-asset correlation is a static group map only (see Next To-Dos).
-- **Exit logic** fires only time-based exits until price bars exist before a position opens. `alphaReturn` is always `null` (no benchmark). Reflection failures are logged and swallowed.
+- **Exit logic** is bar-based (`graph/exit_check.js`): a ticker with no bars in the window gets only the time exit, and an entry day with no intraday rows is not checked. `alphaReturn` is always `null` (no benchmark; `graph/settle.js`). Reflection failures are logged and swallowed (LLM-budget and subrequest-budget errors still propagate).
 - **`debates` table** has no write path (the dead `trade_decisions.debate_id` column was dropped in `state/0003`).
 - **Backtests spend real Gemini quota** (several calls per news item + one per close): manual only, never wire into `scheduled()`.
 - **Not yet observed live:** an ANALYZE crash-and-retry, Queues/D1 ops/day vs. real Observability numbers, fresh `pipeline_checkpoints` on the `*/15` cron, and whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the live dashboard Worker. After any D1 daily write cap hit, confirm `*/15` ingest/ANALYZE recovered post-reset.
