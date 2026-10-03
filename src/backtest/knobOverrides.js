@@ -28,6 +28,7 @@ export const KNOB_OVERRIDES = Object.freeze({
   drawdownBreakerWindowDays: Object.freeze({ min: 1, max: 365, integer: true }),
   splitGuardTolerance: Object.freeze({ min: 0, max: 1 }),
   flipMinConfidence: Object.freeze({ min: 0, max: 1 }),
+  dailyBothTouchedNearestOpen: Object.freeze({ min: 0, max: 1, integer: true }),
 });
 
 /**

@@ -65,7 +65,7 @@ import { PENDING_ENTRY_EXPIRY_MS } from "../shared/entry_timing.js";
  * opened_at that does not parse (logged; a date that cannot be computed is never
  * turned into "the beginning of time").
  */
-async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance, trailing = null }) {
+async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance, trailing = null, dailyBothTouchedNearestOpen = 0 }) {
   if (!exitLevels(position)) return null;
 
   const start = exitWindowStart({ openedAt: position.openedAt, lastCheckedAt: position.lastCheckedAt });
@@ -104,7 +104,7 @@ async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance, t
     });
   }
 
-  return walkBarsForExit(position, bars, { splitGuardTolerance, trailing });
+  return walkBarsForExit(position, bars, { splitGuardTolerance, trailing, dailyBothTouchedNearestOpen });
 }
 
 /**
@@ -173,7 +173,12 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     // backtest walk the due day's own bars are visible by the time the exit is priced).
     const dueAt = config.maxPositionHoldDays != null ? timeExitDueAt(position.openedAt, config.maxPositionHoldDays) : null;
     const timeDue = dueAt != null && Date.parse(dueAt) <= Date.parse(asOf);
-    const walk = await walkPositionBars(inputs, position, { asOf: timeDue ? dueAt : asOf, splitGuardTolerance: config.splitGuardTolerance, trailing });
+    const walk = await walkPositionBars(inputs, position, {
+      asOf: timeDue ? dueAt : asOf,
+      splitGuardTolerance: config.splitGuardTolerance,
+      trailing,
+      dailyBothTouchedNearestOpen: config.dailyBothTouchedNearestOpen,
+    });
 
     // Split guard: bars are raw/unadjusted, so a split looks like a crash. The walk already
     // stopped before the suspicious bar; log loudly on every check (Adopted Pattern #11) so an
@@ -218,6 +223,18 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     // triggering bar's close time. The cursor is deliberately NOT advanced here.
     if (walk?.exit) {
       const { reason, exitPrice, closedAt: barClosedAt } = walk.exit;
+      if (walk.exit.ambiguous) {
+        // A daily bar (no intraday rows that day) touched both stop and target: the order inside it is unknowable.
+        // Loud so the share of such exits in a run is countable (Adopted Pattern #11); see exit_bars.js DAILY-BAR AMBIGUITY.
+        console.error("checkOpenPositionExits: exit on a daily bar that touched both stop and target -- order unknown", {
+          positionId: position.id,
+          ticker: position.ticker,
+          reason,
+          nearestOpenRule: Number(config.dailyBothTouchedNearestOpen) > 0,
+          barOpenMs: walk.exit.barOpenMs,
+          asOf,
+        });
+      }
       // positions.closed_at is compared as a STRING against asOf (getOpenPositionsAsOf, getRealizedPnlPctAsOf),
       // and asOf everywhere is toISOString() form ("...:00.000Z"). The bar's canonical "...:00Z" sorts AFTER
       // that ('.' < 'Z'), so a daily bar closing exactly at asOf would still read as open at asOf. Store the
