@@ -36,11 +36,6 @@
 // propagates.
 
 import { fetchIntradayBars as fetchAlpacaIntradayBars } from "./sources/alpaca.js";
-// twelvedata.js itself is no longer imported here -- 'twelvedata' is not a
-// live route any ticker resolves to anymore (see resolveIntradayVendor). The
-// old TWELVE_DATA_SYMBOL_MAP list lives on in twelvedata.js's own file for
-// reference (step 4 -- purging old twelvedata rows -- and any rollback know
-// exactly what to touch there without this file needing to import it).
 import { fetchIntradayBars as fetchTiingoFxIntradayBars, TIINGO_FX_INTRADAY_TICKERS } from "./sources/tiingo_fx_intraday.js";
 import { insertPriceBarsIntraday } from "../storage/inputs_view.js";
 import { summarizeIntradayRejections } from "../shared/intraday_sanity.js";
@@ -142,8 +137,7 @@ export async function ensureTodayBackfillRows(db, { tickers, date }) {
  * 'in_progress' with `now` as last_attempt, and returns it (or `null` if
  * nothing is claimable). Two statements (SELECT then UPDATE), not one atomic
  * UPDATE...RETURNING with an ORDER BY/LIMIT subquery -- same
- * read-then-write, accepted-non-atomic tradeoff as
- * shared/d1_rate_limiter.js#reserve (see that function's own comment): this
+ * read-then-write, accepted-non-atomic tradeoff: this
  * job is cron-triggered, not high-concurrency (one tick every 15 minutes,
  * one claim per ticker per tick), so a genuine race double-claiming the same
  * row is a near-zero-probability, low-cost failure mode (both callers
