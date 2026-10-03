@@ -50,6 +50,18 @@ const MAX_CASCADE_MS = 90000;
 // Production calls (no subrequestBudget) are unaffected.
 const MAX_ATTEMPTS_UNDER_BUDGET = 3;
 
+// A model that 404s (retired / unavailable to this project) is remembered in the
+// cooldown store for this long, so later calls skip it without spending an attempt
+// (under a backtest's budget a call gets only MAX_ATTEMPTS_UNDER_BUDGET) and the loud
+// error below fires once per window instead of on every call. Deliberately NOT
+// permanent: a false 404 heals itself, and when EVERY model is marked the marks are
+// ignored (see geminiGenerateContent). Stored under the pseudo-model name
+// `dead-<model>` (key `gemini:cooldown:dead-<model>:0`), so it rides the single-map
+// KV store (shared/cooldown_map_kv.js) at no extra read and can never be mistaken for
+// a real (model, key) cooldown.
+export const DEAD_MODEL_COOLDOWN_SECONDS = 6 * 60 * 60;
+const deadModelName = (model) => `dead-${model}`;
+
 // Round-robin starting key index (Workers isolates are single-threaded for
 // sync code, so a plain module-level counter is safe -- no lock needed).
 // Persistence across invocations (warm isolates) is a nice-to-have, not a
@@ -202,6 +214,13 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
   // it, skip it for the remaining keys instead of re-discovering the same
   // 404 once per key.
   const deadModels = new Set();
+  // Models an earlier call already found retired (404 within DEAD_MODEL_COOLDOWN_SECONDS): skip them
+  // from the start. If that would leave NO model, ignore the marks and try for real -- a false 404
+  // must not take the whole cascade down for hours (a true all-404 just re-discovers itself, loudly).
+  for (const m of models) {
+    if (await getCooldown(kv, deadModelName(m), 0)) deadModels.add(m);
+  }
+  if (deadModels.size === models.length) deadModels.clear();
   const keyCount = config.geminiApiKeys.length;
   // Proactive spreading: each call starts at the NEXT key in rotation rather
   // than always key 0, so happy-path traffic distributes across keys instead
@@ -304,6 +323,12 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
         // re-discovering the same 404 on every remaining key.
         if (err.status === 404) {
           deadModels.add(model);
+          // Loud and greppable (error level, fixed prefix): a retired model silently shrinks the fallback
+          // chain until the day it is the one that was needed. Remembered in KV so this fires once per window.
+          console.error(
+            `[gemini] MODEL UNAVAILABLE (404): "${model}" is retired or not available to this project -- remove it from GEMINI_QUICK_MODEL / GEMINI_DEEP_MODEL / GEMINI_FALLBACK_MODELS (skipping it for ${DEAD_MODEL_COOLDOWN_SECONDS / 3600}h)`
+          );
+          await setCooldown(kv, deadModelName(model), 0, DEAD_MODEL_COOLDOWN_SECONDS);
           if (deadModels.size === models.length) throw err;
           continue;
         }
