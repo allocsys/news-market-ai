@@ -66,6 +66,7 @@ const API_ROUTES = [
   { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct", "resolvedEnv", "envError"] },
   { path: "/api/pipeline", keys: ["checkpoints", "tickerStages", "error", "resolvedEnv", "envError"] },
   { path: "/api/tickers", keys: ["tickers", "error", "resolvedEnv", "envError"] },
+  { path: "/api/watchlist", keys: ["tickers"] },
   // getBacktestRunsData (data.js) also composes recent news-replay comparisons
   // (replayJobs/replayError) alongside the plain backtest_runs registry list --
   // a separate job_progress-backed query, its own independent error, not folded
