@@ -115,10 +115,10 @@ async function fetchBackendJson(env, path) {
  * navigates away. BEST-EFFORT: a failed lookup must never take the page
  * down, so any error just means no panel.
  */
-async function activeJobPanelFor(env, type) {
+async function activeJobPanelFor(env, type, panelOptions) {
   try {
     const { job } = await fetchBackendJson(env, `/api/jobs/active?type=${encodeURIComponent(type)}`);
-    return renderActiveJobPanel(job);
+    return renderActiveJobPanel(job, panelOptions);
   } catch (err) {
     console.warn("dashboard active-job lookup failed (non-fatal)", { type, message: err.message });
     return "";
@@ -275,7 +275,17 @@ async function renderSection(request, env, config, section) {
     // in practice, but concatenating both panels (each "" when nothing's
     // running) is simpler than picking one and matches how /dashboard/backfill
     // already shows two possible panels (news vs. price backfill) above.
-    const activePanel = section === "backtest" ? (await activeJobPanelFor(env, "backtest")) + (await activeJobPanelFor(env, "replay")) : "";
+    //
+    // Snapshot is the landing page, so it also carries the running backtest's
+    // progress card (backtest only, no Terminate button -- see renderActiveJobPanel)
+    // so the operator sees a run's state without opening the Backtest tab. Nothing
+    // running = no card, the page is unchanged.
+    const activePanel =
+      section === "backtest"
+        ? (await activeJobPanelFor(env, "backtest")) + (await activeJobPanelFor(env, "replay"))
+        : section === "snapshot"
+          ? await activeJobPanelFor(env, "backtest", { terminate: false })
+          : "";
     const envBar = ENV_SECTIONS.includes(section)
       ? await envSelectorFor(env, { resolvedEnv, envError: data.envError ?? null, url })
       : "";
