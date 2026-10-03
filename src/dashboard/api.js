@@ -17,6 +17,7 @@
 // response in src/index.js, rather than introducing a second, unproven one.
 import { checkAuth } from "./routes.js";
 import { parseDashboardParams, parseLlmParams, parseEnvParam, BACKTEST_ID_RE } from "./helpers.js";
+import { isJobStale } from "../storage/jobs.js";
 import {
   getSnapshotData,
   getActivityData,
@@ -208,5 +209,6 @@ export async function handleApiJobRoute(request, env, config, id) {
   const { store } = await resolveEnv(env, parseEnvParam(new URL(request.url).searchParams));
   const job = await store.getJob(id);
   if (!job) return jsonResponse({ error: "job not found" }, { status: 404 });
-  return jsonResponse(job);
+  // `stale`: still queued/running but idle past the 15-min cutoff getActiveJob uses. Its terminal write probably never landed (see storage/jobs.js#isJobStale); the progress panel uses this to stop showing a live bar.
+  return jsonResponse({ ...job, stale: isJobStale(job) });
 }
