@@ -15,6 +15,13 @@
 //   OHLC says nothing about the order inside it, and protecting capital wins
 //   over locking in a gain (same priority as evaluateExit). Across bars the
 //   order is real: the earlier bar wins.
+//   DAILY-BAR AMBIGUITY. A day with no intraday rows is walked as one daily bar, which can touch both
+//   levels with no way to know the order. The exit then carries `ambiguous: true` (so the caller can log
+//   it). Default resolution is the stop-first rule above (pessimistic). With `dailyBothTouchedNearestOpen`
+//   on, such a daily bar resolves to the level NEARER ITS OPEN instead (price travels from the open to the
+//   closer level first); a level already crossed at the open wins outright (a gap), and a tie goes to the
+//   stop. A heuristic, not knowledge: it exists so a run can be compared against the pessimistic default.
+//   Intraday bars are never ambiguous this way (5-minute order is real; a bar spanning both levels is a gap).
 //
 // FILL PRICE
 //   The exit fills at the level itself (a resting stop/limit order), EXCEPT when
@@ -57,6 +64,16 @@ function isFiniteBar(bar) {
 }
 
 /**
+ * For a bar that touched both levels: does the TARGET come first? A level the bar already opened
+ * through was crossed first; else the level nearer the open is reached first. A tie goes to the stop.
+ */
+function targetResolvesFirst(isLong, open, stop, target) {
+  if (isLong ? open <= stop : open >= stop) return false;
+  if (isLong ? open >= target : open <= target) return true;
+  return Math.abs(target - open) < Math.abs(open - stop);
+}
+
+/**
  * Stop and target price levels for a position, or null when they cannot be
  * computed (no direction / non-positive entry price). A missing pct yields a
  * null level for that side only.
@@ -77,7 +94,8 @@ export function exitLevels({ direction, entryPrice, stopLossPct, takeProfitPct }
  * for `position` (`{direction, entryPrice, stopLossPct, takeProfitPct}`).
  *
  * Returns
- *   exit               null, or { reason, exitPrice, closedAt, gapped, barKind, barOpenMs }
+ *   exit               null, or { reason, exitPrice, closedAt, gapped, barKind, barOpenMs, ambiguous? } -- `ambiguous: true`
+ *                      only when a DAILY bar touched both stop and target (see DAILY-BAR AMBIGUITY above)
  *   maePct, mfePct     gross extremes over the walked bars (null when none counted)
  *   lastBarAvailableAt availableAt of the last bar EVALUATED (the cursor target);
  *                      null when no bar was evaluated. Invalid bars (non-finite OHLC)
@@ -106,7 +124,7 @@ export function exitLevels({ direction, entryPrice, stopLossPct, takeProfitPct }
  * once the trail is the binding stop. With `trailing` off the walk is exactly the static stop/target walk.
  * With no computable levels (see exitLevels) nothing is walked and every field is empty.
  */
-export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trailing = null } = {}) {
+export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trailing = null, dailyBothTouchedNearestOpen = 0 } = {}) {
   const empty = { exit: null, maePct: null, mfePct: null, lastBarAvailableAt: null, lastClose: null, barsWalked: 0, invalidBars: 0, split: null };
   const levels = exitLevels(position);
   if (!levels || !Array.isArray(bars) || bars.length === 0) return empty;
@@ -169,12 +187,15 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trail
     const stopReason = rule ? rule.reason : CLOSE_REASON.STOP_LOSS;
     const target = rule && trailing.trailRemovesTarget && rule.reason === CLOSE_REASON.TRAILING_STOP ? null : levels.target;
 
-    const stopHit = stop != null && (isLong ? bar.low <= stop : bar.high >= stop);
+    const stopTouched = stop != null && (isLong ? bar.low <= stop : bar.high >= stop);
+    const targetTouched = target != null && (isLong ? bar.high >= target : bar.low <= target);
+    const ambiguous = stopTouched && targetTouched && bar.kind === "daily";
+    const stopHit = stopTouched && !(ambiguous && dailyBothTouchedNearestOpen > 0 && targetResolvesFirst(isLong, bar.open, stop, target));
     if (stopHit) {
       const gapped = isLong ? bar.open < stop : bar.open > stop;
       const exitPrice = isLong ? Math.min(bar.open, stop) : Math.max(bar.open, stop);
       return {
-        exit: { reason: stopReason, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs },
+        exit: { reason: stopReason, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs, ...(ambiguous ? { ambiguous: true } : {}) },
         maePct,
         mfePct,
         lastBarAvailableAt,
@@ -185,12 +206,12 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trail
       };
     }
 
-    const targetHit = target != null && (isLong ? bar.high >= target : bar.low <= target);
+    const targetHit = targetTouched;
     if (targetHit) {
       const gapped = isLong ? bar.open > target : bar.open < target;
       const exitPrice = isLong ? Math.max(bar.open, target) : Math.min(bar.open, target);
       return {
-        exit: { reason: CLOSE_REASON.TAKE_PROFIT, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs },
+        exit: { reason: CLOSE_REASON.TAKE_PROFIT, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs, ...(ambiguous ? { ambiguous: true } : {}) },
         maePct,
         mfePct,
         lastBarAvailableAt,
