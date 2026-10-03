@@ -357,8 +357,10 @@ export function loadConfig(env) {
     // a holiday enough room to still land on the latest trading day.
     tiingoLiveWindowDays: Number(env.TIINGO_LIVE_WINDOW_DAYS) || 7,
     // Intraday bars for plan.md finding G (step 2): Alpaca (AAPL/MSFT/TSLA/USO,
-    // ingestion/sources/alpaca.js) and Twelve Data (XAUUSD only,
-    // ingestion/sources/twelvedata.js). No default keys, same convention as
+    // ingestion/sources/alpaca.js); XAUUSD now comes from Tiingo FX (see the
+    // tiingoFx* block below). The twelveData* settings that follow are LEGACY:
+    // ingestion/sources/twelvedata.js is no longer called by any live path (kept
+    // for rollback and its tests). No default keys, same convention as
     // tiingoApiKey/finnhubApiKey -- secrets on the `ingest` Worker only; an
     // unset key makes the adapter throw once, up front.
     alpacaApiKey: env.ALPACA_API_KEY_ID || "",
