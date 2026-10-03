@@ -149,18 +149,8 @@ Fixed: (A/A2) real Tiingo price history; (B, PR #72) silent 500-row caps removed
 
 **Vendors (decided 2026-09-23, owner; free tiers only):** **Alpaca** for AAPL/MSFT/TSLA/USO; **Tiingo FX intraday** for XAUUSD. Paid tiers avoided. Tiingo's equity intraday feed is capped at the newest 2,000 points/ticker.
 
-### Other remaining work
-1. **Live verification** (not yet observed): an ANALYZE crash-and-retry, Queues/D1 ops/day vs. real Observability numbers, fresh `pipeline_checkpoints` on the `*/15` cron.
-2. **Optional:** owner runs remaining news backfill in ~90-day slices up to ~1 year.
-3. **D1 daily write cap**: after any future hit, confirm `*/15` ingest/ANALYZE recovered post-reset.
-4. **Job stuck `queued` when the terminal progress write fails**: needs a dashboard-side stale/timeout state.
-5. **New instruments (gold, oil, forex):** sourcing decided; wider FX/commodity design not started.
-6. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the live dashboard Worker: unverified.
-
-## Dashboard (all DONE)
-**UX adoption (2026-09-22):** ported the `prototype-ui-overhaul` ideas into the existing edge-native SSR dashboard (`src/dashboard/*`): theme toggle, auto-refresh, CSV/JSON export, mobile bottom-sheet nav (#89), Overview command center (#90), global ticker search (#91). The Next.js prototype was a design reference only and was removed from the repo 2026-09-24.
-
-**Redesign (2026-09-22), 7 steps, one PR each:** tokens + shell (#92: Carbon Ink `#14171F`, Ticker Amber `#D98E3C`, Bull Sage/Bear Brick; Fraunces / IBM Plex Sans / IBM Plex Mono) → nav reorg to 5 groups Overview/Book/Research/Operations/Backtest (#93) → ledger tables → verdict card, bull left/bear right/judge's ruling beneath (#94) → stat cards as instrument readouts (#95) → light theme parity (#96) → focus states + a11y pass (#97).
+## Dashboard
+Edge-native SSR dashboard (`src/dashboard/*`), done: five nav groups (Overview/Book/Research/Operations/Backtest), theme toggle with light/dark parity, auto-refresh, CSV/JSON export, mobile bottom-sheet nav, global ticker search, verdict card (bull left, bear right, judge beneath), focus states and an a11y pass. The Next.js prototype was a design reference only and was removed 2026-09-24. The 7-step redesign (#92-#97) and token values live in git history.
 
 **Process lessons:** no direct pushes to `main`. **Never `workflow_dispatch` `deploy.yml` from a non-`main` branch**. A CI signal before merge comes only from a real PR into `main` or local `npm test`.
 
