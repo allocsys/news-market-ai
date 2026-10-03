@@ -189,6 +189,20 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
             }
             return;
           }
+          // GET /api/jobs/:id sets `stale` for a queued/running row idle past
+          // the 15-min cutoff (its terminal write never landed, or a backtest
+          // is paused: job_progress stays frozen then). Stop polling and say so
+          // instead of showing a live bar forever; a reload re-checks (a live
+          // job shows again via /api/jobs/active).
+          if (job.stale) {
+            stopped = true;
+            if (staleTimer) clearTimeout(staleTimer);
+            markTerminal("var(--color-warning-text)");
+            if (bar) bar.style.background = "var(--color-warning-text)";
+            if (phaseEl) phaseEl.textContent = "No progress for over 15 minutes -- the job has likely stopped (or the run is paused). Check its page for the real status, or reload to re-check.";
+            showNextSteps("stalled");
+            return;
+          }
           if (phaseEl) phaseEl.textContent = job.detail || (job.phase ? job.phase + "..." : job.status + "...");
           if (job.updatedAt !== lastUpdatedAt) armStaleCheck(job.updatedAt);
         }
