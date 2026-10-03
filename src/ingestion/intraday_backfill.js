@@ -132,6 +132,42 @@ export async function ensureTodayBackfillRows(db, { tickers, date }) {
 }
 
 /**
+ * Re-opens ('done' -> 'pending') recent days whose bars were fetched BEFORE
+ * the day ended, so they were incomplete when marked done. Without this a
+ * day's row is claimed once -- typically in the first ticks after 00:00Z,
+ * with only a bar or two -- marked done, and never revisited (found
+ * 2026-10-04: no intraday bars for any ticker after 2026-09-25).
+ *
+ * A row is re-opened when ALL hold: status 'done'; date within the last
+ * `lookbackDays` days up to `today`; last_attempt (the claim time) is before
+ * the END of that day (compared at second granularity); and last_attempt is
+ * older than `minAgeMs` (throttle -- today refreshes at most once per
+ * minAgeMs; a past day has exactly one completing refetch, after which its
+ * last_attempt is past its end and it is never re-opened, so this always
+ * terminates). Rows with a NULL last_attempt are left alone. Claiming stays
+ * oldest-first, so history is filled before today refreshes.
+ */
+export async function reopenIncompleteDays(db, { tickers, today, now = new Date(), lookbackDays = 14, minAgeMs = 30 * 60_000 }) {
+  if (tickers.length === 0) return { reopened: 0 };
+  const fromDate = addDays(today, -lookbackDays);
+  const maxLastAttempt = new Date(now.getTime() - minAgeMs).toISOString();
+  const placeholders = tickers.map(() => "?").join(", ");
+  const res = await db
+    .prepare(
+      `UPDATE intraday_backfill_status SET status = 'pending'
+       WHERE status = 'done'
+         AND ticker IN (${placeholders})
+         AND date >= ? AND date <= ?
+         AND last_attempt IS NOT NULL
+         AND substr(last_attempt, 1, 19) < strftime('%Y-%m-%dT%H:%M:%S', date, '+1 day')
+         AND last_attempt < ?`
+    )
+    .bind(...tickers, fromDate, today, maxLastAttempt)
+    .run();
+  return { reopened: res.meta?.changes ?? 0 };
+}
+
+/**
  * Claims the OLDEST 'pending' or 'failed' row for `ticker` (oldest date
  * first -- fills history before chasing today's gap), marking it
  * 'in_progress' with `now` as last_attempt, and returns it (or `null` if
@@ -335,6 +371,12 @@ export async function runIntradayBackfillTick(config, db, { now = new Date() } =
     console.log("intraday backfill: seeded new ticker(s)", { tickers: seeded.tickers, lookbackDays, seeded: seeded.seeded });
   }
   await ensureTodayBackfillRows(db, { tickers, date: today });
+  const reopenMinutes = Number.isFinite(Number(config.intradayBackfillReopenMinutes)) ? Number(config.intradayBackfillReopenMinutes) : 30;
+  const reopenLookbackDays = Number.isFinite(Number(config.intradayBackfillReopenLookbackDays)) ? Number(config.intradayBackfillReopenLookbackDays) : 14;
+  const { reopened } = await reopenIncompleteDays(db, { tickers, today, now, lookbackDays: reopenLookbackDays, minAgeMs: reopenMinutes * 60_000 });
+  if (reopened > 0) {
+    console.log("intraday backfill: re-opened day(s) fetched before day end", { reopened });
+  }
 
   const results = [];
   for (const ticker of tickers) {
