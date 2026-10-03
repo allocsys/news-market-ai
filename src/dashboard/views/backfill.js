@@ -1,4 +1,5 @@
 import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE } from "../helpers.js";
+import { tickerChecklist } from "../ticker_picker.js";
 
 /** UTC "YYYY-MM-DD HH:MM:SS UTC", same format the page-toolbar's own "Loaded ..." stamp uses (shell.js) -- null/invalid input renders as "unknown time" rather than "Invalid Date". */
 function formatUtc(iso) {
@@ -62,8 +63,8 @@ export function backfillTriggerForm() {
   </form>`;
 }
 
-/** Form for the historical price-bar backfill: a range (default: the last year) and an optional comma-separated ticker list (blank = the whole watchlist). GET to the confirm page, like the news form. */
-export function priceBackfillTriggerForm() {
+/** Form for the historical price-bar backfill: a range (default: the last year) and the tickers to fetch -- watchlist checkboxes (none ticked = the whole watchlist), or a comma-separated text field when `tickerOptions` is empty (watchlist lookup failed). GET to the confirm page, like the news form. */
+export function priceBackfillTriggerForm(tickerOptions = []) {
   const today = new Date().toISOString().slice(0, 10);
   const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
   return `<form method="get" action="/dashboard/backfill-prices/confirm" class="filter-bar">
@@ -77,8 +78,13 @@ export function priceBackfillTriggerForm() {
       <input class="filter-form ${DATE_INPUT_STYLE}" id="priceBackfillTo" type="date" name="to" value="${today}">
     </div>
     <div class="filter-group">
-      <span class="filter-label">Tickers (optional)</span>
-      <input class="filter-form" type="text" name="tickers" placeholder="blank = watchlist, e.g. XAUUSD,USO">
+      ${
+        tickerOptions.length > 0
+          ? `<span class="filter-label">Tickers (none selected = whole watchlist)</span>
+      ${tickerChecklist({ name: "tickers", idPrefix: "priceBackfillTicker", options: tickerOptions })}`
+          : `<span class="filter-label">Tickers (optional)</span>
+      <input class="filter-form" type="text" name="tickers" placeholder="blank = watchlist, e.g. XAUUSD,USO">`
+      }
     </div>
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
@@ -87,7 +93,7 @@ export function priceBackfillTriggerForm() {
   </form>`;
 }
 
-export function renderBackfillView({ lastRun, lastPriceRun } = {}) {
+export function renderBackfillView({ lastRun, lastPriceRun, tickerOptions = [] } = {}) {
   return `<section id="backfill">
     <h2>Historical news backfill</h2>
     <p class="note">Triggers <code>POST /backfill</code> -- real Finnhub <code>/company-news</code> calls (spends free-tier quota) for the whole watchlist over the chosen range, persisted the same way live ingestion is. Requires a logged-in dashboard session -- log in from the dashboard's login page to use this. rss/scrape sources can't be backfilled this way (see ingestion/ingest.js#backfillHistoricalNews's own header for why) -- only Finnhub-covered history fills in.</p>
@@ -109,7 +115,7 @@ export function renderBackfillView({ lastRun, lastPriceRun } = {}) {
     <div class="panel">
       <div class="panel-header"><span class="panel-title">Price backfill parameters</span></div>
       <div class="panel-body">
-        ${priceBackfillTriggerForm()}
+        ${priceBackfillTriggerForm(tickerOptions)}
       </div>
     </div>
   </section>`;
