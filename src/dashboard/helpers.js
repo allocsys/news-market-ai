@@ -550,8 +550,24 @@ export function miniStats(items, { cols = 2 } = {}) {
 // Call sites in views will switch from style="${DATE_INPUT_STYLE}" to class="date-input" as needed.
 export const DATE_INPUT_STYLE = "date-input";
 
+/**
+ * Self-contained onclick body for one quick-range button: end = today, start =
+ * today minus `days` (UTC, same as the server-rendered defaults), written into
+ * the two date inputs by id, then a change event on each. No dependency on any
+ * page-level function, so it works even if the shell's head script did not run.
+ * Single quotes only (it sits inside a double-quoted attribute); ids come from
+ * code constants and are checked, never escaped into the script.
+ */
+export function rangePresetOnclick(fromId, toId, days) {
+  const idOk = /^[A-Za-z][A-Za-z0-9_-]*$/;
+  if (!idOk.test(fromId) || !idOk.test(toId)) throw new Error("rangePresetOnclick: ids must be simple element ids");
+  const d = Number(days);
+  if (!Number.isInteger(d) || d < 0) throw new Error("rangePresetOnclick: days must be a non-negative integer");
+  return `var f=document.getElementById('${fromId}'),t=document.getElementById('${toId}');if(f&&t){t.value=new Date().toISOString().slice(0,10);f.value=new Date(Date.now()-${d}*864e5).toISOString().slice(0,10);f.dispatchEvent(new Event('change',{bubbles:true}));t.dispatchEvent(new Event('change',{bubbles:true}));}`;
+}
+
 export function rangePresetButtons(fromId, toId) {
-  const buttons = RANGE_PRESET_DAYS.map((d) => `<button type="button" class="pill" onclick="setDateRange('${fromId}','${toId}',${d})">${d}d</button>`).join("");
+  const buttons = RANGE_PRESET_DAYS.map((d) => `<button type="button" class="pill" onclick="${rangePresetOnclick(fromId, toId, d)}">${d}d</button>`).join("");
   return `<div class="filter-group">
     <span class="filter-label">Quick range</span>
     <div class="pill-row">${buttons}</div>
