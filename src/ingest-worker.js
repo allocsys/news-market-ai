@@ -173,7 +173,7 @@ export default {
         message.ack();
         continue;
       }
-      if (job.type === "ingest_ticker" && (await getDisabled()).has(job.ticker)) {
+      if (job?.type === "ingest_ticker" && (await getDisabled()).has(job.ticker)) {
         console.log("ingest message skipped: ticker disabled by the operator", { type: job.type, ticker: job.ticker });
         message.ack();
         continue;
