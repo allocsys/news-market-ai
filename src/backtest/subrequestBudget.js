@@ -333,6 +333,9 @@ const COOLDOWN_PREFIX = "gemini:cooldown:";
 const POSITIVE_READ_TTL_MS = 15000;
 
 /**
+ * SUPERSEDED in the Workers by shared/cooldown_map_kv.js (every cooldown in ONE KV key, one
+ * read per part); kept, with its tests, as the simpler per-key memo.
+ *
  * An in-invocation memo in FRONT of a (counting) KV wrapper for the Gemini
  * cooldown keys only -- every LLM attempt reads one, ~7 per news item, and they
  * almost always come back empty. Cache hits never reach the counting wrapper, so
