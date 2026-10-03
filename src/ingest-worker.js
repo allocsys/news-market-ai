@@ -49,6 +49,7 @@ import { sendInChunks } from "./ingestion/enqueue.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { RunStore } from "./storage/run_store.js";
 import { getPauseFlags } from "./storage/pause_flags.js";
+import { getDisabledTickers } from "./storage/active_tickers.js";
 
 // Backfill self-continuation (see wrangler.ingest.toml's BACKFILL producer
 // binding). One invocation writes at most about this many NET-NEW articles
@@ -88,10 +89,16 @@ export const MAX_BACKFILL_PARTS = 50;
  * loudly with a count and the affected `ticker:runId` labels instead, because
  * this is the one place where stored-but-never-analyzed items can come from.
  */
-async function enqueueAnalyze(queue, { jobName, context, fetched, fresh, skipAnalyze = false }) {
+async function enqueueAnalyze(queue, { jobName, context, fetched, fresh, skipAnalyze = false, disabledTickers = null }) {
   const messages = [];
+  let disabledSkipped = 0;
   for (const { item, tickers } of fresh) {
     for (const ticker of tickers) {
+      // Operator ticker selection (storage/active_tickers.js): the item stays stored, it is just not analyzed.
+      if (disabledTickers?.has(ticker)) {
+        disabledSkipped += 1;
+        continue;
+      }
       messages.push({ body: { type: "analyze", runId: item.id, ticker, newsItem: item, asOf: item.publishedAt } });
     }
   }
@@ -105,7 +112,7 @@ async function enqueueAnalyze(queue, { jobName, context, fetched, fresh, skipAna
   }
 
   const { sent, failures } = await sendInChunks(queue, messages);
-  console.log(`${jobName} job completed`, { ...context, fetched, freshItems: fresh.length, analyzeMessages: messages.length, enqueued: sent });
+  console.log(`${jobName} job completed`, { ...context, fetched, freshItems: fresh.length, analyzeMessages: messages.length, enqueued: sent, ...(disabledSkipped ? { skippedDisabledTickers: disabledSkipped } : {}) });
   if (failures.length > 0) {
     console.error(`${jobName} could not enqueue every ANALYZE message -- these items are stored but will not be analyzed`, {
       ...context,
@@ -155,10 +162,19 @@ export default {
     // backfill and purge messages always run.
     const { flags } = await getPauseFlags(env.LIVE_DB);
     const skipAnalyze = flags.trading || flags.llm;
+    // Operator ticker selection (storage/active_tickers.js), read lazily (only live ingest messages need
+    // it, so backfill batches add no read); fails open.
+    let disabledTickers = null;
+    const getDisabled = async () => (disabledTickers ??= (await getDisabledTickers(env.LIVE_DB)).disabled);
     for (const message of batch.messages) {
       const job = message.body;
       if (flags.ingestion && (job.type === "ingest_ticker" || job.type === "ingest_feeds")) {
         console.log("ingest message skipped: ingestion is paused", { type: job.type, ticker: job.ticker });
+        message.ack();
+        continue;
+      }
+      if (job.type === "ingest_ticker" && (await getDisabled()).has(job.ticker)) {
+        console.log("ingest message skipped: ticker disabled by the operator", { type: job.type, ticker: job.ticker });
         message.ack();
         continue;
       }
@@ -182,7 +198,7 @@ export default {
           // same loop shape ingest_ticker's single-ticker case doesn't need.
           try {
             const { fetched, fresh } = await ingestFeedNews(config, env.INPUTS_DB, env.CACHE_KV);
-            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_feeds", context: {}, fetched, fresh, skipAnalyze });
+            await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_feeds", context: {}, fetched, fresh, skipAnalyze, disabledTickers: await getDisabled() });
           } catch (err) {
             console.error("ingest_feeds job failed", { message: err.message });
           }
