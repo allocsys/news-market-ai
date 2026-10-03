@@ -1,13 +1,22 @@
 # News → Market Analysis → Trade Signal Pipeline
 
-_Trimmed 2026-10-01 (seventh pass). Current Status refreshed. Per-PR narration, incident logs and vendor research live in git history (`git log -p plan.md`). Labels that code comments reference are unchanged: "Adopted Pattern #N", "Backtesting Integrity point N", "Step N", "Design: environments", "Engine ports", "Decided (2026-09-19)", "Other remaining work #N". **Start with "Next To-Dos", then "Current Status".**_
+_Consolidated 2026-10-03 (eighth pass). Next To-Dos and Current Status refreshed; history sections folded into git._ Per-PR narration, incident logs and vendor research live in git history (`git log -p plan.md`). Labels that code comments reference are unchanged: "Adopted Pattern #N", "Backtesting Integrity point N", "Step N", "Design: environments", "Engine ports", "Decided (2026-09-19)", "Other remaining work #N". **Start with "Next To-Dos", then "Current Status".**_
 
-## Next To-Dos (2026-10-01)
-Priority order, code-verified against current `main`:
-1. **Re-run baseline backtest** — re-run backtest on current code for AAPL, MSFT, TSLA, XAUUSD, USO over 2026-09-01..09-29 (owner approval pending, writes to sim D1). Note: prior baseline run (`backtest-1790860459100-zpv5ex`) finished but was tiny: AAPL only, 2026-09-01..09-03, 11 trades, strategy cum return 0.09% vs buy-and-hold 4.86%; it FAILS the rollout gate (needs >=500 trades and >=3 months, mean net return lower bound `mean - 1.645*SE > 0`). PRs #142–#163 are all squash merged (latest #163: backtest progress granularity -- per-ticker-day/news progress, net returns, MAE/MFE incl. timeline; main deploy #710 succeeded). Live trading is OFF (owner decision); paper clock is not running. Dashboard dedup is done (shared `renderBookCharts` helper; Book view no longer duplicates Overview cards/charts).
-2. **Tune knobs & validate rollout gate** — after a finished run, compare to the rollout gate and tune knobs per `docs/rollout.md` (`FLIP_MIN_CONFIDENCE`, `DRAWDOWN_BREAKER_PCT` + `DRAWDOWN_BREAKER_WINDOW_DAYS`, `SPLIT_GUARD_TOLERANCE`, `TRADE_COST_BPS`; per-run overrides from #152).
-3. **Verify `SIM_DB` purge-guard actually fires in prod** — binding and guard code are in place (`ingest-worker.js`, `wrangler.ingest.toml`), just never confirmed against a real purge run; depends on a completed backtest run.
-4. **Portfolio correlation/cross-asset-exposure check** — still just a flat risk-budget check (`portfolio_manager.js`). **DECIDED 2026-09-25 (owner): build the computed price-return correlation matrix, not a static sector map.** Rationale: static map misclassifies macro-risk-off correlations (XAUUSD/USO) and technology co-movements while conflicting with Adopted Pattern #9 (grounded data claims). Scoping: buildable on existing plumbing (`storage/inputs_view.js#getPriceBarsAsOf`), rolling N-day Pearson correlation of daily returns across the 5-ticker watchlist (5x5), integrated into `portfolio_manager.js#evaluatePortfolio`. Depends on a completed backtest run.
+## Next To-Dos (2026-10-03)
+Priority order, code-verified against current `main` (PRs #165-#189 merged; live trading OFF by owner decision; paper clock not running). Backtests are started only by the owner from `/dashboard/backtest`.
+1. **Finish the baseline backtest and read it against the rollout gate** (`docs/rollout.md`: >=500 closed trades AND >=3 months, mean net return lower bound `mean - 1.645*SE > 0`). Earlier baselines were tiny (e.g. `backtest-1790860459100-zpv5ex`: AAPL only, 11 trades, FAILED the gate). A run started 2026-10-03 is in progress. Expect to need several runs to reach 500 trades.
+2. **Verify #188 and #189 on a live run.** #188 (Gemini cooldowns in one KV key) is confirmed: `kvReads` is 1 per part in the `backtest part finished` log. #189 (idle parts do not count toward `BACKTEST_MAX_PARTS`) has not been exercised: no idle part has occurred yet.
+3. **Verify the `SIM_DB` purge-guard fires in prod** (`ingest-worker.js`, `wrangler.ingest.toml`): never confirmed against a real purge run; needs a completed backtest.
+4. **Tune knobs only after >= 500 trades** (`FLIP_MIN_CONFIDENCE`, `DRAWDOWN_BREAKER_PCT` + `DRAWDOWN_BREAKER_WINDOW_DAYS`, `SPLIT_GUARD_TOLERANCE`, `TRADE_COST_BPS`, trailing knobs; per-run overrides via `backtest/knobOverrides.js`).
+5. **Vol-aware sizing:** on hold. It changes every backtest, so if built it is a per-run knob that defaults to off.
+
+**Decided (owner, 2026-10-03):**
+- Risk ceilings stay as they are until there is trade evidence: gross exposure 20% (`MAX_PORTFOLIO_RISK_PCT`), loss-at-stop 0.75% (`MAX_PORTFOLIO_STOP_RISK_PCT`), group cap 10%, drawdown breaker 2% over 14 days. Trailing/break-even knobs stay at 0 (off): the evidence is 3 trades.
+- **Correlation:** the 2026-09-25 plan for a computed correlation matrix is SUPERSEDED by the static `TICKER_GROUPS` map + `MAX_GROUP_EXPOSURE_PCT` (#176/#177): a computed matrix needs extra price reads per decision, which the 40-subrequest backtest budget cannot afford (`shared/constants.js`). Known gap: macro co-movement across groups (e.g. USO/XAUUSD in a risk-off move) is only bounded by the loss-at-stop ceiling.
+- **No config changes** to backtest limits (`BACKTEST_MAX_TOTAL_SUBREQUESTS` 40, 15s part delay); no pre-warm, parallelisation or batching of pipeline stages. More Gemini keys is the only accepted lever for throughput.
+- No news relevance filter. Backtest resume is manual only; a backtest never starts or resumes by itself.
+- The `platform_limit` pause trigger stays unbuilt (needs the exact D1/KV limit error text from observability). Replacing the quota ledger with the Cloudflare analytics API was considered and dropped.
+- Jev (TypeSafe) provider scratched.
 
 ## Goal
 AI pipeline: ingest financial news → summarize → second LLM reasons about
