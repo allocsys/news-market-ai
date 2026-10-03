@@ -1,6 +1,6 @@
 // Tiingo FX intraday adapter -- XAUUSD intraday bars, replacing Twelve Data
-// (plan.md finding G follow-up, 2026-09-24): the twelvedata.js XAUUSD feed
-// turned out to be untrustworthy (288-289 bars/day including weekends, all
+// (plan.md finding G follow-up, 2026-09-24): the Twelve Data XAUUSD feed (its
+// adapter has since been removed) turned out to be untrustworthy (288-289 bars/day including weekends, all
 // volume 0, weekend hours a flat/jittered synthetic bridge, weekday opens
 // not chaining to the prior close -- see plan.md's own note on this). Owner
 // decision: switch XAUUSD intraday to Tiingo's Forex API instead, using the
