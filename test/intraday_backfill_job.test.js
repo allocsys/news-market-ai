@@ -19,6 +19,7 @@ import {
   resolveIntradayVendor,
   seedBackfillRows,
   ensureTodayBackfillRows,
+  reopenIncompleteDays,
   claimNextBackfillDay,
   claimNextBackfillBatch,
   runIntradayBackfillTick,
@@ -348,4 +349,70 @@ test("a ticker with no claimable day (everything already done) is reported claim
 
   const aapl = result.results.find((r) => r.ticker === "AAPL");
   assert.deepEqual(aapl, { ticker: "AAPL", claimed: false });
+});
+
+// ---------------------------------------------------------------------------
+// reopening days fetched before the day ended (2026-10-04 fix)
+// ---------------------------------------------------------------------------
+
+async function seedDone(db, date, lastAttempt, ticker = "AAPL") {
+  await seedBackfillRows(db, { tickers: [ticker], fromDate: date, toDate: date });
+  await db.prepare("UPDATE intraday_backfill_status SET status = 'done', last_attempt = ? WHERE ticker = ? AND date = ?").bind(lastAttempt, ticker, date).run();
+}
+
+async function statusOf(db, date, ticker = "AAPL") {
+  return (await db.prepare("SELECT status FROM intraday_backfill_status WHERE ticker = ? AND date = ?").bind(ticker, date).first()).status;
+}
+
+test("reopenIncompleteDays re-opens a done day that was fetched before its day ended, but not one fetched after", async () => {
+  const db = newDb();
+  await seedDone(db, "2026-01-13", "2026-01-13T00:15:00.000Z"); // fetched early on its own day -> incomplete
+  await seedDone(db, "2026-01-12", "2026-01-13T06:00:00.000Z"); // fetched the day after -> complete
+
+  const { reopened } = await reopenIncompleteDays(db, { tickers: ["AAPL"], today: "2026-01-15", now: new Date("2026-01-15T12:00:00Z") });
+
+  assert.equal(reopened, 1);
+  assert.equal(await statusOf(db, "2026-01-13"), "pending");
+  assert.equal(await statusOf(db, "2026-01-12"), "done");
+});
+
+test("reopenIncompleteDays throttles today by minAgeMs and ignores NULL last_attempt, other tickers and rows outside the lookback", async () => {
+  const db = newDb();
+  await seedDone(db, "2026-01-15", "2026-01-15T11:50:00.000Z"); // today, fetched 10 min ago -> throttled
+  await seedDone(db, "2026-01-14", null); // legacy row, no last_attempt
+  await seedDone(db, "2025-12-01", "2025-12-01T00:15:00.000Z"); // outside lookback
+  await seedDone(db, "2026-01-13", "2026-01-13T00:15:00.000Z", "MSFT"); // ticker not requested
+
+  const now = new Date("2026-01-15T12:00:00Z");
+  assert.equal((await reopenIncompleteDays(db, { tickers: ["AAPL"], today: "2026-01-15", now })).reopened, 0);
+  assert.equal(await statusOf(db, "2026-01-15"), "done");
+
+  // 40 minutes later today is old enough to refresh.
+  const later = new Date("2026-01-15T12:30:00Z");
+  assert.equal((await reopenIncompleteDays(db, { tickers: ["AAPL"], today: "2026-01-15", now: later })).reopened, 1);
+  assert.equal(await statusOf(db, "2026-01-15"), "pending");
+  assert.equal(await statusOf(db, "2026-01-14"), "done");
+  assert.equal(await statusOf(db, "2025-12-01"), "done");
+  assert.equal(await statusOf(db, "2026-01-13", "MSFT"), "done");
+});
+
+test("a tick refetches an early-fetched day exactly once: done -> reopened -> refetched after day end -> stays done", async (t) => {
+  const db = newDb();
+  await seedDone(db, "2026-01-14", "2026-01-14T00:15:00.000Z");
+  const calls = mockVendors(t, { alpacaByTicker: { AAPL: { bars: [alpacaBar("2026-01-14T14:30:00Z")], next_page_token: null } } });
+  const config = { ...baseConfig(), watchlist: [{ ticker: "AAPL", query: "AAPL" }] };
+
+  // Tick 1 (next day, 12:00Z): reopens 01-14 and refetches it; today's row (01-15) is pending but newer, claimed next tick.
+  const first = await runIntradayBackfillTick(config, db, { now: new Date("2026-01-15T12:00:00Z") });
+  const aapl1 = first.results.find((r) => r.ticker === "AAPL");
+  assert.equal(aapl1.date, "2026-01-14");
+  assert.equal(aapl1.ok, true);
+  assert.equal(await statusOf(db, "2026-01-14"), "done");
+  assert.equal(calls.filter((u) => u.hostname === "data.alpaca.markets").length, 1);
+
+  // Tick 2 (same day, 12:15Z): 01-14 now has last_attempt after its end -> NOT reopened again; today's row is the one claimed.
+  const second = await runIntradayBackfillTick(config, db, { now: new Date("2026-01-15T12:15:00Z") });
+  const aapl2 = second.results.find((r) => r.ticker === "AAPL");
+  assert.equal(aapl2.date, "2026-01-15");
+  assert.equal(await statusOf(db, "2026-01-14"), "done");
 });
