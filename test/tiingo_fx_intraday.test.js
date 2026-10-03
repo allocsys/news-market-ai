@@ -5,7 +5,7 @@
 // field from this vendor), the exactly-one-request-per-ticker contract (no
 // pagination -- see the adapter's own header), the [from, to) window filter,
 // and the same per-ticker failure isolation / retry / credential-scrubbing
-// conventions as twelvedata.js/alpaca.js.
+// conventions as alpaca.js.
 //
 // Everything is mocked at global fetch: nothing here has touched the real
 // Tiingo API (see the adapter's header for what the owner's one manual
