@@ -38,6 +38,7 @@ import { renderBacktestDetailView } from "./dashboard/views/backtest_detail.js";
 import { renderEnvSelector } from "./dashboard/views/env_selector.js";
 import { parseDashboardParams, parseLlmParams, parseEnvParam, envSuffix, errorState, ENV_SECTIONS, BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
+import { tickersFromParams } from "./dashboard/ticker_picker.js";
 
 /** Same "no partial config" gate backend used to run itself (src/index.js,
  * pre-Step-2) -- now the ONLY place this check happens, since backend no
@@ -144,6 +145,22 @@ async function lastFinishedBackfillJob(env, type = "backfill") {
 }
 
 /**
+ * The configured watchlist (backend's GET /api/watchlist), the option list for
+ * the ticker pickers (dashboard/ticker_picker.js). BEST-EFFORT, same as
+ * activeJobPanelFor: a failed lookup returns [] and every picker then falls
+ * back to its plain text field, so the page still works.
+ */
+async function watchlistTickersFor(env) {
+  try {
+    const { tickers } = await fetchBackendJson(env, "/api/watchlist");
+    return Array.isArray(tickers) ? tickers.filter((t) => typeof t === "string" && t) : [];
+  } catch (err) {
+    console.warn("dashboard watchlist lookup failed (non-fatal)", { message: err.message });
+    return [];
+  }
+}
+
+/**
  * HTML for the environment selector (Live + recent backtests) on an env-aware
  * page. BEST-EFFORT, same as activeJobPanelFor: if the registry lookup fails
  * the selector still renders with just "Live" (plus the active backtest, if
@@ -229,6 +246,9 @@ const SECTION_PARAM_PARSERS = {
   llm: parseLlmParams,
 };
 
+// Sections whose view has a ticker picker: renderSection adds `tickerOptions` (the watchlist) to their props.
+const TICKER_PICKER_SECTIONS = new Set(["backtest", "llm"]);
+
 /** GET /dashboard/<section> -- fetch that section's JSON from backend, render it through the same view function routes.js's SSR handler used, wrap in the shell. */
 async function renderSection(request, env, config, section) {
   const auth = await requireSession(request, config);
@@ -247,7 +267,8 @@ async function renderSection(request, env, config, section) {
     // filter/pager link is built off them, so after a bogus or vanished
     // `?env=` those links heal to live instead of re-asking for it (and
     // re-showing the same "not found" note) on every click.
-    const props = parseParams ? { ...data, params: { ...parseParams(url.searchParams), env: resolvedEnv } } : data;
+    const baseProps = parseParams ? { ...data, params: { ...parseParams(url.searchParams), env: resolvedEnv } } : data;
+    const props = TICKER_PICKER_SECTIONS.has(section) ? { ...baseProps, tickerOptions: await watchlistTickersFor(env) } : baseProps;
     // Backtest page shows progress for BOTH job types that live under their
     // own SIM_DB run id (a plain backtest and a news-replay comparison) --
     // at most one of the two is ever actually in flight for a given operator
@@ -481,21 +502,21 @@ export default {
         const activePanel = newsPanel || (await activeJobPanelFor(env, "backfill_prices"));
         const lastRun = await lastFinishedBackfillJob(env);
         const lastPriceRun = await lastFinishedBackfillJob(env, "backfill_prices");
-        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView({ lastRun, lastPriceRun }), theme: getThemeCookie(request) }));
+        return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml: activePanel + renderBackfillView({ lastRun, lastPriceRun, tickerOptions: await watchlistTickersFor(env) }), theme: getThemeCookie(request) }));
       }
       if (pathname === "/dashboard/backfill/confirm") {
         const bodyHtml = renderBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to") });
         return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml, theme: getThemeCookie(request) }));
       }
       if (pathname === "/dashboard/backfill-prices/confirm") {
-        const bodyHtml = renderPriceBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to"), tickers: url.searchParams.get("tickers") });
+        const bodyHtml = renderPriceBackfillConfirmPage({ from: url.searchParams.get("from"), to: url.searchParams.get("to"), tickers: tickersFromParams(url.searchParams) });
         return htmlResponse(renderShell({ activeSection: "backfill", sessionUsername: auth.sessionUsername, bodyHtml, theme: getThemeCookie(request) }));
       }
       if (pathname === "/dashboard/backtest/confirm") {
         const bodyHtml = renderBacktestConfirmPage({
           testStart: url.searchParams.get("testStart"),
           testEnd: url.searchParams.get("testEnd"),
-          tickers: url.searchParams.get("tickers"),
+          tickers: tickersFromParams(url.searchParams),
           graceDays: url.searchParams.get("graceDays"),
         });
         return htmlResponse(renderShell({ activeSection: "backtest", sessionUsername: auth.sessionUsername, bodyHtml, theme: getThemeCookie(request) }));
