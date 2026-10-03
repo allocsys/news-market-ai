@@ -20,10 +20,10 @@
 // claimNextBackfillDay's own comment on that gap) by a later tick, never
 // silently skipped.
 //
-// VENDOR SPLIT (plan.md, decided 2026-09-23, unchanged here): Alpaca for
-// AAPL/MSFT/TSLA/USO, Twelve Data free Basic for XAUUSD only --
-// resolveIntradayVendor derives this from twelvedata.js's own
-// TWELVE_DATA_SYMBOL_MAP rather than a second, easily-drifting copy of the
+// VENDOR SPLIT (plan.md, decided 2026-09-23; XAUUSD switched 2026-09-24): Alpaca
+// for AAPL/MSFT/TSLA/USO, Tiingo FX intraday for XAUUSD only (it replaced Twelve
+// Data) -- resolveIntradayVendor derives this from tiingo_fx_intraday.js's own
+// TIINGO_FX_INTRADAY_TICKERS rather than a second, easily-drifting copy of the
 // same list.
 //
 // FAILURE ISOLATION (Adopted Pattern #11, same convention as every other
