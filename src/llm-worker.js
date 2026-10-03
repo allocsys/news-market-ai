@@ -50,6 +50,7 @@ import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { withLlmLogContext } from "./storage/llm_calls.js";
 import { getPauseFlags } from "./storage/pause_flags.js";
+import { getDisabledTickers } from "./storage/active_tickers.js";
 import { cooldownMapKv } from "./shared/cooldown_map_kv.js";
 
 // How long a loaded Gemini cooldown map is trusted inside one invocation before it is re-read:
@@ -82,6 +83,10 @@ export default {
     // analyze message is not retried; that news item is not analyzed later.)
     const { flags } = await getPauseFlags(env.LIVE_DB);
     const llmBlocked = flags.trading || flags.llm;
+    // Operator ticker selection (storage/active_tickers.js), read lazily (only analyze messages need it);
+    // fails open. A dropped analyze message is not retried, same as under the pause switches.
+    let disabledTickers = null;
+    const getDisabled = async () => (disabledTickers ??= (await getDisabledTickers(env.LIVE_DB)).disabled);
     for (const message of batch.messages) {
       const job = message.body;
       // The Gemini cascade reads cooldowns through ONE KV key per message (shared/cooldown_map_kv.js)
@@ -90,6 +95,11 @@ export default {
       const gemEnv = env.CACHE_KV ? { ...env, CACHE_KV: cooldownMapKv(env.CACHE_KV, { refreshMs: COOLDOWN_MAP_REFRESH_MS }) } : env;
       if (llmBlocked && (job.type === "analyze" || job.type === "exit_check")) {
         console.log("llm message skipped: trading/LLM calls paused", { type: job.type, ticker: job.ticker });
+        message.ack();
+        continue;
+      }
+      if (job.type === "analyze" && (await getDisabled()).has(job.ticker)) {
+        console.log("llm message skipped: ticker disabled by the operator", { type: job.type, ticker: job.ticker });
         message.ack();
         continue;
       }
