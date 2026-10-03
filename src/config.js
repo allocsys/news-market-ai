@@ -518,15 +518,14 @@ export function loadConfig(env) {
     // on hintTicker/COMPANY_DOMAIN_MAP only) rather than throwing if the
     // index can't be built for any reason -- see gdelt.js/rss.js/
     // html_scrape.js's own wiring.
-    // UPDATE (2026-09-17): default flipped false -> true. Unit/wiring test
-    // coverage is thorough (see entity_resolution.test.js,
+    // NOTE: the default is OFF -- the index is only enabled when
+    // ENTITY_RESOLUTION_USE_NAME_INDEX is exactly "true" (an earlier note
+    // here said the default had flipped to true; the code below never did).
+    // Unit/wiring test coverage is thorough (see entity_resolution.test.js,
     // entity_resolution_wiring.test.js -- normalization, word-boundary
     // matching, KV cache-aside fail-open behavior, all three adapters'
     // wiring), but this has NOT yet been validated against a live SEC
-    // fetch + real headline traffic -- every attempt this session hit
-    // unreliable network conditions before a live check could complete.
-    // Explicit opt-out remains available ("false") if live behavior turns
-    // out to need more false-positive tuning than expected.
+    // fetch + real headline traffic, which is why it stays opt-in.
     entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX === "true",
     // Dashboard login (src/index.js's GET/POST /login, src/auth/session.js)
     // -- a one-time login that then authorizes POST /backfill and POST
