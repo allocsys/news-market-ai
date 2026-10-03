@@ -108,6 +108,25 @@ export function jobFromRow(row) {
 export const ACTIVE_JOB_MAX_IDLE_MS = 15 * 60 * 1000;
 
 /**
+ * True when `job` (jobFromRow shape) is still 'queued'/'running' but hasn't
+ * ticked within `maxIdleMs` -- the same cutoff getActiveJob uses to hide an
+ * orphan. GET /api/jobs/:id reports it as `stale` so a progress panel that is
+ * polling a row whose terminal write never landed (best-effort reporter, an
+ * isolate kill, a dropped queue message) can stop pretending it is live. A
+ * finished job is never stale, and an unparseable updatedAt is not stale
+ * (don't cry wolf on bad data). `now` is epoch ms, injectable for tests.
+ * NOTE: a PAUSED backtest also reads as stale after the cutoff (parkRun only
+ * updates backtest_runs and leaves job_progress frozen), so callers word the
+ * message as "no progress", not "dead".
+ */
+export function isJobStale(job, { now = Date.now(), maxIdleMs = ACTIVE_JOB_MAX_IDLE_MS } = {}) {
+  if (!job || (job.status !== "queued" && job.status !== "running")) return false;
+  const updated = Date.parse(job.updatedAt);
+  if (!Number.isFinite(updated)) return false;
+  return now - updated > maxIdleMs;
+}
+
+/**
  * The only way callers should write progress. See the header: best-effort,
  * throttled, silent when `store` can't do job writes (missing, or a bare `{}`
  * in tests). `store` is a RunStore; the job's run_id is whatever that store
