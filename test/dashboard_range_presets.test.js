@@ -10,7 +10,7 @@ import vm from "node:vm";
 import { rangePresetButtons, rangePresetOnclick, RANGE_PRESET_DAYS } from "../src/dashboard/helpers.js";
 import { renderShell } from "../src/dashboard/shell.js";
 import { backtestTriggerForm } from "../src/dashboard/views/backtest.js";
-import { priceBackfillTriggerForm } from "../src/dashboard/views/backfill.js";
+import { backfillTriggerForm, priceBackfillTriggerForm } from "../src/dashboard/views/backfill.js";
 
 function decodeAttr(s) {
   return s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -73,10 +73,16 @@ test("the backtest and backfill forms wire their buttons to their own date input
   assert.match(html, /id="backtestStart"/);
   assert.match(html, /id="backtestEnd"/);
 
-  const backfill = onclicks(priceBackfillTriggerForm([]));
+  const backfill = onclicks(backfillTriggerForm());
   assert.equal(backfill.length, RANGE_PRESET_DAYS.length);
   const els2 = runClick(backfill[0].code, ["backfillFrom", "backfillTo"]);
   assert.equal(els2.backfillFrom.value, isoDaysAgo(backfill[0].days));
+
+  const prices = onclicks(priceBackfillTriggerForm([]));
+  assert.equal(prices.length, RANGE_PRESET_DAYS.length);
+  const els3 = runClick(prices[2].code, ["priceBackfillFrom", "priceBackfillTo"]);
+  assert.equal(els3.priceBackfillFrom.value, isoDaysAgo(prices[2].days));
+  assert.equal(els3.priceBackfillTo.value, isoDaysAgo(0));
 });
 
 test("every inline <script> the shell emits parses as JavaScript", () => {
