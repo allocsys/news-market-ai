@@ -50,7 +50,11 @@ import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { withLlmLogContext } from "./storage/llm_calls.js";
 import { getPauseFlags } from "./storage/pause_flags.js";
+import { cooldownMapKv } from "./shared/cooldown_map_kv.js";
 
+// How long a loaded Gemini cooldown map is trusted inside one invocation before it is re-read:
+// other llm invocations run concurrently and write the same map (shared/cooldown_map_kv.js).
+const COOLDOWN_MAP_REFRESH_MS = 15000;
 // Per-message engine context (M2). `inputs` is a read-only handle onto the
 // shared inputs DB (this Worker never writes news/price/fundamentals --
 // only `ingest` and backend's backfill do), `store` is the live run's
@@ -80,6 +84,10 @@ export default {
     const llmBlocked = flags.trading || flags.llm;
     for (const message of batch.messages) {
       const job = message.body;
+      // The Gemini cascade reads cooldowns through ONE KV key per message (shared/cooldown_map_kv.js)
+      // instead of one per model/key, which cost up to ~38 reads (and subrequests) per LLM call while
+      // most combinations were cooling down. Other KV keys pass through untouched.
+      const gemEnv = env.CACHE_KV ? { ...env, CACHE_KV: cooldownMapKv(env.CACHE_KV, { refreshMs: COOLDOWN_MAP_REFRESH_MS }) } : env;
       if (llmBlocked && (job.type === "analyze" || job.type === "exit_check")) {
         console.log("llm message skipped: trading/LLM calls paused", { type: job.type, ticker: job.ticker });
         message.ack();
@@ -106,7 +114,7 @@ export default {
           // set by the ingest Worker); inside the engine it is the
           // pipelineRunId that keys checkpoints and the thesis id.
           const { runId, ticker, newsItem, asOf: itemAsOf } = job;
-          await runPipelineForTicker(env, withLlmLogContext(config, { source: "pipeline" }), buildLiveContext(env), { pipelineRunId: runId, ticker, newsItem, asOf: itemAsOf });
+          await runPipelineForTicker(gemEnv, withLlmLogContext(config, { source: "pipeline" }), buildLiveContext(env), { pipelineRunId: runId, ticker, newsItem, asOf: itemAsOf });
         } else if (job.type === "backtest") {
           // M2: backtests no longer run here. The engine now takes a
           // {inputs, store} context, and a backtest needs a SIM_DB-backed
@@ -141,13 +149,13 @@ export default {
           // session open is then visible to the exit check below. Own try/catch -- a failed fill must
           // not block the exit check of positions that are already open.
           try {
-            const fills = await fillPendingEntries(env, withLlmLogContext(config, { source: "entry_fill" }), liveCtx, { asOf: job.asOf });
+            const fills = await fillPendingEntries(gemEnv, withLlmLogContext(config, { source: "entry_fill" }), liveCtx, { asOf: job.asOf });
             if (fills.filled.length || fills.expired.length) console.log("entry fill completed", fills);
           } catch (err) {
             console.error("entry fill failed", { message: err.message });
           }
           try {
-            const closed = await checkOpenPositionExits(env, withLlmLogContext(config, { source: "exit_check" }), liveCtx, { asOf: job.asOf });
+            const closed = await checkOpenPositionExits(gemEnv, withLlmLogContext(config, { source: "exit_check" }), liveCtx, { asOf: job.asOf });
             console.log("exit_check job completed", { closed: closed.length, closed });
           } catch (err) {
             console.error("exit_check job failed", { message: err.message });

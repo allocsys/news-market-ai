@@ -251,8 +251,10 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
           transient: true,
         });
         note({ model, keyIndex: ki, outcome: "skipped", detail: cooling.daily ? "daily quota cooldown active" : "cooldown active", ...(cooling.daily ? { daily: true } : {}) });
-        // A daily cooldown's real remaining time (known from its stored expiry) instead of the flat default.
-        cooldownSeconds.push(cooling.daily && cooling.remainingSeconds ? cooling.remainingSeconds : DEFAULT_COOLDOWN_SECONDS);
+        // The cooldown's real remaining time when known (a daily one always; a per-minute one when the
+        // single-key cooldown store reports its expiry) instead of the flat default, so the backtest's
+        // retry delay follows the soonest recovery rather than respinning every ~30s.
+        cooldownSeconds.push(cooling.remainingSeconds ? cooling.remainingSeconds : DEFAULT_COOLDOWN_SECONDS);
         continue;
       }
 
