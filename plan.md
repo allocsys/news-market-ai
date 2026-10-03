@@ -13,7 +13,7 @@ Priority order, code-verified against current `main` (PRs #165-#194 merged; live
 **Decided (owner, 2026-10-03):**
 - Risk ceilings stay as they are until there is trade evidence: gross exposure 20% (`MAX_PORTFOLIO_RISK_PCT`), loss-at-stop 0.75% (`MAX_PORTFOLIO_STOP_RISK_PCT`), group cap 10%, drawdown breaker 2% over 14 days. Trailing/break-even knobs stay at 0 (off): the evidence is 3 trades.
 - **Correlation:** the 2026-09-25 plan for a computed correlation matrix is SUPERSEDED by the static `TICKER_GROUPS` map + `MAX_GROUP_EXPOSURE_PCT` (#176/#177): a computed matrix needs extra price reads per decision, which the 40-subrequest backtest budget cannot afford (`shared/constants.js`). Known gap: macro co-movement across groups (e.g. USO/XAUUSD in a risk-off move) is only bounded by the loss-at-stop ceiling.
-- **No config changes** to backtest limits (`BACKTEST_MAX_TOTAL_SUBREQUESTS` 40, 15s part delay); no pre-warm, parallelisation or batching of pipeline stages. More Gemini keys is the only accepted lever for throughput.
+- **No config changes** to backtest limits (`BACKTEST_MAX_TOTAL_SUBREQUESTS` 40, 15s part delay); no pre-warm, parallelisation or batching of pipeline stages. More Gemini keys is the only accepted lever for throughput (currently 4 keys, confirmed by the owner 2026-10-03).
 - No news relevance filter. Backtest resume is manual only; a backtest never starts or resumes by itself.
 - The `platform_limit` pause trigger stays unbuilt (needs the exact D1/KV limit error text from observability). Replacing the quota ledger with the Cloudflare analytics API was considered and dropped.
 - Jev (TypeSafe) provider scratched.
