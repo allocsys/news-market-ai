@@ -67,7 +67,8 @@ import { applyKnobOverrides } from "./backtest/knobOverrides.js";
 import { replayNewsItems } from "./backtest/newsReplay.js";
 import { getNewsItemsByIds } from "./storage/inputs_view.js";
 import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
-import { SubrequestBudget, countedD1, countedKv, cooldownMemoKv } from "./backtest/subrequestBudget.js";
+import { SubrequestBudget, countedD1, countedKv } from "./backtest/subrequestBudget.js";
+import { cooldownMapKv } from "./shared/cooldown_map_kv.js";
 import { pauseBacktestRun } from "./storage/sim_registry.js";
 import { getQuotaUsage, mergeGeminiCounts, quotaUsageUpsertStatement, utcDay, nextUtcMidnightIso } from "./storage/quota_usage.js";
 import { dailyQuotaCooldownSeconds } from "./shared/cooldown.js";
@@ -102,8 +103,11 @@ function buildBacktestContext(env, runId) {
 
 /**
  * The per-invocation budget and the env whose D1/KV bindings charge it, or
- * `{ budget: null, runEnv: env }` when budgeting is off. The memo sits OUTSIDE
- * the counting KV wrapper so a cached cooldown read costs nothing.
+ * `{ budget: null, runEnv: env }` when budgeting is off. The cooldown store sits OUTSIDE
+ * the counting KV wrapper, so only its real KV operations are charged: ONE read per part
+ * (the whole cooldown map) however many model/key pairs the cascade walks, plus one write
+ * per cooldown event. This is the only writer of the backtest's KV namespace (queue
+ * max_concurrency 1), hence exclusiveWriter.
  */
 function buildBudgetedEnv(env, config) {
   const externalLimit = config.backtestMaxExternalSubrequests;
@@ -114,7 +118,7 @@ function buildBudgetedEnv(env, config) {
     ...env,
     SIM_DB: countedD1(env.SIM_DB, budget),
     INPUTS_DB: countedD1(env.INPUTS_DB, budget),
-    ...(env.CACHE_KV ? { CACHE_KV: cooldownMemoKv(countedKv(env.CACHE_KV, budget)) } : {}),
+    ...(env.CACHE_KV ? { CACHE_KV: cooldownMapKv(countedKv(env.CACHE_KV, budget), { exclusiveWriter: true }) } : {}),
   };
   return { budget, runEnv };
 }
