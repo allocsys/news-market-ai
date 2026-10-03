@@ -30,7 +30,7 @@
 // again on the next scheduled tick, same "no chunk left behind, just
 // deferred" shape as backfillHistoricalNews's own part/continuation limit).
 
-import { getActiveBacktestRunId } from "../storage/sim_registry.js";
+import { getActiveBacktestRunId, getPausedBacktestRunId } from "../storage/sim_registry.js";
 
 // Default retention: 180 days (~6 months), the upper end of plan.md's
 // "rolling 4-6 month window" -- generous headroom over the 90-day backtest
@@ -65,6 +65,14 @@ export async function purgeOldIntradayBars(inputsDb, simDb, { retentionDays = DE
   if (activeRunId) {
     console.log("intraday purge: skipped, a backtest is active", { activeRunId });
     return { skipped: true, reason: `active backtest run ${activeRunId}`, deleted: 0 };
+  }
+
+  // A PAUSED run (manual resume only) is not 'queued'/'running' in job_progress once its
+  // idle cutoff passes, yet resuming it reads its window's bars again: protect it too.
+  const pausedRunId = await getPausedBacktestRunId(simDb);
+  if (pausedRunId) {
+    console.log("intraday purge: skipped, a backtest is paused", { pausedRunId });
+    return { skipped: true, reason: `paused backtest run ${pausedRunId}`, deleted: 0 };
   }
 
   const cutoff = new Date(now.getTime() - retentionDays * 24 * 3600 * 1000).toISOString();

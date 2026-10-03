@@ -285,6 +285,22 @@ export async function getActiveBacktestRunId(db, { maxIdleMs = ACTIVE_JOB_MAX_ID
 }
 
 /**
+ * Run id of the newest PAUSED backtest (backtest_runs.status = 'paused'), or null.
+ *
+ * parkRun (backtest-worker.js) only updates backtest_runs: the run's job_progress
+ * row stays 'running' with a frozen updated_at, so getActiveBacktestRunId stops
+ * seeing it after its idle cutoff, yet resume is manual and the run will read
+ * its window's intraday bars again when resumed. The intraday purge uses this
+ * to keep protecting a parked run. No idle cutoff on purpose: a paused run is
+ * waiting for the operator, not dead. An abandoned one blocks the purge until
+ * it is resumed, cancelled or purged (a skipped purge is only deferred).
+ */
+export async function getPausedBacktestRunId(db) {
+  const row = await db.prepare(`SELECT id FROM backtest_runs WHERE status = 'paused' ORDER BY started_at DESC LIMIT 1`).first();
+  return row ? row.id : null;
+}
+
+/**
  * Run id of the newest in-flight ('queued' or 'running') REPLAY job in SIM_DB,
  * or null -- identical shape and reasoning to getActiveBacktestRunId just
  * above (a replay job's job_progress row lives under the replay's OWN run_id,
