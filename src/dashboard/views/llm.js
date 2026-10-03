@@ -8,6 +8,7 @@ import {
   escapeHtml, fmtTime, errorState, emptyState, statusBadge,
   LLM_SOURCE_OPTIONS, LLM_STATUS_OPTIONS, LLM_LIMIT_OPTIONS, llmQuery, envSuffix,
 } from "../helpers.js";
+import { tickerSelect } from "../ticker_picker.js";
 
 const SOURCE_LABEL = { pipeline: "live pipeline", backtest: "backtest", exit_check: "exit check" };
 
@@ -116,7 +117,7 @@ function pager(params, nextBeforeId) {
   return newer || older ? `<div class="filter-bar" style="margin-top:1rem">${newer}${older}</div>` : "";
 }
 
-export function renderLlmView({ calls, nextBeforeId, params, error }) {
+export function renderLlmView({ calls, nextBeforeId, params, error, tickerOptions = [] }) {
   const filterBar = `<div class="filter-bar filter-bar-scroll">
     ${llmPills("Source", LLM_SOURCE_OPTIONS, params.llmSource, "llmSource", params)}
     ${llmPills("Status", LLM_STATUS_OPTIONS, params.llmStatus, "llmStatus", params)}
@@ -125,7 +126,11 @@ export function renderLlmView({ calls, nextBeforeId, params, error }) {
       <span class="filter-label">Ticker</span>
       <div class="pill-row">
         ${hiddenFilterInputs(params)}
-        <input class="filter-form" type="text" name="llmTicker" value="${escapeHtml(params.llmTicker)}" placeholder="e.g. AAPL" maxlength="12" autocapitalize="characters" style="width:7.5rem">
+        ${
+          tickerOptions.length > 0
+            ? tickerSelect({ name: "llmTicker", id: "llmTicker", options: tickerOptions, selected: params.llmTicker, allLabel: "All tickers" })
+            : `<input class="filter-form" type="text" name="llmTicker" value="${escapeHtml(params.llmTicker)}" placeholder="e.g. AAPL" maxlength="12" autocapitalize="characters" style="width:7.5rem">`
+        }
         <button type="submit" class="btn btn-secondary">Filter</button>
       </div>
     </form>

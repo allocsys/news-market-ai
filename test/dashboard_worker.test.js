@@ -241,9 +241,10 @@ test("Page toolbar's Export CSV/JSON options are combined into one dropdown menu
   assert.match(html, /id="dashboard-export-json-btn"[^>]*>Export as JSON<\/button>/);
 });
 
-test("Backtest trigger form's ticker field has a stable id so auto-refresh can restore it, same as the date fields", async () => {
+test("Backtest trigger form's ticker checkboxes each have a unique id so auto-refresh can restore them, same as the date fields", async () => {
   const html = await getHtml("/dashboard/backtest");
-  assert.match(html, /<input class="filter-form" id="backtestTickers" type="text" name="tickers"/);
+  assert.match(html, /<input type="checkbox" id="backtestTicker-AAPL" name="tickers" value="AAPL">/);
+  assert.match(html, /<input type="checkbox" id="backtestTicker-MSFT" name="tickers" value="MSFT">/);
 });
 
 test("Auto-refresh's #dashboard-main swap captures and restores in-progress form state (quick-range/date/ticker edits), not just a blind innerHTML replace", async () => {
