@@ -73,6 +73,11 @@ const DEFAULT_MAX_TRANSIENT_STALLS = 30;
 // means something systematic (a prompt/schema mismatch) that would silently hollow out
 // the backtest, so past the cap the run fails and says so.
 const DEFAULT_MAX_SKIPPED_ITEMS = 25;
+// IDLE parts (a continuation that completed no unit, made no external call and moved no ticker-day, e.g. its
+// whole budget went on reads while Gemini was cooling down) do not count toward maxParts: they cost nothing
+// and a long outage must not eat the cap. This many IDLE parts IN A ROW fail the run instead, so a run that
+// can never progress still ends.
+const MAX_IDLE_PARTS_IN_A_ROW = 1000;
 // Skipped items listed in the stored result / cursor (the count is always exact).
 const MAX_LISTED_SKIPS = 50;
 
@@ -265,8 +270,16 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
     // long (a Gemini outage: no point retrying before the cooldowns clear);
     // `extra.detail` overrides the progress line.
     const yieldPart = async (state, reason, extra = {}) => {
-      if (part >= maxParts) {
+      // Idle = nothing this part did advanced the run (see MAX_IDLE_PARTS_IN_A_ROW). Only the other parts count
+      // toward maxParts; a cursor from before this counter existed falls back to the part number.
+      const idle = Boolean(budget) && budget.unitsCompleted === 0 && budget.external === 0 && completedSteps === (cursor?.completed ?? 0);
+      const countedParts = (cursor?.countedParts ?? part - 1) + (idle ? 0 : 1);
+      const idleStreak = idle ? (cursor?.idleStreak ?? 0) + 1 : 0;
+      if (countedParts >= maxParts) {
         throw new Error(`Backtest exceeded ${maxParts} continuation parts without finishing (${completedSteps}/${totalSteps} ticker-days done); raise BACKTEST_MAX_PARTS or the subrequest limits`);
+      }
+      if (idleStreak > MAX_IDLE_PARTS_IN_A_ROW) {
+        throw new Error(`Backtest made no progress in ${MAX_IDLE_PARTS_IN_A_ROW} consecutive parts (${completedSteps}/${totalSteps} ticker-days done); giving up`);
       }
       await unenf(() =>
         onProgress?.({
@@ -278,7 +291,7 @@ export async function runManualBacktest(env, config, { inputs, store, registryDb
           force: true,
         }),
       );
-      return { id, status: "continue", reason, ...(extra.delaySeconds ? { delaySeconds: extra.delaySeconds } : {}), ...(extra.dailyQuota ? { dailyQuota: true, retryAfterSeconds: extra.retryAfterSeconds ?? null } : {}), cursor: { clockNow: clock.now(), ...state, completed: completedSteps, ...(skipped.count ? { skipped } : {}) } };
+      return { id, status: "continue", reason, ...(extra.delaySeconds ? { delaySeconds: extra.delaySeconds } : {}), ...(extra.dailyQuota ? { dailyQuota: true, retryAfterSeconds: extra.retryAfterSeconds ?? null } : {}), cursor: { clockNow: clock.now(), ...state, completed: completedSteps, countedParts, idleStreak, ...(skipped.count ? { skipped } : {}) } };
     };
 
     // WALK: windows in order, each one leaving its positions in the store.
