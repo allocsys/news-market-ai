@@ -65,6 +65,10 @@ export async function isCoolingDown(kv, model, keyIndex) {
 // backtest see "every model/key is out for the day" (VendorError.dailyQuota)
 // instead of the flat 60s hint every skipped combination used to produce.
 const DAILY_PREFIX = "daily:";
+// A per-minute cooldown is still WRITTEN as "1". shared/cooldown_map_kv.js (the single-key store the Workers put
+// under this module) hands one back as `min:<expiry epoch ms>`, so the cascade can use its real remaining time
+// instead of the flat 60s default. A plain "1" (raw KV, tests) still reads as before, remaining unknown.
+export const MINUTE_PREFIX = "min:";
 
 /** `null` when (model, key) is not cooling down, else `{ daily, remainingSeconds }` (remaining is null when unknown, e.g. a legacy "1" value). Fails open like isCoolingDown. */
 export async function getCooldown(kv, model, keyIndex, now = Date.now()) {
@@ -76,6 +80,10 @@ export async function getCooldown(kv, model, keyIndex, now = Date.now()) {
     if (text.startsWith(DAILY_PREFIX)) {
       const expiresAt = Number(text.slice(DAILY_PREFIX.length));
       return { daily: true, remainingSeconds: Number.isFinite(expiresAt) ? Math.max(KV_MIN_TTL_SECONDS, Math.ceil((expiresAt - now) / 1000)) : null };
+    }
+    if (text.startsWith(MINUTE_PREFIX)) {
+      const expiresAt = Number(text.slice(MINUTE_PREFIX.length));
+      return { daily: false, remainingSeconds: Number.isFinite(expiresAt) ? Math.max(KV_MIN_TTL_SECONDS, Math.ceil((expiresAt - now) / 1000)) : null };
     }
     return { daily: false, remainingSeconds: null };
   } catch {
