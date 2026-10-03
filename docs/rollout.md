@@ -2,7 +2,7 @@
 
 Stages, in order: **backtest -> paper -> micro-size live**.
 
-All numeric thresholds below are PROPOSED starting values. They are not tuned. The owner confirms or edits them in this PR. Once a stage starts, its criteria are frozen (see "Rules").
+All numeric thresholds below are PROPOSED starting values. They are not tuned. The owner confirms or edits them before Stage 1 is judged. Once a stage starts, its criteria are frozen (see "Rules").
 
 ## Rules
 

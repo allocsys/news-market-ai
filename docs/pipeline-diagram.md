@@ -16,7 +16,7 @@ Reference diagrams for `runPipelineForTicker` (one ticker, one news item), cover
 
 4. Stage `traded`: `runTrader` (`agents/trader/trader.js`) turns the verdict into a thesis. Never sizes.
 5. Stage `risk_checked`: `evaluateRisk` (`agents/risk_mgmt/risk.js`) -- deterministic, no LLM, sets sizing/stop-loss/take-profit.
-6. Stage `portfolio_checked`: `evaluatePortfolio` (`agents/managers/portfolio_manager.js`) -- deterministic, no LLM, portfolio-wide risk ceiling go/no-go. If approved: `store.commitThesis` (atomic open/replace), plus `settlePositionOutcome` (`graph/settle.js`, a reflection call) if replacing an existing position.
+6. Stage `portfolio_checked`: `evaluatePortfolio` (`agents/managers/portfolio_manager.js`) -- deterministic, no LLM, portfolio go/no-go against the gross-exposure ceiling, the loss-at-stop ceiling, the per-group cap (`TICKER_GROUPS`) and the drawdown breaker (limits in `shared/constants.js`; `RunStore#commitThesis` re-checks the SQL-checkable ones atomically). If approved: `store.commitThesis` (atomic open/replace), plus `settlePositionOutcome` (`graph/settle.js`, a reflection call) if replacing an existing position.
 
 ## Worker, queue and D1 topology
 
@@ -26,7 +26,7 @@ Five Workers, each with its own `wrangler.*.toml`: `dashboard` (public, no D1/KV
 
 ## Notes
 
-- Every stage is checkpointed (`graph/checkpointer.js`), so a crash resumes from the next stage instead of re-spending LLM calls.
+- Every LLM-backed stage is checkpointed (`graph/checkpointer.js`), so a crash resumes from the next stage instead of re-spending LLM calls. `risk_checked` is deterministic and is NOT checkpointed: it is recomputed on resume.
 - LLM-backed stages (purple): the analyst team, bull/bear researchers, research manager, trader. These are the calls that share the free-tier Gemini RPM limit.
 - Deterministic stages (gray): risk check, portfolio check. No LLM involvement, no rate-limit exposure.
 - Exit check (`graph/exit_check.js`, live cron every 15 min; backtests call it once per day at midnight UTC): stop-loss/take-profit are evaluated by walking OHLC bars (`agents/risk_mgmt/exit_bars.js`), not by sampling one price. The window runs from `positions.last_checked_at` (or `opened_at` on the first check) to `asOf`: 5-min bars with `ts + 5min <= asOf`, plus daily bars for days that have no intraday rows. The cursor advances only when a window was evaluated with no exit. Within one bar the stop is checked before the target; a bar that gaps past a level fills at its open, otherwise the fill is the level. `closedAt` is the triggering bar's close time in ms ISO form (so string compares against `asOf` treat it as closed at that instant). MAE/MFE are recorded over the window. A position that `commitThesis` is about to close as `flipped`/`replaced` gets the same bar walk first (`recordExcursionBeforeClose`, called from `pipeline.js` before the commit, skipped when the hold rule keeps the position): excursion only, it never closes the position or moves the cursor. A split guard yields a null exit price. An entry day with no intraday rows is not checked (conservative). Time exits are unchanged: `evaluateExit(..., skipPriceExits: true)` closes at `asOf` via `resolveCurrentPrice`. Needs migration `state/0006_position_last_checked.sql`.

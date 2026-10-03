@@ -1,13 +1,22 @@
 # News → Market Analysis → Trade Signal Pipeline
 
-_Trimmed 2026-10-01 (seventh pass). Current Status refreshed. Per-PR narration, incident logs and vendor research live in git history (`git log -p plan.md`). Labels that code comments reference are unchanged: "Adopted Pattern #N", "Backtesting Integrity point N", "Step N", "Design: environments", "Engine ports", "Decided (2026-09-19)", "Other remaining work #N". **Start with "Next To-Dos", then "Current Status".**_
+_Consolidated 2026-10-03 (ninth pass). Known Gaps re-verified against code; incident narration and duplicated values folded into git._ Per-PR narration, incident logs and vendor research live in git history (`git log -p plan.md`). Labels that code comments reference are unchanged: "Adopted Pattern #N", "Backtesting Integrity point N", "Step N", "Design: environments", "Engine ports", "Decided (2026-09-19)", "Other remaining work #N". **Start with "Next To-Dos", then "Current Status".**_
 
-## Next To-Dos (2026-10-01)
-Priority order, code-verified against current `main`:
-1. **Re-run baseline backtest** — re-run backtest on current code for AAPL, MSFT, TSLA, XAUUSD, USO over 2026-09-01..09-29 (owner approval pending, writes to sim D1). Note: prior baseline run (`backtest-1790860459100-zpv5ex`) finished but was tiny: AAPL only, 2026-09-01..09-03, 11 trades, strategy cum return 0.09% vs buy-and-hold 4.86%; it FAILS the rollout gate (needs >=500 trades and >=3 months, mean net return lower bound `mean - 1.645*SE > 0`). PRs #142–#163 are all squash merged (latest #163: backtest progress granularity -- per-ticker-day/news progress, net returns, MAE/MFE incl. timeline; main deploy #710 succeeded). Live trading is OFF (owner decision); paper clock is not running. Dashboard dedup is done (shared `renderBookCharts` helper; Book view no longer duplicates Overview cards/charts).
-2. **Tune knobs & validate rollout gate** — after a finished run, compare to the rollout gate and tune knobs per `docs/rollout.md` (`FLIP_MIN_CONFIDENCE`, `DRAWDOWN_BREAKER_PCT` + `DRAWDOWN_BREAKER_WINDOW_DAYS`, `SPLIT_GUARD_TOLERANCE`, `TRADE_COST_BPS`; per-run overrides from #152).
-3. **Verify `SIM_DB` purge-guard actually fires in prod** — binding and guard code are in place (`ingest-worker.js`, `wrangler.ingest.toml`), just never confirmed against a real purge run; depends on a completed backtest run.
-4. **Portfolio correlation/cross-asset-exposure check** — still just a flat risk-budget check (`portfolio_manager.js`). **DECIDED 2026-09-25 (owner): build the computed price-return correlation matrix, not a static sector map.** Rationale: static map misclassifies macro-risk-off correlations (XAUUSD/USO) and technology co-movements while conflicting with Adopted Pattern #9 (grounded data claims). Scoping: buildable on existing plumbing (`storage/inputs_view.js#getPriceBarsAsOf`), rolling N-day Pearson correlation of daily returns across the 5-ticker watchlist (5x5), integrated into `portfolio_manager.js#evaluatePortfolio`. Depends on a completed backtest run.
+## Next To-Dos (2026-10-03)
+Priority order, code-verified against current `main` (PRs #165-#189 merged; live trading OFF by owner decision; paper clock not running). Backtests are started only by the owner from `/dashboard/backtest`.
+1. **Finish the baseline backtest and read it against the rollout gate** (`docs/rollout.md`: >=500 closed trades AND >=3 months, mean net return lower bound `mean - 1.645*SE > 0`). Earlier baselines were tiny (e.g. `backtest-1790860459100-zpv5ex`: AAPL only, 11 trades, FAILED the gate). A run started 2026-10-03 (`backtest-1791023632932-u65p8e`, AAPL, 2026-09-01..05) COMPLETED at 12:08Z in 151 parts (~95 min): n=4 signals, one position traded, nowhere near the gate. The 2026-10-02 run `emy6gk` failed at the part cap (17/120 ticker-days) before #188/#189. Expect to need several runs to reach 500 trades.
+2. **Verify #188 and #189 on a live run.** #188 (Gemini cooldowns in one KV key) is confirmed on `u65p8e`: `kvReads` is 0-1 per part in the `backtest part finished` log. #189 (idle parts do not count toward `BACKTEST_MAX_PARTS`) is not exercised: that run used only 151 of 1500 parts.
+3. **Verify the `SIM_DB` purge-guard fires in prod** (`ingest-worker.js`, `wrangler.ingest.toml`): never confirmed against a real purge run; needs a completed backtest.
+4. **Tune knobs only after >= 500 trades** (`FLIP_MIN_CONFIDENCE`, `DRAWDOWN_BREAKER_PCT` + `DRAWDOWN_BREAKER_WINDOW_DAYS`, `SPLIT_GUARD_TOLERANCE`, `TRADE_COST_BPS`, trailing knobs; per-run overrides via `backtest/knobOverrides.js`).
+5. **Vol-aware sizing:** on hold. It changes every backtest, so if built it is a per-run knob that defaults to off.
+
+**Decided (owner, 2026-10-03):**
+- Risk ceilings stay as they are until there is trade evidence: gross exposure 20% (`MAX_PORTFOLIO_RISK_PCT`), loss-at-stop 0.75% (`MAX_PORTFOLIO_STOP_RISK_PCT`), group cap 10%, drawdown breaker 2% over 14 days. Trailing/break-even knobs stay at 0 (off): the evidence is 3 trades.
+- **Correlation:** the 2026-09-25 plan for a computed correlation matrix is SUPERSEDED by the static `TICKER_GROUPS` map + `MAX_GROUP_EXPOSURE_PCT` (#176/#177): a computed matrix needs extra price reads per decision, which the 40-subrequest backtest budget cannot afford (`shared/constants.js`). Known gap: macro co-movement across groups (e.g. USO/XAUUSD in a risk-off move) is only bounded by the loss-at-stop ceiling.
+- **No config changes** to backtest limits (`BACKTEST_MAX_TOTAL_SUBREQUESTS` 40, 15s part delay); no pre-warm, parallelisation or batching of pipeline stages. More Gemini keys is the only accepted lever for throughput.
+- No news relevance filter. Backtest resume is manual only; a backtest never starts or resumes by itself.
+- The `platform_limit` pause trigger stays unbuilt (needs the exact D1/KV limit error text from observability). Replacing the quota ledger with the Cloudflare analytics API was considered and dropped.
+- Jev (TypeSafe) provider scratched.
 
 ## Goal
 AI pipeline: ingest financial news → summarize → second LLM reasons about
@@ -30,7 +39,7 @@ risk → portfolio sign-off).
 12. **Checkpoint/resume** per pipeline stage so a crash doesn't re-spend LLM calls.
 
 ## Pipeline Stages
-1. **Ingestion**: normalize every source into one schema (`id` = sha256(url+published_at), `source`, `url`, `published_at` = exact public time not ingestion time, `ingested_at`, `tickers`, `title`, `body`, `raw`). Sources: Finnhub `/company-news` (primary), RSS, HTML scrape, Tiingo (bars), Alpaca (intraday), SEC EDGAR (XBRL fundamentals).
+1. **Ingestion**: normalize every source into one schema (`id` = sha256(url+published_at), `source`, `url`, `published_at` = exact public time not ingestion time, `ingested_at`, `tickers`, `title`, `body`, `raw`). Sources: Finnhub `/company-news` (primary), RSS, HTML scrape, Tiingo (daily bars; FX intraday for XAUUSD), Alpaca (intraday), SEC EDGAR (XBRL fundamentals). GDELT is unwired.
 2. **Storage**: D1 (R2 is an unused option if D1 is outgrown).
 3. **Analyst team**: News/Event, Sentiment (5-band + justification), Technical, on the quick model.
 4. **Researchers**: Bull and Bear argue; Research Manager reconciles into a verdict (direction, confidence, horizon).
@@ -79,7 +88,7 @@ Before the split, backtest and live shared D1 state and nothing marked which run
 - **Backtest subrequest budget** (`src/backtest/subrequestBudget.js`, confirmed live 2026-09-21): defaults 40 external + 40 total; D1/KV calls count toward the same total, so ~1 item per part. When the next unit won't fit the run returns a cursor and continues as a new part after 15s (`BACKTEST_MAX_PARTS` 1500). Keep TOTAL ≥ 10. Workers Paid removes all of this.
 - A backtest over an un-backfilled window fails fast (step D preflight).
 - **Backtest pause/resume + daily quota guard (2026-10-02, PR #187):** a huge span can hit the daily D1/KV/Gemini caps mid-run, so a run can be **paused instead of failed** (status `paused`, data kept; `backtest_runs.cursor` holds a resume envelope `{part, cursor, job}`). Each part adds its D1 rows written/read, KV writes/reads and Gemini calls to one `quota_usage` row per UTC day (same `db.batch` as `rows_written`, ~+1 row/part, no extra subrequest). At a part boundary the run parks once today's total reaches `QUOTA_PAUSE_PCT` (90) of one of our shares: `BACKTEST_DAILY_WRITE_BUDGET` 40000, `BACKTEST_DAILY_READ_BUDGET` 2000000 (a lower bound), `BACKTEST_DAILY_KV_WRITE_BUDGET` 500, `BACKTEST_DAILY_KV_READ_BUDGET` 50000 (`0` disables a counter). Also parks when every Gemini key is on a daily cooldown (`gemini_daily_cap`) and on the dashboard Pause button (`operator`). `paused_reason`: `operator | d1_write_budget | gemini_daily_cap | quota_threshold`; `platform_limit` is reserved, not built. **Resume is manual only** (`POST /backtest/:id/resume`, dashboard button); a backtest never restarts by itself, and part 1 of a new run is never refused. `resume_after` is a hint (next UTC midnight, or the shortest Gemini cooldown), not a timer.
-- **Gemini cooldowns in ONE KV key (2026-10-03):** the cascade used to read one KV key per model/key pair (~9 models x 4 keys). While most pairs were cooling, a backtest part spent ~29-38 KV reads (the whole 40-subrequest budget, zero progress for ~4h) and the day used 26k of the 50k KV reads. `src/shared/cooldown_map_kv.js` now serves every `gemini:cooldown:*` key from one map key `gemini:cooldown-map` (`{key: [value, expiryMs]}`): ONE read per backtest part / live `llm` message however many pairs are walked, one write per cooldown event. Entries carry their expiry, so a cached map never reports an expired cooldown. Backtest = exclusive writer (loads once, no re-read on write); live `llm` re-reads before each write and refreshes every 15s (concurrent invocations). A per-minute cooldown now reports its real remaining time, so the pause delay follows the soonest recovery instead of the flat 60s. Old per-key entries are ignored and expire on their own (worst case one extra 429 per pair).
+- **Gemini cooldowns in ONE KV key (2026-10-03):** `src/shared/cooldown_map_kv.js` serves every `gemini:cooldown:*` key from one map key `gemini:cooldown-map` (`{key: [value, expiryMs]}`), so a backtest part or live `llm` message costs ONE KV read however many model/key pairs the cascade walks, plus one write per cooldown event. (The old one-read-per-pair design burned the whole 40-subrequest budget with zero progress while keys were cooling.) Entries carry their expiry, so a cached map never reports an expired cooldown. Backtest = exclusive writer (loads once); live `llm` re-reads before each write and refreshes every 15s. A per-minute cooldown reports its real remaining time, so the pause delay follows the soonest recovery instead of a flat 60s. Old per-key entries are ignored and expire on their own.
 
 ## Architecture: Cloudflare Workers + D1 + KV (free tier)
 Five Workers connected by queues, each binding only the D1s it needs; only `backend` runs migrations.
@@ -89,19 +98,14 @@ Five Workers connected by queues, each binding only the D1s it needs; only `back
 - **`llm`**: live Gemini caller (`GEMINI_API_KEYS`); binds `LIVE_DB` rw, `INPUTS_DB` ro; consumes `ANALYZE` and `LLM_JOBS` (`exit_check` only).
 - **`backtest`**: private; consumes `BACKTEST` (batch 1, concurrency 1, DLQ); binds `SIM_DB` rw, `INPUTS_DB` ro, own `CACHE_KV`, **no `LIVE_DB`** (CI-pinned); own `GEMINI_API_KEYS`, never `FINNHUB_API_KEY`.
 
-Every queue has a DLQ (`max_retries` 3). CI: `test` → `migrate` (gated on `migrations/**`) → one deploy job per Worker, each diffed against its last successful deploy; docs-only PRs deploy nothing. **Lesson:** a green deploy says nothing about live bindings; compare each Worker's live bindings to its wrangler file. wrangler v4 required.
+Every queue has a DLQ (`max_retries` 3). CI: `test` → `migrate` (gated on `migrations/**`) → one deploy job per Worker, each diffed against its last successful deploy; docs-only PRs deploy nothing. **Lesson:** a green deploy says nothing about live bindings; compare each Worker's live bindings to its wrangler file. wrangler v4 required. `sendBatch` takes at most 100 messages per call, so senders chunk (an oversized batch was once acked silently and no analysis ran).
 
 ## LLM Layer: Multi-Key Gemini Cascade
 **Model-first, two-axis:** outer loop tries `[requestedModel, ...GEMINI_FALLBACK_MODELS]` across every key before dropping a tier; inner loop rotates keys on 401/403/429/503/transient. **Cooldown:** KV with TTL, written only on rate-limit; fails open. Stored as ONE map key `gemini:cooldown-map` (see the 2026-10-03 note above; the cascade still asks per `gemini:cooldown:<model>:<keyIndex>` name, `shared/cooldown_map_kv.js` answers from the map). The fallback list must differ from the requested model.
 
 **Models (2026-09-22):** quick `3.1-flash-lite`, deep `3.6-flash`; fallbacks `3.1-flash-lite, 3.5-flash-lite, 3.7-flash, 3.8-flash, 3.6-flash, 3-flash-preview` (`wrangler.llm.toml`, `wrangler.backtest.toml`, `config.js`). **Lesson (2026-09-22 incident):** Google retired `gemini-2.5-flash` while it sat last in the fallback list; a 404 is fatal-not-transient by design, so an exhausted cascade killed a live backtest. Revisit the list periodically; entries can go from "rate-limited" to "retired" with no warning.
 
-**LLM call log** (`/dashboard/llm`): every prompt/response incl. failures → `llm_calls`, via `agents/utils/structured.js#callStructured`. Best-effort; `LLM_LOG_ENABLED=false` disables; ~4 D1 rows/call; pruned after 14 days; clipped at 60,000 chars.
-
-## Live incidents (fixed; lessons)
-- **No analysis after M4 cutover (2026-09-20):** `ANALYZE.sendBatch` exceeded Cloudflare's 100-message cap and acked silently; fixed via chunked sending.
-- **First price backfill (2026-09-20):** yfinance 429s + D1 write cap stuck a job `queued` forever; resolved via Tiingo switch.
-- **Service split (2026-09-19, PRs #27–#33):** one Worker was hitting CPU limits nearly every tick; fixed by splitting Workers.
+**LLM call log** (`/dashboard/llm`): every prompt/response incl. failures → `llm_calls`, via `agents/utils/structured.js#callStructured`. Best-effort; `LLM_LOG_ENABLED=false` disables; ~4 D1 rows/call; pruned after `LLM_LOG_RETENTION_DAYS` (default 14; the prune runs in `llm-worker.js`); clipped at 60,000 chars. Rows are buffered per news item and flushed in one batch (see Known Gaps).
 
 ## Historical news backfill
 `POST /backfill?from=&to=` → `BACKFILL` queue → `ingest` in self-continuing parts (caps: 40 requests/500 items/invocation, 50 parts/job). Verified 2026-09-20: 90 days = 10,025 items in 13 parts, 0 errors; reruns dedupe; Finnhub `to` is inclusive. ~29 MB/10K articles, so run ~90-day slices up to a year.
@@ -118,52 +122,47 @@ dashboard-worker.js    # `dashboard`: login, session, SSR UI
 ingest-worker.js       # `ingest`: INGEST + BACKFILL consumers
 llm-worker.js          # `llm`: ANALYZE + exit_check
 backtest-worker.js     # `backtest`: BACKTEST consumer
-ingestion/             # Finnhub, GDELT (unwired), EDGAR, RSS, scrape, Tiingo, Alpaca adapters
+ingestion/             # ingest.js (orchestration + news backfill), entity_resolution.js, date_windows.js, market_data_validator.js
+  sources/             # adapters: Finnhub, GDELT (unwired), EDGAR, RSS, scrape, Tiingo (+FX intraday), Alpaca, Twelve Data, yfinance
   intraday_backfill.js # cron-driven gradual intraday backfill
   intraday_purge.js    # retention purge (skipped while a backtest runs)
-  errors.js, date_windows.js, market_data_validator.js
-shared/                # price_availability.js, intraday_availability.js, intraday_sanity.js, errors.js
-storage/               # run_store.js, inputs_view.js, sim_registry.js
+shared/                # price_availability.js, intraday_availability.js, intraday_sanity.js, constants.js (risk ceilings, groups),
+                       # cooldown.js + cooldown_map_kv.js (Gemini cooldowns), errors.js, retry.js, throttle.js, split_guard.js
+storage/               # run_store.js, inputs_view.js, sim_registry.js, quota_usage.js, jobs.js, llm_calls.js, pause_flags.js
 llm/  agents/  graph/  backtest/  dashboard/
 migrations/            # inputs/, state/, sim/
-config/  tests/
+config.js              # the single place that reads env vars
+test/                  # incl. the mandatory backtest leak-check test
 ```
 
 ## Current Status
-Built end to end: schemas, Gemini cascade, debate + judge, deterministic risk/sizing + portfolio sign-off, all adapters, positions store with stop/take-profit/time exits, technical analyst on price bars, settlement → reflection loop, date-windowed backfill, signal on/off backtest harness, live-progress job panel, backtest/live isolation (M1–M5), subrequest-budgeted resumable backtests. CI and deploys are green across all five Workers.
+Built end to end: schemas, Gemini cascade, debate + judge, deterministic risk/sizing + portfolio sign-off, all adapters, positions store with stop/take-profit/time exits, technical analyst on price bars, settlement → reflection loop, date-windowed backfill, signal on/off backtest harness, live-progress job panel, backtest/live isolation (M1–M5), subrequest-budgeted resumable backtests with pause/resume and a daily quota ledger, deterministic risk gates (exposure, loss-at-stop, group cap, mark-to-market drawdown breaker, SQL re-check), break-even/trailing stops (knobs default off), a single-key Gemini cooldown store, and a part cap that ignores idle parts. CI and deploys are green across all five Workers.
 
 ### Backtest trustworthiness (audit 2026-09-20: "is backtesting bug free?" → no)
 Working rules: one PR per step off `main`; CI `test` is the real test (no local runner); **merge only on the owner's explicit go-ahead**, squash.
 
 Fixed: (A/A2) real Tiingo price history; (B, PR #72) silent 500-row caps removed via keyset paging; (C) same-day price look-ahead fixed (strict `<` on UTC date); (D) real daily portfolio equity curves + price-coverage preflight; (E) day-major walk + as-of exposure checks.
 
-### Finding G: same-day replacement booked zero PnL (found 2026-09-23) — FIXED
-**Cause:** `getPriceBarsAsOf` resolves at UTC-day granularity, so two same-ticker same-day news items get the same price (previous close). `graph/pipeline.js`'s replace path used one price for both `entryPrice` and `exitPrice`, so `computeRealizedReturn` always returned 0.
-**Fix:** price entry/exit off real intraday bars at each item's own timestamp, falling back to the daily close when no intraday bar exists.
+### Finding G (found 2026-09-23) — FIXED
+A same-day replacement booked zero PnL because both prices resolved to the previous daily close. Entry and exit now price off real intraday bars at each item's own timestamp (daily close when none exists).
+**Vendors (owner, 2026-09-23; free tiers only):** Alpaca for AAPL/MSFT/TSLA/USO; Tiingo FX intraday for XAUUSD (replaced Twelve Data). Tiingo's equity intraday feed is capped at the newest 2,000 points/ticker.
 
-**Vendors (decided 2026-09-23, owner; free tiers only):** **Alpaca** for AAPL/MSFT/TSLA/USO; **Tiingo FX intraday** for XAUUSD. Paid tiers avoided. Tiingo's equity intraday feed is capped at the newest 2,000 points/ticker.
-
-### Other remaining work
-1. **Live verification** (not yet observed): an ANALYZE crash-and-retry, Queues/D1 ops/day vs. real Observability numbers, fresh `pipeline_checkpoints` on the `*/15` cron.
-2. **Optional:** owner runs remaining news backfill in ~90-day slices up to ~1 year.
-3. **D1 daily write cap**: after any future hit, confirm `*/15` ingest/ANALYZE recovered post-reset.
-4. **Job stuck `queued` when the terminal progress write fails**: needs a dashboard-side stale/timeout state.
-5. **New instruments (gold, oil, forex):** sourcing decided; wider FX/commodity design not started.
-6. Whether `wrangler.dashboard.toml`'s `[observability.logs]` is enabled on the live dashboard Worker: unverified.
-
-## Dashboard (all DONE)
-**UX adoption (2026-09-22):** ported the `prototype-ui-overhaul` ideas into the existing edge-native SSR dashboard (`src/dashboard/*`): theme toggle, auto-refresh, CSV/JSON export, mobile bottom-sheet nav (#89), Overview command center (#90), global ticker search (#91). The Next.js prototype was a design reference only and was removed from the repo 2026-09-24.
-
-**Redesign (2026-09-22), 7 steps, one PR each:** tokens + shell (#92: Carbon Ink `#14171F`, Ticker Amber `#D98E3C`, Bull Sage/Bear Brick; Fraunces / IBM Plex Sans / IBM Plex Mono) → nav reorg to 5 groups Overview/Book/Research/Operations/Backtest (#93) → ledger tables → verdict card, bull left/bear right/judge's ruling beneath (#94) → stat cards as instrument readouts (#95) → light theme parity (#96) → focus states + a11y pass (#97).
+## Dashboard
+Edge-native SSR dashboard (`src/dashboard/*`), done: five nav groups (Overview/Book/Research/Operations/Backtest), theme toggle with light/dark parity, auto-refresh, CSV/JSON export, mobile bottom-sheet nav, global ticker search, verdict card (bull left, bear right, judge beneath), focus states and an a11y pass. The Next.js prototype was a design reference only and was removed 2026-09-24. The 7-step redesign (#92-#97) and token values live in git history.
 
 **Process lessons:** no direct pushes to `main`. **Never `workflow_dispatch` `deploy.yml` from a non-`main` branch**. A CI signal before merge comes only from a real PR into `main` or local `npm test`.
 
 ## Known Gaps / Backlog
-- **Entity resolution:** SEC-backed name matching exists but is **off** (`ENTITY_RESOLUTION_USE_NAME_INDEX`), suspected cause of an earlier CPU-limit incident; never validated on live data.
-- **News sources:** Finnhub primary and backfill-capable. `gdelt.js` unwired. RSS/HTML-scrape are live-only; scrape can't handle bot-challenge sites (Reuters/WSJ) and falls back to fetch-time when a page has no published-time meta.
-- **yfinance** deprecated. **EDGAR** gives only reported `us-gaap` tags, paced at 110ms; no shared cross-vendor rate limiter; no delta fetching for price/fundamentals.
-- **Untuned placeholders:** `MAX_PORTFOLIO_RISK_PCT` (0.20), `config.maxPositionHoldDays` (10), intraday gate thresholds. No correlation check in portfolio sign-off.
-- **Exit logic** fires only time-based exits until price bars exist before a position opens. `alphaReturn` is always `null` (no benchmark). Reflection failures are logged and swallowed.
-- **`debates` table** has no write path (`trade_decisions.debate_id` always null).
-- **Backtests spend real Gemini quota** (several calls per news item + one per close): manual only, never wire into `scheduled()`.
-- **CI:** no lockfile-sync job (fine with one `package.json`).
+- **Entity resolution:** SEC-backed name matching exists but is **off by default** (`ENTITY_RESOLUTION_USE_NAME_INDEX` must be `"true"`; `config.js:530`), suspected cause of an earlier CPU-limit incident; never validated on live data. The comment above that line still claims the default was flipped to true: stale, the code wins.
+- **News sources:** Finnhub is primary and the ONLY backfill source (`backfillHistoricalNews` uses just the Finnhub windowed fetcher). `gdelt.js` is unwired (only tests import it). RSS/HTML-scrape are live-only; scrape can't handle bot-challenge sites (Reuters/WSJ) and, when a page has no published-time meta, uses fetch time as `publishedAt` (flagged `raw.publishedAtIsFetchTime`; `html_scrape.js` ~L80-82).
+- **yfinance** deprecated. **EDGAR** gives only reported `us-gaap` tags, paced at 110ms (`edgarMinRequestIntervalMs`); no delta fetching for price/fundamentals. `shared/d1_rate_limiter.js` (D1-persisted daily counter) is imported only by `twelvedata.js`; `config.js` says Tiingo FX replaced Twelve Data for XAUUSD, so confirm that adapter is still called before relying on the limiter.
+- **Untuned placeholders:** `FLIP_MIN_CONFIDENCE` 0.75, `TRADE_COST_BPS` 5, `SPLIT_GUARD_TOLERANCE` 0.05, `MAX_POSITION_HOLD_DAYS` 10, intraday gate thresholds, and the risk ceilings listed under Decided (`shared/constants.js`). Cross-asset correlation is a static group map only (see Next To-Dos).
+- **Exit logic** is bar-based (`graph/exit_check.js`, `agents/risk_mgmt/exit_bars.js`): it walks intraday bars, using the daily bar (coarser) for a UTC day with none. A bar touching both stop and target resolves as the stop; fills are at the level, or the bar's open if it gapped past it. A time exit fills at the first bar open after the hold limit and closes at the `asOf` price if no bar appears within 5 days. A ticker with no bars in the window gets only the time exit, and an entry day with no intraday rows is not checked. `alphaReturn` is always `null` (no benchmark; `graph/settle.js`). Reflection failures are logged and swallowed (LLM-budget and subrequest-budget errors still propagate).
+- **No `debates` table exists** (in no migration; the dead `trade_decisions.debate_id` column was dropped in `state/0003`). The debate output is stored on the `trade_decisions` row.
+- **Backtests spend real Gemini quota** (several calls per news item + one per close). `scheduled()` only fans out ingest, `exit_check`, the intraday backfill tick and the 03:00 UTC purge; no backtest starts from it, and none should.
+- **Not yet observed live:** an ANALYZE crash-and-retry, Queues/D1 ops/day vs. real Observability numbers, fresh `pipeline_checkpoints` on the `*/15` cron, and whether `wrangler.dashboard.toml`'s `[observability.logs]` (enabled in the file) is also on in the live dashboard Worker. After any D1 daily write cap hit, confirm `*/15` ingest/ANALYZE recovered post-reset.
+- **Job stuck `queued` when the terminal progress write fails:** needs a dashboard-side stale/timeout state.
+- **New instruments:** gold/oil/FX sourcing is decided (see Price data sources); the wider FX/commodity design is not started. Optional: owner runs the remaining news backfill in ~90-day slices up to ~1 year.
+- **Dashboard header chrome** (`shell.js`, `env_selector.js`, `controls.js`) and `llm.js` from #185: owner checks on phone, unverified here.
+- **LLM-call log buffering (#171)** applies to every `runPipelineForTicker` call, live and backtest alike (`graph/pipeline.js`): rows flush in one batch in `finally`, so a killed Worker loses that item's rows. **Test gap:** the worker-level `gemini_daily_cap` park path (`backtest-worker.js`) is untested; `backtest_daily_quota_pause.test.js` covers only the `runManualBacktest` side.
+- **CI:** no lockfile-sync job (dropped on purpose: one `package.json`, no workspaces; `npm ci` fails on lock drift).
