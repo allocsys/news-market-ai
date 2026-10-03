@@ -125,6 +125,7 @@ test("effective: reports every knob from the config", () => {
     drawdownBreakerWindowDays: 14,
     splitGuardTolerance: 0.05,
     flipMinConfidence: 0.7,
+    dailyBothTouchedNearestOpen: 0,
   });
   assert.deepEqual(knobs, {
     tradeCostBps: 5,
@@ -132,6 +133,7 @@ test("effective: reports every knob from the config", () => {
     drawdownBreakerWindowDays: 14,
     splitGuardTolerance: 0.05,
     flipMinConfidence: 0.7,
+    dailyBothTouchedNearestOpen: 0,
   });
 });
 
