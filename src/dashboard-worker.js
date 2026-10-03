@@ -38,7 +38,7 @@ import { renderBacktestDetailView } from "./dashboard/views/backtest_detail.js";
 import { renderEnvSelector } from "./dashboard/views/env_selector.js";
 import { parseDashboardParams, parseLlmParams, parseEnvParam, envSuffix, errorState, ENV_SECTIONS, BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
-import { tickersFromParams } from "./dashboard/ticker_picker.js";
+import { tickersFromParams, parseTickerList } from "./dashboard/ticker_picker.js";
 
 /** Same "no partial config" gate backend used to run itself (src/index.js,
  * pre-Step-2) -- now the ONLY place this check happens, since backend no
@@ -161,6 +161,19 @@ async function watchlistTickersFor(env) {
 }
 
 /**
+ * The live ticker selection (backend's GET /api/active-tickers) for the Controls page. BEST-EFFORT, same as
+ * watchlistTickersFor: a failed lookup returns null and the page simply omits the card.
+ */
+async function activeTickersFor(env) {
+  try {
+    return await fetchBackendJson(env, "/api/active-tickers");
+  } catch (err) {
+    console.warn("dashboard active-tickers lookup failed (non-fatal)", { message: err.message });
+    return null;
+  }
+}
+
+/**
  * HTML for the environment selector (Live + recent backtests) on an env-aware
  * page. BEST-EFFORT, same as activeJobPanelFor: if the registry lookup fails
  * the selector still renders with just "Live" (plus the active backtest, if
@@ -268,7 +281,11 @@ async function renderSection(request, env, config, section) {
     // `?env=` those links heal to live instead of re-asking for it (and
     // re-showing the same "not found" note) on every click.
     const baseProps = parseParams ? { ...data, params: { ...parseParams(url.searchParams), env: resolvedEnv } } : data;
-    const props = TICKER_PICKER_SECTIONS.has(section) ? { ...baseProps, tickerOptions: await watchlistTickersFor(env) } : baseProps;
+    const props = TICKER_PICKER_SECTIONS.has(section)
+      ? { ...baseProps, tickerOptions: await watchlistTickersFor(env) }
+      : section === "controls"
+        ? { ...baseProps, tickerSelection: await activeTickersFor(env) }
+        : baseProps;
     // Backtest page shows progress for BOTH job types that live under their
     // own SIM_DB run id (a plain backtest and a news-replay comparison) --
     // at most one of the two is ever actually in flight for a given operator
@@ -782,6 +799,25 @@ export default {
           if (key !== "all" && !PAUSE_KEYS.includes(key)) return { error: `key must be one of: ${PAUSE_KEYS.join(", ")}, all` };
           if (paused !== "1" && paused !== "0") return { error: "paused must be 1 or 0" };
           const params = { key, paused };
+          if (sessionUsername) params.by = sessionUsername;
+          return { params, activeSection: "controls" };
+        },
+        formSubmitAccepted: () => ({}),
+      });
+    }
+
+    // POST /controls/tickers -- choose which watchlist tickers the live pipeline runs for. The checkbox
+    // form sends repeated `tickers` fields (a scripted caller may send a comma list); "all" re-enables
+    // everything. Session-gated here, forwarded with the operator's username as `by`; the backend
+    // validates against the watchlist. Form posts 303 back to /dashboard/controls.
+    if (pathname === "/controls/tickers" && request.method === "POST") {
+      return handleTriggerRoute(request, env, config, {
+        backendPath: "/controls/tickers",
+        buildQuery: (searchParams, fromForm, sessionUsername, form) => {
+          const fromQuery = parseTickerList(searchParams.getAll("tickers"));
+          const tickers = fromQuery.length > 0 ? fromQuery : parseTickerList(form ? form.getAll("tickers") : []);
+          if (tickers.length === 0) return { error: "select at least one ticker (use the pause switches to stop everything)" };
+          const params = { tickers: tickers.join(",") };
           if (sessionUsername) params.by = sessionUsername;
           return { params, activeSection: "controls" };
         },
