@@ -98,7 +98,7 @@ export default {
         message.ack();
         continue;
       }
-      if (job.type === "analyze" && (await getDisabled()).has(job.ticker)) {
+      if (job?.type === "analyze" && (await getDisabled()).has(job.ticker)) {
         console.log("llm message skipped: ticker disabled by the operator", { type: job.type, ticker: job.ticker });
         message.ack();
         continue;
