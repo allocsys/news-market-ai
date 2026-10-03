@@ -7,6 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { purgeOldIntradayBars } from "../src/ingestion/intraday_purge.js";
+import { insertBacktestRun, pauseBacktestRun, cancelBacktestRun } from "../src/storage/sim_registry.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { INPUTS_DIR, STATE_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
 
@@ -68,6 +69,39 @@ test("a terminal (complete/failed/cancelled) job does NOT gate the purge -- only
   const now = new Date("2026-07-01T00:00:00Z");
   await putBar(inputsDb, "AAPL", "2026-01-01T00:00:00Z");
   await insertJobProgress(simDb, { id: "backtest-done", status: "complete", updatedAt: now.toISOString() });
+
+  const result = await purgeOldIntradayBars(inputsDb, simDb, { retentionDays: 180, now });
+  assert.equal(result.skipped, false);
+  assert.equal(result.deleted, 1);
+});
+
+test("skips while a backtest is PAUSED, even when its job_progress row has gone stale", async () => {
+  const inputsDb = newInputsDb();
+  const simDb = newSimDb();
+  const now = new Date("2026-07-01T00:00:00Z");
+  await putBar(inputsDb, "AAPL", "2026-01-01T00:00:00Z");
+  await insertBacktestRun(simDb, { id: "backtest-paused", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00Z", testEnd: "2026-01-10T00:00:00Z", trainDays: 30, testDays: 7, startedAt: "2026-06-30T00:00:00Z" });
+  // parkRun only touches backtest_runs: job_progress stays 'running' with a frozen updated_at.
+  await insertJobProgress(simDb, { id: "backtest-paused", status: "running", updatedAt: "2026-06-30T00:00:00Z" });
+  await pauseBacktestRun(simDb, { id: "backtest-paused", reason: "operator", pausedAt: "2026-06-30T00:01:00Z" });
+
+  const result = await purgeOldIntradayBars(inputsDb, simDb, { retentionDays: 180, now });
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /paused backtest run backtest-paused/);
+  assert.equal(result.deleted, 0);
+
+  const remaining = await inputsDb.prepare("SELECT COUNT(*) AS n FROM price_bars_intraday").first();
+  assert.equal(remaining.n, 1, "nothing was deleted");
+});
+
+test("a cancelled backtest no longer gates the purge", async () => {
+  const inputsDb = newInputsDb();
+  const simDb = newSimDb();
+  const now = new Date("2026-07-01T00:00:00Z");
+  await putBar(inputsDb, "AAPL", "2026-01-01T00:00:00Z");
+  await insertBacktestRun(simDb, { id: "backtest-cancelled", tickers: ["AAPL"], testStart: "2026-01-01T00:00:00Z", testEnd: "2026-01-10T00:00:00Z", trainDays: 30, testDays: 7, startedAt: "2026-06-30T00:00:00Z" });
+  await pauseBacktestRun(simDb, { id: "backtest-cancelled", reason: "operator", pausedAt: "2026-06-30T00:01:00Z" });
+  await cancelBacktestRun(simDb, { id: "backtest-cancelled", finishedAt: "2026-06-30T00:02:00Z" });
 
   const result = await purgeOldIntradayBars(inputsDb, simDb, { retentionDays: 180, now });
   assert.equal(result.skipped, false);
