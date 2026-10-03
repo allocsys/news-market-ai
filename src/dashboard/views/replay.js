@@ -9,14 +9,19 @@
 // dashboard-worker.js's own route handler rather than being pure UI.
 
 import { escapeHtml, errorState } from "../helpers.js";
+import { tickerSelect } from "../ticker_picker.js";
 
 /** Step 1: ticker + date, GET-submits to /dashboard/backtest/replay/news (step 2, below). Embedded in the Backtest page (src/dashboard/views/backtest.js) rather than its own page, since it's a short two-field form. */
-export function replayTriggerForm() {
+export function replayTriggerForm(tickerOptions = []) {
   const today = new Date().toISOString().slice(0, 10);
   return `<form method="get" action="/dashboard/backtest/replay/news" class="filter-bar">
     <div class="filter-group">
       <span class="filter-label">Ticker</span>
-      <input class="filter-form" type="text" name="ticker" placeholder="AAPL" required>
+      ${
+        tickerOptions.length > 0
+          ? tickerSelect({ name: "ticker", id: "replayTicker", options: tickerOptions, required: true })
+          : `<input class="filter-form" type="text" name="ticker" placeholder="AAPL" required>`
+      }
     </div>
     <div class="filter-group">
       <span class="filter-label">News date</span>
