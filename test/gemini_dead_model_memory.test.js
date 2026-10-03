@@ -120,7 +120,7 @@ test("marks do not collide with real cooldowns: a rate-limited model is still a 
 test("through the single-map store the dead marker costs no extra KV read", async (t) => {
   t.mock.method(console, "log", () => {});
   t.mock.method(console, "error", () => {});
-  mockFetch(t, (url) => (url.includes("m-quick") ? retired() : ok()));
+  const calls = mockFetch(t, (url) => (url.includes("m-quick") ? retired() : ok()));
   const kv = memoryKv();
   const wrapped = cooldownMapKv(kv, { exclusiveWriter: true });
 
@@ -132,7 +132,7 @@ test("through the single-map store the dead marker costs no extra KV read", asyn
   assert.deepEqual(Object.keys(JSON.parse(kv.puts[0][1])), [DEAD_KEY("m-quick")]);
 
   // A second call through a fresh wrapper over the same KV skips the model.
-  const calls = mockFetch(t, (url) => (url.includes("m-quick") ? retired() : ok()));
+  calls.length = 0;
   await geminiGenerateContent({ CACHE_KV: cooldownMapKv(kv, { exclusiveWriter: true }) }, cascadeConfig(), { contents: [] });
   assert.equal(calls.filter((u) => u.includes("m-quick")).length, 0);
 });
