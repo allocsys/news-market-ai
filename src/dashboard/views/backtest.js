@@ -1,13 +1,20 @@
 import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE, backtestRunsList, replayJobsList, errorState } from "../helpers.js";
 import { replayTriggerForm } from "./replay.js";
+import { tickerChecklist } from "../ticker_picker.js";
 
-export function backtestTriggerForm() {
+/** `tickerOptions` = the watchlist, as tappable checkboxes (none ticked = the whole watchlist, same as a blank text field was). Empty = the old comma-separated text field, e.g. when the watchlist lookup failed. */
+export function backtestTriggerForm(tickerOptions = []) {
   const today = new Date().toISOString().slice(0, 10);
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   return `<form method="get" action="/dashboard/backtest/confirm" class="filter-bar">
     <div class="filter-group">
-      <span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
-      <input class="filter-form" id="backtestTickers" type="text" name="tickers" placeholder="AAPL,MSFT">
+      ${
+        tickerOptions.length > 0
+          ? `<span class="filter-label">Tickers (none selected = whole watchlist)</span>
+      ${tickerChecklist({ name: "tickers", idPrefix: "backtestTicker", options: tickerOptions })}`
+          : `<span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
+      <input class="filter-form" id="backtestTickers" type="text" name="tickers" placeholder="AAPL,MSFT">`
+      }
     </div>
     ${rangePresetButtons("backtestStart", "backtestEnd")}
     <div class="filter-group">
@@ -63,7 +70,7 @@ function backtestPurgeForm() {
   </form>`;
 }
 
-export function renderBacktestView({ backtestRuns, error, replayJobs, replayError }) {
+export function renderBacktestView({ backtestRuns, error, replayJobs, replayError, tickerOptions = [] }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
     <p class="note">Signal ON (real pipeline) vs. OFF (buy &amp; hold). Manual only; needs login. No backfilled news in the window = empty ON side.</p>
@@ -71,7 +78,7 @@ export function renderBacktestView({ backtestRuns, error, replayJobs, replayErro
     <div class="panel" style="margin-bottom:1.5rem">
       <div class="panel-header"><span class="panel-title">Trigger a new run</span></div>
       <div class="panel-body">
-        ${backtestTriggerForm()}
+        ${backtestTriggerForm(tickerOptions)}
       </div>
     </div>
 
@@ -96,7 +103,7 @@ export function renderBacktestView({ backtestRuns, error, replayJobs, replayErro
       <div class="panel-header"><span class="panel-title">News replay comparison</span></div>
       <div class="panel-body">
         <p class="note">Compare old parallel vs. current batched analyst calls on ingested news items. Read-only.</p>
-        ${replayTriggerForm()}
+        ${replayTriggerForm(tickerOptions)}
       </div>
     </div>
 
