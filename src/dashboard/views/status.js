@@ -277,9 +277,11 @@ export function describeJob(job) {
  * Live progress panel for a job that's ALREADY in flight (submitted from an
  * earlier page load), for the top of the backfill/backtest pages. Empty
  * string when there is no job, so callers can prepend the result
- * unconditionally.
+ * unconditionally. `terminate: false` leaves out the Terminate button -- the
+ * landing-page card (dashboard-worker.js, snapshot) passes it so a stray tap on a
+ * phone can't cancel a run; the Backtest page still offers it.
  */
-export function renderActiveJobPanel(job) {
+export function renderActiveJobPanel(job, { terminate: allowTerminate = true } = {}) {
   if (!job || !job.id) return "";
   const pollUrl = jobPollUrl(job.id, job.type);
   const label = job.type === "backtest" ? "Backtest" : job.type === "replay" ? "News replay" : job.type === "backfill_prices" ? "Price backfill" : "Backfill";
@@ -290,7 +292,7 @@ export function renderActiveJobPanel(job) {
   // calls, not a multi-part walk). job.id IS the backtest's run id (see
   // src/index.js's POST /backtest/run, which enqueues the job under its own
   // newly-generated id).
-  const terminate = job.type === "backtest" ? `<div style="margin-top:0.9rem">${terminateRunForm(job.id)}</div>` : "";
+  const terminate = job.type === "backtest" && allowTerminate ? `<div style="margin-top:0.9rem">${terminateRunForm(job.id)}</div>` : "";
 
   return `<section id="active-job" data-job-id="${escapeHtml(job.id)}">
     <h2 id="run-status-title">${label} in progress</h2>
