@@ -1,52 +1,24 @@
 # news-market-ai
 
 News ingestion -> multi-agent LLM analysis -> trade signal pipeline, with
-rigorous point-in-time backtesting. Full design and rationale live in
-[`plan.md`](./plan.md) -- read that first, this file is just setup.
+rigorous point-in-time backtesting. This file is setup only.
 
-## Status
+## Where things are documented
 
-The pipeline is implemented end to end (ingest -> analyst team -> bull/bear
-debate -> trader -> risk -> portfolio check -> commit), with a point-in-time
-backtester and a dashboard. Live trading is OFF by owner decision; the
-rollout gates (backtest -> paper -> micro-live) are in
-[`docs/rollout.md`](./docs/rollout.md). Current priorities are in plan.md's
-"Next To-Dos". Stage and Worker diagrams: [`docs/pipeline-diagram.md`](./docs/pipeline-diagram.md).
+- [`plan.md`](./plan.md): design, rationale, architecture, repo structure, known gaps and the current to-do list. Start here.
+- [`docs/rollout.md`](./docs/rollout.md): the backtest -> paper -> micro-live gates and the knob-tuning rules.
+- [`docs/pipeline-diagram.md`](./docs/pipeline-diagram.md): stage and Worker/queue/D1 diagrams (`docs/diagrams/`).
+
+Status: the pipeline is implemented end to end, with a point-in-time
+backtester and a dashboard. Live trading is OFF by owner decision.
 
 ## Stack
 
 - Cloudflare Workers (compute) + D1 (structured storage) + KV (LLM cascade
-  cooldown state) -- all free tier. See plan.md's Deployment section for the
-  exact limits this is designed around.
+  cooldown state), all free tier. plan.md's "Free-plan budgets" lists the
+  limits this is designed around.
 - Gemini, called through a multi-key model-cascade client
   (`src/llm/gemini/client.js`).
-
-## Directory layout
-
-```
-src/
-  config.js               # single place that reads env vars
-  shared/                 # errors, KV-backed cooldown tracking
-  llm/gemini/              # Gemini cascade client
-  schemas/                 # shared zod types every agent reads/writes against
-  ingestion/
-    normalize.js            # "jsonify anything" boundary
-    sources/                # one adapter per source (gdelt.js first, stubbed)
-  storage/                  # D1 access: run_store.js, inputs_view.js, jobs.js, llm_calls.js, sim_registry.js (see plan.md Repo Structure)
-  backtest/                # point-in-time helpers, onSignalRunner.js, runBacktest.js
-  graph/                   # pipeline.js stage sequence, exit_check, settle, checkpointer
-  dashboard/               # data.js, helpers.js, routes.js, shell.js + views/
-  dashboard-worker.js      # public dashboard Worker (other Workers: ingest, llm, backtest)
-  agents/
-    analysts/                # quick-tier: analystTeam.js (batched news/event, sentiment, technical)
-    researchers/              # deep-tier: bull, bear, judge
-    trader/                   # deep-tier: direction/thesis only
-    risk_mgmt/                # deterministic, NOT an LLM -- position sizing
-  index.js                  # Worker entry (fetch + scheduled)
-docs/                       # rollout.md, pipeline-diagram.md + diagrams/
-migrations/                 # D1 schemas: inputs/, state/ (live + sim), sim/ (backtest_runs)
-test/                       # includes the mandatory backtest leak-check test
-```
 
 ## Local setup
 
