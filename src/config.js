@@ -197,6 +197,11 @@ export function loadConfig(env) {
     // common split ratios. Untuned placeholder, see constants.js; 0 disables.
     // Consumers handed a config without it (unit tests) run unguarded.
     splitGuardTolerance: nonNegativeNumberOrDefault(env.SPLIT_GUARD_TOLERANCE, DEFAULT_SPLIT_GUARD_TOLERANCE),
+    // A DAILY bar (a day with no intraday rows) that touched both the stop and the target hides which came
+    // first (agents/risk_mgmt/exit_bars.js DAILY-BAR AMBIGUITY). 0 (default) = stop first, the pessimistic rule
+    // every run so far used; 1 = whichever level is nearer the bar's open. Only matters for windows that reach
+    // back before intraday data starts (or days with missing intraday rows). Overridable per backtest run.
+    dailyBothTouchedNearestOpen: nonNegativeNumberOrDefault(env.DAILY_BOTH_TOUCHED_NEAREST_OPEN, 0),
     // Break-even / trailing stop (agents/risk_mgmt/trailing.js), in R = the position's initial stop distance
     // (positions.stop_loss_pct). ALL DEFAULT 0 = OFF: the exit walk is then exactly the static stop/target walk,
     // so existing runs are unchanged until a knob is set. No tuned value exists yet (needs the >= 500-trade
