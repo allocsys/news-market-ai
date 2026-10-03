@@ -473,10 +473,36 @@ test("GET /dashboard/backtest prepends the active-job panel when backend reports
 
   assert.match(html, /id="active-job" data-job-id="backtest-1-abc"/);
   assert.match(html, /Backtest in progress/);
+  // The Backtest page keeps the Terminate button (the snapshot card omits it, see below).
+  assert.match(html, /Terminate run/);
 });
 
-test("GET /dashboard/snapshot never shows an active-job panel -- only backfill/backtest pages look one up", async () => {
+test("GET /dashboard/snapshot shows no active-job panel for a running BACKFILL -- only a backtest gets the landing-page card", async () => {
   const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb([RUNNING_BACKFILL])).db }) });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
+  assert.doesNotMatch(html, /id="active-job"/);
+});
+
+test("GET /dashboard/snapshot shows the running backtest's progress card, without a Terminate button", async () => {
+  const simDb = createTestD1([STATE_DIR, SIM_DIR]);
+  const now = new Date().toISOString();
+  const simStore = new RunStore(simDb, "backtest-1-abc");
+  await simStore.insertQueuedJob({ id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] }, now });
+  await simStore.markJobRunning({ id: "backtest-1-abc", type: "backtest", now });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db, SIM_DB: simDb }) });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
+
+  assert.match(html, /id="active-job" data-job-id="backtest-1-abc"/);
+  assert.match(html, /Backtest in progress/);
+  assert.doesNotMatch(html, /Terminate run/);
+  // Card sits above the page's own content.
+  assert.match(html, /id="active-job"[\s\S]*id="snapshot"/);
+});
+
+test("GET /dashboard/snapshot shows no card when no backtest is running", async () => {
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
   const cookie = await loggedInCookie(env);
   const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
   assert.doesNotMatch(html, /id="active-job"/);
