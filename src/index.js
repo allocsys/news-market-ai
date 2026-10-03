@@ -49,6 +49,7 @@ import { createJobReporter } from "./storage/jobs.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { getNewsItemsInRange } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
+import { getActiveTickers, getDisabledTickers, setActiveTickers, checkTickerSelection } from "./storage/active_tickers.js";
 import { SimClock } from "./backtest/simClock.js";
 import { parseKnobOverrides } from "./backtest/knobOverrides.js";
 import { cancelBacktestRun, getBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
@@ -143,6 +144,27 @@ export default {
       }
       console.log("pause flag updated", { key, paused: pausedParam === "1", by: url.searchParams.get("by") });
       return jsonResponse(await getPauseFlags(env.LIVE_DB));
+    }
+
+    // Live ticker selection (dashboard /dashboard/controls, storage/active_tickers.js). GET reads it;
+    // POST /controls/tickers?tickers=XAUUSD,AAPL|all[&by=] makes exactly those watchlist tickers active
+    // for the live pipeline and disables the rest. Backtests are unaffected (own ticker form).
+    if (pathname === "/api/active-tickers") return jsonResponse(await getActiveTickers(env.LIVE_DB, config.watchlist.map((w) => w.ticker)));
+    if (pathname === "/controls/tickers" && request.method === "POST") {
+      const watchlist = config.watchlist.map((w) => w.ticker);
+      const raw = url.searchParams.getAll("tickers");
+      const wantsAll = raw.length === 1 && raw[0].trim().toLowerCase() === "all";
+      const checked = checkTickerSelection(watchlist, wantsAll ? watchlist : raw);
+      if (checked.error) return jsonResponse({ error: checked.error }, { status: 400 });
+      if (!env.LIVE_DB) return jsonResponse({ error: "LIVE_DB is not bound" }, { status: 500 });
+      try {
+        await setActiveTickers(env.LIVE_DB, watchlist, checked.tickers, { by: url.searchParams.get("by") });
+      } catch (err) {
+        console.error("active tickers update failed", { message: err.message });
+        return jsonResponse({ error: "active tickers update failed", message: err.message }, { status: 500 });
+      }
+      console.log("active tickers updated", { tickers: checked.tickers, by: url.searchParams.get("by") });
+      return jsonResponse(await getActiveTickers(env.LIVE_DB, watchlist));
     }
 
     // JSON API layer (plan.md Step 1), unauthenticated at this layer since
@@ -681,8 +703,11 @@ if (pathname === "/backtest/replay/run" && request.method === "POST") {
       if (flags.ingestion) {
         // paused: no INGEST messages at all (ticker or feeds)
       } else if (config.watchlist.length > 0) {
-        const tickerMessages = config.watchlist.map(({ ticker }) => ({ body: { type: "ingest_ticker", ticker, asOf } }));
-        await env.INGEST.sendBatch(tickerMessages);
+        // Operator ticker selection (storage/active_tickers.js): a disabled ticker gets no fan-out message. Fails open.
+        const { disabled } = await getDisabledTickers(env.LIVE_DB);
+        const tickerMessages = config.watchlist.filter(({ ticker }) => !disabled.has(ticker)).map(({ ticker }) => ({ body: { type: "ingest_ticker", ticker, asOf } }));
+        if (disabled.size > 0) console.log("scheduled: tickers disabled by the operator", { disabled: [...disabled], enqueued: tickerMessages.length });
+        if (tickerMessages.length > 0) await env.INGEST.sendBatch(tickerMessages);
       }
       if (!flags.ingestion) await env.INGEST.send({ type: "ingest_feeds", asOf });
     } catch (err) {

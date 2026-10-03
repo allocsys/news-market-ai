@@ -1,4 +1,5 @@
 import { escapeHtml } from "../helpers.js";
+import { tickerChecklist } from "../ticker_picker.js";
 import { PAUSE_KEYS, PAUSE_LABELS } from "../../storage/pause_flags.js";
 
 // What each switch stops. Kept next to the view so the page states exactly
@@ -33,8 +34,33 @@ function switchForm(key, paused) {
     </form>`;
 }
 
-/** `data` is backend's GET /api/controls body: `{ flags, meta, error }`. */
-export function renderControlsView({ flags = {}, meta = {}, error = null } = {}) {
+/**
+ * "Live tickers" card: tick the tickers the live pipeline (ingestion + analysis) runs for. `selection` is
+ * backend's GET /api/active-tickers body (`{ watchlist, active, disabled, meta, error }`); "" without a
+ * watchlist (a failed lookup must not break the page). Backtests are not affected by this.
+ */
+function renderTickerSelection(selection) {
+  const watchlist = Array.isArray(selection?.watchlist) ? selection.watchlist : [];
+  if (watchlist.length === 0) return "";
+  const active = Array.isArray(selection.active) ? selection.active : watchlist;
+  const off = watchlist.filter((t) => !active.includes(t));
+  const errorNote = selection.error ? `<p class="note">Could not read the ticker selection (${escapeHtml(selection.error)}); showing every ticker as active.</p>` : "";
+  const state = off.length === 0 ? "All tickers are active." : `Active: ${escapeHtml(active.join(", ") || "none")}. Off: ${escapeHtml(off.join(", "))}.`;
+  return `<h2 style="margin-top:1.5rem">Live tickers</h2>
+    <p class="note">Which tickers the live pipeline fetches and analyzes. Open positions and pending entries keep being managed, and backtests are not affected.</p>
+    ${errorNote}
+    <div class="pause-row" style="flex-direction:column;align-items:flex-start">
+      <div class="pause-desc" style="margin:0">${state}</div>
+      <form method="POST" action="/controls/tickers" style="display:flex;flex-direction:column;gap:0.75rem;width:100%">
+        ${tickerChecklist({ name: "tickers", idPrefix: "live-ticker", options: watchlist, selected: active })}
+        <div><button type="submit" class="pause-btn is-running">Save selection</button></div>
+      </form>
+      ${off.length > 0 ? `<form method="POST" action="/controls/tickers"><input type="hidden" name="tickers" value="all" /><button type="submit" class="pause-btn">Select all</button></form>` : ""}
+    </div>`;
+}
+
+/** `data` is backend's GET /api/controls body: `{ flags, meta, error }`; `tickerSelection` is GET /api/active-tickers (null when unavailable). */
+export function renderControlsView({ flags = {}, meta = {}, error = null, tickerSelection = null } = {}) {
   const rows = PAUSE_KEYS.map((key) => {
     const paused = flags[key] === true;
     const m = meta[key];
@@ -64,6 +90,7 @@ export function renderControlsView({ flags = {}, meta = {}, error = null } = {})
     ${errorNote}
     ${masterForms}
     <div class="pause-list">${rows}</div>
+    ${renderTickerSelection(tickerSelection)}
     <style>
       .pause-master { display:flex; gap:0.6rem; margin:0.75rem 0 1rem; flex-wrap:wrap; }
       .pause-list { display:flex; flex-direction:column; gap:0.75rem; }
