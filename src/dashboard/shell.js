@@ -1829,7 +1829,7 @@ ${themeColorMeta}
 
     function csvCell(v) {
       var s = v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
-      return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      return /[",\\r\\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     }
 
     // Multiple tables (e.g. openPositions + closedPositions) are unioned into
@@ -1853,7 +1853,7 @@ ${themeColorMeta}
           lines.push(columns.map(function (col) { return csvCell(col === "_table" ? t.name : row[col]); }).join(","));
         });
       });
-      return lines.join("\r\n");
+      return lines.join("\\r\\n");
     }
 
     function download(filename, content, mime) {
