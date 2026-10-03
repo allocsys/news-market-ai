@@ -376,7 +376,7 @@ export async function insertPriceBars(db, bars) {
 
 /**
  * Write path for intraday bars (ingestion/sources/alpaca.js,
- * ingestion/sources/twelvedata.js -- plan.md finding G, step 6). Same
+ * ingestion/sources/tiingo_fx_intraday.js -- plan.md finding G, step 6). Same
  * batched-upsert shape as insertPriceBars, but keyed on (ticker, ts) rather
  * than (ticker, date): a bar for a given 5-minute window should overwrite on
  * a re-fetch (e.g. a retried backfill day), never duplicate. One db.batch()

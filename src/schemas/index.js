@@ -38,7 +38,7 @@ export const PriceBar = z.object({
 });
 
 // Intraday OHLCV bar for migrations/inputs/0002_price_bars_intraday.sql,
-// produced by ingestion/sources/alpaca.js and ingestion/sources/twelvedata.js
+// produced by ingestion/sources/alpaca.js and ingestion/sources/tiingo_fx_intraday.js
 // and validated by market_data_validator.js#validatePriceBarIntraday. `ts` is
 // the bar's own OPEN (start) time (ISO8601 UTC, canonical `YYYY-MM-DDTHH:MM:SSZ`,
 // see shared/intraday_availability.js), NOT a calendar day -- that is what
@@ -55,7 +55,7 @@ export const PriceBarIntraday = z.object({
   low: z.number(),
   close: z.number(),
   volume: z.number().min(0),
-  source: z.string(), // 'alpaca' | 'twelvedata'
+  source: z.string(), // 'alpaca' | 'tiingo_fx_intraday'
 });
 
 // Point-in-time fundamental fact, produced by

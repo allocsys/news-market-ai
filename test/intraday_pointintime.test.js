@@ -114,12 +114,12 @@ test("null, not a stale or invented price, when there is no closed bar: an empty
 test("tickers are isolated and each carries its own vendor's source", async () => {
   const db = newDb();
   await putBar(db, "AAPL", "2025-09-02T13:30:00Z", 100, { source: "alpaca" });
-  await putBar(db, "XAUUSD", "2025-09-02T13:30:00Z", 3500, { source: "twelvedata" });
+  await putBar(db, "XAUUSD", "2025-09-02T13:30:00Z", 3500, { source: "tiingo_fx_intraday" });
 
   const a = await getIntradayPriceAsOf(db, { ticker: "AAPL", asOf: "2025-09-02T14:00:00Z" });
   const g = await getIntradayPriceAsOf(db, { ticker: "XAUUSD", asOf: "2025-09-02T14:00:00Z" });
   assert.deepEqual([a.close, a.source], [100, "alpaca"]);
-  assert.deepEqual([g.close, g.source], [3500, "twelvedata"]);
+  assert.deepEqual([g.close, g.source], [3500, "tiingo_fx_intraday"]);
 });
 
 test("the row has the OHLCV fields plus availableAt (ts + 5 minutes), and no storage internals", async () => {

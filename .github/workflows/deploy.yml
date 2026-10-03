@@ -528,20 +528,6 @@ jobs:
           fi
           echo "$ALPACA_API_KEY_ID" | npx wrangler secret put ALPACA_API_KEY_ID --config wrangler.ingest.toml
           echo "$ALPACA_API_SECRET_KEY" | npx wrangler secret put ALPACA_API_SECRET_KEY --config wrangler.ingest.toml
-      - name: Set TWELVE_DATA_API_KEY on the ingest Worker
-        # Same idempotent, non-blocking shape as above. Intraday bars for
-        # XAUUSD only (ingestion/sources/twelvedata.js). Only this Worker
-        # ever holds it.
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
-        run: |
-          if [ -z "$TWELVE_DATA_API_KEY" ]; then
-            echo "TWELVE_DATA_API_KEY repo secret not set -- skipping. The ingest Worker is deployed but XAUUSD intraday fetches will fail until this is configured."
-            exit 0
-          fi
-          echo "$TWELVE_DATA_API_KEY" | npx wrangler secret put TWELVE_DATA_API_KEY --config wrangler.ingest.toml
 
   # `llm` Worker (plan.md Step 6) -- own path-filtered job, own concurrency
   # group (same reasoning as deploy-dashboard/deploy-ingest above: an
