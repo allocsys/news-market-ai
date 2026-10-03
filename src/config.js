@@ -357,10 +357,8 @@ export function loadConfig(env) {
     // a holiday enough room to still land on the latest trading day.
     tiingoLiveWindowDays: Number(env.TIINGO_LIVE_WINDOW_DAYS) || 7,
     // Intraday bars for plan.md finding G (step 2): Alpaca (AAPL/MSFT/TSLA/USO,
-    // ingestion/sources/alpaca.js); XAUUSD now comes from Tiingo FX (see the
-    // tiingoFx* block below). The twelveData* settings that follow are LEGACY:
-    // ingestion/sources/twelvedata.js is no longer called by any live path (kept
-    // for rollback and its tests). No default keys, same convention as
+    // ingestion/sources/alpaca.js); XAUUSD comes from Tiingo FX (see the
+    // tiingoFxIntraday* block below). No default keys, same convention as
     // tiingoApiKey/finnhubApiKey -- secrets on the `ingest` Worker only; an
     // unset key makes the adapter throw once, up front.
     alpacaApiKey: env.ALPACA_API_KEY_ID || "",
@@ -372,18 +370,9 @@ export function loadConfig(env) {
     // Published free limit is 200 requests/minute per key; 350ms (~171/min)
     // leaves a safety margin. Not tuned against live traffic.
     alpacaMinRequestIntervalMs: Number(env.ALPACA_MIN_REQUEST_INTERVAL_MS) || 350,
-    twelveDataApiKey: env.TWELVE_DATA_API_KEY || "",
-    twelveDataApiBase: env.TWELVE_DATA_API_BASE || "https://api.twelvedata.com",
-    // Must be a key of INTERVAL_MS in twelvedata.js (an unlisted value fails fast).
-    twelveDataIntradayInterval: env.TWELVE_DATA_INTRADAY_INTERVAL || "5min",
-    // Free Basic plan, published: 8 requests/minute (7500ms; 7600ms adds
-    // 100ms padding) and 800 requests/day (enforced across invocations by
-    // shared/d1_rate_limiter.js).
-    twelveDataMinRequestIntervalMs: Number(env.TWELVE_DATA_MIN_REQUEST_INTERVAL_MS) || 7600,
-    twelveDataDailyRequestLimit: Number(env.TWELVE_DATA_DAILY_REQUEST_LIMIT) || 800,
     // Tiingo FX intraday (ingestion/sources/tiingo_fx_intraday.js) -- XAUUSD's
     // vendor as of the plan.md finding G follow-up (2026-09-24), replacing
-    // Twelve Data. Same TIINGO_API_KEY as tiingo.js's daily bars, no separate
+    // the removed Twelve Data feed. Same TIINGO_API_KEY as tiingo.js's daily bars, no separate
     // key. 5min matches every other intraday vendor's bar width (the
     // point-in-time reader assumes 5-minute bars). Pacing defaults to 0 (a
     // true no-op): this adapter makes at most one request per ticker per
