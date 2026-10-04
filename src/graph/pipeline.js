@@ -120,6 +120,16 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     stage = "debated"; // next-needed after "analyzed" is written, per resumeFrom's own convention
   }
 
+  // PRICE-IMPACT GATE: the analyst call also judges whether the article can move this ticker's price at all
+  // (agents/analysts/analystTeam.js). A confident 'none' ends the run here, before the debate and trader calls
+  // that cost most of the Gemini quota; the skip is stored as a decision so it stays auditable. A missing,
+  // unclear, 'indirect' or 'direct' verdict continues exactly as before, and config.skipNoPriceImpact === false
+  // turns the gate off. Also runs on a resume from 'analyzed' (the verdict is in the checkpointed opinions).
+  if (stage === "debated" && config.skipNoPriceImpact !== false) {
+    const noImpact = findNoPriceImpact(state.opinions);
+    if (noImpact) return recordNoPriceImpact(store, { pipelineRunId, ticker, asOf, state, noImpact });
+  }
+
   if (stage === "debated") {
     const priorLessons = await loadLessonsForDebate(store, { ticker, asOf });
     let verdict;
@@ -316,5 +326,39 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     if (!checkpointFolded) await checkpoint(store, finalCheckpoint);
   }
 
+  return state.portfolioDecision;
+}
+
+/** The analyst team's price_impact verdict when it is a confident 'none' (else null: the pipeline carries on). */
+function findNoPriceImpact(opinions) {
+  const impact = (opinions ?? []).find((o) => o?.agent === "price_impact");
+  return impact && impact.relevance === "none" ? { channel: impact.channel ?? "", justification: impact.justification ?? "" } : null;
+}
+
+/**
+ * Ends a run whose article has no plausible effect on the ticker's price: one decision row (status
+ * skipped_irrelevant, opinions kept, no debate) plus the 'portfolio_checked' completion marker in the same atomic
+ * batch, so a queue retry or backtest resume returns this decision instead of calling the model again. Nothing is
+ * opened, replaced or priced. The id is the same tradeThesisId (`ticker|asOf`) every other decision uses.
+ */
+async function recordNoPriceImpact(store, { pipelineRunId, ticker, asOf, state, noImpact }) {
+  const tradeThesisId = `${ticker}|${asOf}`;
+  const why = `analyst: no price impact on ${ticker}${noImpact.channel && noImpact.channel !== "none" ? ` (${noImpact.channel})` : ""}`;
+  state.thesis = { ticker, asOf, direction: "flat", instrument: "none", rationale: why };
+  state.riskDecision = { tradeThesisId, approved: false, positionSizePct: 0, reason: why };
+  state.portfolioDecision = { tradeThesisId, approvedForExecution: false, finalPositionSizePct: 0, reason: `skipped before the debate -- ${why}` };
+  await store.insertTradeDecision({
+    id: tradeThesisId,
+    ticker,
+    asOf,
+    thesis: state.thesis,
+    riskDecision: state.riskDecision,
+    portfolioDecision: state.portfolioDecision,
+    status: TRADE_DECISION_STATUS.SKIPPED_IRRELEVANT,
+    createdAt: new Date().toISOString(),
+    opinions: state.opinions,
+    debate: null,
+    checkpoint: { pipelineRunId, ticker, stage: "portfolio_checked", state },
+  });
   return state.portfolioDecision;
 }
