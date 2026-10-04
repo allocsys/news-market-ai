@@ -138,7 +138,7 @@ export function renderBacktestConfirmPage({ testStart, testEnd, tickers, graceDa
       </label>
       <label class="filter-group" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
         <input type="checkbox" name="disableGate" value="1">
-        <span>Disable price-impact gate <span class="chart-axis-label">(this run only; unchecked = gate on, runs every item through the full pipeline when disabled)</span></span>
+        <span>Disable price-impact gate <span class="chart-axis-label">(this run only; unchecked = default, gate on)</span></span>
       </label>
       <div class="filter-group">
         <button type="submit" class="btn">Confirm and run backtest</button>
