@@ -404,6 +404,45 @@ test("POST /backtest/run with a valid session cookie is forwarded to backend, wh
   assert.deepEqual(backtestQueue.sent[0].tickers, ["AAPL"]);
 });
 
+test("Backtest confirm page offers an unchecked-by-default 'Disable price-impact gate' checkbox", async () => {
+  const html = await getHtml("/dashboard/backtest/confirm?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL");
+  assert.match(html, /<input type="checkbox" name="disableGate" value="1">/);
+  assert.match(html, /Disable price-impact gate/);
+});
+
+async function postBacktestForm(fields) {
+  const { createTestD1 } = await import("./helpers/sqlite_d1.js");
+  const { STATE_DIR, SIM_DIR } = await import("./helpers/engine_ctx.js");
+  const backtestQueue = new FakeQueue();
+  const env = loginConfiguredEnv({
+    BACKEND: makeBackend({ DB: new FakeNewsDb(), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]), BACKTEST: backtestQueue, WATCHLIST_TICKERS: "AAPL" }),
+  });
+  const cookie = await loggedInCookie(env);
+  const response = await worker.fetch(
+    new Request("https://dashboard.example/backtest/run", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", Cookie: cookie },
+      body: new URLSearchParams({ testStart: "2024-01-01", testEnd: "2024-01-31", tickers: "AAPL", ...fields }).toString(),
+    }),
+    env,
+  );
+  return { response, backtestQueue };
+}
+
+test("POST /backtest/run form with disableGate=1 queues the run with the price-impact gate off (skipNoPriceImpact override 0)", async () => {
+  const { response, backtestQueue } = await postBacktestForm({ disableGate: "1" });
+  assert.equal(response.status, 303);
+  assert.equal(backtestQueue.sent.length, 1);
+  assert.deepEqual(backtestQueue.sent[0].knobOverrides, { skipNoPriceImpact: 0 });
+});
+
+test("POST /backtest/run form without the checkbox sends no gate override (Worker default, gate on)", async () => {
+  const { response, backtestQueue } = await postBacktestForm({});
+  assert.equal(response.status, 303);
+  assert.equal(backtestQueue.sent.length, 1);
+  assert.equal(backtestQueue.sent[0].knobOverrides?.skipNoPriceImpact, undefined);
+});
+
 // --------------------------------------------------------------------
 // Active-job panel wiring: GET /dashboard/backfill and GET /dashboard/backtest
 // prepend a live progress panel (src/dashboard/views/status.js's

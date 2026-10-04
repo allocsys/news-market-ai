@@ -736,6 +736,10 @@ export default {
           // Unchecked checkboxes aren't submitted at all, so presence (of
           // either source) means checked -- there's no "0" value to read.
           if (searchParams.get("enableLlmLog") === "1" || fromForm("enableLlmLog")) params.enableLlmLog = "1";
+          // "Disable price-impact gate" checkbox: presence = checked = this run only
+          // goes out with the gate off (backend's skipNoPriceImpact=0 knob override).
+          // Unchecked sends nothing, so the Worker default (gate on) applies.
+          if (searchParams.get("disableGate") === "1" || fromForm("disableGate")) params.skipNoPriceImpact = "0";
           return { params, activeSection: "backtest" };
         },
         formSubmitAccepted: ({ testStart, testEnd, tickers }, body) => ({
