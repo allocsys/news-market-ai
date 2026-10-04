@@ -136,6 +136,10 @@ export function renderBacktestConfirmPage({ testStart, testEnd, tickers, graceDa
         <input type="checkbox" name="enableLlmLog" value="1">
         <span>Enable LLM call logging <span class="chart-axis-label">(off by default to save D1 writes)</span></span>
       </label>
+      <label class="filter-group" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+        <input type="checkbox" name="disableGate" value="1">
+        <span>Disable price-impact gate <span class="chart-axis-label">(this run only; unchecked = gate on, runs every item through the full pipeline when disabled)</span></span>
+      </label>
       <div class="filter-group">
         <button type="submit" class="btn">Confirm and run backtest</button>
       </div>
