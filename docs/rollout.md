@@ -91,9 +91,10 @@ Each backtest run takes the knobs as request params, so a sweep needs no redeplo
 
 `POST /backtest/run?...&tradeCostBps=5&drawdownBreakerPct=0.02&drawdownBreakerWindowDays=14&splitGuardTolerance=0.05&flipMinConfidence=0.7`
 
-- Only these five params are accepted (allowlist). A blank value means "use the default"; a present but invalid or out-of-range value returns 400 before any job row is created.
+- Only the allowlisted knobs are accepted (see `KNOB_OVERRIDES` in `src/backtest/knobOverrides.js`; the example above shows five, plus `dailyBothTouchedNearestOpen` and `skipNoPriceImpact`). A blank value means "use the default"; a present but invalid or out-of-range value returns 400 before any job row is created.
 - `0` is a real value: it disables the breaker (`drawdownBreakerPct`) or the split guard (`splitGuardTolerance`), and `flipMinConfidence=0` means always flip.
 - The overrides ride on the queue message and every continuation part, so a run finishes under the knobs it started with.
+- `skipNoPriceImpact=0|1` switches the price-impact gate off/on for that run only (default: the Worker's `SKIP_NO_PRICE_IMPACT`, on unless set to `false`), which allows gate on/off comparison runs without a redeploy. It is recorded as `true`/`false` in `result.knobs`.
 - Each run's stored result has `result.knobs`, the effective values it used (override or default), so results are self-describing.
 
 ## Code gate

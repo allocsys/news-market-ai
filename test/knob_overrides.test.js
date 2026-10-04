@@ -126,6 +126,7 @@ test("effective: reports every knob from the config", () => {
     splitGuardTolerance: 0.05,
     flipMinConfidence: 0.7,
     dailyBothTouchedNearestOpen: 0,
+    skipNoPriceImpact: false,
   });
   assert.deepEqual(knobs, {
     tradeCostBps: 5,
@@ -134,6 +135,7 @@ test("effective: reports every knob from the config", () => {
     splitGuardTolerance: 0.05,
     flipMinConfidence: 0.7,
     dailyBothTouchedNearestOpen: 0,
+    skipNoPriceImpact: false,
   });
 });
 
@@ -159,4 +161,33 @@ test("effective: reflects overrides applied to a config", () => {
   const knobs = effectiveKnobs(applyKnobOverrides(config, { drawdownBreakerPct: 0.04 }));
   assert.equal(knobs.drawdownBreakerPct, 0.04);
   assert.equal(knobs.tradeCostBps, 5);
+});
+
+// ---------------------------------------------------------------------------
+// skipNoPriceImpact (price-impact gate): requested as 0/1, stored as a boolean
+// ---------------------------------------------------------------------------
+
+test("gate: parse accepts 0 and 1, rejects anything else", () => {
+  assert.deepEqual(parseKnobOverrides(from({ skipNoPriceImpact: "0" })), { overrides: { skipNoPriceImpact: 0 } });
+  assert.deepEqual(parseKnobOverrides(from({ skipNoPriceImpact: "1" })), { overrides: { skipNoPriceImpact: 1 } });
+  assert.ok(parseKnobOverrides(from({ skipNoPriceImpact: "2" })).error?.includes("skipNoPriceImpact"));
+  assert.ok(parseKnobOverrides(from({ skipNoPriceImpact: "0.5" })).error);
+  assert.ok(parseKnobOverrides(from({ skipNoPriceImpact: "false" })).error);
+  assert.deepEqual(parseKnobOverrides(from({ skipNoPriceImpact: "" })), { overrides: {} });
+});
+
+test("gate: apply turns 0 into false and 1 into true, never mutating the input", () => {
+  const config = { skipNoPriceImpact: true, tradeCostBps: 5 };
+  const off = applyKnobOverrides(config, { skipNoPriceImpact: 0 });
+  assert.equal(off.skipNoPriceImpact, false, "the pipeline checks === false");
+  assert.equal(off.tradeCostBps, 5);
+  assert.equal(config.skipNoPriceImpact, true);
+  assert.equal(applyKnobOverrides({ skipNoPriceImpact: false }, { skipNoPriceImpact: 1 }).skipNoPriceImpact, true);
+});
+
+test("gate: effective reports true by default (a missing key means on) and the override result", () => {
+  assert.equal(effectiveKnobs({}).skipNoPriceImpact, true);
+  assert.equal(effectiveKnobs({ skipNoPriceImpact: true }).skipNoPriceImpact, true);
+  assert.equal(effectiveKnobs({ skipNoPriceImpact: false }).skipNoPriceImpact, false);
+  assert.equal(effectiveKnobs(applyKnobOverrides({}, { skipNoPriceImpact: 0 })).skipNoPriceImpact, false);
 });
