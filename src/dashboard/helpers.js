@@ -62,6 +62,7 @@ const DECISION_STATUS_LABELS = {
   [TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA]: "skipped (no price)",
   [TRADE_DECISION_STATUS.PENDING_ENTRY]: "pending entry",
   [TRADE_DECISION_STATUS.SKIPPED_NO_FILL]: "skipped (no fill)",
+  [TRADE_DECISION_STATUS.SKIPPED_IRRELEVANT]: "skipped (no impact)",
 };
 
 /** Badge for a trade_decisions.status: green for opened, red for rejected, neutral for held/superseded/skipped. */
@@ -195,7 +196,7 @@ export function healthRow(label, stat) {
   return `<tr${rowCls}><td class="cell-title">${escapeHtml(label)}</td><td class="num" data-label="Rows">${stat.count}</td><td class="num cell-wide" data-label="Last ingested">${fmtTime(stat.lastIngestedAt)}</td><td data-label="Status">${flag}</td></tr>`;
 }
 
-const OPINION_AGENT_LABELS = { news_event: "News", sentiment: "Sentiment", technical: "Technical" };
+const OPINION_AGENT_LABELS = { news_event: "News", sentiment: "Sentiment", price_impact: "Price impact", technical: "Technical" };
 
 export function analystOpinionLine(op) {
   const label = OPINION_AGENT_LABELS[op.agent] ?? op.agent;
