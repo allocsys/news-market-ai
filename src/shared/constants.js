@@ -114,4 +114,6 @@ export const TRADE_DECISION_STATUS = Object.freeze({
   PENDING_ENTRY: "pending_entry",
   /** A pending_entry that no bar filled before its fill_expires_at, so nothing was executed. */
   SKIPPED_NO_FILL: "skipped_no_fill",
+  /** The analyst call judged the article has no plausible effect on this ticker's price, so the run ended before the debate (no debate, trader or position). */
+  SKIPPED_IRRELEVANT: "skipped_irrelevant",
 });
