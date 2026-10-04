@@ -87,12 +87,31 @@ export const SentimentBand = z.enum([
   "strongly_positive",
 ]);
 
+// Does the article plausibly move THIS ticker's price (not: is the ticker named, not: is the tone positive)?
+// 'none' is the only value that lets the pipeline skip the debate (graph/pipeline.js), so anything the model
+// writes that is not exactly one of the three words (case/space aside) becomes 'indirect' -- an unclear answer
+// keeps the item in the pipeline instead of dropping it.
+export const PriceImpactRelevance = z.enum(["none", "indirect", "direct"]);
+export const PriceImpactDirection = z.enum(["bullish", "bearish", "neutral"]);
+const coerceRelevance = (v) => {
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return PriceImpactRelevance.options.includes(s) ? s : "indirect";
+};
+const coerceDirection = (v) => {
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return PriceImpactDirection.options.includes(s) ? s : "neutral";
+};
+
 export const AnalystOpinion = z.object({
-  agent: z.enum(["news_event", "sentiment", "technical"]),
+  agent: z.enum(["news_event", "sentiment", "technical", "price_impact"]),
   newsItemId: z.string(),
   eventType: z.string().optional(),
   entities: z.array(z.string()).default([]),
   sentiment: SentimentBand.optional(),
+  // price_impact agent only: relevance to the ticker's price, the expected direction of the PRICE, and the channel.
+  relevance: PriceImpactRelevance.optional(),
+  priceDirection: PriceImpactDirection.optional(),
+  channel: z.string().optional(),
   summary: z.string(),
   justification: z.string(),
   modelUsed: z.string().optional(),
@@ -123,6 +142,17 @@ const AnalystContent = z.object({
 export const AnalystTeamOpinion = z.object({
   news_event: AnalystContent,
   sentiment: AnalystContent,
+  // OPTIONAL KEY: a model (or a test's fake model) that omits it just means "no price-impact verdict", and the
+  // pipeline carries on exactly as before.
+  price_impact: z
+    .object({
+      relevance: z.preprocess(coerceRelevance, PriceImpactRelevance),
+      direction: z.preprocess(coerceDirection, PriceImpactDirection).default("neutral"),
+      channel: z.string().default(""),
+      summary: z.string().default(""),
+      justification: z.string().default(""),
+    })
+    .optional(),
   technical: AnalystContent.optional(),
 });
 
