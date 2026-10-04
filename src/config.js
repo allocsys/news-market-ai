@@ -176,6 +176,11 @@ export function loadConfig(env) {
     // stop regardless of confidence" -- start conservative given the free
     // model-quota budget this is meant to protect.
     maxDebateRounds: Number(env.MAX_DEBATE_ROUNDS) || 1,
+    // Price-impact gate (graph/pipeline.js): when the analyst call answers that an article has no plausible effect
+    // on the ticker's price, the run ends before the debate (decision status skipped_irrelevant). On by default;
+    // SKIP_NO_PRICE_IMPACT="false" runs every item through the full pipeline as before. A config built elsewhere
+    // (unit tests) has no key, and the gate treats that as on -- it only fires when the model returns a verdict.
+    skipNoPriceImpact: env.SKIP_NO_PRICE_IMPACT !== "false",
     // Time-based exit knob for graph/exit_check.js#checkOpenPositionExits --
     // a position still open this many days after opened_at closes
     // regardless of price, even if price_bars has no data for it (see that
