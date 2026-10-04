@@ -29,6 +29,9 @@ export const KNOB_OVERRIDES = Object.freeze({
   splitGuardTolerance: Object.freeze({ min: 0, max: 1 }),
   flipMinConfidence: Object.freeze({ min: 0, max: 1 }),
   dailyBothTouchedNearestOpen: Object.freeze({ min: 0, max: 1, integer: true }),
+  // Price-impact gate (graph/pipeline.js). Requested as 0 (off) / 1 (on) like the knob above, but the config key
+  // is a boolean: `boolean: true` makes applyKnobOverrides store `n !== 0` and effectiveKnobs report true/false.
+  skipNoPriceImpact: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
 });
 
 /**
@@ -60,7 +63,9 @@ export function applyKnobOverrides(config, overrides) {
   if (!overrides) return config;
   const picked = {};
   for (const name of Object.keys(KNOB_OVERRIDES)) {
-    if (Object.prototype.hasOwnProperty.call(overrides, name) && Number.isFinite(overrides[name])) picked[name] = overrides[name];
+    if (Object.prototype.hasOwnProperty.call(overrides, name) && Number.isFinite(overrides[name])) {
+      picked[name] = KNOB_OVERRIDES[name].boolean ? overrides[name] !== 0 : overrides[name];
+    }
   }
   return Object.keys(picked).length === 0 ? config : { ...config, ...picked };
 }
@@ -74,6 +79,8 @@ export function applyKnobOverrides(config, overrides) {
 export function effectiveKnobs(config) {
   const knobs = {};
   for (const name of Object.keys(KNOB_OVERRIDES)) knobs[name] = config[name] ?? null;
+  // The gate treats a missing key as on (config.js), so the record shows true, not null.
+  knobs.skipNoPriceImpact = config.skipNoPriceImpact !== false;
   knobs.flipMinConfidence = config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE;
   return knobs;
 }
