@@ -140,3 +140,80 @@ test("runAnalystTeam grounds the technical section's prompt in the real computed
 
   assert.ok(capturedPrompt.includes("110"), "prompt should ground on the real latest close (110)");
 });
+
+// ---------------------------------------------------------------------------
+// price_impact: does the article move THIS ticker's price? (gates the debate in graph/pipeline.js)
+// ---------------------------------------------------------------------------
+
+const BASE_SECTIONS = {
+  news_event: { eventType: "e", entities: [], summary: "s", justification: "j" },
+  sentiment: { sentiment: "neutral", summary: "s", justification: "j" },
+};
+
+async function runWithImpact(price_impact, { ticker = "XAUUSD" } = {}) {
+  const config = baseConfig(async () => JSON.stringify({ ...BASE_SECTIONS, price_impact }));
+  return runAnalystTeam({}, config, { ticker, newsItem: { id: "news1", title: "t", body: "b" }, bars: [] });
+}
+
+test("runAnalystTeam returns a price_impact opinion with relevance, price direction and channel, still in ONE model call", async () => {
+  let callCount = 0;
+  const config = baseConfig(async () => {
+    callCount += 1;
+    return JSON.stringify({ ...BASE_SECTIONS, price_impact: { relevance: "indirect", direction: "bearish", channel: "rates/yields", summary: "hot PPI lifts hike odds", justification: "higher real yields weigh on gold" } });
+  });
+
+  const opinions = await runAnalystTeam({}, config, { ticker: "XAUUSD", newsItem: { id: "news1", title: "t", body: "b" }, bars: [] });
+
+  assert.equal(callCount, 1);
+  const impact = opinions.find((o) => o.agent === "price_impact");
+  assert.ok(impact);
+  assert.equal(impact.relevance, "indirect");
+  assert.equal(impact.priceDirection, "bearish");
+  assert.equal(impact.channel, "rates/yields");
+  assert.equal(impact.newsItemId, "news1");
+  assert.equal(impact.modelUsed, "test-model");
+  assert.match(impact.summary, /indirect price impact, bearish via rates\/yields/);
+  assert.match(impact.summary, /hot PPI lifts hike odds/);
+  assert.equal(impact.justification, "higher real yields weigh on gold");
+});
+
+test("runAnalystTeam adds no price_impact opinion when the model omits the section (older fake models, resumed checkpoints)", async () => {
+  const config = baseConfig(async () => JSON.stringify(BASE_SECTIONS));
+  const opinions = await runAnalystTeam({}, config, { ticker: "AAPL", newsItem: { id: "news1", title: "t", body: "b" }, bars: [] });
+  assert.equal(opinions.some((o) => o.agent === "price_impact"), false);
+  assert.equal(opinions.length, 2);
+});
+
+test("runAnalystTeam asks the model about price impact on THIS ticker's price, and to answer 'none' only when confident", async () => {
+  let capturedPrompt = null;
+  const config = baseConfig(async (prompt) => {
+    capturedPrompt = prompt;
+    return JSON.stringify(BASE_SECTIONS);
+  });
+
+  await runAnalystTeam({}, config, { ticker: "XAUUSD", newsItem: { id: "news1", title: "t", body: "b" }, bars: [] });
+
+  assert.ok(capturedPrompt.includes("PRICE IMPACT"));
+  assert.ok(capturedPrompt.includes("PRICE of XAUUSD"));
+  assert.ok(capturedPrompt.includes('answer "none" only when you are confident'));
+  assert.ok(capturedPrompt.includes('"price_impact": {'), "the JSON shape lists the section");
+});
+
+test("price_impact relevance is case/space tolerant: ' NONE ' is none", async () => {
+  const opinions = await runWithImpact({ relevance: " NONE ", direction: "neutral", channel: "none" });
+  assert.equal(opinions.find((o) => o.agent === "price_impact").relevance, "none");
+});
+
+test("an unclear price_impact relevance becomes 'indirect' (keeps the item in the pipeline), never 'none'", async () => {
+  for (const relevance of ["maybe", "", "no impact at all", 3, null]) {
+    const opinions = await runWithImpact({ relevance, direction: "bullish", channel: "x" });
+    assert.equal(opinions.find((o) => o.agent === "price_impact").relevance, "indirect", `relevance ${JSON.stringify(relevance)}`);
+  }
+});
+
+test("a missing or unclear price direction becomes 'neutral', and a missing relevance becomes 'indirect'", async () => {
+  const opinions = await runWithImpact({ direction: "sideways" });
+  const impact = opinions.find((o) => o.agent === "price_impact");
+  assert.equal(impact.priceDirection, "neutral");
+  assert.equal(impact.relevance, "indirect");
+});
