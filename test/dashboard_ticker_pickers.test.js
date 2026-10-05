@@ -166,7 +166,7 @@ test("when the watchlist lookup fails every page still renders, with the old tex
   assert.match(backfill, /<input class="filter-form" id="priceBackfillTickers" type="text" name="tickers" placeholder="blank = watchlist/);
 
   const llm = await page("/dashboard/llm", env);
-  assert.match(llm, /<input class="filter-form" type="text" name="llmTicker"/);
+  assert.match(llm, /<input class="filter-form" id="llmTicker" type="text" name="llmTicker"/);
 });
 
 test("the backtest confirm page joins repeated tickers params into one comma list for the run form", async () => {

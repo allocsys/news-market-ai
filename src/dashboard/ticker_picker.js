@@ -41,9 +41,10 @@ const CHIP_STYLE =
 /**
  * Multi-select as a row of checkboxes, all submitted under `name` (so the
  * server sees repeated params). Nothing ticked submits nothing. `idPrefix`
- * must be unique on the page.
+ * must be unique on the page. `labelId` = id of the visible text that names
+ * the group (screen readers announce that instead of the generic "Tickers").
  */
-export function tickerChecklist({ name, idPrefix, options, selected = [] }) {
+export function tickerChecklist({ name, idPrefix, options, selected = [], labelId = "" }) {
   const chosen = new Set(parseTickerList(Array.isArray(selected) ? selected : [selected]));
   const chips = options
     .map((ticker) => {
@@ -51,7 +52,8 @@ export function tickerChecklist({ name, idPrefix, options, selected = [] }) {
       return `<label for="${escapeHtml(id)}" style="${CHIP_STYLE}"><input type="checkbox" id="${escapeHtml(id)}" name="${escapeHtml(name)}" value="${escapeHtml(ticker)}"${chosen.has(ticker) ? " checked" : ""}><span>${escapeHtml(ticker)}</span></label>`;
     })
     .join("");
-  return `<div role="group" aria-label="Tickers" style="display:flex;flex-wrap:wrap;gap:0.4rem">${chips}</div>`;
+  const groupName = labelId ? `aria-labelledby="${escapeHtml(labelId)}"` : `aria-label="Tickers"`;
+  return `<div role="group" ${groupName} style="display:flex;flex-wrap:wrap;gap:0.4rem">${chips}</div>`;
 }
 
 /**

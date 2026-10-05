@@ -80,8 +80,8 @@ export function priceBackfillTriggerForm(tickerOptions = []) {
     <div class="filter-group">
       ${
         tickerOptions.length > 0
-          ? `<span class="filter-label">Tickers (none selected = whole watchlist)</span>
-      ${tickerChecklist({ name: "tickers", idPrefix: "priceBackfillTicker", options: tickerOptions })}`
+          ? `<span class="filter-label" id="priceBackfillTickersLabel">Tickers (none selected = whole watchlist)</span>
+      ${tickerChecklist({ name: "tickers", idPrefix: "priceBackfillTicker", options: tickerOptions, labelId: "priceBackfillTickersLabel" })}`
           : `<label class="filter-label" for="priceBackfillTickers">Tickers (optional)</label>
       <input class="filter-form" id="priceBackfillTickers" type="text" name="tickers" placeholder="blank = watchlist, e.g. XAUUSD,USO">`
       }

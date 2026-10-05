@@ -56,13 +56,13 @@ function renderTickerSelection(selection) {
   const off = watchlist.filter((t) => !active.includes(t));
   const errorNote = selection.error ? `<p class="note">Could not read the ticker selection (${escapeHtml(selection.error)}); showing every ticker as active.</p>` : "";
   const state = off.length === 0 ? "All tickers are active." : `Active: ${escapeHtml(active.join(", ") || "none")}. Off: ${escapeHtml(off.join(", "))}.`;
-  return `<h2 class="mt-lg">Live tickers</h2>
+  return `<h2 class="mt-lg" id="liveTickersTitle">Live tickers</h2>
     <p class="note">Which tickers the live pipeline fetches and analyzes. Open positions and pending entries keep being managed, and backtests are not affected.</p>
     ${errorNote}
     <div class="pause-row" style="flex-direction:column;align-items:flex-start">
       <div class="pause-desc" style="margin:0">${state}</div>
       <form method="POST" action="/controls/tickers" style="display:flex;flex-direction:column;gap:0.75rem;width:100%">
-        ${tickerChecklist({ name: "tickers", idPrefix: "live-ticker", options: watchlist, selected: active })}
+        ${tickerChecklist({ name: "tickers", idPrefix: "live-ticker", options: watchlist, selected: active, labelId: "liveTickersTitle" })}
         <div><button type="submit" class="pause-btn is-running">Save selection</button></div>
       </form>
       ${off.length > 0 ? `<form method="POST" action="/controls/tickers"><input type="hidden" name="tickers" value="all" /><button type="submit" class="pause-btn">Select all</button></form>` : ""}
