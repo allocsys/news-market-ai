@@ -103,7 +103,7 @@ test("tradeTimelineChart draws both curves and one marker per position, colored 
   assert.equal((html.match(/<circle /g) ?? []).length, 1);
   assert.ok(html.includes('fill="var(--color-success-text)"') && html.includes('fill="var(--color-danger-text)"'));
   assert.match(html, /MSFT \? opened 2026-09-17 \u2014 still open/);
-  assert.match(html, /Signal ON \(\+2\.5%\)/);
+  assert.match(html, /Strategy \(\+2\.5%\)/);
 });
 
 test("tradeTimelineChart places a weekend open on the next scored day, clamps out-of-span opens, and escapes text", () => {
