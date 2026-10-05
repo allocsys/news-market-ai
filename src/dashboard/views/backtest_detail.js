@@ -5,7 +5,7 @@
 // Props are exactly what backend's GET /api/backtest-runs/:id returns.
 import {
   escapeHtml, fmtTime, errorState, emptyState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery, pausedNote, pauseResumeForm, terminateRunForm,
-  tradeTimelineChart, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
+  tradeTimelineChart, tradeTimelineDataTable, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
 } from "../helpers.js";
 import { renderJobProgressPanel } from "./status.js";
 
@@ -81,7 +81,7 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
     // rather than leaving the chart area blank.
     chartBody = (activeJob && renderJobProgressPanel(activeJob)) || `<p class="empty">Still running -- the equity curve appears when scoring finishes. Reload to update.</p>`;
   }
-  else chartBody = tradeTimelineChart(series, positions);
+  else chartBody = tradeTimelineChart(series, positions) + tradeTimelineDataTable(series, positions);
 
   const stats = run.status === "complete"
     ? miniStats(
