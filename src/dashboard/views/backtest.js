@@ -10,8 +10,8 @@ export function backtestTriggerForm(tickerOptions = []) {
     <div class="filter-group">
       ${
         tickerOptions.length > 0
-          ? `<span class="filter-label">Tickers (none selected = whole watchlist)</span>
-      ${tickerChecklist({ name: "tickers", idPrefix: "backtestTicker", options: tickerOptions })}`
+          ? `<span class="filter-label" id="backtestTickersLabel">Tickers (none selected = whole watchlist)</span>
+      ${tickerChecklist({ name: "tickers", idPrefix: "backtestTicker", options: tickerOptions, labelId: "backtestTickersLabel" })}`
           : `<label class="filter-label" for="backtestTickers">Tickers (comma-separated, blank = watchlist)</label>
       <input class="filter-form" id="backtestTickers" type="text" name="tickers" placeholder="AAPL,MSFT">`
       }
