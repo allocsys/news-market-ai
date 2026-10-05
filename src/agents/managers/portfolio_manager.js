@@ -53,7 +53,7 @@
 // breaker was decided at signal time).
 
 import { PortfolioDecision } from "../../schemas/index.js";
-import { FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
+import { FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, groupCapOf, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
 
 export function evaluatePortfolio(
   riskDecision,
@@ -105,7 +105,7 @@ export function evaluatePortfolio(
       if (p.direction && p.direction !== direction) continue;
       groupExposurePct += p.positionSizePct;
     }
-    groupOk = groupExposurePct + riskDecision.positionSizePct <= MAX_GROUP_EXPOSURE_PCT + GROUP_CAP_EPSILON;
+    groupOk = groupExposurePct + riskDecision.positionSizePct <= groupCapOf(groupId) + GROUP_CAP_EPSILON;
   }
   const approvedForExecution = exposureOk && stopRiskOk && groupOk;
   const netNote = isReplacingPosition
@@ -120,7 +120,7 @@ export function evaluatePortfolio(
   } else if (!stopRiskOk) {
     reason = `combined loss-at-stop ${wouldBeStopRiskPct} would exceed ceiling ${MAX_PORTFOLIO_STOP_RISK_PCT}${netNote} -- rejected`;
   } else {
-    reason = `concentration: open ${direction} exposure in group "${groupId}" ${groupExposurePct} + this thesis ${riskDecision.positionSizePct} would exceed the group cap ${MAX_GROUP_EXPOSURE_PCT} -- rejected`;
+    reason = `concentration: open ${direction} exposure in group "${groupId}" ${groupExposurePct} + this thesis ${riskDecision.positionSizePct} would exceed the group cap ${groupCapOf(groupId)} -- rejected`;
   }
 
   return PortfolioDecision.parse({
