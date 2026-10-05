@@ -19,7 +19,7 @@ const MORE_SECTIONS = [
   { id: "charts", title: "Charts", desc: "Recent daily closes for watchlist tickers.", icon: MORE_ICONS.charts },
   { id: "llm", title: "LLM calls", desc: "Every Gemini prompt and response (live only).", icon: MORE_ICONS.llm },
   { id: "backfill", title: "Backfill", desc: "Historical news backfill (Finnhub).", icon: MORE_ICONS.backfill },
-  { id: "backtest", title: "Backtest", desc: "Manual run: Signal ON vs buy & hold.", icon: MORE_ICONS.backtest },
+  { id: "backtest", title: "Backtest", desc: "Manual run: strategy vs buy & hold.", icon: MORE_ICONS.backtest },
 ];
 
 export function renderMoreView() {
