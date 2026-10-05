@@ -33,12 +33,12 @@ function renderLastRunPanel(job, { title = "Last run" } = {}) {
   const finished = formatUtc(job.finishedAt);
   const failed = job.status === "failed";
 
-  return `<div class="panel" style="margin-bottom:1.5rem">
+  return `<div class="panel mb-lg">
     <div class="panel-header"><span class="panel-title">${escapeHtml(title)}</span></div>
     <div class="panel-body">
-      <p class="note" style="${failed ? "color: var(--color-danger-text); font-weight: 600;" : ""}">${failed ? "Failed" : "Complete"} &mdash; ${escapeHtml(range)}, finished ${escapeHtml(finished)}.</p>
+      <p class="note${failed ? " note-danger-strong" : ""}">${failed ? "Failed" : "Complete"} &mdash; ${escapeHtml(range)}, finished ${escapeHtml(finished)}.</p>
       <p class="note">${escapeHtml(job.detail || (failed ? job.error || "unknown error" : ""))}</p>
-      ${failed && job.error && job.error !== job.detail ? `<p class="note" style="color: var(--color-danger-text);">${escapeHtml(job.error)}</p>` : ""}
+      ${failed && job.error && job.error !== job.detail ? `<p class="note note-danger">${escapeHtml(job.error)}</p>` : ""}
     </div>
   </div>`;
 }
@@ -107,7 +107,7 @@ export function renderBackfillView({ lastRun, lastPriceRun, tickerOptions = [] }
       </div>
     </div>
 
-    <h2 style="margin-top:2rem">Historical price bars</h2>
+    <h2 class="mt-xl">Historical price bars</h2>
     <p class="note">Triggers <code>POST /backfill-prices</code> -- one daily-bars request per ticker for the chosen range (the whole watchlist unless you list tickers), saved the same way live ingestion saves bars. Bars come from Tiingo once a Tiingo key is configured on the ingest Worker, otherwise from Yahoo Finance, which has been answering 429 to every ticker from Cloudflare Workers. Spot gold is <code>XAUUSD</code> (Tiingo's forex data: no volume). Backtests need this: with no price history a backtest can't open positions outside the last few days. A failed job says which tickers and why.</p>
 
     ${renderLastRunPanel(lastPriceRun, { title: "Last price backfill" })}
@@ -126,7 +126,7 @@ export function renderPriceBackfillConfirmPage({ from, to, tickers }) {
   return `<section id="price-backfill-confirm">
     <h2>Confirm historical price backfill</h2>
     <p class="note">You are about to backfill daily price bars for ${tickersList ? escapeHtml(tickersList) : "the whole watchlist"} with the following range:</p>
-    <div class="llm-answer-body" style="max-width:none; margin-bottom: 1.5rem;">
+    <div class="llm-answer-body maxw-none mb-lg">
       <div class="llm-block"><span class="llm-agent">From</span> <span class="num">${escapeHtml(from)}</span></div>
       <div class="llm-block"><span class="llm-agent">To</span> <span class="num">${escapeHtml(to)}</span></div>
     </div>
@@ -146,11 +146,11 @@ export function renderBackfillConfirmPage({ from, to }) {
   return `<section id="backfill-confirm">
     <h2>Confirm historical news backfill</h2>
     <p class="note">You are about to run a historical news backfill with the following parameters:</p>
-    <div class="llm-answer-body" style="max-width:none; margin-bottom: 1.5rem;">
+    <div class="llm-answer-body maxw-none mb-lg">
       <div class="llm-block"><span class="llm-agent">From</span> <span class="num">${escapeHtml(from)}</span></div>
       <div class="llm-block"><span class="llm-agent">To</span> <span class="num">${escapeHtml(to)}</span></div>
     </div>
-    <p class="note" style="color: var(--color-danger-text); font-weight: 600;">Cost warning: This action makes real Finnhub API calls and spends free-tier quota.</p>
+    <p class="note note-danger-strong">Cost warning: This action makes real Finnhub API calls and spends free-tier quota.</p>
     <form method="post" action="/backfill" class="filter-bar">
       <input type="hidden" name="from" value="${escapeHtml(from)}">
       <input type="hidden" name="to" value="${escapeHtml(to)}">
