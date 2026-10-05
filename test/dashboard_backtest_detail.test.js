@@ -10,7 +10,7 @@ import { STATE_DIR, INPUTS_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
 import { computeRealizedReturn } from "../src/shared/returns.js";
-import { cumulativeReturns, signedPct, tradeTimelineChart, tradeTimelineSummary, newsBasis, backtestRunsList } from "../src/dashboard/helpers.js";
+import { cumulativeReturns, signedPct, tradeTimelineChart, tradeTimelineDataTable, outcomeText, tradeTimelineSummary, newsBasis, backtestRunsList } from "../src/dashboard/helpers.js";
 import { renderBacktestDetailView } from "../src/dashboard/views/backtest_detail.js";
 import backendWorker from "../src/index.js";
 import dashboardWorker from "../src/dashboard-worker.js";
@@ -104,6 +104,21 @@ test("tradeTimelineChart draws both curves and one marker per position, colored 
   assert.ok(html.includes('fill="var(--color-success-text)"') && html.includes('fill="var(--color-danger-text)"'));
   assert.match(html, /MSFT \? opened 2026-09-17 \u2014 still open/);
   assert.match(html, /Strategy \(\+2\.5%\)/);
+});
+
+test("outcomeText and tradeTimelineDataTable give the chart a no-color, no-hover text alternative", () => {
+  assert.equal(outcomeText({ realizedReturn: 0.1 }), "\u2713 profit +10.0%");
+  assert.equal(outcomeText({ realizedReturn: -0.1 }), "\u2715 loss -10.0%");
+  assert.equal(outcomeText({ realizedReturn: 0 }), "\u2014 flat 0.0%");
+  assert.equal(outcomeText({ realizedReturn: null, closedAt: null }), "\u2014 still open");
+  assert.equal(outcomeText({ realizedReturn: null, closedAt: "x" }), "\u2014 closed, return unknown");
+  const html = tradeTimelineDataTable(SERIES, [{ ticker: "A<b>", direction: "long", openedAt: "2026-09-15T10:00:00Z", realizedReturn: 0.1, closedAt: "x" }]);
+  assert.match(html, /<details class="llm-answer chart-data">/);
+  assert.equal((html.match(/<td data-label="Date">/g) ?? []).length, 4, "one row per scored day");
+  assert.ok(html.includes("+2.5%") || html.includes("+2.0%"), "cumulative return values are printed");
+  assert.ok(html.includes("\u2713 profit +10.0%") && html.includes("A&lt;b&gt;") && !html.includes("A<b>"));
+  assert.equal(tradeTimelineDataTable(undefined, []), "");
+  assert.equal(tradeTimelineDataTable({ dates: ["a", "b"], on: [0], off: [0, 0] }, []), "");
 });
 
 test("tradeTimelineChart places a weekend open on the next scored day, clamps out-of-span opens, and escapes text", () => {
