@@ -555,6 +555,8 @@ const STYLE = `
   }
   .mb-lg { margin-bottom: 1.5rem; }
   .mt-xl { margin-top: 2rem; }
+  .mt-lg { margin-top: 1.5rem; }
+  .mt-md { margin-top: 1rem; }
   .maxw-none { max-width: none; }
   .w-6rem { width: 6rem; }
   .note-danger { color: var(--color-danger-text); }
