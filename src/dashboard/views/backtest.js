@@ -1,4 +1,4 @@
-import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE, backtestRunsList, replayJobsList, errorState } from "../helpers.js";
+import { escapeHtml, rangePresetButtons, DATE_INPUT_STYLE, backtestRunsList, backtestCompareTable, replayJobsList, errorState } from "../helpers.js";
 import { replayTriggerForm } from "./replay.js";
 import { tickerChecklist } from "../ticker_picker.js";
 
@@ -85,7 +85,7 @@ export function renderBacktestView({ backtestRuns, error, replayJobs, replayErro
     <div class="panel">
       <div class="panel-header"><span class="panel-title">Recent runs</span></div>
       <div class="panel-body">
-        ${error ? errorState(error) : backtestRunsList(backtestRuns)}
+        ${error ? errorState(error) : backtestCompareTable(backtestRuns) + backtestRunsList(backtestRuns)}
       </div>
     </div>
 
