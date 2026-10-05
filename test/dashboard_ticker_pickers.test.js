@@ -64,8 +64,8 @@ test("tickerSelect without allLabel has no empty option, and passes required thr
 test("trigger forms fall back to the text field when there is no watchlist to pick from", () => {
   assert.match(backtestTriggerForm(), /<input class="filter-form" id="backtestTickers" type="text" name="tickers"/);
   assert.match(backtestTriggerForm([]), /type="text" name="tickers"/);
-  assert.match(replayTriggerForm(), /<input class="filter-form" type="text" name="ticker"/);
-  assert.match(priceBackfillTriggerForm(), /<input class="filter-form" type="text" name="tickers"/);
+  assert.match(replayTriggerForm(), /<input class="filter-form" id="replayTicker" type="text" name="ticker"/);
+  assert.match(priceBackfillTriggerForm(), /<input class="filter-form" id="priceBackfillTickers" type="text" name="tickers"/);
 });
 
 test("trigger forms use pickers instead of text fields when given the watchlist", () => {
@@ -160,10 +160,10 @@ test("when the watchlist lookup fails every page still renders, with the old tex
   const env = dashEnv(backendWithoutWatchlist());
   const backtest = await page("/dashboard/backtest", env);
   assert.match(backtest, /<input class="filter-form" id="backtestTickers" type="text" name="tickers"/);
-  assert.match(backtest, /<input class="filter-form" type="text" name="ticker" placeholder="AAPL" required>/);
+  assert.match(backtest, /<input class="filter-form" id="replayTicker" type="text" name="ticker" placeholder="AAPL" required>/);
 
   const backfill = await page("/dashboard/backfill", env);
-  assert.match(backfill, /<input class="filter-form" type="text" name="tickers" placeholder="blank = watchlist/);
+  assert.match(backfill, /<input class="filter-form" id="priceBackfillTickers" type="text" name="tickers" placeholder="blank = watchlist/);
 
   const llm = await page("/dashboard/llm", env);
   assert.match(llm, /<input class="filter-form" type="text" name="llmTicker"/);

@@ -52,7 +52,7 @@ const PULSE_STYLE = `<style>
 
 /** The panel itself: pulsing dot, headline, phase text and (when `pollUrl` is set) the bar. */
 function renderProgressPanel({ detail, pollUrl }) {
-  return `<div class="panel" style="margin-bottom:1.5rem">
+  return `<div class="panel mb-lg">
       <div class="panel-body">
         <div style="display:flex;align-items:center;gap:0.85rem;${pollUrl ? "margin-bottom:0.9rem" : ""}">
           <span id="run-status-dot" style="width:10px;height:10px;border-radius:50%;background:var(--color-success-text);box-shadow:0 0 0 0 var(--color-success-strong);animation:runPulse 1.6s ease-out infinite;flex-shrink:0"></span>
@@ -63,7 +63,8 @@ function renderProgressPanel({ detail, pollUrl }) {
         </div>
         ${
           pollUrl
-            ? `<div style="height:8px;border-radius:4px;background:var(--border-color, rgba(128,128,128,0.25));overflow:hidden">
+            ? `<div id="run-live" class="sr-only" role="status" aria-live="polite"></div>
+        <div id="run-progress-track" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="height:8px;border-radius:4px;background:var(--border-color, rgba(128,128,128,0.25));overflow:hidden">
           <div id="run-progress-bar" style="height:100%;width:0%;background:var(--color-success-text);transition:width 0.4s ease"></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">
@@ -103,6 +104,11 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
         var bar = document.getElementById("run-progress-bar");
         var pctEl = document.getElementById("run-progress-pct");
         var countEl = document.getElementById("run-progress-count");
+        var liveEl = document.getElementById("run-live");
+        var trackEl = document.getElementById("run-progress-track");
+        function announce(msg) {
+          if (liveEl) liveEl.textContent = msg;
+        }
         var stopped = false;
         var lastUpdatedAt = null;
         var staleTimer = null;
@@ -136,12 +142,14 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
           staleTimer = setTimeout(function () {
             if (stopped) return;
             if (phaseEl) phaseEl.textContent = "No update in a while -- the job may have stalled. Still checking...";
+            announce(label + ": no update in a while, the job may have stalled.");
           }, 45000);
         }
 
         function render(job) {
           var pct = Math.max(0, Math.min(100, Number(job.percent) || 0));
           if (bar) bar.style.width = pct + "%";
+          if (trackEl) trackEl.setAttribute("aria-valuenow", String(pct));
           if (pctEl) pctEl.textContent = pct + "%";
           if (countEl) countEl.textContent = job.total ? (job.done || 0) + " / " + job.total : "";
 
@@ -150,6 +158,7 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
             if (staleTimer) clearTimeout(staleTimer);
             markTerminal("var(--color-success-text)");
             if (phaseEl) phaseEl.textContent = job.detail || "Complete.";
+            announce(label + " complete. " + (job.detail || ""));
             if (reloadOnComplete) {
               setTimeout(function () {
                 window.location.reload();
@@ -163,6 +172,7 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
             stopped = true;
             if (staleTimer) clearTimeout(staleTimer);
             markTerminal("var(--color-danger-text)");
+            announce(label + " failed. " + (job.error || ""));
             if (bar) bar.style.background = "var(--color-danger-text)";
             if (phaseEl) phaseEl.textContent = "Failed: " + (job.error || "unknown error");
             if (reloadOnComplete) {
@@ -178,6 +188,7 @@ function renderProgressScript({ pollUrl, label, backLink, backLabel, reloadOnCom
             stopped = true;
             if (staleTimer) clearTimeout(staleTimer);
             markTerminal("var(--text-muted)");
+            announce(label + " cancelled.");
             if (bar) bar.style.background = "var(--text-muted)";
             if (phaseEl) phaseEl.textContent = "Cancelled by operator.";
             if (reloadOnComplete) {

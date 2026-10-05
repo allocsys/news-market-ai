@@ -46,7 +46,7 @@ function backtestCleanupForm() {
   return `<form method="post" action="/backtest/cleanup" class="filter-bar" onsubmit="return confirm('Delete trade-level data for terminal (complete/failed/cancelled) runs older than the chosen window? Each run\u2019s summary result is kept, but its trade timeline is deleted and can\u2019t be recovered.');">
     <div class="filter-group">
       <label class="filter-label" for="cleanupOlderThanDays">Older than (days)</label>
-      <input class="filter-form" id="cleanupOlderThanDays" type="number" name="olderThanDays" value="30" min="1" step="1" style="width:6rem">
+      <input class="filter-form w-6rem" id="cleanupOlderThanDays" type="number" name="olderThanDays" value="30" min="1" step="1">
     </div>
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>

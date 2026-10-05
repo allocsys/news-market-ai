@@ -549,6 +549,18 @@ const STYLE = `
   }
 
   /* ---- Filters ---- */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  .mb-lg { margin-bottom: 1.5rem; }
+  .mt-xl { margin-top: 2rem; }
+  .mt-lg { margin-top: 1.5rem; }
+  .mt-md { margin-top: 1rem; }
+  .maxw-none { max-width: none; }
+  .w-6rem { width: 6rem; }
+  .note-danger { color: var(--color-danger-text); }
+  .note-danger-strong { color: var(--color-danger-text); font-weight: 600; }
   .filter-bar { display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: flex-end; margin-bottom: 1.25rem; }
   .filter-group { display: flex; flex-direction: column; gap: 0.45rem; }
   .filter-label {
@@ -1030,13 +1042,6 @@ const STYLE = `
   /* Mobile (< 768px) */
   @media (max-width: 767px) {
     #overview { display: flex; flex-direction: column; }
-    #overview > h2 { order: 1; }
-    #overview > .note { order: 2; }
-    .ov-charts { order: 3; }
-    .ov-alert { order: 4; }
-    .ov-cards { order: 5; }
-    .ov-panels { order: 6; }
-    .ov-links { order: 7; }
 
     .ov-pulse-row { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
     .ov-pulse-ticker { order: 1; }
