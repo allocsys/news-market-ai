@@ -49,11 +49,11 @@ export function backfillTriggerForm() {
   return `<form method="get" action="/dashboard/backfill/confirm" class="filter-bar">
     ${rangePresetButtons("backfillFrom", "backfillTo")}
     <div class="filter-group">
-      <span class="filter-label">From</span>
+      <label class="filter-label" for="backfillFrom">From</label>
       <input class="filter-form ${DATE_INPUT_STYLE}" id="backfillFrom" type="date" name="from" value="${monthAgo}">
     </div>
     <div class="filter-group">
-      <span class="filter-label">To</span>
+      <label class="filter-label" for="backfillTo">To</label>
       <input class="filter-form ${DATE_INPUT_STYLE}" id="backfillTo" type="date" name="to" value="${today}">
     </div>
     <div class="filter-group">
@@ -70,11 +70,11 @@ export function priceBackfillTriggerForm(tickerOptions = []) {
   return `<form method="get" action="/dashboard/backfill-prices/confirm" class="filter-bar">
     ${rangePresetButtons("priceBackfillFrom", "priceBackfillTo")}
     <div class="filter-group">
-      <span class="filter-label">From</span>
+      <label class="filter-label" for="priceBackfillFrom">From</label>
       <input class="filter-form ${DATE_INPUT_STYLE}" id="priceBackfillFrom" type="date" name="from" value="${yearAgo}">
     </div>
     <div class="filter-group">
-      <span class="filter-label">To</span>
+      <label class="filter-label" for="priceBackfillTo">To</label>
       <input class="filter-form ${DATE_INPUT_STYLE}" id="priceBackfillTo" type="date" name="to" value="${today}">
     </div>
     <div class="filter-group">
@@ -82,8 +82,8 @@ export function priceBackfillTriggerForm(tickerOptions = []) {
         tickerOptions.length > 0
           ? `<span class="filter-label">Tickers (none selected = whole watchlist)</span>
       ${tickerChecklist({ name: "tickers", idPrefix: "priceBackfillTicker", options: tickerOptions })}`
-          : `<span class="filter-label">Tickers (optional)</span>
-      <input class="filter-form" type="text" name="tickers" placeholder="blank = watchlist, e.g. XAUUSD,USO">`
+          : `<label class="filter-label" for="priceBackfillTickers">Tickers (optional)</label>
+      <input class="filter-form" id="priceBackfillTickers" type="text" name="tickers" placeholder="blank = watchlist, e.g. XAUUSD,USO">`
       }
     </div>
     <div class="filter-group">
