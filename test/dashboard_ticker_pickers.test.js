@@ -163,7 +163,7 @@ test("when the watchlist lookup fails every page still renders, with the old tex
   assert.match(backtest, /<input class="filter-form" id="replayTicker" type="text" name="ticker" placeholder="AAPL" required>/);
 
   const backfill = await page("/dashboard/backfill", env);
-  assert.match(backfill, /<input class="filter-form" type="text" name="tickers" placeholder="blank = watchlist/);
+  assert.match(backfill, /<input class="filter-form" id="priceBackfillTickers" type="text" name="tickers" placeholder="blank = watchlist/);
 
   const llm = await page("/dashboard/llm", env);
   assert.match(llm, /<input class="filter-form" type="text" name="llmTicker"/);
