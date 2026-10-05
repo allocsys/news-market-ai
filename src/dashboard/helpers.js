@@ -461,7 +461,7 @@ export function replayItemCard(item) {
   if (!item) return "";
   return `<details class="llm-answer">
     <summary>News item ${escapeHtml(item.newsItemId)} \u2014 as of ${fmtTime(item.asOf)}</summary>
-    <div class="llm-answer-body" style="max-width:none">
+    <div class="llm-answer-body maxw-none">
       ${replayModeSummary("Parallel (pre-#132)", item.parallel?.summary)}
       ${replayModeSummary("Batched (current)", item.batched?.summary)}
       ${replayDiffSummary(item.diff)}
@@ -506,7 +506,7 @@ export function replayJobsList(replayJobs) {
       }
       const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery({ ...parseLlmParams(null), env: job.id }, { llmJob: job.id })}">View every LLM call this comparison made &rarr;</a></p>`;
       const open = job.status === "running" || job.status === "queued" ? " open" : "";
-      return `<details class="llm-answer"${open}><summary>${summaryLine}</summary><div class="llm-answer-body" style="max-width:none">${llmLink}${body}</div></details>`;
+      return `<details class="llm-answer"${open}><summary>${summaryLine}</summary><div class="llm-answer-body maxw-none">${llmLink}${body}</div></details>`;
     })
     .join("\n");
 }
@@ -534,7 +534,7 @@ export function backtestRunsList(runs) {
       const timelineLink = r.status === "complete" ? `<p class="note"><a href="/dashboard/backtest/${escapeHtml(encodeURIComponent(r.id))}">View trade timeline &rarr;</a></p>` : "";
       const llmLink = `<p class="note"><a href="/dashboard/llm${llmQuery({ ...parseLlmParams(null), env: r.id }, { llmJob: r.id })}">View every LLM call this run made &rarr;</a></p>`;
       const terminate = r.status === "running" ? pauseResumeForm(r.id, "pause") + terminateRunForm(r.id) : r.status === "paused" ? pauseResumeForm(r.id, "resume") + terminateRunForm(r.id) : "";
-      return `<details class="llm-answer" ${r.status !== "running" && r.status !== "paused" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body" style="max-width:none">${timelineLink}${llmLink}${body}${terminate}</div></details>`;
+      return `<details class="llm-answer" ${r.status !== "running" && r.status !== "paused" ? "" : "open"}><summary>${summary}</summary><div class="llm-answer-body maxw-none">${timelineLink}${llmLink}${body}${terminate}</div></details>`;
     })
     .join("\n");
 }
