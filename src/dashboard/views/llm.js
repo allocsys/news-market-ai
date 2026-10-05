@@ -123,13 +123,13 @@ export function renderLlmView({ calls, nextBeforeId, params, error, tickerOption
     ${llmPills("Status", LLM_STATUS_OPTIONS, params.llmStatus, "llmStatus", params)}
     ${llmPills("Rows", LLM_LIMIT_OPTIONS, params.llmLimit, "llmLimit", params)}
     <form method="get" action="/dashboard/llm" class="filter-group">
-      <span class="filter-label">Ticker</span>
+      <label class="filter-label" for="llmTicker">Ticker</label>
       <div class="pill-row">
         ${hiddenFilterInputs(params)}
         ${
           tickerOptions.length > 0
             ? tickerSelect({ name: "llmTicker", id: "llmTicker", options: tickerOptions, selected: params.llmTicker, allLabel: "All tickers" })
-            : `<input class="filter-form" type="text" name="llmTicker" value="${escapeHtml(params.llmTicker)}" placeholder="e.g. AAPL" maxlength="12" autocapitalize="characters" style="width:7.5rem">`
+            : `<input class="filter-form" id="llmTicker" type="text" name="llmTicker" value="${escapeHtml(params.llmTicker)}" placeholder="e.g. AAPL" maxlength="12" autocapitalize="characters" style="width:7.5rem">`
         }
         <button type="submit" class="btn btn-secondary">Filter</button>
       </div>
