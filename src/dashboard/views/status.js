@@ -52,7 +52,7 @@ const PULSE_STYLE = `<style>
 
 /** The panel itself: pulsing dot, headline, phase text and (when `pollUrl` is set) the bar. */
 function renderProgressPanel({ detail, pollUrl }) {
-  return `<div class="panel" style="margin-bottom:1.5rem">
+  return `<div class="panel mb-lg">
       <div class="panel-body">
         <div style="display:flex;align-items:center;gap:0.85rem;${pollUrl ? "margin-bottom:0.9rem" : ""}">
           <span id="run-status-dot" style="width:10px;height:10px;border-radius:50%;background:var(--color-success-text);box-shadow:0 0 0 0 var(--color-success-strong);animation:runPulse 1.6s ease-out infinite;flex-shrink:0"></span>
