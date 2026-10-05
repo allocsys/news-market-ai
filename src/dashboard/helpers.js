@@ -539,6 +539,51 @@ export function backtestRunsList(runs) {
     .join("\n");
 }
 
+/**
+ * Side-by-side comparison of FINISHED runs (step 5 of the UI overhaul): one row per complete run with a
+ * result, newest first (the order backtestRunsList already gets). Shows the headline numbers only (net
+ * portfolio return, buy & hold, delta, Sharpe, average exposure, positions traded) so runs can be read
+ * against each other without opening each one. Renders nothing for fewer than two comparable runs.
+ * Read-only: no new queries, it formats the runs the page already loaded. The price-impact gate setting
+ * is not stored on the registry row, so it is not shown here; "Strategy" vs "Buy & hold" is NOT gate on/off.
+ * Runs saved before the daily-equity-curve scoring have no `portfolio`: exposure/positions show an em dash.
+ */
+export function backtestCompareTable(runs) {
+  const done = (runs ?? []).filter((r) => r.status === "complete" && r.result?.overall?.on && r.result.overall.off);
+  if (done.length < 2) return "";
+  const pct = (v) => (v != null && Number.isFinite(v) ? `${v > 0 ? "+" : ""}${(v * 100).toFixed(1)}%` : "\u2014");
+  const num = (v) => (v != null && Number.isFinite(v) ? v.toFixed(2) : "\u2014");
+  const day = (iso) => escapeHtml(String(iso ?? "").slice(0, 10));
+  const rows = done
+    .map((r) => {
+      const { on, off } = r.result.overall;
+      const delta = r.result.overall.delta?.cumulativeReturn;
+      const deltaCls = delta > 0 ? "status-approved" : delta < 0 ? "status-rejected" : "status-neutral";
+      const p = r.result.portfolio;
+      const tickers = Array.isArray(r.tickers) ? r.tickers : [];
+      return `<tr class="rt-tiles">
+        <td class="cell-title" title="${escapeHtml(tickers.join(", "))}">${day(r.testStart)} &rarr; ${day(r.testEnd)} <span class="chart-axis-label">${tickers.length} ticker${tickers.length === 1 ? "" : "s"}</span></td>
+        <td class="num" data-label="Strategy">${pct(on.cumulativeReturn)}</td>
+        <td class="num" data-label="Buy &amp; hold">${pct(off.cumulativeReturn)}</td>
+        <td class="num ${deltaCls}" data-label="Delta">${pct(delta)}</td>
+        <td class="num" data-label="Sharpe">${num(on.sharpeRatio)}</td>
+        <td class="num" data-label="Invested">${p?.on?.avgExposure != null ? pct(p.on.avgExposure).replace(/^\+/, "") : "\u2014"}</td>
+        <td class="num" data-label="Positions">${p?.on?.positionsTraded ?? "\u2014"}</td>
+      </tr>`;
+    })
+    .join("\n");
+  return `<details class="llm-answer">
+    <summary>Compare finished runs (${done.length})</summary>
+    <div class="llm-answer-body maxw-none">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Window</th><th>Strategy</th><th>Buy &amp; hold</th><th>Delta</th><th>Sharpe</th><th>Invested</th><th>Positions</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <p class="note">Return is the whole window, net of trading costs; Invested is the average share of the portfolio in positions. Windows differ in length, so compare returns with that in mind. Strategy vs buy &amp; hold is not the price-impact gate on/off.</p>
+    </div>
+  </details>`;
+}
+
 // Compact row of big-number stats used inside panels (Exit quality, Window totals).
 // items: [{ value, label, color? }]; cols = column count on phones (desktop auto-fits).
 export function miniStats(items, { cols = 2 } = {}) {
