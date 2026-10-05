@@ -19,7 +19,7 @@ function done(id, { on = 0.012, off = -0.03, sharpe = 0.8, exposure = 0.05, posi
       overall: {
         on: { cumulativeReturn: on, sharpeRatio: sharpe, winRate: 0.5, maxDrawdown: -0.01 },
         off: { cumulativeReturn: off, sharpeRatio: 0.1, winRate: 0.5, maxDrawdown: -0.1 },
-        delta: { cumulativeReturn: on - off },
+        delta: { cumulativeReturn: on - off, sharpeRatio: sharpe - 0.1, winRate: 0, maxDrawdown: 0.09 },
       },
       perWindow: [],
       ...(portfolio ? { portfolio: { method: "daily-equity-curve-v3", days: 20, from: start, to: end, tickers, on: { avgExposure: exposure, positionsTraded: positions, positionsIgnored: 0, openAtSpanEnd: 0 } } } : {}),
