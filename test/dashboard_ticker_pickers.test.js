@@ -64,8 +64,8 @@ test("tickerSelect without allLabel has no empty option, and passes required thr
 test("trigger forms fall back to the text field when there is no watchlist to pick from", () => {
   assert.match(backtestTriggerForm(), /<input class="filter-form" id="backtestTickers" type="text" name="tickers"/);
   assert.match(backtestTriggerForm([]), /type="text" name="tickers"/);
-  assert.match(replayTriggerForm(), /<input class="filter-form" type="text" name="ticker"/);
-  assert.match(priceBackfillTriggerForm(), /<input class="filter-form" type="text" name="tickers"/);
+  assert.match(replayTriggerForm(), /<input class="filter-form" id="replayTicker" type="text" name="ticker"/);
+  assert.match(priceBackfillTriggerForm(), /<input class="filter-form" id="priceBackfillTickers" type="text" name="tickers"/);
 });
 
 test("trigger forms use pickers instead of text fields when given the watchlist", () => {
