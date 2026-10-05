@@ -19,7 +19,7 @@ test("backtestResultTable explains the daily-equity scoring, labels up days, and
   assert.doesNotMatch(html, /Win rate/);
   assert.match(html, /Scored on 5 daily portfolio returns \(2026-01-01 to 2026-01-06\)/);
   assert.match(html, /average 0\.8% invested, 1 position\b/);
-  assert.match(html, /equal-weight buy &amp; hold/);
+  assert.match(html, /Buy &amp; hold = equal-weight holding/);
   assert.ok(html.includes("A&lt;B&gt;"), "tickers are HTML-escaped");
   assert.doesNotMatch(html, /could not be replayed/);
 });

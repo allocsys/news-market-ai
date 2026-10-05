@@ -11,6 +11,13 @@ const PAUSE_DESCRIPTIONS = {
   backtests: "Starting new backtest runs. Runs already in flight finish.",
 };
 
+// Resume prompts for the switches whose restart places trades or spends model quota. Static text, no apostrophes (it sits inside an onsubmit attribute).
+const RESUME_CONFIRM = {
+  trading: "Resume trading? Exit checks and the analyze/decision pipeline start running again.",
+  llm: "Resume LLM calls? Every Gemini-calling path and new backtest runs start again and spend model quota.",
+};
+const RESUME_ALL_CONFIRM = "Resume everything? Ingestion, trading, LLM calls and backtests all start again.";
+
 /** Banner shown on every dashboard page while any switch is on. "" when nothing is paused. */
 export function renderPausedBanner(flags) {
   const on = PAUSE_KEYS.filter((k) => flags?.[k]);
@@ -18,7 +25,7 @@ export function renderPausedBanner(flags) {
   const names = on.map((k) => escapeHtml(PAUSE_LABELS[k])).join(", ");
   return `<div class="paused-banner" role="status"><strong>PAUSED:</strong> ${names}. <a href="/dashboard/controls">Manage switches</a></div>
   <style>
-    .paused-banner { background: var(--bg-elevated); border: 1px solid var(--border-strong); border-left: 4px solid #d97706; border-radius: var(--radius-sm); padding: 0.6rem 0.9rem; margin-bottom: 1rem; font-size: 0.875rem; color: var(--text-main); }
+    .paused-banner { background: var(--bg-elevated); border: 1px solid var(--border-strong); border-left: 4px solid var(--color-warning-strong); border-radius: var(--radius-sm); padding: 0.6rem 0.9rem; margin-bottom: 1rem; font-size: 0.875rem; color: var(--text-main); }
     .paused-banner a { color: var(--accent-bright); margin-left: 0.4rem; }
     @media (max-width: 767px) {
       .paused-banner { padding: 0.4rem 0.65rem; margin-bottom: 0.5rem; font-size: 0.75rem; line-height: 1.35; }
@@ -27,10 +34,13 @@ export function renderPausedBanner(flags) {
 }
 
 function switchForm(key, paused) {
-  return `<form method="POST" action="/controls/set" class="pause-form">
+  // Pausing stays one tap (it is the kill switch). Resuming the paths that spend money or place trades asks first.
+  const resumeMsg = paused ? RESUME_CONFIRM[key] : undefined;
+  const onsubmit = resumeMsg ? ` onsubmit="return confirm('${resumeMsg}');"` : "";
+  return `<form method="POST" action="/controls/set" class="pause-form"${onsubmit}>
       <input type="hidden" name="key" value="${escapeHtml(key)}" />
       <input type="hidden" name="paused" value="${paused ? "0" : "1"}" />
-      <button type="submit" class="pause-btn ${paused ? "is-paused" : "is-running"}" aria-pressed="${paused ? "true" : "false"}">${paused ? "Resume" : "Pause"}</button>
+      <button type="submit" class="pause-btn ${paused ? "is-paused" : "is-running"}">${paused ? "Resume" : "Pause"}</button>
     </form>`;
 }
 
@@ -79,7 +89,7 @@ export function renderControlsView({ flags = {}, meta = {}, error = null, ticker
   const allPaused = PAUSE_KEYS.every((k) => flags[k] === true);
   const masterForms = `<div class="pause-master">
       ${allPaused ? "" : `<form method="POST" action="/controls/set"><input type="hidden" name="key" value="all" /><input type="hidden" name="paused" value="1" /><button type="submit" class="pause-btn is-running">Pause all</button></form>`}
-      ${anyPaused ? `<form method="POST" action="/controls/set"><input type="hidden" name="key" value="all" /><input type="hidden" name="paused" value="0" /><button type="submit" class="pause-btn is-paused">Resume all</button></form>` : ""}
+      ${anyPaused ? `<form method="POST" action="/controls/set" onsubmit="return confirm('${RESUME_ALL_CONFIRM}');"><input type="hidden" name="key" value="all" /><input type="hidden" name="paused" value="0" /><button type="submit" class="pause-btn is-paused">Resume all</button></form>` : ""}
     </div>`;
 
   const errorNote = error ? `<p class="note">Could not read the switches (${escapeHtml(error)}); showing everything as running.</p>` : "";
@@ -99,10 +109,10 @@ export function renderControlsView({ flags = {}, meta = {}, error = null, ticker
       .pause-title { font-family:var(--font-display); font-weight:600; color:var(--text-main); }
       .pause-desc, .pause-meta { font-size:0.75rem; color:var(--text-muted); line-height:1.5; margin-top:0.2rem; }
       .pause-state { font-size:0.6875rem; font-weight:700; letter-spacing:0.05em; margin-left:0.4rem; }
-      .pause-state.is-paused { color:#d97706; }
+      .pause-state.is-paused { color:var(--color-warning-text); }
       .pause-state.is-running { color:var(--text-subtle); }
       .pause-btn { min-height:44px; padding:0 1.1rem; border-radius:var(--radius-sm); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--text-main); font-weight:600; cursor:pointer; }
-      .pause-btn.is-paused { border-color:#d97706; }
+      .pause-btn.is-paused { border-color:var(--color-warning-strong); }
       .pause-btn:hover { background:var(--bg-hover); }
       .pause-btn:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; }
     </style>

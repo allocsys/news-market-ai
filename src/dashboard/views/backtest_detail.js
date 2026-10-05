@@ -5,7 +5,7 @@
 // Props are exactly what backend's GET /api/backtest-runs/:id returns.
 import {
   escapeHtml, fmtTime, errorState, emptyState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery, pausedNote, pauseResumeForm, terminateRunForm,
-  tradeTimelineChart, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
+  tradeTimelineChart, tradeTimelineDataTable, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
 } from "../helpers.js";
 import { renderJobProgressPanel } from "./status.js";
 
@@ -81,7 +81,7 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
     // rather than leaving the chart area blank.
     chartBody = (activeJob && renderJobProgressPanel(activeJob)) || `<p class="empty">Still running -- the equity curve appears when scoring finishes. Reload to update.</p>`;
   }
-  else chartBody = tradeTimelineChart(series, positions);
+  else chartBody = tradeTimelineChart(series, positions) + tradeTimelineDataTable(series, positions);
 
   const stats = run.status === "complete"
     ? miniStats(
@@ -89,7 +89,7 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
           { value: String(s.opened), label: "Positions opened" },
           { value: `${s.closed} / ${s.stillOpen}`, label: "Closed / still open" },
           { value: s.winRate != null ? `${(s.winRate * 100).toFixed(0)}%` : DASH, label: `Win rate (${s.wins}W ${s.losses}L)` },
-          { value: signedPct(s.onReturn), label: "Signal ON return", color: outcomeColor(s.onReturn) },
+          { value: signedPct(s.onReturn), label: "Strategy return", color: outcomeColor(s.onReturn) },
           { value: signedPct(s.offReturn), label: "Buy & hold return" },
         ],
         { cols: 2 }

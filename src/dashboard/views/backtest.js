@@ -12,17 +12,17 @@ export function backtestTriggerForm(tickerOptions = []) {
         tickerOptions.length > 0
           ? `<span class="filter-label">Tickers (none selected = whole watchlist)</span>
       ${tickerChecklist({ name: "tickers", idPrefix: "backtestTicker", options: tickerOptions })}`
-          : `<span class="filter-label">Tickers (comma-separated, blank = watchlist)</span>
+          : `<label class="filter-label" for="backtestTickers">Tickers (comma-separated, blank = watchlist)</label>
       <input class="filter-form" id="backtestTickers" type="text" name="tickers" placeholder="AAPL,MSFT">`
       }
     </div>
     ${rangePresetButtons("backtestStart", "backtestEnd")}
     <div class="filter-group">
-      <span class="filter-label">Test start</span>
+      <label class="filter-label" for="backtestStart">Test start</label>
       <input class="filter-form ${DATE_INPUT_STYLE}" id="backtestStart" type="date" name="testStart" value="${monthAgo}">
     </div>
     <div class="filter-group">
-      <span class="filter-label">Test end</span>
+      <label class="filter-label" for="backtestEnd">Test end</label>
       <input class="filter-form ${DATE_INPUT_STYLE}" id="backtestEnd" type="date" name="testEnd" value="${today}">
     </div>
     <div class="filter-group">
@@ -45,8 +45,8 @@ export function backtestTriggerForm(tickerOptions = []) {
 function backtestCleanupForm() {
   return `<form method="post" action="/backtest/cleanup" class="filter-bar" onsubmit="return confirm('Delete trade-level data for terminal (complete/failed/cancelled) runs older than the chosen window? Each run\u2019s summary result is kept, but its trade timeline is deleted and can\u2019t be recovered.');">
     <div class="filter-group">
-      <span class="filter-label">Older than (days)</span>
-      <input class="filter-form" type="number" name="olderThanDays" value="30" min="1" step="1" style="width:6rem">
+      <label class="filter-label" for="cleanupOlderThanDays">Older than (days)</label>
+      <input class="filter-form" id="cleanupOlderThanDays" type="number" name="olderThanDays" value="30" min="1" step="1" style="width:6rem">
     </div>
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
@@ -73,22 +73,12 @@ function backtestPurgeForm() {
 export function renderBacktestView({ backtestRuns, error, replayJobs, replayError, tickerOptions = [] }) {
   return `<section id="backtest">
     <h2>Backtest results</h2>
-    <p class="note">Signal ON (real pipeline) vs. OFF (buy &amp; hold). Manual only; needs login. No backfilled news in the window = empty ON side.</p>
+    <p class="note">Each run compares the strategy (real pipeline) against buy &amp; hold. The price-impact gate is a separate per-run option on the confirm page. Manual only; needs login. No backfilled news in the window = empty strategy side.</p>
 
     <div class="panel" style="margin-bottom:1.5rem">
       <div class="panel-header"><span class="panel-title">Trigger a new run</span></div>
       <div class="panel-body">
         ${backtestTriggerForm(tickerOptions)}
-      </div>
-    </div>
-
-    <div class="panel" style="margin-bottom:1.5rem">
-      <div class="panel-header"><span class="panel-title">Clean up old runs</span></div>
-      <div class="panel-body">
-        <p class="note">Deletes per-trade data of finished runs; summaries stay. Running runs are never touched.</p>
-        ${backtestCleanupForm()}
-        <p class="note" style="margin-top:1rem">Or remove failed/cancelled runs entirely, including error history.</p>
-        ${backtestPurgeForm()}
       </div>
     </div>
 
@@ -113,6 +103,16 @@ export function renderBacktestView({ backtestRuns, error, replayJobs, replayErro
         ${replayError ? errorState(replayError) : replayJobsList(replayJobs)}
       </div>
     </div>
+
+    <details class="panel" style="margin-top:1.5rem">
+      <summary class="panel-header"><span class="panel-title">Maintenance: delete old run data</span></summary>
+      <div class="panel-body">
+        <p class="note">Deletes per-trade data of finished runs; summaries stay. Running runs are never touched.</p>
+        ${backtestCleanupForm()}
+        <p class="note" style="margin-top:1rem">Or remove failed/cancelled runs entirely, including error history.</p>
+        ${backtestPurgeForm()}
+      </div>
+    </details>
   </section>`;
 }
 

@@ -344,7 +344,7 @@ export function positionsTable(positions, { closed = false } = {}) {
 export function backtestMetricRow(label, on, off, delta, { isPercent = true } = {}) {
   const fmt = (v) => (isPercent ? (v * 100).toFixed(1) + "%" : v.toFixed(2));
   const deltaCls = delta > 0 ? "status-approved" : delta < 0 ? "status-rejected" : "status-neutral";
-  return `<tr class="rt-tiles"><td class="cell-title">${escapeHtml(label)}</td><td class="num" data-label="Signal ON">${fmt(on)}</td><td class="num" data-label="Signal OFF">${fmt(off)}</td><td class="num ${deltaCls}" data-label="Delta">${delta > 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
+  return `<tr class="rt-tiles"><td class="cell-title">${escapeHtml(label)}</td><td class="num" data-label="Strategy">${fmt(on)}</td><td class="num" data-label="Buy &amp; hold">${fmt(off)}</td><td class="num ${deltaCls}" data-label="Delta">${delta > 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
 }
 
 /** Per-trade rollout-gate line (backtest/gateStats.js, result.gate). Runs saved before it have no `gate`: renders nothing. Null stats (n too small) show an em dash, never 0, so a thin sample can't read as a pass. */
@@ -367,10 +367,10 @@ export function backtestResultTable(result) {
   const isV3 = p?.method === "daily-equity-curve-v3";
   const openAtEnd = isV3 && p.on.openAtSpanEnd ? `, ${p.on.openAtSpanEnd} still open at window end, marked to market` : "";
   const scoring = p
-    ? `Scored on ${p.days} daily portfolio return${p.days === 1 ? "" : "s"} (${escapeHtml(p.from)} to ${escapeHtml(p.to)}) over ${escapeHtml(p.tickers.join(", "))}. Signal ON = the positions the pipeline opened, sized by the risk rules, the rest in cash (average ${(p.on.avgExposure * 100).toFixed(1)}% invested, ${p.on.positionsTraded} position${p.on.positionsTraded === 1 ? "" : "s"}${p.on.positionsIgnored ? `, ${p.on.positionsIgnored} could not be replayed` : ""}${openAtEnd}). Signal OFF = equal-weight buy &amp; hold of the same tickers, fully invested. `
+    ? `Scored on ${p.days} daily portfolio return${p.days === 1 ? "" : "s"} (${escapeHtml(p.from)} to ${escapeHtml(p.to)}) over ${escapeHtml(p.tickers.join(", "))}. Strategy = the positions the pipeline opened, sized by the risk rules, the rest in cash (average ${(p.on.avgExposure * 100).toFixed(1)}% invested, ${p.on.positionsTraded} position${p.on.positionsTraded === 1 ? "" : "s"}${p.on.positionsIgnored ? `, ${p.on.positionsIgnored} could not be replayed` : ""}${openAtEnd}). Buy &amp; hold = equal-weight holding of the same tickers, fully invested. (Neither column is the price-impact gate on/off; that is a separate setting.) `
     : "";
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Metric</th><th>Signal ON</th><th>Signal OFF (buy &amp; hold)</th><th>Delta</th></tr></thead>
+    <thead><tr><th>Metric</th><th>Strategy</th><th>Buy &amp; hold</th><th>Delta</th></tr></thead>
     <tbody>
       ${backtestMetricRow("Cumulative return", on.cumulativeReturn, off.cumulativeReturn, delta.cumulativeReturn)}
       ${backtestMetricRow("Sharpe ratio", on.sharpeRatio, off.sharpeRatio, delta.sharpeRatio, { isPercent: false })}
@@ -1220,19 +1220,54 @@ export function tradeTimelineChart(series, positions = []) {
 
   const swatch = (color) => `<span class="legend-swatch" style="background:${color}"></span>`;
   const legend = [
-    `<span class="legend-item">${swatch("var(--accent-bright)")}Signal ON (${escapeHtml(signedPct(on[n - 1]))})</span>`,
-    `<span class="legend-item">${swatch("var(--text-subtle)")}Signal OFF, buy &amp; hold (${escapeHtml(signedPct(off[n - 1]))})</span>`,
+    `<span class="legend-item">${swatch("var(--accent-bright)")}Strategy (${escapeHtml(signedPct(on[n - 1]))})</span>`,
+    `<span class="legend-item">${swatch("var(--text-subtle)")}Buy &amp; hold (${escapeHtml(signedPct(off[n - 1]))})</span>`,
     `<span class="legend-item">\u25b2 long \u00b7 \u25bc short, at the day it opened</span>`,
     `<span class="legend-item">${swatch("var(--color-success-text)")}profit</span>`,
     `<span class="legend-item">${swatch("var(--color-danger-text)")}loss</span>`,
     `<span class="legend-item">${swatch("var(--text-muted)")}open / flat / unknown</span>`,
   ].join("");
 
-  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" class="chart" role="img" aria-label="Cumulative return of signal ON versus signal OFF over ${n} trading days, with ${placeable.length} position${placeable.length === 1 ? "" : "s"} marked where they opened">
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" class="chart" role="img" aria-label="Cumulative return of the strategy versus buy and hold over ${n} trading days, with ${placeable.length} position${placeable.length === 1 ? "" : "s"} marked where they opened">
     ${gridlines.join("\n    ")}
     ${xLabels}
     ${lines}
     ${markers}
   </svg>
   <div class="chart-legend">${legend}</div>`;
+}
+
+/** Text outcome for a position marker: the chart colors it green/red/grey, this says the same in words (✓ profit, ✕ loss, — flat/open/unknown). */
+export function outcomeText(p) {
+  const r = p?.realizedReturn;
+  if (r != null && Number.isFinite(r)) return `${r > 0 ? "\u2713 profit" : r < 0 ? "\u2715 loss" : "\u2014 flat"} ${signedPct(r)}`;
+  return p?.closedAt ? "\u2014 closed, return unknown" : "\u2014 still open";
+}
+
+/**
+ * Table alternative to tradeTimelineChart (collapsed): the cumulative-return values the two
+ * lines are drawn from, plus each marker's day, side and outcome in words, so the chart is
+ * readable without color, hover or sight. Empty string when there is no drawable series.
+ */
+export function tradeTimelineDataTable(series, positions = []) {
+  const dates = series?.dates;
+  const n = Array.isArray(dates) ? dates.length : 0;
+  if (n < 2 || !Array.isArray(series.on) || !Array.isArray(series.off) || series.on.length !== n || series.off.length !== n) return "";
+  const on = cumulativeReturns(series.on);
+  const off = cumulativeReturns(series.off);
+  const dayRows = dates
+    .map((d, i) => `<tr><td data-label="Date">${escapeHtml(String(d))}</td><td class="num" data-label="Strategy">${signedPct(on[i])}</td><td class="num" data-label="Buy &amp; hold">${signedPct(off[i])}</td></tr>`)
+    .join("\n");
+  const placeable = positions.filter((p) => typeof p.openedAt === "string" && p.openedAt.length >= 10);
+  const posRows = placeable
+    .map((p) => `<tr><td class="ticker cell-title">${escapeHtml(p.ticker)}</td><td data-label="Side">${escapeHtml(p.direction ?? "\u2014")}</td><td class="num" data-label="Opened">${escapeHtml(p.openedAt.slice(0, 10))}</td><td data-label="Outcome">${escapeHtml(outcomeText(p))}</td></tr>`)
+    .join("\n");
+  const posTable = placeable.length > 0
+    ? `<div class="table-wrap"><table><caption class="note">Positions marked on the chart</caption><thead><tr><th>Ticker</th><th>Side</th><th>Opened</th><th>Outcome</th></tr></thead><tbody>${posRows}</tbody></table></div>`
+    : "";
+  return `<details class="llm-answer chart-data">
+    <summary>Chart data as tables</summary>
+    ${posTable}
+    <div class="table-wrap"><table><caption class="note">Cumulative return by day</caption><thead><tr><th>Date</th><th>Strategy</th><th>Buy &amp; hold</th></tr></thead><tbody>${dayRows}</tbody></table></div>
+  </details>`;
 }
