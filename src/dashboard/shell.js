@@ -549,6 +549,10 @@ const STYLE = `
   }
 
   /* ---- Filters ---- */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
   .filter-bar { display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: flex-end; margin-bottom: 1.25rem; }
   .filter-group { display: flex; flex-direction: column; gap: 0.45rem; }
   .filter-label {
