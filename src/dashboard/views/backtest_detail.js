@@ -89,7 +89,7 @@ export function renderBacktestDetailView({ run = null, positions = [], positions
           { value: String(s.opened), label: "Positions opened" },
           { value: `${s.closed} / ${s.stillOpen}`, label: "Closed / still open" },
           { value: s.winRate != null ? `${(s.winRate * 100).toFixed(0)}%` : DASH, label: `Win rate (${s.wins}W ${s.losses}L)` },
-          { value: signedPct(s.onReturn), label: "Signal ON return", color: outcomeColor(s.onReturn) },
+          { value: signedPct(s.onReturn), label: "Strategy return", color: outcomeColor(s.onReturn) },
           { value: signedPct(s.offReturn), label: "Buy & hold return" },
         ],
         { cols: 2 }
