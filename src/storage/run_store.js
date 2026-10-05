@@ -15,7 +15,7 @@
 
 import { LookaheadViolationError } from "../shared/errors.js";
 import { computeRealizedReturn, roundTripCostFraction } from "../shared/returns.js";
-import { DEFAULT_FLIP_MIN_CONFIDENCE, FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_GROUP_EXPOSURE_PCT, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, TICKER_GROUPS, TRADE_DECISION_STATUS, groupOfTicker } from "../shared/constants.js";
+import { DEFAULT_FLIP_MIN_CONFIDENCE, FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, TICKER_GROUPS, TRADE_DECISION_STATUS, groupCapOf, groupOfTicker } from "../shared/constants.js";
 import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
 import {
   ACTIVE_JOB_MAX_IDLE_MS,
@@ -535,7 +535,7 @@ export class RunStore {
       : null;
     const groupAllowClause = checkGroup ? ` AND ${groupSum} + ? <= ?` : "";
     const groupRejectClause = checkGroup ? ` OR ${groupSum} + ? > ?` : "";
-    const groupBinds = checkGroup ? [this.runId, ...groupPeers, asOf, asOf, direction, positionSizePct, MAX_GROUP_EXPOSURE_PCT + GROUP_CAP_EPSILON] : [];
+    const groupBinds = checkGroup ? [this.runId, ...groupPeers, asOf, asOf, direction, positionSizePct, groupCapOf(groupOfTicker(ticker)) + GROUP_CAP_EPSILON] : [];
 
     // P2d, the drawdown circuit breaker: trailing-window book P&L (same definition as getRealizedPnlPctAsOf with
     // includeUnrealized: net realized closes in (asOf - window, asOf] plus positions open as of asOf marked at

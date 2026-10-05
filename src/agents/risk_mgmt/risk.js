@@ -8,9 +8,9 @@
 
 import { RiskDecision } from "../../schemas/index.js";
 import { computeATR } from "../analysts/technicalIndicators.js";
-import { FALLBACK_STOP_LOSS_PCT } from "../../shared/constants.js";
+import { FALLBACK_STOP_LOSS_PCT, MAX_POSITION_PCT_BY_TICKER } from "../../shared/constants.js";
 
-const MAX_POSITION_PCT = 0.05; // never risk more than 5% of portfolio on one thesis
+const MAX_POSITION_PCT = 0.05; // default cap on one thesis's size (fraction of portfolio); MAX_POSITION_PCT_BY_TICKER overrides it per ticker
 const MIN_CONFIDENCE_TO_ACT = 0.6;
 
 // Fallback flat thresholds -- used only when `bars` isn't enough to compute
@@ -71,7 +71,8 @@ function computeStopAndTarget(bars) {
  */
 export function evaluateRisk(thesis, verdict, bars) {
   const approved = verdict.confidence >= MIN_CONFIDENCE_TO_ACT && thesis.direction !== "flat";
-  const positionSizePct = approved ? Math.min(MAX_POSITION_PCT, verdict.confidence * MAX_POSITION_PCT) : 0;
+  const maxPositionPct = MAX_POSITION_PCT_BY_TICKER[thesis.ticker] ?? MAX_POSITION_PCT;
+  const positionSizePct = approved ? Math.min(maxPositionPct, verdict.confidence * maxPositionPct) : 0;
   const { stopLossPct, takeProfitPct } = computeStopAndTarget(bars);
 
   return RiskDecision.parse({
@@ -81,7 +82,7 @@ export function evaluateRisk(thesis, verdict, bars) {
     stopLossPct: approved ? stopLossPct : undefined,
     takeProfitPct: approved ? takeProfitPct : undefined,
     reason: approved
-      ? `confidence ${verdict.confidence} >= threshold ${MIN_CONFIDENCE_TO_ACT}; sized proportionally to confidence, capped at ${MAX_POSITION_PCT * 100}% of portfolio; stop/target ATR-scaled to recent volatility`
+      ? `confidence ${verdict.confidence} >= threshold ${MIN_CONFIDENCE_TO_ACT}; sized proportionally to confidence, capped at ${maxPositionPct * 100}% of portfolio; stop/target ATR-scaled to recent volatility`
       : `confidence ${verdict.confidence} below threshold ${MIN_CONFIDENCE_TO_ACT}, or direction is flat -- no position taken`,
   });
 }

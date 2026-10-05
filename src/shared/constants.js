@@ -49,6 +49,22 @@ export function groupOfTicker(ticker) {
   return TICKER_GROUPS[ticker] ?? ticker;
 }
 
+// Per-group override of MAX_GROUP_EXPOSURE_PCT. XAUUSD is alone in "gold" and its book is one position at a time
+// (hold/flip), so the 10% default acted as a hard per-position cap that kept it at ~3-4% of the book. Untuned
+// placeholder, raised together with MAX_POSITION_PCT_BY_TICKER below: the group cap REJECTS (it does not clamp),
+// so a size above it would never trade. A group not listed uses MAX_GROUP_EXPOSURE_PCT.
+export const GROUP_EXPOSURE_CAP_BY_GROUP = { gold: 0.15 };
+
+export function groupCapOf(groupId) {
+  return GROUP_EXPOSURE_CAP_BY_GROUP[groupId] ?? MAX_GROUP_EXPOSURE_PCT;
+}
+
+// Per-ticker override of the position-size multiplier in risk_mgmt/risk.js (size = confidence * cap, capped at
+// cap). A ticker not listed uses risk.js's default (5%). Untuned placeholder: XAU moves slowly, sits in one
+// position at a time, and its stop is ~2.5-3.5%, so a full stop-out at 15% is ~0.5% of the book, inside
+// MAX_PORTFOLIO_STOP_RISK_PCT (0.75%).
+export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.15 };
+
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
 // already has an open position only REPLACES it if it points the OTHER way
 // with at least this confidence. Same direction never replaces (the open
