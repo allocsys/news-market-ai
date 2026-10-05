@@ -16,16 +16,16 @@ export function replayTriggerForm(tickerOptions = []) {
   const today = new Date().toISOString().slice(0, 10);
   return `<form method="get" action="/dashboard/backtest/replay/news" class="filter-bar">
     <div class="filter-group">
-      <span class="filter-label">Ticker</span>
+      <label class="filter-label" for="replayTicker">Ticker</label>
       ${
         tickerOptions.length > 0
           ? tickerSelect({ name: "ticker", id: "replayTicker", options: tickerOptions, required: true })
-          : `<input class="filter-form" type="text" name="ticker" placeholder="AAPL" required>`
+          : `<input class="filter-form" id="replayTicker" type="text" name="ticker" placeholder="AAPL" required>`
       }
     </div>
     <div class="filter-group">
-      <span class="filter-label">News date</span>
-      <input class="filter-form date-input" type="date" name="date" value="${today}" required>
+      <label class="filter-label" for="replayDate">News date</label>
+      <input class="filter-form date-input" id="replayDate" type="date" name="date" value="${today}" required>
     </div>
     <div class="filter-group">
       <span class="filter-label">&nbsp;</span>
