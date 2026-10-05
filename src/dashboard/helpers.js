@@ -1236,3 +1236,38 @@ export function tradeTimelineChart(series, positions = []) {
   </svg>
   <div class="chart-legend">${legend}</div>`;
 }
+
+/** Text outcome for a position marker: the chart colors it green/red/grey, this says the same in words (✓ profit, ✕ loss, — flat/open/unknown). */
+export function outcomeText(p) {
+  const r = p?.realizedReturn;
+  if (r != null && Number.isFinite(r)) return `${r > 0 ? "\u2713 profit" : r < 0 ? "\u2715 loss" : "\u2014 flat"} ${signedPct(r)}`;
+  return p?.closedAt ? "\u2014 closed, return unknown" : "\u2014 still open";
+}
+
+/**
+ * Table alternative to tradeTimelineChart (collapsed): the cumulative-return values the two
+ * lines are drawn from, plus each marker's day, side and outcome in words, so the chart is
+ * readable without color, hover or sight. Empty string when there is no drawable series.
+ */
+export function tradeTimelineDataTable(series, positions = []) {
+  const dates = series?.dates;
+  const n = Array.isArray(dates) ? dates.length : 0;
+  if (n < 2 || !Array.isArray(series.on) || !Array.isArray(series.off) || series.on.length !== n || series.off.length !== n) return "";
+  const on = cumulativeReturns(series.on);
+  const off = cumulativeReturns(series.off);
+  const dayRows = dates
+    .map((d, i) => `<tr><td data-label="Date">${escapeHtml(String(d))}</td><td class="num" data-label="Strategy">${signedPct(on[i])}</td><td class="num" data-label="Buy &amp; hold">${signedPct(off[i])}</td></tr>`)
+    .join("\n");
+  const placeable = positions.filter((p) => typeof p.openedAt === "string" && p.openedAt.length >= 10);
+  const posRows = placeable
+    .map((p) => `<tr><td class="ticker cell-title">${escapeHtml(p.ticker)}</td><td data-label="Side">${escapeHtml(p.direction ?? "\u2014")}</td><td class="num" data-label="Opened">${escapeHtml(p.openedAt.slice(0, 10))}</td><td data-label="Outcome">${escapeHtml(outcomeText(p))}</td></tr>`)
+    .join("\n");
+  const posTable = placeable.length > 0
+    ? `<div class="table-wrap"><table><caption class="note">Positions marked on the chart</caption><thead><tr><th>Ticker</th><th>Side</th><th>Opened</th><th>Outcome</th></tr></thead><tbody>${posRows}</tbody></table></div>`
+    : "";
+  return `<details class="llm-answer chart-data">
+    <summary>Chart data as tables</summary>
+    ${posTable}
+    <div class="table-wrap"><table><caption class="note">Cumulative return by day</caption><thead><tr><th>Date</th><th>Strategy</th><th>Buy &amp; hold</th></tr></thead><tbody>${dayRows}</tbody></table></div>
+  </details>`;
+}
