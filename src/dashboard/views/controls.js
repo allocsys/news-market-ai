@@ -56,7 +56,7 @@ function renderTickerSelection(selection) {
   const off = watchlist.filter((t) => !active.includes(t));
   const errorNote = selection.error ? `<p class="note">Could not read the ticker selection (${escapeHtml(selection.error)}); showing every ticker as active.</p>` : "";
   const state = off.length === 0 ? "All tickers are active." : `Active: ${escapeHtml(active.join(", ") || "none")}. Off: ${escapeHtml(off.join(", "))}.`;
-  return `<h2 style="margin-top:1.5rem">Live tickers</h2>
+  return `<h2 class="mt-lg">Live tickers</h2>
     <p class="note">Which tickers the live pipeline fetches and analyzes. Open positions and pending entries keep being managed, and backtests are not affected.</p>
     ${errorNote}
     <div class="pause-row" style="flex-direction:column;align-items:flex-start">
