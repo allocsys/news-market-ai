@@ -129,7 +129,7 @@ function scriptOf(html) {
  */
 async function runPoller(html, responses) {
   const els = {};
-  const getEl = (id) => (els[id] ??= { style: {}, textContent: "", innerHTML: "" });
+  const getEl = (id) => (els[id] ??= { style: {}, textContent: "", innerHTML: "", setAttribute() {} });
   const timers = [];
   let reloads = 0;
   let polled = 0;
