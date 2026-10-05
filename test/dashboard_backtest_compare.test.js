@@ -22,7 +22,7 @@ function done(id, { on = 0.012, off = -0.03, sharpe = 0.8, exposure = 0.05, posi
         delta: { cumulativeReturn: on - off },
       },
       perWindow: [],
-      ...(portfolio ? { portfolio: { on: { avgExposure: exposure, positionsTraded: positions } } } : {}),
+      ...(portfolio ? { portfolio: { method: "daily-equity-curve-v3", days: 20, from: start, to: end, tickers, on: { avgExposure: exposure, positionsTraded: positions, positionsIgnored: 0, openAtSpanEnd: 0 } } } : {}),
     },
   };
 }
