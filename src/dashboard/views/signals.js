@@ -119,11 +119,17 @@ export function renderSignalsView({ decisions = [], tickerStages = [], checkpoin
     </details>`;
   }
 
+  const llmLink = `<a class="sig-link-row" href="/dashboard/llm">
+    <span class="sig-link-text"><span class="sig-link-title">LLM calls</span><span class="sig-link-desc">Every Gemini prompt and response (live only).</span></span>
+    <span class="sig-link-chevron" aria-hidden="true">&rsaquo;</span>
+  </a>`;
+
   return `<section id="signals">
     <h2>Signals</h2>
     ${stripHtml}
     ${filterBarHtml}
     ${feedAndSummary}
     ${activityExpander}
+    ${llmLink}
   </section>`;
 }
