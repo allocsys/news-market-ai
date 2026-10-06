@@ -1,25 +1,15 @@
 // Logout — clears the session cookie on the Next.js origin.
-// Also forwards a GET to ${BACKEND_URL}/logout so the backend clears its
-// own cookie (though the JWT itself is not server-side revoked — it just
-// expires naturally; the original dashboard Worker behaves the same way).
+// The session is a signed JWT with no server-side state (the original
+// dashboard Worker's /logout only clears the cookie too), so there is
+// nothing to call upstream.
 
 import { NextRequest, NextResponse } from "next/server";
-import { BACKEND_URL, HAS_BACKEND, SESSION_COOKIE_NAME } from "@/lib/server-config";
+import { SESSION_COOKIE_NAME } from "@/lib/server-config";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(_request: NextRequest) {
-  if (HAS_BACKEND) {
-    try {
-      await fetch(new URL("/logout", BACKEND_URL).toString(), {
-        method: "GET",
-        redirect: "manual",
-      });
-    } catch {
-      /* best-effort */
-    }
-  }
   const attrs = [
     `${SESSION_COOKIE_NAME}=`,
     "Path=/",
