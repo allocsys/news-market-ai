@@ -968,6 +968,47 @@ const STYLE = `
   .filter-bar-scroll .pill { flex: 0 0 auto; white-space: nowrap; }
 
   .ov-alert-panel { margin-bottom: 1.75rem; }
+
+  /* ---- Today screen (phone-first redesign step 2) ---- */
+  .today { max-width: 720px; margin-left: auto; margin-right: auto; }
+  .today .panel, .today .today-more { margin-bottom: 0.75rem; }
+  .today-status {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    min-height: 36px; padding: 0.35rem 0.85rem; border-radius: 999px;
+    font-size: 0.9375rem; font-weight: 600; margin-bottom: 1rem;
+  }
+  .today-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  .today-status--ok { color: var(--color-success-text); background: var(--color-success-bg); }
+  .today-status--warn { color: var(--color-warning-text); background: var(--color-warning-bg); }
+  .today-status--bad { color: var(--color-danger-text); background: var(--color-danger-bg); }
+  .today-numbers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+  .today-big {
+    display: flex; flex-direction: column; gap: 0.15rem; min-height: 44px;
+    padding: 0.85rem 1rem; border-radius: var(--radius-md);
+    background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+    color: var(--text-main); text-decoration: none;
+  }
+  .today-big:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .today-big-value {
+    font-family: var(--font-mono); font-size: 2rem; font-weight: 600; line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .today-big-label { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+  .today-big-sub { font-size: 0.75rem; color: var(--text-subtle); }
+  .today-attn-list { list-style: none; margin: 0; padding: 0; }
+  .today-attn-row { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.55rem 0; border-bottom: 1px solid var(--border-subtle); }
+  .today-attn-row:last-child { border-bottom: none; }
+  .today-attn-text { min-width: 0; overflow-wrap: anywhere; }
+  .today-meta { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--text-muted); }
+  .today-decision-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.5rem; }
+  .today-decision-ticker { font-size: 1.25rem; }
+  .today-decision-dir { color: var(--text-muted); text-transform: capitalize; }
+  .today-decision-reason { margin: 0 0 0.75rem; overflow-wrap: anywhere; }
+  .today-link {
+    display: inline-flex; align-items: center; min-height: 44px;
+    color: var(--color-info-text); text-decoration: none; font-weight: 500;
+  }
+  .today-link:hover { text-decoration: underline; }
   .ov-ok-panel-body { display: flex; align-items: center; gap: 0.6rem; }
   .ov-alert-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
   .ov-alert-text { color: var(--text-main); font-size: 0.8125rem; min-width: 0; overflow-wrap: anywhere; }

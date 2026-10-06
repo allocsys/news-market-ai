@@ -293,14 +293,14 @@ async function renderSection(request, env, config, section) {
     // running) is simpler than picking one and matches how /dashboard/backfill
     // already shows two possible panels (news vs. price backfill) above.
     //
-    // Snapshot is the landing page, so it also carries the running backtest's
+    // Today (overview) is the landing page, so it carries the running backtest's
     // progress card (backtest only, no Terminate button -- see renderActiveJobPanel)
-    // so the operator sees a run's state without opening the Backtest tab. Nothing
-    // running = no card, the page is unchanged.
+    // so the operator sees a run's state without opening the Backtest tab. Snapshot
+    // (Recent exits) keeps the card too. Nothing running = no card, page unchanged.
     const activePanel =
       section === "backtest"
         ? (await activeJobPanelFor(env, "backtest")) + (await activeJobPanelFor(env, "replay"))
-        : section === "snapshot"
+        : section === "snapshot" || section === "overview"
           ? await activeJobPanelFor(env, "backtest", { terminate: false })
           : "";
     const envBar = ENV_SECTIONS.includes(section)
@@ -486,11 +486,7 @@ export default {
       }
     }
 
-    // Landing page stays /dashboard/snapshot for now (plan.md doesn't
-    // explicitly call for changing it, and the prototype screenshots don't
-    // settle it either) -- Overview is added as a nav destination, not a
-    // redirect target, until that's a deliberate decision rather than a
-    // side effect of adding the page.
+    // Landing page is Today (/dashboard/overview), also the post-login target (owner decision 2026-10-06).
     if (pathname === "/dashboard") return redirect("/dashboard/overview");
 
     // Nav-group landing routes (plan.md Step 2 nav reorg, 2026-09-22): each
@@ -584,7 +580,7 @@ export default {
     if (pathname === "/login" && request.method === "GET") {
       if (!isDashboardAuthConfigured(config)) return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
       const sessionUsername = await getSessionUsername(request, config);
-      if (sessionUsername) return redirect("/dashboard/snapshot");
+      if (sessionUsername) return redirect("/dashboard/overview");
       const error = url.searchParams.get("error") === "invalid" ? "Invalid username or password." : null;
       return htmlResponse(renderLoginPage({ error }));
     }
@@ -598,7 +594,7 @@ export default {
         return htmlResponse(renderLoginPage({ error: "Invalid username or password." }), { status: 401 });
       }
       const cookie = await createSessionCookie(username, config);
-      return redirect("/dashboard/snapshot", { "Set-Cookie": cookie });
+      return redirect("/dashboard/overview", { "Set-Cookie": cookie });
     }
 
     if (pathname === "/logout") {

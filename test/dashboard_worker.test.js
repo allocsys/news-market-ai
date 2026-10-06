@@ -137,15 +137,15 @@ test("GET /login renders the form when configured and there's no session yet", a
   assert.match(html, /<form method="post" action="\/login">/);
 });
 
-test("GET /login redirects straight to /dashboard/snapshot when already logged in", async () => {
+test("GET /login redirects straight to /dashboard/overview (Today) when already logged in", async () => {
   const env = loginConfiguredEnv();
   const cookie = await loggedInCookie(env);
   const response = await worker.fetch(new Request("https://dashboard.example/login", { headers: { Cookie: cookie } }), env);
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard/snapshot");
+  assert.equal(response.headers.get("Location"), "/dashboard/overview");
 });
 
-test("POST /login with correct credentials redirects to /dashboard/snapshot and sets a session cookie", async () => {
+test("POST /login with correct credentials redirects to /dashboard/overview (Today) and sets a session cookie", async () => {
   const env = loginConfiguredEnv();
   const response = await worker.fetch(
     new Request("https://dashboard.example/login", {
@@ -156,7 +156,7 @@ test("POST /login with correct credentials redirects to /dashboard/snapshot and 
     env,
   );
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard/snapshot");
+  assert.equal(response.headers.get("Location"), "/dashboard/overview");
   const setCookie = response.headers.get("Set-Cookie");
   assert.match(setCookie, /^nmai_session=/);
   assert.match(setCookie, /HttpOnly/);
@@ -538,6 +538,21 @@ test("GET /dashboard/snapshot shows the running backtest's progress card, withou
   assert.doesNotMatch(html, /Terminate run/);
   // Card sits above the page's own content.
   assert.match(html, /id="active-job"[\s\S]*id="snapshot"/);
+});
+
+test("GET /dashboard/overview (Today, the landing page) shows the running backtest's progress card, without a Terminate button", async () => {
+  const simDb = createTestD1([STATE_DIR, SIM_DIR]);
+  const now = new Date().toISOString();
+  const simStore = new RunStore(simDb, "backtest-1-abc");
+  await simStore.insertQueuedJob({ id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] }, now });
+  await simStore.markJobRunning({ id: "backtest-1-abc", type: "backtest", now });
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db, SIM_DB: simDb }) });
+  const cookie = await loggedInCookie(env);
+  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/overview", { headers: { Cookie: cookie } }), env)).text();
+
+  assert.match(html, /id="active-job" data-job-id="backtest-1-abc"/);
+  assert.match(html, /Backtest in progress/);
+  assert.doesNotMatch(html, /Terminate run/);
 });
 
 test("GET /dashboard/snapshot shows no card when no backtest is running", async () => {
