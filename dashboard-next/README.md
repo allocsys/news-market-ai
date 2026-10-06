@@ -54,8 +54,8 @@ Mock data is never used in production unless `ALLOW_MOCK=1` is set on purpose.
 
 ## Secrets
 
-Set on the Worker by `deploy-dashboard-next.yml` (from repo secrets of the same
-name) after each deploy:
+Set on the Worker by `deploy.yml`'s `deploy-dashboard` job (from repo secrets of
+the same name) after each deploy:
 
 - `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, `JWT_SECRET`: all three must be
   set together, or the login answers 503 and every `/api/*` call is refused.
@@ -79,11 +79,13 @@ The gateway tests run from the repo root: `node --test test/dashboard_gateway*.t
 ## Deploy
 
 CI (`.github/workflows/dashboard-next.yml`) lints, type-checks and builds the
-Worker bundle on every PR touching this folder. On push to `main`,
-`.github/workflows/deploy-dashboard-next.yml` runs the gateway tests, then
+Worker bundle on every PR touching this folder. On push to `main`, the
+`deploy-dashboard` job in `.github/workflows/deploy.yml` (the 8th job: after
+the backend `deploy` job, gated by the `dashboard` filter in
+`.github/path-filters.yml`, so only `dashboard-next/**` changes redeploy it) runs
 `npm run deploy` (`opennextjs-cloudflare build && deploy`) using the repo's
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, then sets the login
-secrets above. It is the only workflow that deploys this Worker; `deploy.yml`
-has no dashboard job.
+secrets above. The gateway tests run in the root `test` job that every deploy
+job waits on. It is the only job that deploys this Worker.
 
 No lockfile is committed yet, so installs use `npm install`.
