@@ -28,7 +28,8 @@ export function renderPausedBanner(flags) {
     .paused-banner { background: var(--bg-elevated); border: 1px solid var(--border-strong); border-left: 4px solid var(--color-warning-strong); border-radius: var(--radius-sm); padding: 0.6rem 0.9rem; margin-bottom: 1rem; font-size: 0.875rem; color: var(--text-main); }
     .paused-banner a { color: var(--accent-bright); margin-left: 0.4rem; }
     @media (max-width: 767px) {
-      .paused-banner { padding: 0.4rem 0.65rem; margin-bottom: 0.5rem; font-size: 0.75rem; line-height: 1.35; }
+      .paused-banner { padding: 0.3rem 0.6rem; margin-bottom: 0.4rem; font-size: 0.6875rem; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left-width: 3px; }
+      .paused-banner a { margin-left: 0.3rem; }
     }
   </style>`;
 }

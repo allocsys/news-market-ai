@@ -220,7 +220,7 @@ async function getHtml(pathAndQuery) {
 }
 
 function refreshHrefIn(html) {
-  const match = html.match(/<a href="([^"]*)" class="btn btn-secondary" title="[^"]*"><span aria-hidden="true">[^<]*<\/span> Refresh<\/a>/);
+  const match = html.match(/<a href="([^"]*)" class="btn btn-secondary" title="[^"]*"><span aria-hidden="true">[^<]*<\/span><span class="page-toolbar-refresh-label"> Refresh<\/span><\/a>/);
   return match ? match[1] : null;
 }
 

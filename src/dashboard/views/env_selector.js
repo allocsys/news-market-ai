@@ -127,8 +127,8 @@ export function renderEnvSelector({ runs = [], resolvedEnv = "live", envError = 
   const bar = `<div class="filter-bar" id="env-selector">
     <div class="filter-group">
       <span class="filter-label">Environment</span>
-      <details class="env-dropdown dropdown-details">
-        <summary><span class="env-dot ${triggerDotClass}"></span><span class="env-dropdown-label">${escapeHtml(triggerLabel)}</span>${CHEVRON_ICON}</summary>
+      <details class="env-dropdown dropdown-details"${isLive ? "" : ` title="${escapeHtml(resolvedEnv)}"`}>
+        <summary><span class="env-dot ${triggerDotClass}"></span><span class="env-dropdown-label">${escapeHtml(triggerLabel)}</span>${isLive ? "" : `<span class="env-badge">BACKTEST</span>`}${CHEVRON_ICON}</summary>
         <div class="env-dropdown-panel">${liveOption}${recentGroup}${failedBlock}</div>
       </details>
     </div>
@@ -137,7 +137,7 @@ export function renderEnvSelector({ runs = [], resolvedEnv = "live", envError = 
   const notes = [];
   if (envError) notes.push(`<p class="note env-note">${escapeHtml(envError)}</p>`);
   if (resolvedEnv !== "live") {
-    notes.push(`<p class="note env-note">Viewing backtest <code>${escapeHtml(resolvedEnv)}</code> &mdash; simulated results, not live trading.</p>`);
+    notes.push(`<p class="note env-note env-note-run">Viewing backtest <code>${escapeHtml(resolvedEnv)}</code> &mdash; simulated results, not live trading.</p>`);
   }
   return bar + notes.join("");
 }

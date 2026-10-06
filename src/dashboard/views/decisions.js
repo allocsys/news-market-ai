@@ -84,7 +84,7 @@ export function renderDecisionsView({ decisions, params, error }) {
     ${decisionsFilterBar}
 
     <div class="panel decisions-summary">
-      <div class="panel-header"><span class="panel-title">This view</span></div>
+      <div class="panel-header"><span class="panel-title">This view <span class="summary-count">${total}</span></span></div>
       <div class="panel-body">${outcomeBar}${directionBar}</div>
     </div>
 

@@ -145,4 +145,19 @@ details.sig-activity .panel-body {
   font-size: 1.5rem;
   line-height: 1;
 }
+.summary-count { display: none; }
+/* Phone only: the tab already says Decisions, so drop the H2 + intro and keep
+   the count in the summary header; compact the summary to one tight block. */
+@media (max-width: 767px) {
+  #decisions > h2,
+  #decisions > .note { display: none; }
+  .summary-count {
+    display: inline-block; margin-left: 0.4rem;
+    font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);
+  }
+  .decisions-summary .panel-header { padding: 0.5rem 0.75rem; }
+  .decisions-summary .panel-body { padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .decisions-summary .stack + .stack .stack-legend,
+  .decisions-summary .stack + .stack .stack-title { display: none; }
+}
 `;

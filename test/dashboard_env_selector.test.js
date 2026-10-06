@@ -159,10 +159,10 @@ test("renderEnvSelector: an active env that's failed and not otherwise listed st
   const html = renderEnvSelector({ runs, resolvedEnv: "backtest-bad", pathname: "/dashboard/snapshot", search: "" });
   // It's already in the failed list (href + title attrs both carry the raw
   // id, plus the "Viewing backtest <code>...</code>" note below the
-  // dropdown -- 3 occurrences total), so it should NOT also get a separate
+  // dropdown), plus the dropdown's own title attr -- 4 occurrences total), so it should NOT also get a separate
   // "reachable" option rendered outside the failed-runs disclosure (which
-  // would push this past 3).
-  assert.equal((html.match(/backtest-bad/g) || []).length, 3, "href + title of the one failed option, plus the non-live banner -- no duplicate option elsewhere");
+  // would push this past 4).
+  assert.equal((html.match(/backtest-bad/g) || []).length, 4, "dropdown title + href + title of the one failed option, plus the non-live banner -- no duplicate option elsewhere");
   assert.match(html, /class="env-option active"[^>]*>[\s\S]*?AAPL/);
 });
 
