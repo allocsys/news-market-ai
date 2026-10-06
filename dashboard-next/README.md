@@ -78,9 +78,9 @@ The gateway tests run from the repo root: `node --test test/dashboard_gateway*.t
 
 ## Deploy
 
-CI is all in `.github/workflows/deploy.yml`. The `check-dashboard` job lints,
+CI is all in `.github/workflows/deploy.yml`. The root `test` job also lints,
 type-checks and builds the Worker bundle on every PR and push touching this
-folder, and `deploy-dashboard` waits for it. On push to `main`, the
+folder, and every deploy waits on it. On push to `main`, the
 `deploy-dashboard` job (the 8th job: after
 the backend `deploy` job, gated by the `dashboard` filter in
 `.github/path-filters.yml`, so only `dashboard-next/**` changes redeploy it) runs
