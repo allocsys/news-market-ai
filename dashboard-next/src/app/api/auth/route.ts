@@ -9,7 +9,8 @@
 // round-trip.
 
 import { NextRequest, NextResponse } from "next/server";
-import { SESSION_COOKIE_NAME, HAS_BACKEND } from "@/lib/server-config";
+import { SESSION_COOKIE_NAME } from "@/lib/server-config";
+import { getBackend } from "@/lib/backend";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,9 +18,10 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   const cookie = request.headers.get("cookie") ?? "";
   const sessionValue = extractCookie(cookie, SESSION_COOKIE_NAME);
+  const mock = getBackend().kind === "mock";
 
   if (!sessionValue) {
-    return NextResponse.json({ authenticated: false, mock: !HAS_BACKEND });
+    return NextResponse.json({ authenticated: false, mock });
   }
 
   // Decode the JWT payload (no signature verification — the backend does that
@@ -34,13 +36,13 @@ export async function GET(request: NextRequest) {
     }
   } catch {
     /* malformed cookie — treat as unauthenticated */
-    return NextResponse.json({ authenticated: false, mock: !HAS_BACKEND });
+    return NextResponse.json({ authenticated: false, mock });
   }
 
   return NextResponse.json({
     authenticated: true,
     user: { username: username ?? "operator" },
-    mock: !HAS_BACKEND,
+    mock,
   });
 }
 
