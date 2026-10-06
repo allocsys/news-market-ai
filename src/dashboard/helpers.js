@@ -1,5 +1,5 @@
 // Query-param parsing and constants shared by the dashboard's JSON API
-// (src/dashboard/api.js, data.js) and the gateway Worker (src/dashboard-worker.js).
+// (src/dashboard/api.js, data.js) and the dashboard gateway (dashboard-next/src/server/gateway.mjs, which keeps a copy of BACKTEST_ID_RE).
 // The old server-rendered HTML renderers that used to live
 // here were removed when the Next.js app (dashboard-next/) replaced the SSR UI.
 
