@@ -1,0 +1,27 @@
+{
+  // Next.js dashboard (dashboard-next/) as its own Cloudflare Worker, built
+  // by @opennextjs/cloudflare. It has no D1/KV of its own: login and data go
+  // through the DASHBOARD service binding to the existing
+  // `news-market-ai-dashboard` Worker (login, session JWT, and its
+  // session-gated GET /api/* passthrough to the private backend Worker).
+  // The binding is required: same-account workers.dev fetches are blocked,
+  // and without it the proxy answers 503 (see src/lib/backend.ts).
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "news-market-ai-dashboard-next",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "DASHBOARD",
+      "service": "news-market-ai-dashboard"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
