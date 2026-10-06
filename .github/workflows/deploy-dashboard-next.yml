@@ -1,21 +1,30 @@
-# Deploys the Next.js dashboard (dashboard-next/) as its own Cloudflare Worker
-# (`news-market-ai-dashboard-next`, built by @opennextjs/cloudflare).
+# Deploys the ops dashboard: the Next.js app (dashboard-next/) as ONE Cloudflare
+# Worker named `news-market-ai-dashboard` (built by @opennextjs/cloudflare). It
+# serves the UI and, in the same Worker, login, the session cookie and the
+# session-gated API in front of the private backend (dashboard-next/src/server/
+# gateway.mjs). It replaced the separate gateway Worker that used to hold this
+# name (src/dashboard-worker.js), so this workflow is the ONLY thing that
+# deploys it: deploy.yml no longer has a dashboard job, because that job would
+# deploy the retired gateway over this app.
 #
 # Separate from deploy.yml on purpose: that workflow's change detection and
-# per-target baselines are built around the five existing Workers, and this
-# app is a different toolchain (npm project in dashboard-next/, no lockfile
-# yet, OpenNext build). Pull requests are covered by dashboard-next.yml
-# (lint, typecheck, OpenNext build); this one only runs on main.
+# per-target baselines are built around the backend/ingest/llm/backtest
+# Workers, and this app is a different toolchain (npm project in
+# dashboard-next/, no lockfile yet, OpenNext build). Pull requests are covered
+# by dashboard-next.yml (lint, typecheck, OpenNext build); this one only runs on
+# main.
 #
-# It talks to the existing `news-market-ai-dashboard` Worker through the
-# DASHBOARD service binding in dashboard-next/wrangler.jsonc, so that Worker
-# must already exist (it does: deploy.yml's deploy-dashboard job). That
-# Worker's session-gated GET /api/* passthrough ships via deploy.yml; if both
-# land in one push the two workflows run in parallel and the passthrough may
-# go live a minute after this Worker -- harmless, requests just 404 until it does.
+# It reaches the backend through the BACKEND service binding in
+# dashboard-next/wrangler.jsonc, so the `news-market-ai` Worker must already
+# exist (it does: deploy.yml's `deploy` job).
 #
-# Login credentials/JWT secret are NOT set here: the new Worker never sees
-# them. Login is proxied to the old dashboard Worker, which owns them.
+# The login secrets (DASHBOARD_USERNAME, DASHBOARD_PASSWORD, JWT_SECRET, and the
+# optional SESSION_TTL_SECONDS) are repo secrets pushed to the Worker after each
+# deploy with `wrangler secret put`, idempotent on repeat runs. All three of the
+# first group must be set together or the login stays disabled (503).
+#
+# The gateway tests run first and gate the deploy: this deploy replaces the live
+# UI and its login, so a broken gateway must not go out.
 
 name: Deploy Dashboard Next
 
@@ -28,14 +37,28 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-news-market-ai-dashboard-next
+  group: deploy-news-market-ai-dashboard
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - name: Gateway tests
+        run: node --test test/dashboard_gateway.test.js test/dashboard_gateway_passthrough.test.js test/dashboard_gateway_price_backfill.test.js test/dashboard_gateway_parity.test.js test/dashboard_worker_wiring.test.js
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -66,3 +89,26 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy
+      - name: Set login secrets on the dashboard Worker
+        # Pushed after the deploy so the Worker exists. Without all three of
+        # DASHBOARD_USERNAME/DASHBOARD_PASSWORD/JWT_SECRET the Worker still
+        # deploys but the login answers 503 and every /api/* call is refused,
+        # so an unset secret fails closed rather than leaving anything open.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DASHBOARD_USERNAME: ${{ secrets.DASHBOARD_USERNAME }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SESSION_TTL_SECONDS: ${{ secrets.SESSION_TTL_SECONDS }}
+        run: |
+          if [ -z "$DASHBOARD_USERNAME" ] || [ -z "$DASHBOARD_PASSWORD" ] || [ -z "$JWT_SECRET" ]; then
+            echo "DASHBOARD_USERNAME/DASHBOARD_PASSWORD/JWT_SECRET not all set -- skipping. The dashboard Worker is deployed but the login returns 503 (disabled) until all three are configured."
+            exit 0
+          fi
+          echo "$DASHBOARD_USERNAME" | npx wrangler secret put DASHBOARD_USERNAME --config wrangler.jsonc
+          echo "$DASHBOARD_PASSWORD" | npx wrangler secret put DASHBOARD_PASSWORD --config wrangler.jsonc
+          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET --config wrangler.jsonc
+          if [ -n "$SESSION_TTL_SECONDS" ]; then
+            echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS --config wrangler.jsonc
+          fi
