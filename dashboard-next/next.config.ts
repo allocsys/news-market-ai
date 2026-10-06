@@ -7,6 +7,6 @@ const nextConfig: NextConfig = {
 
 export default nextConfig;
 
-// Lets `next dev` see the wrangler.jsonc bindings (DASHBOARD) via
-// getCloudflareContext(), so local dev can talk to the real Worker.
+// Lets `next dev` see the wrangler.jsonc bindings (BACKEND) via
+// getCloudflareContext(), so local dev can reach the private backend Worker.
 initOpenNextCloudflareForDev();
