@@ -163,7 +163,10 @@ export default {
     // env.BACKEND after the session gate (401 JSON without a session, 503 if
     // login is unconfigured). GET only: every write goes through the POST
     // routes below.
-    if (pathname.startsWith("/api/") && request.method === "GET") {
+    //
+    // GET /backtest/replay/news is the one read that lives outside /api on the
+    // backend (the news-replay picker's item list); it gets the same gate.
+    if ((pathname.startsWith("/api/") || pathname === "/backtest/replay/news") && request.method === "GET") {
       const auth = await requireSession(request, config);
       if (auth.redirect === "__disabled__") return jsonResponse({ error: "dashboard is not configured" }, { status: 503 });
       if (auth.redirect) return jsonResponse({ error: "unauthorized" }, { status: 401 });
