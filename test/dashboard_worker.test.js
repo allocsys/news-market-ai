@@ -1,29 +1,21 @@
-// Covers src/dashboard-worker.js (plan.md "Step 2 -- Dashboard Worker"):
-// GET/POST /login, GET /logout, the session-gated redirect on GET
-// /dashboard/*, the Refresh-link/Loaded-time toolbar per section, and the
-// session-cookie authorization + forward-to-backend flow on POST /backfill
-// and POST /backtest/run. Replaces the former test/index_login.test.js +
-// test/dashboard_refresh.test.js, which covered the same behavior back
-// when it lived directly in src/index.js.
+// Covers src/dashboard-worker.js (plan.md "Step 2 -- Dashboard Worker") as the
+// API gateway for the Next.js dashboard (dashboard-next/): GET/POST /login,
+// GET /logout, 404 for the retired HTML routes, and the session-cookie
+// authorization + forward-to-backend flow on every POST trigger route --
+// including the JSON bodies the Next.js app sends. (GET /api/* passthrough:
+// test/dashboard_api_passthrough.test.js.)
 //
-// FakeBackend wraps the REAL backend Worker (src/index.js) with a fake env,
-// rather than hand-building JSON fixtures -- this exercises the actual
-// /api/* and /backfill//backtest/run contracts dashboard-worker.js depends
-// on, not a guessed shape of them, at the cost of this file also owning a
-// FakeNewsDb (and real empty sqlite DBs for the panels) the way index_login.test.js/index_backfill.test.js
-// used to.
+// Two kinds of backend here: the REAL backend Worker (src/index.js) wrapped
+// as a service binding, which exercises the actual /backfill and
+// /backtest/run contracts; and a recording fake, which checks exactly what
+// the gateway forwards for each request shape.
 
 import test from "node:test";
-import { jobStateDb } from "./helpers/job_db.js";
+import assert from "node:assert/strict";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
-import assert from "node:assert/strict";
 import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
-import { renderShell } from "../src/dashboard/shell.js";
-import { insertBacktestRun, completeBacktestRun } from "../src/storage/sim_registry.js";
-import { RunStore } from "../src/storage/run_store.js";
-import { ENV_SECTIONS } from "../src/dashboard/helpers.js";
 
 class FakeNewsDb {
   constructor() {
@@ -43,12 +35,31 @@ class FakeNewsDb {
   }
 }
 
-/** Wraps the real backend Worker as a Cloudflare-service-binding-shaped
- * object ({ fetch(url, init) }), the same interface env.BACKEND exposes in
- * production. `backendCtx.waitUntil` promises are collected so a test can
- * await them (same pattern index_backfill.test.js used directly). */
+/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. backend's POST routes never run the work themselves: they validate, enqueue and return an immediate ack. */
+class FakeQueue {
+  constructor() {
+    this.sent = [];
+  }
+  async send(body) {
+    this.sent.push(body);
+  }
+}
+
+/** Wraps the real backend Worker as a Cloudflare-service-binding-shaped object ({ fetch(url, init) }), the same interface env.BACKEND exposes in production. */
 function makeBackend(backendEnv, backendCtx = { promises: [], waitUntil(p) { this.promises.push(p); } }) {
   return { fetch: (input, init) => backendWorker.fetch(new Request(input, init), backendEnv, backendCtx), _ctx: backendCtx };
+}
+
+/** A backend that records every call and answers `{ accepted: true }`. */
+function recordingBackend(status = 200) {
+  const calls = [];
+  return {
+    calls,
+    fetch: async (input, init) => {
+      calls.push({ url: new URL(typeof input === "string" ? input : input.url), method: init?.method ?? "GET" });
+      return new Response(JSON.stringify({ accepted: true }), { status, headers: { "content-type": "application/json" } });
+    },
+  };
 }
 
 function baseEnv(overrides = {}) {
@@ -81,40 +92,33 @@ async function loggedInCookie(env) {
   return cookieValueFrom(response.headers.get("Set-Cookie"));
 }
 
+/** POSTs a JSON body to `path` with a valid session, against a recording backend. Returns { response, calls }. */
+async function postJson(path, body, { cookie = true } = {}) {
+  const backend = recordingBackend();
+  const env = loginConfiguredEnv({ BACKEND: backend });
+  const headers = { "content-type": "application/json" };
+  if (cookie) headers.Cookie = await loggedInCookie(env);
+  const response = await worker.fetch(new Request(`https://dashboard.example${path}`, { method: "POST", headers, body: typeof body === "string" ? body : JSON.stringify(body) }), env);
+  return { response, calls: backend.calls };
+}
+
 // --------------------------------------------------------------------
-// GET /dashboard -- session gate
+// Retired HTML routes
 // --------------------------------------------------------------------
 
-test("GET /dashboard always redirects to /dashboard/overview (Today landing)", async () => {
-  const env = loginConfiguredEnv();
-  const response = await worker.fetch(new Request("https://dashboard.example/dashboard"), env);
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard/overview");
-});
-
-test("GET /dashboard/snapshot returns 503 (disabled) when the login isn't configured -- Step 2 fails closed, unlike backend's old unauthenticated fallback", async () => {
-  const env = baseEnv(); // no DASHBOARD_USERNAME/PASSWORD/JWT_SECRET
-  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot"), env);
-  assert.equal(response.status, 503);
-  const html = await response.text();
-  assert.match(html, /not configured/i);
-});
-
-test("GET /dashboard/snapshot redirects to /login when the login IS configured and there's no session cookie", async () => {
-  const env = loginConfiguredEnv();
-  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot"), env);
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/login");
-});
-
-test("GET /dashboard/snapshot renders (not a redirect) with a valid session cookie", async () => {
+test("the server-rendered /dashboard/* pages are gone: 404 JSON, even with a valid session", async () => {
   const env = loginConfiguredEnv();
   const cookie = await loggedInCookie(env);
-  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env);
+  for (const path of ["/dashboard", "/dashboard/overview", "/dashboard/snapshot", "/dashboard/backtest", "/dashboard/jobs/x", "/dashboard/tickers"]) {
+    const response = await worker.fetch(new Request(`https://dashboard.example${path}`, { headers: { Cookie: cookie } }), env);
+    assert.equal(response.status, 404, `${path} should be retired`);
+    assert.deepEqual(await response.json(), { error: "not found" });
+  }
+});
+
+test("GET / answers 200 (liveness) without needing a session", async () => {
+  const response = await worker.fetch(new Request("https://dashboard.example/"), loginConfiguredEnv());
   assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /logged in as admin/);
-  assert.match(html, /\/logout/);
 });
 
 // --------------------------------------------------------------------
@@ -137,15 +141,15 @@ test("GET /login renders the form when configured and there's no session yet", a
   assert.match(html, /<form method="post" action="\/login">/);
 });
 
-test("GET /login redirects straight to /dashboard/overview (Today) when already logged in", async () => {
+test("GET /login redirects away from the form when already logged in", async () => {
   const env = loginConfiguredEnv();
   const cookie = await loggedInCookie(env);
   const response = await worker.fetch(new Request("https://dashboard.example/login", { headers: { Cookie: cookie } }), env);
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard/overview");
+  assert.equal(response.headers.get("Location"), "/");
 });
 
-test("POST /login with correct credentials redirects to /dashboard/overview (Today) and sets a session cookie", async () => {
+test("POST /login with correct credentials sets a session cookie (this is what the Next.js /api/login reads)", async () => {
   const env = loginConfiguredEnv();
   const response = await worker.fetch(
     new Request("https://dashboard.example/login", {
@@ -156,7 +160,7 @@ test("POST /login with correct credentials redirects to /dashboard/overview (Tod
     env,
   );
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard/overview");
+  assert.equal(response.headers.get("Location"), "/");
   const setCookie = response.headers.get("Set-Cookie");
   assert.match(setCookie, /^nmai_session=/);
   assert.match(setCookie, /HttpOnly/);
@@ -177,6 +181,11 @@ test("POST /login with a wrong password returns 401 and re-renders the form with
   assert.equal(response.headers.get("Set-Cookie"), null);
   const html = await response.text();
   assert.match(html, /Invalid username or password/);
+});
+
+test("POST /login with no body at all is a 401, not a crash", async () => {
+  const response = await worker.fetch(new Request("https://dashboard.example/login", { method: "POST" }), loginConfiguredEnv());
+  assert.equal(response.status, 401);
 });
 
 test("POST /login returns 503 (disabled) rather than checking credentials at all when the login isn't configured", async () => {
@@ -207,84 +216,8 @@ test("GET /logout clears the session cookie and redirects to /login", async () =
 });
 
 // --------------------------------------------------------------------
-// Refresh link + Loaded-time toolbar (per section) -- ported from the
-// former test/dashboard_refresh.test.js.
-// --------------------------------------------------------------------
-
-async function getHtml(pathAndQuery) {
-  const env = loginConfiguredEnv();
-  const cookie = await loggedInCookie(env);
-  const response = await worker.fetch(new Request(`https://dashboard.example${pathAndQuery}`, { headers: { Cookie: cookie } }), env);
-  assert.equal(response.status, 200, `${pathAndQuery} should render`);
-  return response.text();
-}
-
-function refreshHrefIn(html) {
-  const match = html.match(/<a href="([^"]*)" class="btn btn-secondary" title="[^"]*"><span aria-hidden="true">[^<]*<\/span><span class="page-toolbar-refresh-label"> Refresh<\/span><\/a>/);
-  return match ? match[1] : null;
-}
-
-const REFRESHABLE_SECTIONS = ["snapshot", "activity", "charts", "health", "decisions", "positions", "pipeline", "backtest"];
-
-for (const section of REFRESHABLE_SECTIONS) {
-  test(`GET /dashboard/${section} renders a Refresh link back to itself, plus a Loaded time`, async () => {
-    const html = await getHtml(`/dashboard/${section}`);
-    assert.equal(refreshHrefIn(html), `/dashboard/${section}`);
-    assert.match(html, /<span class="page-toolbar-updated">Loaded \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC<\/span>/);
-  });
-}
-
-test("Page toolbar's Export CSV/JSON options are combined into one dropdown menu (not two loose buttons)", async () => {
-  const html = await getHtml("/dashboard/snapshot");
-  assert.match(html, /<details class="dropdown-details page-toolbar-export">/);
-  assert.match(html, /id="dashboard-export-csv-btn"[^>]*>Export as CSV<\/button>/);
-  assert.match(html, /id="dashboard-export-json-btn"[^>]*>Export as JSON<\/button>/);
-});
-
-test("Backtest trigger form's ticker checkboxes each have a unique id so auto-refresh can restore them, same as the date fields", async () => {
-  const html = await getHtml("/dashboard/backtest");
-  assert.match(html, /<input type="checkbox" id="backtestTicker-AAPL" name="tickers" value="AAPL">/);
-  assert.match(html, /<input type="checkbox" id="backtestTicker-MSFT" name="tickers" value="MSFT">/);
-});
-
-test("Auto-refresh's #dashboard-main swap captures and restores in-progress form state (quick-range/date/ticker edits), not just a blind innerHTML replace", async () => {
-  const html = await getHtml("/dashboard/backtest");
-  assert.match(html, /function captureFormState\(\)/);
-  assert.match(html, /function restoreFormState\(state\)/);
-  assert.match(html, /var savedState = captureFormState\(\);/);
-  assert.match(html, /restoreFormState\(savedState\);/);
-});
-
-const NON_REFRESHABLE_PAGES = [
-  "/dashboard/backfill",
-  "/dashboard/more",
-  "/dashboard/backfill/confirm?from=2024-01-01&to=2024-01-31",
-  "/dashboard/backtest/confirm?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL&graceDays=5",
-];
-
-for (const path of NON_REFRESHABLE_PAGES) {
-  test(`GET ${path} has no Refresh link -- nothing on it goes stale`, async () => {
-    const html = await getHtml(path);
-    assert.equal(refreshHrefIn(html), null);
-    assert.doesNotMatch(html, /page-toolbar"/);
-  });
-}
-
-test("Refresh link keeps the page's active filters (query string), HTML-escaped", async () => {
-  const html = await getHtml("/dashboard/decisions?decisionStatus=opened&decisionLimit=50");
-  assert.equal(refreshHrefIn(html), "/dashboard/decisions?decisionStatus=opened&amp;decisionLimit=50");
-});
-
-test("renderShell without refreshHref renders no toolbar (e.g. the POST run-accepted status page)", () => {
-  const html = renderShell({ activeSection: "backfill", sessionUsername: null, bodyHtml: "<p>body</p>" });
-  assert.equal(refreshHrefIn(html), null);
-  assert.doesNotMatch(html, /page-toolbar"/);
-  assert.match(html, /<p>body<\/p>/);
-});
-
-// --------------------------------------------------------------------
-// POST /backfill and POST /backtest/run -- session auth here, then
-// forwarded to backend over the BACKEND service binding.
+// POST trigger routes -- session auth here, then forwarded to backend over
+// the BACKEND service binding.
 // --------------------------------------------------------------------
 
 test("POST /backfill returns 503 when dashboard login is not configured", async () => {
@@ -311,17 +244,13 @@ test("POST /backtest/run returns 401 with a stale/forged cookie (bad signature) 
   assert.equal(response.status, 401);
 });
 
-/** Minimal fake of a Cloudflare Queue producer binding -- captures every enqueued message. Since plan.md Step 3, backend's POST /backfill never runs the backfill itself: it validates, enqueues onto BACKFILL (renamed from JOBS in a Step 5 follow-up, 2026-09-20, when its consumer moved from `backend` to `ingest`) and returns an immediate ack. POST /backtest/run followed the same shape onto LLM_JOBS (Step 6), was disabled with a 503 during M2 pending the backtest Worker, and (M3) is re-enabled onto its own new BACKTEST queue -- see the test below. These tests were originally written for the pre-Step-3 synchronous/waitUntil behavior and had been failing on main ever since -- backend's env had no JOBS binding, so the enqueue threw and the route returned 500. */
-class FakeQueue {
-  constructor() {
-    this.sent = [];
-  }
-  async send(body) {
-    this.sent.push(body);
-  }
-}
+test("a JSON POST without a session is a 401 and never reaches backend", async () => {
+  const { response, calls } = await postJson("/backfill", { from: "2024-01-01", to: "2024-01-31" }, { cookie: false });
+  assert.equal(response.status, 401);
+  assert.equal(calls.length, 0);
+});
 
-test("POST /backfill succeeds on a valid session cookie (scripted/non-form caller gets backend's enqueue ack forwarded verbatim)", async () => {
+test("POST /backfill succeeds on a valid session cookie (query-string caller gets backend's enqueue ack forwarded verbatim)", async () => {
   const jobs = new FakeQueue();
   const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), BACKFILL: jobs }) });
   const cookie = await loggedInCookie(env);
@@ -340,52 +269,76 @@ test("POST /backfill succeeds on a valid session cookie (scripted/non-form calle
   assert.deepEqual(jobs.sent[0], { type: "backfill", id: body.id, from: "2024-01-01", to: "2024-01-31" });
 });
 
-test("POST /backfill accepts a form-encoded body -- checks the session, forwards to backend (which enqueues onto BACKFILL), and 303-redirects to /dashboard/backfill (Post/Redirect/Get -- part 1 of the dashboard backfill-completion UX fix) instead of rendering the accepted HTML directly", async () => {
+test("POST /backfill accepts a form-encoded body and answers JSON (no redirect to a page: there are no pages)", async () => {
   const jobs = new FakeQueue();
-  // A real (empty) LIVE_DB, not just DB+BACKFILL: backend's POST /backfill
-  // writes the 'queued' job_progress row via RunStore(env.LIVE_DB, "live")
-  // (best-effort -- see createJobReporter), and the follow-through check
-  // below needs that row to actually exist for GET /api/jobs/active to find.
+  // A real (empty) LIVE_DB: backend writes the 'queued' job_progress row via RunStore (best-effort).
   const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), LIVE_DB: createTestD1([STATE_DIR]), BACKFILL: jobs }) });
   const cookie = await loggedInCookie(env);
 
-  const body = new URLSearchParams({ from: "2024-01-01", to: "2024-01-31" });
-  const request = new Request("https://dashboard.example/backfill", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", Cookie: cookie },
-    body: body.toString(),
-  });
-
-  const response = await worker.fetch(request, env);
-  assert.equal(response.status, 303);
-  assert.equal(response.headers.get("Location"), "/dashboard/backfill");
-  assert.equal(await response.text(), "", "a 303 has no body to accidentally re-show/re-submit");
-
-  // The route only enqueues (plan.md Step 3) -- the real backfill now runs
-  // in the `ingest` Worker's queue() consumer (Step 5 follow-up,
-  // 2026-09-20), covered by test/ingest_worker.test.js.
+  const response = await worker.fetch(
+    new Request("https://dashboard.example/backfill", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", Cookie: cookie },
+      body: new URLSearchParams({ from: "2024-01-01", to: "2024-01-31" }).toString(),
+    }),
+    env,
+  );
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).accepted, true);
   assert.equal(jobs.sent.length, 1);
   assert.equal(jobs.sent[0].type, "backfill");
   assert.equal(jobs.sent[0].from, "2024-01-01");
   assert.equal(jobs.sent[0].to, "2024-01-31");
-
-  // Following the redirect (a plain GET, as any browser/user agent does on a
-  // 303) lands on /dashboard/backfill and shows the just-queued job via the
-  // ordinary active-job panel wiring -- confirming the redirect target
-  // actually closes the "had to refresh or go back to Backfill" gap, not
-  // just that a redirect happens. Uses backend's real GET /api/jobs/active,
-  // same as the "prepends the active-job panel" tests below.
-  const followed = await worker.fetch(new Request(`https://dashboard.example${response.headers.get("Location")}`, { headers: { Cookie: cookie } }), env);
-  assert.equal(followed.status, 200);
-  const followedHtml = await followed.text();
-  assert.match(followedHtml, /id="active-job"/);
-  assert.match(followedHtml, /2024-01-01/);
-  assert.match(followedHtml, /2024-01-31/);
 });
 
-test("POST /backtest/run with a valid session cookie is forwarded to backend, which (M3) enqueues onto BACKTEST and returns an accepted ack", async () => {
-  const { createTestD1 } = await import("./helpers/sqlite_d1.js");
-  const { STATE_DIR, SIM_DIR } = await import("./helpers/engine_ctx.js");
+test("POST /backfill accepts a JSON body (what the Next.js app sends) and the real backend enqueues it", async () => {
+  const jobs = new FakeQueue();
+  const env = loginConfiguredEnv({ BACKEND: makeBackend({ DB: new FakeNewsDb(), LIVE_DB: createTestD1([STATE_DIR]), BACKFILL: jobs }) });
+  const cookie = await loggedInCookie(env);
+
+  const response = await worker.fetch(
+    new Request("https://dashboard.example/backfill", {
+      method: "POST",
+      headers: { "content-type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ from: "2024-01-01", to: "2024-01-31" }),
+    }),
+    env,
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.accepted, true);
+  assert.equal(jobs.sent.length, 1);
+  assert.deepEqual(jobs.sent[0], { type: "backfill", id: body.id, from: "2024-01-01", to: "2024-01-31" });
+});
+
+test("a JSON body with missing or malformed dates is a 400 from the gateway and never reaches backend", async () => {
+  for (const body of [{}, { from: "2024-01-01" }, { from: "yesterday", to: "today" }]) {
+    const { response, calls } = await postJson("/backfill", body);
+    assert.equal(response.status, 400);
+    assert.equal(calls.length, 0);
+  }
+});
+
+test("a JSON body that isn't an object (array, scalar, or broken JSON) is a 400, not a 500", async () => {
+  for (const raw of ["[]", "42", "{not json"]) {
+    const { response, calls } = await postJson("/backfill", raw);
+    assert.equal(response.status, 400, `body ${raw}`);
+    assert.equal(calls.length, 0);
+  }
+});
+
+test("POST /backfill-prices forwards a JSON tickers array as a comma list, and omits tickers when the array is empty", async () => {
+  const withTickers = await postJson("/backfill-prices", { from: "2024-01-01", to: "2024-01-31", tickers: ["AAPL", "MSFT"] });
+  assert.equal(withTickers.response.status, 200);
+  assert.equal(withTickers.calls[0].url.pathname, "/backfill-prices");
+  assert.equal(withTickers.calls[0].method, "POST");
+  assert.equal(withTickers.calls[0].url.searchParams.get("tickers"), "AAPL,MSFT");
+
+  const empty = await postJson("/backfill-prices", { from: "2024-01-01", to: "2024-01-31", tickers: [] });
+  assert.equal(empty.calls[0].url.searchParams.has("tickers"), false);
+});
+
+test("POST /backtest/run with a valid session cookie is forwarded to backend, which enqueues onto BACKTEST and returns an accepted ack", async () => {
   const backtestQueue = new FakeQueue();
   const env = loginConfiguredEnv({
     BACKEND: makeBackend({ DB: new FakeNewsDb(), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]), BACKTEST: backtestQueue, WATCHLIST_TICKERS: "AAPL" }),
@@ -404,25 +357,19 @@ test("POST /backtest/run with a valid session cookie is forwarded to backend, wh
   assert.deepEqual(backtestQueue.sent[0].tickers, ["AAPL"]);
 });
 
-test("Backtest confirm page offers an unchecked-by-default 'Disable price-impact gate' checkbox", async () => {
-  const html = await getHtml("/dashboard/backtest/confirm?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL");
-  assert.match(html, /<input type="checkbox" name="disableGate" value="1">/);
-  assert.match(html, /Disable price-impact gate/);
-});
-
-async function postBacktestForm(fields) {
-  const { createTestD1 } = await import("./helpers/sqlite_d1.js");
-  const { STATE_DIR, SIM_DIR } = await import("./helpers/engine_ctx.js");
+async function postBacktest(contentType, fields) {
   const backtestQueue = new FakeQueue();
   const env = loginConfiguredEnv({
     BACKEND: makeBackend({ DB: new FakeNewsDb(), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]), BACKTEST: backtestQueue, WATCHLIST_TICKERS: "AAPL" }),
   });
   const cookie = await loggedInCookie(env);
+  const base = { testStart: "2024-01-01", testEnd: "2024-01-31", tickers: "AAPL", ...fields };
+  const body = contentType === "json" ? JSON.stringify({ ...base, tickers: [base.tickers] }) : new URLSearchParams(base).toString();
   const response = await worker.fetch(
     new Request("https://dashboard.example/backtest/run", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", Cookie: cookie },
-      body: new URLSearchParams({ testStart: "2024-01-01", testEnd: "2024-01-31", tickers: "AAPL", ...fields }).toString(),
+      headers: { "content-type": contentType === "json" ? "application/json" : "application/x-www-form-urlencoded", Cookie: cookie },
+      body,
     }),
     env,
   );
@@ -430,287 +377,107 @@ async function postBacktestForm(fields) {
 }
 
 test("POST /backtest/run form with disableGate=1 queues the run with the price-impact gate off (skipNoPriceImpact override 0)", async () => {
-  const { response, backtestQueue } = await postBacktestForm({ disableGate: "1" });
-  assert.equal(response.status, 303);
+  const { response, backtestQueue } = await postBacktest("form", { disableGate: "1" });
+  assert.equal(response.status, 200);
   assert.equal(backtestQueue.sent.length, 1);
   assert.deepEqual(backtestQueue.sent[0].knobOverrides, { skipNoPriceImpact: 0 });
 });
 
-test("POST /backtest/run form without the checkbox sends no gate override (Worker default, gate on)", async () => {
-  const { response, backtestQueue } = await postBacktestForm({});
-  assert.equal(response.status, 303);
+test("POST /backtest/run form without the flag sends no gate override (Worker default, gate on)", async () => {
+  const { response, backtestQueue } = await postBacktest("form", {});
+  assert.equal(response.status, 200);
   assert.equal(backtestQueue.sent.length, 1);
   assert.equal(backtestQueue.sent[0].knobOverrides?.skipNoPriceImpact, undefined);
 });
 
-// --------------------------------------------------------------------
-// Active-job panel wiring: GET /dashboard/backfill and GET /dashboard/backtest
-// prepend a live progress panel (src/dashboard/views/status.js's
-// renderActiveJobPanel) when backend's GET /api/jobs/active reports a job
-// already in flight -- see dashboard-worker.js's activeJobPanelFor. Uses the
-// real backend Worker (via makeBackend), so this exercises the actual
-// /api/jobs/active contract, not a guessed shape of it.
-// --------------------------------------------------------------------
+test("POST /backtest/run JSON with tickers as an array queues the run; disableGate true turns the gate off, false leaves it on", async () => {
+  const on = await postBacktest("json", { disableGate: true });
+  assert.equal(on.response.status, 200);
+  assert.deepEqual(on.backtestQueue.sent[0].tickers, ["AAPL"]);
+  assert.deepEqual(on.backtestQueue.sent[0].knobOverrides, { skipNoPriceImpact: 0 });
 
-const RUNNING_BACKFILL = {
-  id: "backfill-1789783849291-cx0mfj",
-  type: "backfill",
-  phase: "saving",
-  percent: 60,
-  done: 200,
-  total: 733,
-  detail: "Saved 200/733 articles",
-  params: { from: "2024-01-01", to: "2024-01-31" },
-};
-
-test("GET /dashboard/backfill shows no active-job panel when nothing is in flight", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
-  assert.doesNotMatch(html, /id="active-job"/);
+  const off = await postBacktest("json", { disableGate: false });
+  assert.equal(off.response.status, 200);
+  assert.equal(off.backtestQueue.sent[0].knobOverrides?.skipNoPriceImpact, undefined);
 });
 
-test("GET /dashboard/backfill prepends the active-job panel ahead of the form when backend reports a running backfill", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb([RUNNING_BACKFILL])).db }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
-
-  assert.match(html, /id="active-job" data-job-id="backfill-1789783849291-cx0mfj"/);
-  assert.match(html, /Backfill in progress/);
-  // Panel comes BEFORE the ordinary backfill form/view in the body (activeJobPanelFor's
-  // result is prepended: `activePanel + renderBackfillView()` in dashboard-worker.js).
-  assert.match(html, /id="active-job"[\s\S]*<form/);
+test("POST /backtest/run JSON: enableLlmLog true is forwarded as 1, false is NOT forwarded (a JSON false must not read as 'checked')", async () => {
+  const on = await postJson("/backtest/run", { testStart: "2024-01-01", testEnd: "2024-01-31", enableLlmLog: true });
+  assert.equal(on.calls[0].url.searchParams.get("enableLlmLog"), "1");
+  const off = await postJson("/backtest/run", { testStart: "2024-01-01", testEnd: "2024-01-31", enableLlmLog: false });
+  assert.equal(off.calls[0].url.searchParams.has("enableLlmLog"), false);
 });
 
-test("GET /dashboard/backfill renders normally (no active-job panel, no crash) when the backend lookup itself fails -- best-effort, per activeJobPanelFor's own contract", async () => {
-  const brokenBackend = { fetch: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }) };
-  const env = loginConfiguredEnv({ BACKEND: brokenBackend });
-  const cookie = await loggedInCookie(env);
-  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env);
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.doesNotMatch(html, /id="active-job"/);
+test("POST /backtest/run JSON without valid dates is a 400 and never reaches backend", async () => {
+  const { response, calls } = await postJson("/backtest/run", { testStart: "2024-01-01" });
+  assert.equal(response.status, 400);
+  assert.equal(calls.length, 0);
 });
 
-test("GET /dashboard/backtest shows no active-job panel when nothing is in flight", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backtest", { headers: { Cookie: cookie } }), env)).text();
-  assert.doesNotMatch(html, /id="active-job"/);
-});
-
-test("GET /dashboard/backtest prepends the active-job panel when backend reports a running backtest", async () => {
-  // A backtest's job row lives in SIM_DB under its OWN run_id (index.js POST /backtest/run), never under 'live'.
-  const simDb = createTestD1([STATE_DIR, SIM_DIR]);
-  const now = new Date().toISOString();
-  const simStore = new RunStore(simDb, "backtest-1-abc");
-  await simStore.insertQueuedJob({ id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] }, now });
-  await simStore.markJobRunning({ id: "backtest-1-abc", type: "backtest", now });
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db, SIM_DB: simDb }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backtest", { headers: { Cookie: cookie } }), env)).text();
-
-  assert.match(html, /id="active-job" data-job-id="backtest-1-abc"/);
-  assert.match(html, /Backtest in progress/);
-  // The Backtest page keeps the Terminate button (the snapshot card omits it, see below).
-  assert.match(html, /Terminate run/);
-});
-
-test("GET /dashboard/snapshot shows no active-job panel for a running BACKFILL -- only a backtest gets the landing-page card", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb([RUNNING_BACKFILL])).db }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
-  assert.doesNotMatch(html, /id="active-job"/);
-});
-
-test("GET /dashboard/snapshot shows the running backtest's progress card, without a Terminate button", async () => {
-  const simDb = createTestD1([STATE_DIR, SIM_DIR]);
-  const now = new Date().toISOString();
-  const simStore = new RunStore(simDb, "backtest-1-abc");
-  await simStore.insertQueuedJob({ id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] }, now });
-  await simStore.markJobRunning({ id: "backtest-1-abc", type: "backtest", now });
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db, SIM_DB: simDb }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
-
-  assert.match(html, /id="active-job" data-job-id="backtest-1-abc"/);
-  assert.match(html, /Backtest in progress/);
-  assert.doesNotMatch(html, /Terminate run/);
-  // Card sits above the page's own content.
-  assert.match(html, /id="active-job"[\s\S]*id="snapshot"/);
-});
-
-test("GET /dashboard/overview (Today, the landing page) shows the running backtest's progress card, without a Terminate button", async () => {
-  const simDb = createTestD1([STATE_DIR, SIM_DIR]);
-  const now = new Date().toISOString();
-  const simStore = new RunStore(simDb, "backtest-1-abc");
-  await simStore.insertQueuedJob({ id: "backtest-1-abc", type: "backtest", params: { tickers: ["AAPL"] }, now });
-  await simStore.markJobRunning({ id: "backtest-1-abc", type: "backtest", now });
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db, SIM_DB: simDb }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/overview", { headers: { Cookie: cookie } }), env)).text();
-
-  assert.match(html, /id="active-job" data-job-id="backtest-1-abc"/);
-  assert.match(html, /Backtest in progress/);
-  assert.doesNotMatch(html, /Terminate run/);
-});
-
-test("GET /dashboard/snapshot shows no card when no backtest is running", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env)).text();
-  assert.doesNotMatch(html, /id="active-job"/);
-});
-
-// --------------------------------------------------------------------
-// "Last run" panel wiring (dashboard backfill-completion UX, part 3): GET
-// /dashboard/backfill also prepends how the most recently FINISHED backfill
-// job ended (backend's GET /api/jobs/latest?type=backfill via
-// dashboard-worker.js's lastFinishedBackfillJob, rendered by
-// backfill.js#renderLastRunPanel), so the page shows something once the
-// active-job panel above has aged out or the operator just navigates back.
-// --------------------------------------------------------------------
-
-async function liveDbWithFinishedBackfill(overrides = {}) {
-  const db = (await jobStateDb()).db;
-  const store = new RunStore(db, "live");
-  await store.insertQueuedJob({ id: "backfill-done-1", type: "backfill", params: { from: "2024-01-01", to: "2024-01-31" }, now: "2026-01-01T00:00:00.000Z" });
-  await store.markJobRunning({ id: "backfill-done-1", type: "backfill", now: "2026-01-01T00:00:01.000Z" });
-  if (overrides.status === "failed") {
-    await store.failJob({ id: "backfill-done-1", error: overrides.error ?? "boom", detail: overrides.detail ?? null, now: "2026-01-01T00:05:00.000Z" });
-  } else {
-    await store.completeJob({ id: "backfill-done-1", result: overrides.result ?? { inserted: 146, errorCount: 0, parts: 1 }, detail: overrides.detail ?? "Inserted 146 articles", now: "2026-01-01T00:05:00.000Z" });
+test("POST /backtest/:id/{cancel,pause,resume} forward to the matching backend route with the id in the path", async () => {
+  const id = "backtest-1789000000000-abc123";
+  for (const action of ["cancel", "pause", "resume"]) {
+    const { response, calls } = await postJson(`/backtest/${id}/${action}`, "");
+    assert.equal(response.status, 200, action);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url.pathname, `/backtest/${id}/${action}`);
+    assert.equal(calls[0].method, "POST");
   }
-  return db;
-}
-
-test("GET /dashboard/backfill shows no Last-run panel when nothing has ever finished", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: (await jobStateDb()).db }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
-  assert.doesNotMatch(html, /Last run/);
 });
 
-test("GET /dashboard/backfill shows the Last-run panel for a completed job, with its detail and range", async () => {
-  const env = loginConfiguredEnv({ BACKEND: makeBackend({ LIVE_DB: await liveDbWithFinishedBackfill() }) });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
-  assert.match(html, /Last run/);
-  assert.match(html, /Complete/);
-  assert.match(html, /2024-01-01 to 2024-01-31/);
-  assert.match(html, /Inserted 146 articles/);
+test("POST /controls/set reads a JSON boolean: true -> paused=1, false -> paused=0, and the operator's username goes along as `by`", async () => {
+  const pause = await postJson("/controls/set", { key: "all", paused: true });
+  assert.equal(pause.response.status, 200);
+  assert.equal(pause.calls[0].url.pathname, "/controls/set");
+  assert.equal(pause.calls[0].url.searchParams.get("key"), "all");
+  assert.equal(pause.calls[0].url.searchParams.get("paused"), "1");
+  assert.equal(pause.calls[0].url.searchParams.get("by"), "admin");
+
+  const resume = await postJson("/controls/set", { key: "all", paused: false });
+  assert.equal(resume.calls[0].url.searchParams.get("paused"), "0");
 });
 
-test("GET /dashboard/backfill shows the Last-run panel for a failed job, with its error", async () => {
-  const env = loginConfiguredEnv({
-    BACKEND: makeBackend({ LIVE_DB: await liveDbWithFinishedBackfill({ status: "failed", error: "Too many API requests by single Worker invocation", detail: "Saved 325/733 articles" }) }),
-  });
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env)).text();
-  assert.match(html, /Last run/);
-  assert.match(html, /Failed/);
-  assert.match(html, /Saved 325\/733 articles/);
-  assert.match(html, /Too many API requests by single Worker invocation/);
+test("POST /controls/set rejects an unknown key or a missing paused value with 400, without touching backend", async () => {
+  for (const body of [{ key: "not-a-switch", paused: true }, { key: "all" }, { key: "all", paused: "maybe" }]) {
+    const { response, calls } = await postJson("/controls/set", body);
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.equal(calls.length, 0);
+  }
 });
 
-test("GET /dashboard/backfill renders normally (no Last-run panel, no crash) when the /api/jobs/latest lookup itself fails -- best-effort", async () => {
-  const brokenBackend = { fetch: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }) };
-  const env = loginConfiguredEnv({ BACKEND: brokenBackend });
-  const cookie = await loggedInCookie(env);
-  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/backfill", { headers: { Cookie: cookie } }), env);
+test("POST /controls/tickers takes a JSON array (or comma list), upper-cases and dedupes it, and rejects an empty selection", async () => {
+  const ok = await postJson("/controls/tickers", { tickers: ["aapl", "msft", "AAPL"] });
+  assert.equal(ok.response.status, 200);
+  assert.equal(ok.calls[0].url.searchParams.get("tickers"), "AAPL,MSFT");
+  assert.equal(ok.calls[0].url.searchParams.get("by"), "admin");
+
+  const comma = await postJson("/controls/tickers", { tickers: "aapl, msft" });
+  assert.equal(comma.calls[0].url.searchParams.get("tickers"), "AAPL,MSFT");
+
+  const none = await postJson("/controls/tickers", { tickers: [] });
+  assert.equal(none.response.status, 400);
+  assert.equal(none.calls.length, 0);
+});
+
+test("POST /backtest/replay/run takes ticker + a JSON newsItemIds array and forwards them as a comma list", async () => {
+  const { response, calls } = await postJson("/backtest/replay/run", { ticker: "AAPL", newsItemIds: [11, 12] });
   assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.doesNotMatch(html, /Last run/);
+  assert.equal(calls[0].url.pathname, "/backtest/replay/run");
+  assert.equal(calls[0].url.searchParams.get("ticker"), "AAPL");
+  assert.equal(calls[0].url.searchParams.get("newsItemIds"), "11,12");
+
+  const missing = await postJson("/backtest/replay/run", { ticker: "AAPL", newsItemIds: [] });
+  assert.equal(missing.response.status, 400);
 });
 
-// --------------------------------------------------------------------
-// M4b environment selector -- the bar itself (rendering, healing, and
-// best-effort fallback) on renderSection pages. Backend plumbing is
-// already covered by test/dashboard_env.test.js; the view-only pieces
-// (pill rendering, escaping) by test/dashboard_env_selector.test.js. This
-// block covers the actual wiring: does the bar show up on the right pages,
-// does it reflect what backend resolved (not just the raw query param),
-// do links heal after a bad ?env=, and does the rest of the page survive
-// when the (best-effort) run-list lookup itself fails.
-// --------------------------------------------------------------------
-
-const BT = "backtest-1789000000000-abc123";
-
-async function registerCompleteRun(simDb, id) {
-  await insertBacktestRun(simDb, {
-    id, tickers: ["AAPL"], testStart: "2024-01-01T00:00:00.000Z", testEnd: "2024-02-01T00:00:00.000Z",
-    trainDays: 0, testDays: 30, startedAt: "2026-03-12T00:00:00.000Z",
-  });
-  await completeBacktestRun(simDb, { id, result: { overall: {} }, finishedAt: "2026-03-12T01:00:00.000Z" });
-}
-
-// Same shape as baseEnv()/loginConfiguredEnv() above, but keeps a handle on
-// the backend's own env object so a test can register a backtest run
-// against its SIM_DB before issuing requests through the dashboard Worker.
-function envAwareEnv() {
-  const backendEnv = { LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: createTestD1([INPUTS_DIR]), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) };
-  const env = loginConfiguredEnv({ BACKEND: makeBackend(backendEnv) });
-  return { env, backendEnv };
-}
-
-for (const section of ENV_SECTIONS) {
-  test(`GET /dashboard/${section} shows the environment selector bar`, async () => {
-    const html = await getHtml(`/dashboard/${section}`);
-    assert.match(html, /id="env-selector"/);
-  });
-}
-
-for (const section of ["charts", "health"]) {
-  test(`GET /dashboard/${section} does NOT show the environment selector -- env-unaware section`, async () => {
-    const html = await getHtml(`/dashboard/${section}`);
-    assert.doesNotMatch(html, /id="env-selector"/);
-  });
-}
-
-test("the environment selector highlights a registered backtest run when ?env= selects it, and env-aware nav links carry it forward while env-unaware ones don't", async () => {
-  const { env, backendEnv } = envAwareEnv();
-  await registerCompleteRun(backendEnv.SIM_DB, BT);
+test("backend's status and body pass through unchanged (a 4xx from backend stays a 4xx JSON error)", async () => {
+  const backend = recordingBackend(409);
+  const env = loginConfiguredEnv({ BACKEND: backend });
   const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/snapshot?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
-
-  assert.match(html, /class="env-option active"[^>]*>[\s\S]*?AAPL/, "the run's own dropdown option is active, not Live");
-  assert.ok(html.includes(`href="/dashboard/decisions?env=${BT}"`), "nav link to another env-aware section carries the chosen env");
-  assert.ok(html.includes('href="/dashboard/charts"') && !html.includes(`href="/dashboard/charts?env=${BT}"`), "nav link to an env-unaware section does NOT carry env");
-});
-
-test("a well-formed but unregistered ?env= heals to live: the Live pill is active and an envError note explains why", async () => {
-  const env = loginConfiguredEnv();
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/decisions?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
-  assert.match(html, /class="env-option active"[\s\S]*?>Live<\/span>/);
-  assert.match(html, /not found/);
-});
-
-test("filter links on decisions carry the resolved env (?env=) so switching a filter never silently drops back to live", async () => {
-  const { env, backendEnv } = envAwareEnv();
-  await registerCompleteRun(backendEnv.SIM_DB, BT);
-  const cookie = await loggedInCookie(env);
-  const html = await (await worker.fetch(new Request(`https://dashboard.example/dashboard/decisions?env=${BT}`, { headers: { Cookie: cookie } }), env)).text();
-
-  const openedHrefMatch = html.match(/href="([^"]*decisionStatus=opened[^"]*)"/);
-  assert.ok(openedHrefMatch, "found the Opened status pill link");
-  assert.match(openedHrefMatch[1], new RegExp(`env=${BT}`), "the filter link carries env forward");
-});
-
-test("GET /dashboard/snapshot renders fine (Live-only selector, no crash) when the best-effort /api/backtest-runs lookup itself fails", async () => {
-  const realBackend = makeBackend({ LIVE_DB: createTestD1([STATE_DIR]), INPUTS_DB: createTestD1([INPUTS_DIR]), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) });
-  const flakyBackend = {
-    fetch: (input, init) => {
-      const url = typeof input === "string" ? input : input.url;
-      if (url.includes("/api/backtest-runs")) return Promise.resolve(new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
-      return realBackend.fetch(input, init);
-    },
-  };
-  const env = loginConfiguredEnv({ BACKEND: flakyBackend });
-  const cookie = await loggedInCookie(env);
-  const response = await worker.fetch(new Request("https://dashboard.example/dashboard/snapshot", { headers: { Cookie: cookie } }), env);
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /id="env-selector"/);
-  assert.match(html, /class="env-option active"[\s\S]*?>Live<\/span>/);
+  const response = await worker.fetch(
+    new Request("https://dashboard.example/backtest/purge", { method: "POST", headers: { Cookie: cookie } }),
+    env,
+  );
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { accepted: true });
 });
