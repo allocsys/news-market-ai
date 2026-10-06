@@ -7,7 +7,7 @@
   //
   // Keeping the name news-market-ai-dashboard keeps the public workers.dev URL
   // and the login secrets already stored on that Worker. Secrets are not in this
-  // file; deploy-dashboard-next.yml sets them with `wrangler secret put`:
+  // file; deploy.yml's deploy-dashboard job sets them with `wrangler secret put`:
   //   DASHBOARD_USERNAME, DASHBOARD_PASSWORD, JWT_SECRET -- all three must be
   //   set together or the login stays disabled (503).
   //   SESSION_TTL_SECONDS -- optional override of the 24h default.
