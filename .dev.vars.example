@@ -32,9 +32,10 @@ FINNHUB_API_KEY=your-finnhub-key-here
 # POST /backfill and POST /backtest/run (src/index.js) no longer accept a
 # shared secret -- a logged-in dashboard session is the only way to call
 # either route now. To exercise them locally: set DASHBOARD_USERNAME/
-# DASHBOARD_PASSWORD/JWT_SECRET below, log in via GET /login in the
-# browser, then use the dashboard's own backfill/backtest trigger forms
-# (the session cookie authorizes the POST automatically).
+# DASHBOARD_PASSWORD/JWT_SECRET below, log in through the dashboard-next
+# app's login form (it POSTs to this Worker's /login), then use the
+# dashboard's own backfill/backtest triggers (the session cookie authorizes
+# the POST automatically).
 # DASHBOARD_USERNAME=your-local-username
 # DASHBOARD_PASSWORD=your-local-password
 # JWT_SECRET=some-long-random-local-dev-value
