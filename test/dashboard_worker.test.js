@@ -85,11 +85,11 @@ async function loggedInCookie(env) {
 // GET /dashboard -- session gate
 // --------------------------------------------------------------------
 
-test("GET /dashboard always redirects to /dashboard/snapshot", async () => {
+test("GET /dashboard always redirects to /dashboard/overview (Today landing)", async () => {
   const env = loginConfiguredEnv();
   const response = await worker.fetch(new Request("https://dashboard.example/dashboard"), env);
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/dashboard/snapshot");
+  assert.equal(response.headers.get("Location"), "/dashboard/overview");
 });
 
 test("GET /dashboard/snapshot returns 503 (disabled) when the login isn't configured -- Step 2 fails closed, unlike backend's old unauthenticated fallback", async () => {

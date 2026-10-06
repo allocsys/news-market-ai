@@ -307,6 +307,9 @@ const STYLE = `
   }
   .section-nav-group-label:first-child { margin-top: 0; }
 
+  /* Section tab strip: phones only (enabled in the mobile media block). */
+  .section-tabs { display: none; }
+
   .rail-meta {
     margin-top: auto;
     font-size: 0.6875rem; line-height: 1.7; color: var(--text-subtle);
@@ -1142,6 +1145,26 @@ const STYLE = `
       border-top-color: var(--accent-bright);
     }
     .bottom-nav a .nav-icon { opacity: 1; }
+
+    /* Segmented control for sibling sections of the current nav group. */
+    .section-tabs {
+      display: flex; gap: 0.25rem; margin: 0 0 0.9rem; padding: 0.25rem;
+      background: var(--bg-elevated); border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      overflow-x: auto; scrollbar-width: none;
+    }
+    .section-tabs::-webkit-scrollbar { display: none; }
+    .section-tabs a {
+      flex: 1 0 auto; display: flex; align-items: center; justify-content: center;
+      min-height: 40px; padding: 0 0.85rem; border-radius: var(--radius-sm);
+      color: var(--text-muted); text-decoration: none;
+      font-size: 0.8125rem; font-weight: 500; white-space: nowrap;
+    }
+    .section-tabs a.active {
+      background: var(--bg-surface); color: var(--text-main); font-weight: 600;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+    .section-tabs a:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
     .bottom-nav a > span:not(.nav-icon) {
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
@@ -1379,7 +1402,7 @@ const STYLE = `
 `;
 
 export const NAV_SECTIONS = [
-  ["overview", "Overview", "OV"],
+  ["overview", "Today", "OV"],
   ["snapshot", "Recent exits", "RX"],
   ["activity", "Activity", "AC"],
   ["charts", "Charts", "CH"],
@@ -1407,12 +1430,16 @@ export const NAV_SECTIONS = [
 // UNCHANGED and keep working exactly as before -- nothing to redirect there,
 // since nothing was renamed. Only the new group-landing URLs are additions.
 export const NAV_GROUPS = [
-  { id: "overview", label: "Overview", sections: ["overview"] },
+  { id: "overview", label: "Today", sections: ["overview"] },
   { id: "book", label: "Book", sections: ["positions", "snapshot", "charts"] },
-  { id: "research", label: "Research", sections: ["decisions", "llm"] },
-  { id: "operations", label: "Operations", sections: ["pipeline", "health", "backfill"] },
-  { id: "backtest", label: "Backtest", sections: ["backtest"] },
+  { id: "signals", label: "Signals", sections: ["decisions", "pipeline", "activity"] },
+  { id: "system", label: "System", sections: ["health", "llm", "backfill", "backtest"] },
 ];
+
+// Phone-first redesign step 1: the 'system' group is not a bottom-nav tab,
+// it is what the mobile 'More' tab opens (see renderMobileMoreSheet).
+const MORE_GROUP_ID = "system";
+const MORE_IDS = new Set(NAV_GROUPS.find((g) => g.id === MORE_GROUP_ID).sections);
 
 // `env` (the resolved environment, "live" by default) is appended to the links
 // of env-aware sections only, so a chosen backtest survives flipping between
@@ -1443,7 +1470,9 @@ function renderNav(activeSection, env) {
 // /dashboard/<group> redirect targets, see dashboard-worker.js). Derived
 // from NAV_GROUPS directly so this can't drift from the desktop nav's
 // structure the way the old hand-curated list could.
-const MOBILE_NAV_SECTIONS = NAV_GROUPS.map((g) => [g.sections[0], g.label]).concat([["more", "More"]]);
+const MOBILE_NAV_SECTIONS = NAV_GROUPS.filter((g) => g.id !== MORE_GROUP_ID)
+  .map((g) => [g.sections[0], g.label, g.sections])
+  .concat([["more", "More", []]]);
 
 /**
  * "More" sheet overlay (plan.md "Dashboard: Scoped UX Adoption" item 4).
@@ -1463,8 +1492,7 @@ function renderMobileMoreSheet(activeSection, env) {
   // Step 2 nav reorg, 2026-09-22 -- MOBILE_NAV_SECTIONS is now derived from
   // NAV_GROUPS, one tab per group, so this is computed as whatever's left
   // over rather than hand-maintained, avoiding the two drifting apart).
-  const pinnedIds = new Set(MOBILE_NAV_SECTIONS.map(([id]) => id));
-  const overflowIds = NAV_SECTIONS.map(([id]) => id).filter((id) => id !== "more" && !pinnedIds.has(id));
+  const overflowIds = [...MORE_IDS];
   const cards = NAV_SECTIONS.filter(([id]) => overflowIds.includes(id))
     .map(([id, label]) => {
       const active = activeSection === id;
@@ -1487,11 +1515,10 @@ function renderBottomNav(activeSection, env) {
   // "More" tab reads as active whenever the current page is one of the
   // overflow sections (same set renderMobileMoreSheet computes) -- kept as
   // its own computation here since this function doesn't call that one.
-  const pinnedIds = new Set(MOBILE_NAV_SECTIONS.map(([id]) => id));
-  const moreIds = NAV_SECTIONS.map(([id]) => id).filter((id) => id !== "more" && !pinnedIds.has(id));
-  const links = MOBILE_NAV_SECTIONS.map(([id, label, n]) => {
-    let active = activeSection === id;
-    if (id === "more" && moreIds.includes(activeSection)) {
+  const links = MOBILE_NAV_SECTIONS.map(([id, label, groupSections]) => {
+    // A group tab is active for ANY of its sections (e.g. Book while on Exits).
+    let active = activeSection === id || groupSections.includes(activeSection);
+    if (id === "more" && MORE_IDS.has(activeSection)) {
       active = true;
     }
     const icon = ICONS[id] ?? "";
@@ -1538,6 +1565,24 @@ function renderSearchTrigger() {
  */
 function renderSearchPalette() {
   return `<div class="search-backdrop" id="search-backdrop" hidden></div><div class="search-palette" id="search-palette" role="dialog" aria-modal="true" aria-label="Search tickers" hidden><div class="search-palette-input-row"><span class="nav-icon">${ICONS.search}</span><input type="text" id="search-input" class="search-palette-input" placeholder="Search tickers\u2026" autocomplete="off" spellcheck="false"><span class="search-palette-kbd">Esc</span></div><div class="search-palette-results" id="search-results"></div></div>`;
+}
+
+/**
+ * Phone-first redesign step 1: segmented control listing the sibling sections
+ * of the current nav group (e.g. Book: Positions / Recent exits / Charts).
+ * Shown on phones only (CSS), so the four bottom tabs can stay four.
+ */
+function renderSectionTabs(activeSection, env) {
+  const group = NAV_GROUPS.find((g) => g.sections.includes(activeSection));
+  if (!group || group.sections.length < 2) return "";
+  const tabs = group.sections
+    .map((id) => {
+      const label = SECTION_LABEL_BY_ID[id] ?? id;
+      const active = id === activeSection;
+      return `<a href="${escapeHtml(navHref(id, env))}"${active ? ' class="active" aria-current="page"' : ""}>${escapeHtml(label)}</a>`;
+    })
+    .join("");
+  return `<nav class="section-tabs" aria-label="${escapeHtml(group.label)} sections">${tabs}</nav>`;
 }
 
 function renderMobileHeader(sessionUsername) {
@@ -2147,6 +2192,7 @@ ${themeColorMeta}
     </aside>
     <div class="content">
       <main id="dashboard-main">
+      ${renderSectionTabs(activeSection, env)}
       ${renderPageToolbar(refreshHref, activeSection)}
       ${bodyHtml}
       </main>

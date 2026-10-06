@@ -491,7 +491,7 @@ export default {
     // settle it either) -- Overview is added as a nav destination, not a
     // redirect target, until that's a deliberate decision rather than a
     // side effect of adding the page.
-    if (pathname === "/dashboard") return redirect("/dashboard/snapshot");
+    if (pathname === "/dashboard") return redirect("/dashboard/overview");
 
     // Nav-group landing routes (plan.md Step 2 nav reorg, 2026-09-22): each
     // multi-section group (see shell.js's NAV_GROUPS) gets a single URL that
@@ -500,6 +500,7 @@ export default {
     // travels with the redirect so a chosen backtest survives the hop. Old
     // per-section URLs below are completely unchanged by this reorg.
     if (pathname === "/dashboard/book") return redirect(`/dashboard/positions${url.search}`);
+    if (pathname === "/dashboard/signals") return redirect(`/dashboard/decisions${url.search}`);
     if (pathname === "/dashboard/research") return redirect(`/dashboard/decisions${url.search}`);
     if (pathname === "/dashboard/operations") return redirect(`/dashboard/pipeline${url.search}`);
 
