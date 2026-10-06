@@ -172,7 +172,7 @@ export function LlmView({ tickerFilter, onNavigate, env }: ViewProps & { tickerF
           <div className="mt-3">
             <ErrorState message={calls.error?.message ?? "Failed to load LLM calls"} />
           </div>
-        ) : calls.data.calls.length === 0 ? (
+        ) : !calls.data || calls.data.calls.length === 0 ? (
           <div className="mt-3">
             <EmptyState icon={Cpu} title="No LLM calls match" message="Try widening filters." />
           </div>
