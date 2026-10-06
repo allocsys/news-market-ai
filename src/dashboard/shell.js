@@ -26,6 +26,7 @@
 // `data-theme` attribute and there's no flash of the wrong theme.
 
 import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix } from "./helpers.js";
+import { signalsCss } from "./signals_css.js";
 
 // ---- Inline SVG icon set (Lucide-style stroke icons, 20x20, currentColor) ----
 // Stored as raw <svg> strings so they can be dropped into nav links, badges,
@@ -791,8 +792,7 @@ const STYLE = `
     opacity: 0.85;
   }
   /* Minor-scale tick rule under the value, like a gauge's calibration marks --
-     reinforces "instrument readout" over a plain stat tile. Replaces the old
-     radial accent-glow (::after used --stat-accent-glow, now unused). */
+     reinforces "instrument readout" over a plain stat tile. */
   .stat-card::after {
     content: ""; position: absolute; left: 1.25rem; right: 1.25rem; bottom: 0.9rem; height: 1px;
     background: repeating-linear-gradient(90deg, var(--border-strong) 0 2px, transparent 2px 8px);
@@ -1758,7 +1758,7 @@ ${themeColorMeta}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>${STYLE}</style>
+<style>${STYLE}${signalsCss}</style>
 <script>
   function setDateRange(fromId, toId, days) {
     const to = new Date();

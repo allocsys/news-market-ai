@@ -204,15 +204,7 @@ export function analystOpinionLine(op) {
   return `<div class="llm-block"><span class="llm-agent">${escapeHtml(label)}</span>${escapeHtml(lead)}${escapeHtml(op.summary)} <span class="llm-justification">(${escapeHtml(op.justification)})</span></div>`;
 }
 
-export function debateLines(debate) {
-  if (!debate) return "";
-  const confidencePct = typeof debate.confidence === "number" ? `${(debate.confidence * 100).toFixed(0)}%` : "\u2014";
-  return `<div class="llm-block"><span class="llm-agent llm-agent-bull">Bull</span>${escapeHtml(debate.bull?.argument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(debate.bull?.justification ?? "\u2014")})</span></div>
-    <div class="llm-block"><span class="llm-agent llm-agent-bear">Bear</span>${escapeHtml(debate.bear?.argument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(debate.bear?.justification ?? "\u2014")})</span></div>
-    <div class="llm-block"><span class="llm-agent">Verdict</span>${escapeHtml(debate.direction ?? "\u2014")}, ${confidencePct} confidence, ${escapeHtml(debate.timeHorizon ?? "\u2014")} horizon <span class="llm-justification">(${escapeHtml(debate.justification ?? "\u2014")})</span></div>`;
-}
-
-export function traderLine(thesis) {
+function traderLine(thesis) {
   if (!thesis) return "";
   return `<div class="llm-block"><span class="llm-agent">Trader</span>${escapeHtml(thesis.instrument ?? "\u2014")} <span class="llm-justification">(${escapeHtml(thesis.rationale ?? "\u2014")})</span></div>`;
 }
@@ -652,19 +644,7 @@ export function tickerStageCards(rows) {
 }
 
 export function statCard(value, label, sub = null, accent = "var(--accent)") {
-  // Maps a named accent token to a matching soft glow color used for the
-  // radial spotlight in the top-right of the card (see .stat-card::after in
-  // shell.js). Without this, the spotlight would always be blue even on a
-  // "danger" or "success" themed card, which read as inconsistent.
-  const glowMap = {
-    "var(--accent)": "var(--accent-glow)",
-    "var(--color-success-text)": "rgba(16, 185, 129, 0.18)",
-    "var(--color-danger-text)": "rgba(239, 68, 68, 0.18)",
-    "var(--color-warning-text)": "rgba(245, 158, 11, 0.18)",
-    "var(--color-info-text)": "var(--accent-glow)",
-  };
-  const glow = glowMap[accent] ?? "var(--accent-glow)";
-  return `<div class="stat-card" style="--stat-accent:${accent}; --stat-accent-glow:${glow}">
+  return `<div class="stat-card" style="--stat-accent:${accent}">
     <div class="stat-value">${escapeHtml(value)}</div>
     <div class="stat-label">${escapeHtml(label)}</div>
     ${sub ? `<div class="stat-sub">${escapeHtml(sub)}</div>` : ""}
