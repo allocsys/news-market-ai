@@ -1,13 +1,23 @@
 {
-  // Next.js dashboard (dashboard-next/) as its own Cloudflare Worker, built
-  // by @opennextjs/cloudflare. It has no D1/KV of its own: login and data go
-  // through the DASHBOARD service binding to the existing
-  // `news-market-ai-dashboard` Worker (login, session JWT, and its
-  // session-gated GET /api/* passthrough to the private backend Worker).
-  // The binding is required: same-account workers.dev fetches are blocked,
-  // and without it the proxy answers 503 (see src/lib/backend.ts).
+  // The ops dashboard: the Next.js app (dashboard-next/) as ONE Cloudflare
+  // Worker, built by @opennextjs/cloudflare. It serves the UI and, in the same
+  // Worker, the login, the session cookie and the session-gated API in front of
+  // the private backend (src/server/gateway.mjs). It replaced the separate
+  // gateway Worker that used to hold this name (src/dashboard-worker.js).
+  //
+  // Keeping the name news-market-ai-dashboard keeps the public workers.dev URL
+  // and the login secrets already stored on that Worker. Secrets are not in this
+  // file; deploy-dashboard-next.yml sets them with `wrangler secret put`:
+  //   DASHBOARD_USERNAME, DASHBOARD_PASSWORD, JWT_SECRET -- all three must be
+  //   set together or the login stays disabled (503).
+  //   SESSION_TTL_SECONDS -- optional override of the 24h default.
+  //
+  // No D1/KV of its own: every read and write goes through the BACKEND service
+  // binding to the private `news-market-ai` Worker (wrangler.toml, no public
+  // route). The binding is required: same-account workers.dev fetches are
+  // blocked, and without it the API routes answer 503 (see src/lib/backend.ts).
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "news-market-ai-dashboard-next",
+  "name": "news-market-ai-dashboard",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -17,11 +27,17 @@
   },
   "services": [
     {
-      "binding": "DASHBOARD",
-      "service": "news-market-ai-dashboard"
+      "binding": "BACKEND",
+      "service": "news-market-ai"
     }
   ],
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
   }
 }

@@ -1,20 +1,20 @@
 // Dedicated login endpoint.
 //
-// The browser POSTs `{ username, password }` JSON to /api/login.
-// This route forwards the form fields to ${BACKEND_URL}/login (the original
-// dashboard Worker expects URL-encoded form fields and returns a 303 with
-// a Set-Cookie on success).
+// The browser POSTs `{ username, password }` JSON to /api/login. The gateway
+// (src/server/gateway.mjs#login) compares them with the DASHBOARD_USERNAME /
+// DASHBOARD_PASSWORD secrets on this Worker and, on success, signs the session
+// JWT with JWT_SECRET. The session cookie is set directly on the response:
+// the app and its API share one origin, so there is nothing to forward or
+// rewrite.
 //
-// We capture the Set-Cookie, rewrite it to the Next.js origin, and return
-// `{ ok: true }` to the browser. Subsequent /api/* calls will carry the
-// session cookie automatically (same-origin).
-//
-// In MOCK mode (no BACKEND_URL) we accept any credentials and return ok=true
-// with a fake session cookie so the UI flow can be exercised end-to-end.
+// In MOCK mode (no backend configured, local dev only) any credentials are
+// accepted (or the ones in .env, if set) and a fake session cookie is issued,
+// so the UI flow can be exercised end to end.
 
 import { NextRequest, NextResponse } from "next/server";
-import { SESSION_COOKIE_NAME, DASHBOARD_USERNAME, DASHBOARD_PASSWORD } from "@/lib/server-config";
+import { SESSION_COOKIE_NAME, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, COOKIE_SECURE } from "@/lib/server-config";
 import { getBackend } from "@/lib/backend";
+import { login } from "@/server/gateway.mjs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
   const backend = getBackend();
   if (backend.kind === "unconfigured") {
     return NextResponse.json(
-      { error: "dashboard backend is not configured (missing DASHBOARD service binding)" },
+      { error: "dashboard backend is not configured (missing BACKEND service binding)" },
       { status: 503 },
     );
   }
@@ -50,7 +50,6 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Invalid username or password." }, { status: 401 });
       }
     }
-    // Mock mode: accept anything (or whatever matches env if set), set a fake cookie
     const fakeJwt = btoa(JSON.stringify({ sub: username || "mock-user", iat: Date.now(), exp: Date.now() + 86400_000 }));
     const attrs = [
       `${SESSION_COOKIE_NAME}=${fakeJwt}`,
@@ -59,7 +58,7 @@ export async function POST(request: NextRequest) {
       "SameSite=Lax",
       "Max-Age=86400",
     ];
-    if (process.env.NODE_ENV === "production") attrs.push("Secure");
+    if (COOKIE_SECURE) attrs.push("Secure");
     return NextResponse.json(
       { ok: true, user: { username: username || "mock-user" }, mock: true },
       {
@@ -69,87 +68,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // === Real backend mode ===
-  // Forward as form-encoded to ${BACKEND_URL}/login
-  const form = new URLSearchParams();
-  form.set("username", username);
-  form.set("password", password);
-
-  let upstreamRes: Response;
-  try {
-    upstreamRes = await backend.fetch("/login", {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        accept: "application/json",
-      },
-      body: form.toString(),
-      redirect: "manual", // capture the 303 + Set-Cookie
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { error: `failed to reach backend: ${String(err)}` },
-      { status: 502 },
-    );
+  // === Real mode ===
+  const result = await login(backend.env, username, password, { secure: COOKIE_SECURE });
+  if (result.status !== 200 || !result.cookie) {
+    return NextResponse.json({ error: result.error ?? "login failed" }, { status: result.status });
   }
-
-  // The dashboard Worker returns:
-  //   - 401 on bad credentials (re-renders the login page with an error)
-  //   - 303 → /dashboard/overview with Set-Cookie on success
-  //   - 503 when auth is not configured on the Worker
-  if (upstreamRes.status === 401) {
-    return NextResponse.json({ error: "Invalid username or password." }, { status: 401 });
-  }
-  if (upstreamRes.status === 503) {
-    return NextResponse.json(
-      { error: "Dashboard auth is not configured on the backend Worker (503)." },
-      { status: 503 },
-    );
-  }
-
-  // Look for the Set-Cookie on a 303 (or any 2xx/3xx)
-  const setCookies = upstreamRes.headers.getSetCookie?.() ?? [];
-  const sessionCookie = setCookies.find((sc) => sc.startsWith(`${SESSION_COOKIE_NAME}=`));
-  if (!sessionCookie) {
-    return NextResponse.json(
-      { error: "backend did not set a session cookie" },
-      { status: 502 },
-    );
-  }
-
-  const rewritten = rewriteSetCookie(sessionCookie, SESSION_COOKIE_NAME);
-  if (!rewritten) {
-    return NextResponse.json(
-      { error: "failed to parse session cookie from backend" },
-      { status: 502 },
-    );
-  }
-
   return NextResponse.json(
     { ok: true, user: { username } },
     {
       status: 200,
-      headers: { "set-cookie": rewritten },
+      headers: { "set-cookie": result.cookie },
     },
   );
-}
-
-function rewriteSetCookie(sc: string, expectedName: string): string | null {
-  const firstSemi = sc.indexOf(";");
-  const nv = firstSemi < 0 ? sc : sc.slice(0, firstSemi);
-  const eq = nv.indexOf("=");
-  if (eq < 0) return null;
-  const name = nv.slice(0, eq).trim();
-  if (name !== expectedName) return null;
-  const value = nv.slice(eq + 1).trim();
-
-  const attrs = [
-    `${expectedName}=${value}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    "Max-Age=86400",
-  ];
-  if (process.env.NODE_ENV === "production") attrs.push("Secure");
-  return attrs.join("; ");
 }

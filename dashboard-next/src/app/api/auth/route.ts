@@ -1,48 +1,51 @@
-// Auth status — client polls this on first load to find out if it's logged in.
-// Returns `{ authenticated: false }` in mock mode when no session cookie is set,
-// `{ authenticated: true, user: { username } }` when the session cookie is present.
+// Auth status: the client polls this on first load to find out if it's logged in.
+// Returns `{ authenticated: false }` when there is no valid session and
+// `{ authenticated: true, user: { username } }` when the session cookie verifies.
 //
-// In real-backend mode, the proxy at /api/[...path]/route.ts will return 401
-// from any /api/* call when the session is invalid; the client uses that to
-// trigger the redirect to /login. This endpoint is a lightweight pre-flight
-// so we can render the right shell without waiting for a full /api/overview
-// round-trip.
+// The cookie's signature and expiry are checked here (gateway.mjs#getSession),
+// the same check every /api/* call goes through. Any /api/* call answers 401
+// when the session is invalid, and the client uses that to redirect to /login;
+// this endpoint is a lightweight pre-flight so the right shell renders without
+// waiting for a full /api/overview round trip.
+//
+// In MOCK mode (local dev, no backend) any session cookie counts as logged in.
 
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE_NAME } from "@/lib/server-config";
 import { getBackend } from "@/lib/backend";
+import { getSession } from "@/server/gateway.mjs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  const cookie = request.headers.get("cookie") ?? "";
-  const sessionValue = extractCookie(cookie, SESSION_COOKIE_NAME);
-  const mock = getBackend().kind === "mock";
+  const backend = getBackend();
 
-  if (!sessionValue) {
-    return NextResponse.json({ authenticated: false, mock });
+  if (backend.kind === "unconfigured") {
+    return NextResponse.json({ authenticated: false, mock: false });
   }
 
-  // Decode the JWT payload (no signature verification — the backend does that
-  // on every real request; we just need the username for the UI).
-  let username: string | null = null;
-  try {
-    const parts = sessionValue.split(".");
-    if (parts.length === 3) {
-      const payload = Buffer.from(parts[1], "base64url").toString("utf-8");
-      const parsed = JSON.parse(payload);
-      username = parsed.sub ?? null;
+  if (backend.kind === "mock") {
+    const sessionValue = extractCookie(request.headers.get("cookie") ?? "", SESSION_COOKIE_NAME);
+    if (!sessionValue) return NextResponse.json({ authenticated: false, mock: true });
+    let username = "operator";
+    try {
+      const parsed = JSON.parse(atob(sessionValue));
+      if (typeof parsed.sub === "string" && parsed.sub) username = parsed.sub;
+    } catch {
+      /* not our fake cookie: keep the default name */
     }
-  } catch {
-    /* malformed cookie — treat as unauthenticated */
-    return NextResponse.json({ authenticated: false, mock });
+    return NextResponse.json({ authenticated: true, user: { username }, mock: true });
   }
 
+  const session = await getSession(request, backend.env);
+  if (!session.username) {
+    return NextResponse.json({ authenticated: false, mock: false });
+  }
   return NextResponse.json({
     authenticated: true,
-    user: { username: username ?? "operator" },
-    mock,
+    user: { username: session.username },
+    mock: false,
   });
 }
 
