@@ -1,6 +1,7 @@
 // Covers src/dashboard-worker.js (plan.md "Step 2 -- Dashboard Worker") as the
-// API gateway for the Next.js dashboard (dashboard-next/): GET/POST /login,
-// GET /logout, 404 for the retired HTML routes, and the session-cookie
+// API gateway for the Next.js dashboard (dashboard-next/): POST /login (JSON
+// errors), GET /logout, 404 for the retired HTML routes (incl. GET /login), and
+// the session-cookie
 // authorization + forward-to-backend flow on every POST trigger route --
 // including the JSON bodies the Next.js app sends. (GET /api/* passthrough:
 // test/dashboard_api_passthrough.test.js.)
@@ -122,31 +123,18 @@ test("GET / answers 200 (liveness) without needing a session", async () => {
 });
 
 // --------------------------------------------------------------------
-// GET/POST /login
+// POST /login (GET /login no longer serves a page)
 // --------------------------------------------------------------------
 
-test("GET /login returns 503 with the disabled notice when the login isn't configured", async () => {
-  const env = baseEnv();
-  const response = await worker.fetch(new Request("https://dashboard.example/login"), env);
-  assert.equal(response.status, 503);
-  const html = await response.text();
-  assert.match(html, /not configured/i);
-});
-
-test("GET /login renders the form when configured and there's no session yet", async () => {
-  const env = loginConfiguredEnv();
-  const response = await worker.fetch(new Request("https://dashboard.example/login"), env);
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /<form method="post" action="\/login">/);
-});
-
-test("GET /login redirects away from the form when already logged in", async () => {
+test("GET /login is gone: 404 JSON whether or not login is configured or a session exists", async () => {
+  for (const env of [baseEnv(), loginConfiguredEnv()]) {
+    const response = await worker.fetch(new Request("https://dashboard.example/login"), env);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: "not found" });
+  }
   const env = loginConfiguredEnv();
   const cookie = await loggedInCookie(env);
-  const response = await worker.fetch(new Request("https://dashboard.example/login", { headers: { Cookie: cookie } }), env);
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/");
+  assert.equal((await worker.fetch(new Request("https://dashboard.example/login", { headers: { Cookie: cookie } }), env)).status, 404);
 });
 
 test("POST /login with correct credentials sets a session cookie (this is what the Next.js /api/login reads)", async () => {
@@ -167,7 +155,7 @@ test("POST /login with correct credentials sets a session cookie (this is what t
   assert.match(setCookie, /SameSite=Lax/);
 });
 
-test("POST /login with a wrong password returns 401 and re-renders the form with an error, no cookie set", async () => {
+test("POST /login with a wrong password returns 401 JSON, no cookie set", async () => {
   const env = loginConfiguredEnv();
   const response = await worker.fetch(
     new Request("https://dashboard.example/login", {
@@ -179,8 +167,7 @@ test("POST /login with a wrong password returns 401 and re-renders the form with
   );
   assert.equal(response.status, 401);
   assert.equal(response.headers.get("Set-Cookie"), null);
-  const html = await response.text();
-  assert.match(html, /Invalid username or password/);
+  assert.deepEqual(await response.json(), { error: "Invalid username or password." });
 });
 
 test("POST /login with no body at all is a 401, not a crash", async () => {
@@ -199,17 +186,18 @@ test("POST /login returns 503 (disabled) rather than checking credentials at all
     env,
   );
   assert.equal(response.status, 503);
+  assert.match((await response.json()).error, /not configured/);
 });
 
 // --------------------------------------------------------------------
 // GET /logout
 // --------------------------------------------------------------------
 
-test("GET /logout clears the session cookie and redirects to /login", async () => {
+test("GET /logout clears the session cookie and redirects to /", async () => {
   const env = loginConfiguredEnv();
   const response = await worker.fetch(new Request("https://dashboard.example/logout"), env);
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), "/login");
+  assert.equal(response.headers.get("Location"), "/");
   const setCookie = response.headers.get("Set-Cookie");
   assert.match(setCookie, /^nmai_session=;/);
   assert.match(setCookie, /Max-Age=0/);
