@@ -1,8 +1,9 @@
-# CI for the dashboard-next/ Next.js prototype.
+# CI for dashboard-next/, the Next.js ops dashboard (deployed as the
+# news-market-ai-dashboard Worker by deploy-dashboard-next.yml).
 #
 # Kept separate from deploy.yml: that workflow tests and deploys the
 # Cloudflare Workers and knows nothing about dashboard-next/ (its `test` job
-# only runs the root `npm test`). This one only checks that the prototype
+# only runs the root `npm test`). This one only checks that the app
 # installs, lints, type-checks and builds. It never deploys anything.
 #
 # Why a separate typecheck step: next.config.ts sets
