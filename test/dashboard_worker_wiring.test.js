@@ -66,8 +66,7 @@ test("deploy.yml gates the dashboard like the other Workers: output, per-target 
 
 test("deploy-dashboard: after the backend deploy, push/dispatch only, builds dashboard-next, sets the login secrets AFTER the deploy", () => {
   const job = jobBlock("deploy-dashboard");
-  assert.match(job, /needs: \[changes, deploy, check-dashboard\]\n/, "waits for the backend `deploy` job (the BACKEND service binding needs news-market-ai to exist) and for the check-dashboard gate");
-  assert.ok(job.includes("needs.check-dashboard.result == 'success'"), "a red check-dashboard blocks the deploy");
+  assert.match(job, /needs: \[changes, deploy\]\n/, "waits for the backend `deploy` job (the BACKEND service binding needs news-market-ai to exist); `deploy` waits on `test`, which holds the dashboard checks");
   assert.ok(job.includes("needs.changes.outputs.dashboard == 'true'"), "gated by the dashboard filter");
   assert.ok(job.includes("github.event_name == 'push' || github.event_name == 'workflow_dispatch'"), "never on a pull_request");
   assert.ok(job.includes("group: deploy-news-market-ai-dashboard-${{ github.ref }}"), "its own concurrency group");
@@ -88,18 +87,19 @@ test("deploy-dashboard: after the backend deploy, push/dispatch only, builds das
   }
 });
 
-test("check-dashboard: dashboard CI lives in deploy.yml, runs on PRs too, lints + type-checks + builds, never deploys", () => {
+test("dashboard CI runs in the root `test` job (deploy waits on it): lints, type-checks and builds dashboard-next, never deploys", () => {
   assert.ok(DEPLOY_YML.includes("steps.pr.outputs.dashboard == 'true'"), "the `dashboard` changes output is also true on a pull_request that touches the dashboard filter");
-  const job = jobBlock("check-dashboard");
-  assert.ok(job.includes("needs.changes.outputs.dashboard == 'true'"), "gated by the dashboard filter");
-  assert.ok(!job.includes("github.event_name == 'push'"), "no event restriction: runs on pull_request and push alike");
-  assert.ok(job.includes("working-directory: dashboard-next"), "runs inside dashboard-next/");
-  for (const cmd of ["npm run lint", "npx tsc --noEmit", "npx opennextjs-cloudflare build"]) {
+  assert.ok(!DEPLOY_YML.includes("\n  check-dashboard:\n"), "no separate check-dashboard job: the checks live in `test`");
+  const job = jobBlock("test");
+  assert.ok(job.includes("run: npm test"), "the root npm test is still there");
+  assert.ok(job.includes("needs.changes.outputs.dashboard == 'true'"), "dashboard steps only run when the dashboard filter matched");
+  assert.ok((job.match(/working-directory: dashboard-next/g) || []).length >= 4, "install, lint, typecheck and build all run inside dashboard-next/");
+  for (const cmd of ["npm install --no-audit --no-fund", "npm run lint", "npx tsc --noEmit", "npx opennextjs-cloudflare build"]) {
     assert.ok(job.includes(`run: ${cmd}`), `runs ${cmd}`);
   }
   assert.ok(!/secrets\./.test(job), "needs no secrets");
   assert.ok(!/wrangler (deploy|secret)|opennextjs-cloudflare deploy|npm run deploy/.test(job), "never deploys");
-  assert.ok(!existsSync(path.join(ROOT, ".github/workflows/dashboard-next.yml")), "dashboard-next.yml is folded into deploy.yml's check-dashboard job (two workflows would run the same checks)");
+  assert.ok(!existsSync(path.join(ROOT, ".github/workflows/dashboard-next.yml")), "dashboard-next.yml stays folded into deploy.yml");
 });
 
 test("the dashboard has exactly one deploy path: no separate dashboard deploy workflow next to deploy.yml", () => {
