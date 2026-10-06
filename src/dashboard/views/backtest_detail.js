@@ -5,7 +5,7 @@
 // Props are exactly what backend's GET /api/backtest-runs/:id returns.
 import {
   escapeHtml, fmtTime, errorState, emptyState, miniStats, statusBadge, BACKTEST_STATUS_LABEL, llmAnswerDetails, llmQuery, pausedNote, pauseResumeForm, terminateRunForm,
-  tradeTimelineChart, tradeTimelineDataTable, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion,
+  tradeTimelineChart, tradeTimelineDataTable, tradeTimelineSummary, newsBasis, signedPct, outcomeColor, fmtExcursion, directionPill, closeReasonPill,
 } from "../helpers.js";
 import { renderJobProgressPanel } from "./status.js";
 
@@ -17,34 +17,45 @@ function clip(text, max) {
 }
 
 const price = (v) => (v != null && Number.isFinite(Number(v)) ? `$${Number(v).toFixed(2)}` : DASH);
+const tone = (v) => (v > 0 ? "pos" : v < 0 ? "neg" : "flat");
+const MAE_TITLE = "Worst gross return seen while open (sampled at exit checks)";
+const MFE_TITLE = "Best gross return seen while open (sampled at exit checks)";
+
+function stat(label, valueHtml, { title = "", cls = "" } = {}) {
+  return `<div class="pos-stat"><dt${title ? ` title="${escapeHtml(title)}"` : ""}>${label}</dt><dd class="${cls}">${valueHtml}</dd></div>`;
+}
 
 export function tradeTimelineTable(positions) {
   if (positions.length === 0) return emptyState("This run has no positions.", { href: "/dashboard/backtest", label: "Back to backtest runs" });
-  const rows = positions
+  // Phone-first (redesign step 5): one card per position, same pos-card markup as the Book page.
+  const cards = positions
     .map((p) => {
-      const pnlClass = p.realizedReturn > 0 ? "status-approved" : p.realizedReturn < 0 ? "status-rejected" : "status-neutral";
       const pnl = p.realizedReturn != null ? signedPct(p.realizedReturn) : p.closedAt ? "unknown" : "open";
       const news = newsBasis(p.decision);
-      return `<tr>
-        <td class="ticker cell-title">${escapeHtml(p.ticker)}</td>
-        <td data-label="Direction">${escapeHtml(p.direction ?? DASH)}</td>
-        <td class="num" data-label="Size">${p.positionSizePct != null ? (p.positionSizePct * 100).toFixed(1) + "%" : DASH}</td>
-        <td class="num" data-label="Opened">${fmtTime(p.openedAt)}</td>
-        <td class="num" data-label="Closed">${p.closedAt ? fmtTime(p.closedAt) : "still open"}</td>
-        <td class="num" data-label="Entry &rarr; exit">${price(p.entryPrice)} &rarr; ${price(p.exitPrice)}</td>
-        <td data-label="Close reason">${escapeHtml(p.closeReason ?? DASH)}</td>
-        <td class="num" data-label="MAE" title="Worst gross return seen while open (sampled at exit checks)">${fmtExcursion(p.maePct)}</td>
-        <td class="num" data-label="MFE" title="Best gross return seen while open (sampled at exit checks)">${fmtExcursion(p.mfePct)}</td>
-        <td class="num ${pnlClass}" data-label="P&amp;L" style="color:${outcomeColor(p.realizedReturn)}">${escapeHtml(pnl)}</td>
-        <td class="cell-wide" data-label="Based on">${news ? escapeHtml(clip(news, NEWS_PREVIEW_CHARS)) : `<span class="empty">not recorded</span>`}</td>
-        <td class="cell-wide" data-label="Why">${llmAnswerDetails(p.decision ?? {})}</td>
-      </tr>`;
+      const reason = p.closeReason ? closeReasonPill(p.closeReason) : `<span>${p.closedAt ? DASH : "still open"}</span>`;
+      const size = p.positionSizePct != null ? `${(p.positionSizePct * 100).toFixed(1)}%` : DASH;
+      return `<article class="pos-card">
+        <header class="pos-card-head">
+          <span class="ticker pos-card-ticker">${escapeHtml(p.ticker)}</span>
+          ${p.direction ? directionPill(p.direction) : ""}
+          <span class="pos-card-main pos-${tone(p.realizedReturn)}" title="Realized return">${escapeHtml(pnl)}</span>
+        </header>
+        <dl class="pos-card-stats">
+          ${stat("Entry", price(p.entryPrice))}
+          ${stat("Exit", price(p.exitPrice))}
+          ${stat("Size", size)}
+        </dl>
+        <dl class="pos-card-stats">
+          ${stat("MAE", fmtExcursion(p.maePct), { title: MAE_TITLE, cls: `pos-${tone(p.maePct)}` })}
+          ${stat("MFE", fmtExcursion(p.mfePct), { title: MFE_TITLE, cls: `pos-${tone(p.mfePct)}` })}
+        </dl>
+        <p class="pos-card-foot">${reason} <span>Opened ${fmtTime(p.openedAt)}</span> <span>${p.closedAt ? `Closed ${fmtTime(p.closedAt)}` : "still open"}</span></p>
+        <p class="note">${news ? escapeHtml(clip(news, NEWS_PREVIEW_CHARS)) : `<span class="empty">News not recorded</span>`}</p>
+        ${llmAnswerDetails(p.decision ?? {})}
+      </article>`;
     })
     .join("\n");
-  return `<div class="table-wrap"><table>
-    <thead><tr><th>Ticker</th><th>Direction</th><th>Size</th><th>Opened</th><th>Closed</th><th>Entry &rarr; exit</th><th>Close reason</th><th>MAE</th><th>MFE</th><th>P&amp;L</th><th>Based on</th><th>Why</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
+  return `<div class="pos-cards">${cards}</div>`;
 }
 
 export function renderBacktestDetailView({ run = null, positions = [], positionsError = null, truncated = false, error = null, activeJob = null } = {}) {
