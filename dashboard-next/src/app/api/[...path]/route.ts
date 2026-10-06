@@ -113,6 +113,7 @@ async function handle(
     "/backtest/cleanup",
     "/backtest/purge",
     "/backtest/replay/run",
+    "/backtest/replay/news", // GET: the replay picker's news items
     "/controls/set",
     "/controls/tickers",
   ]);
