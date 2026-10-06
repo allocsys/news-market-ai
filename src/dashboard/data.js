@@ -18,6 +18,30 @@ import { STAGES } from "../graph/checkpointer.js";
 const TERMINAL_STAGE = STAGES[STAGES.length - 1];
 import { computeRealizedReturn, computeGrossReturn } from "../shared/returns.js";
 import { loadConfig } from "../config.js";
+import {
+  MAX_PORTFOLIO_RISK_PCT,
+  MAX_PORTFOLIO_STOP_RISK_PCT,
+  MAX_GROUP_EXPOSURE_PCT,
+  GROUP_EXPOSURE_CAP_BY_GROUP,
+  TICKER_GROUPS,
+  FALLBACK_STOP_LOSS_PCT,
+} from "../shared/constants.js";
+
+/**
+ * The portfolio risk ceilings the pipeline actually enforces, as FRACTIONS of the book (0.2 = 20%), read from
+ * shared/constants.js so the dashboard never keeps its own copy. `groupCaps` is the per-group override map; a
+ * group not listed uses `maxGroupExposurePct`. `tickerGroups` maps ticker -> group (a ticker not listed is its own group).
+ */
+export function getRiskLimits() {
+  return {
+    maxPortfolioRiskPct: MAX_PORTFOLIO_RISK_PCT,
+    maxPortfolioStopRiskPct: MAX_PORTFOLIO_STOP_RISK_PCT,
+    maxGroupExposurePct: MAX_GROUP_EXPOSURE_PCT,
+    groupCaps: { ...GROUP_EXPOSURE_CAP_BY_GROUP },
+    tickerGroups: { ...TICKER_GROUPS },
+    fallbackStopLossPct: FALLBACK_STOP_LOSS_PCT,
+  };
+}
 
 /**
  * Adds `realizedReturn` to closed positions: NET of `costBps` per side (same
@@ -157,6 +181,7 @@ export async function getSnapshotData(env, params) {
     closedPositions: withRealizedReturn(closedPositionsResult.data ?? [], costBps),
     decisionStats: decisionStatsResult.data ?? { daily: [], totals: {} },
     totalExposurePct: (exposureResult.data?.totalPct ?? 0) * 100,
+    riskLimits: getRiskLimits(),
     error,
     resolvedEnv,
     envError,
@@ -225,6 +250,7 @@ export async function getPositionsData(env, params) {
     closedPositions: withRealizedReturn(closedPositionsResult.data ?? [], costBps),
     closedPositionsError: closedPositionsResult.error,
     totalExposurePct: (exposureResult.data?.totalPct ?? 0) * 100,
+    riskLimits: getRiskLimits(),
     resolvedEnv,
     envError,
   };
@@ -307,6 +333,7 @@ export async function getOverviewData(env, params) {
     closedPositions: snapshot.closedPositions,
     decisionStats: snapshot.decisionStats,
     totalExposurePct: snapshot.totalExposurePct,
+    riskLimits: snapshot.riskLimits,
     snapshotError: snapshot.error,
     health: healthWithFresh,
     healthError: health.error,
