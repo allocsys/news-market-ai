@@ -177,13 +177,14 @@ test("renderBacktestDetailView shows headline, chart, news basis, why, P&L and a
   assert.ok(html.includes("T&lt;S&gt;") && !html.includes("T<S>"));
 });
 
-test("renderBacktestDetailView shows MAE/MFE columns: signed percents when sampled, a dash when not", () => {
+test("renderBacktestDetailView shows MAE/MFE stats on position cards: signed percents when sampled, a dash when not", () => {
   const d = detail();
   const html = renderBacktestDetailView({ ...d, positions: [{ ...d.positions[0], maePct: -0.021, mfePct: 0.034 }, { ...d.positions[1], maePct: null, mfePct: null }] });
-  assert.match(html, /<th>MAE<\/th><th>MFE<\/th>/);
-  assert.match(html, /data-label="MAE"[^>]*>-2\.1%<\/td>/);
-  assert.match(html, /data-label="MFE"[^>]*>\+3\.4%<\/td>/);
-  assert.match(html, /data-label="MAE"[^>]*>\u2014<\/td>/, "unsampled position shows a dash");
+  assert.match(html, /class="pos-card"/);
+  assert.doesNotMatch(html, /<th>MAE<\/th>/, "no table header any more");
+  assert.match(html, /<dt[^>]*>MAE<\/dt><dd class="pos-neg">-2\.1%<\/dd>/);
+  assert.match(html, /<dt[^>]*>MFE<\/dt><dd class="pos-pos">\+3\.4%<\/dd>/);
+  assert.match(html, /<dt[^>]*>MAE<\/dt><dd class="pos-flat">\u2014<\/dd>/, "unsampled position shows a dash");
 });
 
 test("renderBacktestDetailView handles not-found, error, running, failed, truncated and a positions error", () => {
