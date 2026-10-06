@@ -296,7 +296,7 @@ export function SectionTabs({
 // ============================================================
 import { useBacktestRuns } from "@/lib/api";
 import type { BacktestRun } from "@/lib/types";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Check } from "lucide-react";
 
 type EnvStatus = "live" | "running" | "paused" | "complete" | "failed";
@@ -344,13 +344,25 @@ export function EnvSelector({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const backtestRuns = useBacktestRuns();
+
+  // Close on an outside tap. A `fixed inset-0` overlay doesn't work here: the page
+  // toolbar has backdrop-blur, which makes fixed descendants span only the toolbar.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open]);
   const environments = buildEnvironments(backtestRuns.data?.backtestRuns ?? [], env);
   const current = environments.find((e) => e.id === env) ?? environments[0];
   const isLive = current.id === "live";
 
   return (
-    <div className={cn("relative", className)}>
+    <div ref={rootRef} className={cn("relative", className)}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -369,11 +381,6 @@ export function EnvSelector({
       </button>
       {open && (
         <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-            aria-hidden
-          />
           <ul
             role="listbox"
             className="absolute z-50 mt-1 max-h-72 w-full min-w-[260px] overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-xl"
