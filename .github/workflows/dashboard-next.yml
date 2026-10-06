@@ -1,0 +1,73 @@
+# CI for the dashboard-next/ Next.js prototype.
+#
+# Kept separate from deploy.yml: that workflow tests and deploys the
+# Cloudflare Workers and knows nothing about dashboard-next/ (its `test` job
+# only runs the root `npm test`). This one only checks that the prototype
+# installs, lints, type-checks and builds. It never deploys anything.
+#
+# Why a separate typecheck step: next.config.ts sets
+# typescript.ignoreBuildErrors = true, so `next build` alone would pass with
+# type errors. `tsc --noEmit` is what actually catches them.
+#
+# No lockfile is committed in dashboard-next/ yet, so this uses
+# `npm install` and cannot use the npm cache. Switch to `npm ci` (+ cache)
+# once a package-lock.json is committed.
+#
+# The build runs with BACKEND_URL unset, i.e. in MOCK mode, so it needs no
+# secrets.
+
+name: Dashboard Next CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dashboard-next/**'
+      - '.github/workflows/dashboard-next.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard-next/**'
+      - '.github/workflows/dashboard-next.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dashboard-next-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard-next
+    env:
+      # prisma generate only needs the variable to exist; nothing connects.
+      DATABASE_URL: file:./ci.db
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      # The next three run even if an earlier one failed, so one CI run
+      # shows every problem instead of one at a time.
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: npx tsc --noEmit
+      - name: Build (mock mode)
+        if: ${{ !cancelled() }}
+        env:
+          BACKEND_URL: ''
+        run: npx next build
