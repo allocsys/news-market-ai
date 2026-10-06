@@ -1,16 +1,9 @@
 // Query-param parsing and constants shared by the dashboard's JSON API
-// (src/dashboard/api.js, data.js), the gateway Worker (src/dashboard-worker.js)
-// and the login page. The old server-rendered HTML renderers that used to live
+// (src/dashboard/api.js, data.js) and the gateway Worker (src/dashboard-worker.js).
+// The old server-rendered HTML renderers that used to live
 // here were removed when the Next.js app (dashboard-next/) replaced the SSR UI.
 
 import { TRADE_DECISION_STATUS } from "../shared/constants.js";
-
-const ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-
-export function escapeHtml(value) {
-  if (value === null || value === undefined) return "";
-  return String(value).replace(/[&<>"']/g, (ch) => ESCAPE_MAP[ch]);
-}
 
 export const ACTIVITY_DAYS_OPTIONS = [7, 14, 30, 60];
 // Filter options come from the store's real vocabulary (shared/constants.js), so a new
