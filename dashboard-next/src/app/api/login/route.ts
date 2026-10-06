@@ -13,13 +13,8 @@
 // with a fake session cookie so the UI flow can be exercised end-to-end.
 
 import { NextRequest, NextResponse } from "next/server";
-import {
-  BACKEND_URL,
-  HAS_BACKEND,
-  SESSION_COOKIE_NAME,
-  DASHBOARD_USERNAME,
-  DASHBOARD_PASSWORD,
-} from "@/lib/server-config";
+import { SESSION_COOKIE_NAME, DASHBOARD_USERNAME, DASHBOARD_PASSWORD } from "@/lib/server-config";
+import { getBackend } from "@/lib/backend";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,8 +34,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "username and password are required" }, { status: 400 });
   }
 
-  // === Mock mode ===
-  if (!HAS_BACKEND) {
+  const backend = getBackend();
+  if (backend.kind === "unconfigured") {
+    return NextResponse.json(
+      { error: "dashboard backend is not configured (missing DASHBOARD service binding)" },
+      { status: 503 },
+    );
+  }
+
+  // === Mock mode (local dev only) ===
+  if (backend.kind === "mock") {
     if (DASHBOARD_USERNAME && DASHBOARD_PASSWORD) {
       // If local env has credentials set even in mock mode, validate against them
       if (username !== DASHBOARD_USERNAME || password !== DASHBOARD_PASSWORD) {
@@ -74,7 +77,7 @@ export async function POST(request: NextRequest) {
 
   let upstreamRes: Response;
   try {
-    upstreamRes = await fetch(new URL("/login", BACKEND_URL).toString(), {
+    upstreamRes = await backend.fetch("/login", {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -85,7 +88,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     return NextResponse.json(
-      { error: `failed to reach backend at ${BACKEND_URL}: ${String(err)}` },
+      { error: `failed to reach backend: ${String(err)}` },
       { status: 502 },
     );
   }
