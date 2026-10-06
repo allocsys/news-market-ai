@@ -528,7 +528,7 @@ export function loadConfig(env) {
     // wiring), but this has NOT yet been validated against a live SEC
     // fetch + real headline traffic, which is why it stays opt-in.
     entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX === "true",
-    // Dashboard login (src/dashboard-worker.js's POST /login,
+    // Dashboard login (dashboard-next/src/server/gateway.mjs#login,
     // src/auth/session.js) -- a one-time login that then authorizes the
     // dashboard's /api/* reads and POST trigger routes via a session
     // cookie; it is the ONLY way to call them (the shared
@@ -538,7 +538,7 @@ export function loadConfig(env) {
     // explicit reason" convention as every other secret in this file:
     // unset means the dashboard Worker fails closed (503) rather than
     // either being silently open with a guessable default. See
-    // dashboard-worker.js's isDashboardAuthConfigured() gate.
+    // gateway.mjs's isDashboardAuthConfigured() gate.
     dashboardUsername: env.DASHBOARD_USERNAME || "",
     dashboardPassword: env.DASHBOARD_PASSWORD || "",
     // HMAC signing key for the session JWT (src/auth/jwt.js). No default,
