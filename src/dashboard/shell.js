@@ -1184,7 +1184,7 @@ const STYLE = `
     .page-toolbar-updated { display: none; }
     .auto-refresh-toggle { min-width: 32px; height: 32px; padding: 0; justify-content: center; }
     #auto-refresh-toggle-label { display: none; }
-    .page-toolbar-export-panel { right: auto; left: 0; }
+    .page-toolbar-export-panel { right: 0; left: auto; }
     #env-selector { margin-bottom: 0.5rem; }
     #env-selector .filter-label { display: none; }
     .env-note { font-size: 0.75rem; margin: 0 0 0.6rem; }
@@ -1201,6 +1201,39 @@ const STYLE = `
     /* Refresh shrinks to its icon. */
     .page-toolbar-refresh-label { display: none; }
     .page-toolbar .btn-secondary { min-width: 32px; padding: 0; justify-content: center; }
+    /* Top-of-page cleanup (all pages, phone only). The env chip and the page
+       toolbar are separate siblings in #dashboard-main, so flex + order puts
+       the chip on the left and the controls on the right of ONE row; the tabs
+       and PAUSED strip stay above it, everything else keeps its own full row. */
+    #dashboard-main { display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: 0.5rem; }
+    #dashboard-main > * { order: 5; flex: 0 0 100%; min-width: 0; max-width: 100%; }
+    #dashboard-main > .section-tabs { order: 0; }
+    #dashboard-main > .paused-banner { order: 1; }
+    #dashboard-main > #env-selector { order: 2; flex: 1 1 0; }
+    #dashboard-main > .page-toolbar { order: 3; flex: 0 0 auto; margin-left: auto; }
+    /* Page headings: the tab already names the page, so keep them small. */
+    #dashboard-main > section > h2:first-child { font-size: 0.9375rem; margin: 0 0 0.5rem; }
+    /* Running-job card: one slim block instead of a tall card (the heading is
+       redundant with the BACKTEST chip; the phase text stays, clamped). */
+    #active-job { margin-bottom: 0.5rem; }
+    #active-job > h2 { display: none; }
+    #active-job .panel { margin-bottom: 0.5rem; }
+    #active-job .panel-body { padding: 0.55rem 0.75rem; }
+    #active-job .panel-body > div:first-child { gap: 0.55rem !important; margin-bottom: 0.45rem !important; }
+    #active-job .panel-body > div:first-child > div { min-width: 0; flex: 1; }
+    #active-job .panel-body > div:first-child > div > div:first-child { font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #active-job #run-phase-detail { font-size: 0.6875rem !important; margin-top: 0.1rem !important; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    #active-job #run-progress-track { height: 5px !important; }
+    /* Today: no H2, compact status pill and half-height tiles. */
+    .today > h2 { display: none; }
+    .today .panel, .today .today-more { margin-bottom: 0.5rem; }
+    .today-hero .panel-body { padding: 0.6rem 0.75rem; }
+    .today-status { min-height: 28px; padding: 0.2rem 0.7rem; font-size: 0.8125rem; margin-bottom: 0.5rem; }
+    .today-numbers { gap: 0.5rem; }
+    .today-big { min-height: 0; padding: 0.45rem 0.7rem; gap: 0.05rem; }
+    .today-big-value { font-size: 1.375rem; }
+    .today-big-label { font-size: 0.625rem; }
+    .today-big-sub { font-size: 0.6875rem; }
     .chart-row-2, .chart-row-3 { grid-template-columns: 1fr; }
     .donut-wrap { flex-direction: column; align-items: stretch; }
     .donut-svg { align-self: center; }
