@@ -610,6 +610,8 @@ const STYLE = `
   .env-dropdown > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .env-dropdown[open] > summary { border-color: var(--accent); background: var(--accent-subtle); }
   .env-dropdown-label { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* BACKTEST badge: phone only (the long "Viewing backtest ..." note is hidden there). */
+  .env-badge { display: none; }
   .env-dot {
     width: 0.5rem; height: 0.5rem; border-radius: 50%; flex-shrink: 0;
     background: var(--text-subtle);
@@ -1186,6 +1188,19 @@ const STYLE = `
     #env-selector { margin-bottom: 0.5rem; }
     #env-selector .filter-label { display: none; }
     .env-note { font-size: 0.75rem; margin: 0 0 0.6rem; }
+    /* Declutter: the run-id note is redundant on a phone (BACKTEST badge in the
+       dropdown + run id in its title); the envError note stays visible. */
+    .env-note-run { display: none; }
+    .env-badge {
+      display: inline-block; flex-shrink: 0;
+      font-size: 0.5625rem; font-weight: 700; letter-spacing: 0.06em;
+      padding: 0.1rem 0.4rem; border-radius: 999px;
+      color: var(--color-info-text); background: var(--accent-subtle);
+    }
+    .env-dropdown-label { max-width: 32vw; }
+    /* Refresh shrinks to its icon. */
+    .page-toolbar-refresh-label { display: none; }
+    .page-toolbar .btn-secondary { min-width: 32px; padding: 0; justify-content: center; }
     .chart-row-2, .chart-row-3 { grid-template-columns: 1fr; }
     .donut-wrap { flex-direction: column; align-items: stretch; }
     .donut-svg { align-self: center; }
@@ -1713,7 +1728,7 @@ function renderPageToolbar(refreshHref, activeSection) {
           </div>
         </details>
         <button type="button" class="auto-refresh-toggle" id="auto-refresh-toggle" data-on="true" title="Toggle auto-refresh"><span class="auto-refresh-dot"></span><span id="auto-refresh-toggle-label">Auto-refresh on</span></button>
-        <a href="${escapeHtml(refreshHref)}" class="btn btn-secondary" title="Reload this page with the latest data"><span aria-hidden="true">\u21bb</span> Refresh</a>
+        <a href="${escapeHtml(refreshHref)}" class="btn btn-secondary" title="Reload this page with the latest data"><span aria-hidden="true">\u21bb</span><span class="page-toolbar-refresh-label"> Refresh</span></a>
       </div>`;
 }
 
