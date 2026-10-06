@@ -112,6 +112,8 @@ export function BacktestDetailView({
   const activeJob = run.data.activeJob ?? null;
 
   return (
+    <div className="space-y-5">
+      <Button variant="ghost" size="sm" onClick={onClose} className="-ml-2 gap-1">
         <ChevronLeft className="h-4 w-4" />
         Back to backtests
       </Button>
@@ -128,6 +130,18 @@ export function BacktestDetailView({
           {fmtDate(r.testStart)} → {fmtDate(r.testEnd)} · <span className="font-mono">{r.id}</span>
         </p>
       </section>
+
+      {activeJob && (activeJob.status === "running" || activeJob.status === "queued") && (
+        <JobProgressCard job={activeJob} label="Backtest">
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => act("pause")} disabled={actionMutation.isPending}>
+              <Pause className="mr-1 h-3 w-3" />
+              Pause
+            </Button>
+            <TerminateButton onConfirm={() => act("cancel")} disabled={actionMutation.isPending} />
+          </div>
+        </JobProgressCard>
+      )}
 
       {result && (
         <section>
@@ -206,14 +220,11 @@ export function BacktestDetailView({
             </p>
           )}
           <div className="mt-3 flex gap-2">
-            <Button size="sm" variant="outline">
-              <ArrowUpRight className="mr-1 h-3 w-3" />
+            <Button size="sm" variant="outline" onClick={() => act("resume")} disabled={actionMutation.isPending}>
+              <Play className="mr-1 h-3 w-3" />
               Resume
             </Button>
-            <Button size="sm" variant="outline" className="border-[color:var(--short)]/40 text-[color:var(--short)]">
-              <ArrowDownRight className="mr-1 h-3 w-3" />
-              Terminate
-            </Button>
+            <TerminateButton onConfirm={() => act("cancel")} disabled={actionMutation.isPending} />
           </div>
         </section>
       )}
