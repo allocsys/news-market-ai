@@ -79,6 +79,58 @@ function backtestLoggingNote(params) {
   return `<div class="note llm-backtest-note" role="status"><strong>No calls are logged for backtest <code>${escapeHtml(params.env)}</code>.</strong> Logging is off by default for backtest runs, to save D1 writes. <a href="/dashboard/llm">View live calls &rarr;</a></div>`;
 }
 
+const LLM_CARD_CSS = `<style>
+  .llm-cards { display:flex; flex-direction:column; gap:0.75rem; }
+  .llm-card { background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:0.9rem 1rem; display:flex; flex-direction:column; gap:0.6rem; }
+  .llm-card-head { display:flex; align-items:center; flex-wrap:wrap; gap:0.5rem; min-height:44px; text-decoration:none; color:var(--text-main); }
+  .llm-card-head .ticker { font-size:1rem; font-weight:600; }
+  .llm-card-label { color:var(--text-muted); font-size:0.8125rem; flex:1; min-width:0; overflow-wrap:anywhere; }
+  .llm-card-meta { display:flex; flex-wrap:wrap; gap:0.25rem 0.75rem; font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono); }
+  .llm-card-err { color:var(--color-danger-text); font-size:0.8125rem; overflow-wrap:anywhere; }
+  details.llm-card-io > summary { display:flex; align-items:center; min-height:44px; cursor:pointer; font-size:0.8125rem; font-weight:600; color:var(--accent-bright); list-style:none; user-select:none; }
+  details.llm-card-io > summary::-webkit-details-marker { display:none; }
+  .llm-card-io-label { margin:0.5rem 0 0.25rem; font-size:0.6875rem; letter-spacing:0.05em; text-transform:uppercase; color:var(--text-subtle); }
+  .llm-card-pre { margin:0; padding:0.6rem 0.75rem; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:0.75rem; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; max-height:12rem; overflow:auto; }
+  .llm-card-open { display:inline-flex; align-items:center; min-height:44px; }
+  details.llm-filters { margin-bottom:1rem; }
+  details.llm-filters > summary { display:flex; align-items:center; justify-content:space-between; gap:0.75rem; min-height:48px; padding:0 1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; font-weight:600; list-style:none; user-select:none; }
+  details.llm-filters > summary::-webkit-details-marker { display:none; }
+  details.llm-filters[open] > summary { border-radius:var(--radius-md) var(--radius-md) 0 0; }
+  details.llm-filters .filter-bar { padding:0.75rem 1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-top:none; border-radius:0 0 var(--radius-md) var(--radius-md); margin:0; }
+  .llm-filters-sub { font-size:0.8125rem; font-weight:400; color:var(--text-muted); }
+</style>`;
+
+function callsCards(calls, env) {
+  if (calls.length === 0) {
+    return emptyState(
+      "No LLM calls match these filters. Calls from the live pipeline and exit-check reflections are logged as they happen; rows older than the retention window (14 days by default) are pruned.",
+      { href: `/dashboard/llm${envSuffix(env)}`, label: "Clear filters" },
+    );
+  }
+  const cards = calls
+    .map((c) => {
+      const href = `/dashboard/llm/${c.id}${envSuffix(env)}`;
+      const noResponse = c.status === "error" && !c.responsePreview;
+      const errText = escapeHtml(c.error ?? "failed");
+      return `<article class="llm-card">
+        <a class="llm-card-head" href="${href}"><span class="ticker">${escapeHtml(c.ticker ?? "\u2014")}</span><span class="llm-card-label">${escapeHtml(c.label)}</span>${callStatusBadge(c)}</a>
+        <div class="llm-card-meta"><span>${escapeHtml(sourceLabel(c.source))}</span><span>${modelCell(c)}</span><span>${fmtDuration(c.durationMs)}</span><span>${fmtTime(c.createdAt)}</span></div>
+        ${noResponse ? `<div class="llm-card-err">${errText}</div>` : ""}
+        <details class="llm-card-io">
+          <summary>Sent &amp; got back</summary>
+          <div class="llm-card-io-label">Sent</div>
+          <pre class="llm-card-pre">${preview(c.promptPreview)}</pre>
+          <div class="llm-card-io-label">Got back</div>
+          <pre class="llm-card-pre">${noResponse ? `<span class="llm-card-err">${errText}</span>` : preview(c.responsePreview)}</pre>
+          <a class="llm-card-open" href="${href}">Open full prompt &amp; response &rarr;</a>
+        </details>
+      </article>`;
+    })
+    .join("\n");
+  return `<div class="llm-cards">${cards}</div>${LLM_CARD_CSS}`;
+}
+
+/** Superseded by callsCards (phone-first cards); kept only until the step 6 cleanup removes it. */
 function callsTable(calls, env) {
   if (calls.length === 0) {
     return emptyState(
@@ -136,12 +188,17 @@ export function renderLlmView({ calls, nextBeforeId, params, error, tickerOption
     </form>
   </div>`;
 
+  const filtersActive = params.llmSource !== "all" || params.llmStatus !== "all" || Number(params.llmLimit) !== 50 || Boolean(params.llmTicker);
+
   return `<section id="llm">
     <h2>LLM calls${error ? "" : ` <span class="h2-count">${calls.length}${nextBeforeId ? "+" : ""}</span>`}</h2>
     <p class="note">Prompts sent to Gemini and what came back, newest first. Failed calls are logged too; backtests aren't.</p>
-    ${filterBar}
+    <details class="llm-filters"${filtersActive ? " open" : ""}>
+      <summary>Filters<span class="llm-filters-sub">${filtersActive ? "active" : "none"}</span></summary>
+      ${filterBar}
+    </details>
     ${scopeNote(params)}
-    ${error ? errorState(error) : `${callsTable(calls, params.env)}${pager(params, nextBeforeId)}`}
+    ${error ? errorState(error) : `${callsCards(calls, params.env)}${pager(params, nextBeforeId)}`}
   </section>`;
 }
 
