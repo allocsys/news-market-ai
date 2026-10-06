@@ -247,3 +247,38 @@ export function BacktestDetailView({
     </div>
   );
 }
+
+function TerminateButton({ onConfirm, disabled }: { onConfirm: () => void; disabled?: boolean }) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          className="border-[color:var(--short)]/40 text-[color:var(--short)]"
+        >
+          <Square className="mr-1 h-3 w-3" />
+          Terminate
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Terminate this run?</AlertDialogTitle>
+          <AlertDialogDescription>
+            All partial data for this backtest will be deleted. The run cannot be resumed.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={onConfirm}
+          >
+            Terminate
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
