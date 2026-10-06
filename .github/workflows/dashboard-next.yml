@@ -1,5 +1,5 @@
 # CI for dashboard-next/, the Next.js ops dashboard (deployed as the
-# news-market-ai-dashboard Worker by deploy-dashboard-next.yml).
+# news-market-ai-dashboard Worker by deploy.yml's deploy-dashboard job).
 #
 # Kept separate from deploy.yml: that workflow tests and deploys the
 # Cloudflare Workers and knows nothing about dashboard-next/ (its `test` job
