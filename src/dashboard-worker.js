@@ -4,7 +4,8 @@
 // in dashboard-next/ (its own Worker, bound to this one by the DASHBOARD
 // service binding), which calls this Worker for exactly three things:
 //
-//   1. POST /login, GET /logout -- credential check + session cookie.
+//   1. POST /login, GET /logout -- credential check + session cookie (JSON
+//      errors, no HTML pages: the Next.js app renders its own login form).
 //   2. GET /api/*  -- read-only JSON passthrough to the private `backend`
 //      Worker (env.BACKEND), behind the session gate.
 //   3. POST /backfill, /backfill-prices, /backtest/*, /controls/* -- session
@@ -16,7 +17,6 @@
 // unauthenticated API.
 
 import { loadConfig } from "./config.js";
-import { renderLoginPage } from "./login.js";
 import { PAUSE_KEYS } from "./storage/pause_flags.js";
 import { BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import { getSessionUsername, createSessionCookie, clearSessionCookie } from "./auth/session.js";
@@ -30,9 +30,6 @@ function isPlausibleDateString(value) {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-function htmlResponse(html, { status = 200 } = {}) {
-  return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8" } });
-}
 function jsonResponse(body, { status = 200 } = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
@@ -182,29 +179,21 @@ export default {
       }
     }
 
-    if (pathname === "/login" && request.method === "GET") {
-      if (!isDashboardAuthConfigured(config)) return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
-      const sessionUsername = await getSessionUsername(request, config);
-      if (sessionUsername) return redirect("/");
-      const error = url.searchParams.get("error") === "invalid" ? "Invalid username or password." : null;
-      return htmlResponse(renderLoginPage({ error }));
-    }
-
     // POST /login -- the Next.js app's /api/login proxies here with form-encoded credentials and reads only the status + Set-Cookie.
     if (pathname === "/login" && request.method === "POST") {
-      if (!isDashboardAuthConfigured(config)) return htmlResponse(renderLoginPage({ disabled: true }), { status: 503 });
+      if (!isDashboardAuthConfigured(config)) return jsonResponse({ error: "dashboard login is not configured" }, { status: 503 });
       const body = await readBody(request);
       const username = String(body?.get?.("username") ?? "");
       const password = String(body?.get?.("password") ?? "");
       if (username !== config.dashboardUsername || password !== config.dashboardPassword) {
-        return htmlResponse(renderLoginPage({ error: "Invalid username or password." }), { status: 401 });
+        return jsonResponse({ error: "Invalid username or password." }, { status: 401 });
       }
       const cookie = await createSessionCookie(username, config);
       return redirect("/", { "Set-Cookie": cookie });
     }
 
     if (pathname === "/logout") {
-      return redirect("/login", { "Set-Cookie": clearSessionCookie() });
+      return redirect("/", { "Set-Cookie": clearSessionCookie() });
     }
 
     if (pathname === "/backfill" && request.method === "POST") {
