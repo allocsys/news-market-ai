@@ -6,9 +6,8 @@
 # only runs the root `npm test`). This one only checks that the app
 # installs, lints, type-checks and builds. It never deploys anything.
 #
-# Why a separate typecheck step: next.config.ts sets
-# typescript.ignoreBuildErrors = true, so `next build` alone would pass with
-# type errors. `tsc --noEmit` is what actually catches them.
+# Why a separate typecheck step: it fails fast with plain tsc errors, before
+# the slower OpenNext build runs.
 #
 # No lockfile is committed in dashboard-next/ yet, so this uses
 # `npm install` and cannot use the npm cache. Switch to `npm ci` (+ cache)
