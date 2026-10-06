@@ -17,7 +17,7 @@
 # bundles the Worker into .open-next/), so a bundling problem fails here
 # rather than in the deploy job. Needs no secrets.
 
-name: Dashboard Next CI
+name: deploy-dashboard
 
 on:
   pull_request:
