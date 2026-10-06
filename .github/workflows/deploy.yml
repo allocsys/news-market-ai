@@ -96,7 +96,7 @@ jobs:
       ingest: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.ingest == '' || steps.f_ingest.outputs.ingest == 'true')) }}
       llm: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.llm == '' || steps.f_llm.outputs.llm == 'true')) }}
       backtest: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.backtest == '' || steps.f_backtest.outputs.backtest == 'true')) }}
-      dashboard: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.dashboard == '' || steps.f_dashboard.outputs.dashboard == 'true')) }}
+      dashboard: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && steps.pr.outputs.dashboard == 'true') || (github.event_name == 'push' && (steps.base.outputs.dashboard == '' || steps.f_dashboard.outputs.dashboard == 'true')) }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_dispatch'
@@ -367,6 +367,44 @@ jobs:
       # secrets comment and deploy-ingest's FINNHUB_API_KEY step below,
       # which is now the only place this secret is pushed.)
 
+  # Dashboard CI gate (folded in from the former dashboard-next.yml): installs,
+  # lints, type-checks and OpenNext-builds dashboard-next/ so a bundling problem
+  # fails here instead of in the deploy job. Runs on pull_request and push (same
+  # `dashboard` path filter as the deploy job), needs no secrets, never deploys.
+  # deploy-dashboard below waits on it, so a red check blocks the deploy.
+  #
+  # No lockfile is committed in dashboard-next/ yet, so `npm install` (not
+  # `npm ci`) and no setup-node cache. Switch both once a package-lock.json is
+  # committed.
+  check-dashboard:
+    needs: changes
+    if: needs.changes.outputs.dashboard == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard-next
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      # The next three run even if an earlier one failed, so one CI run
+      # shows every problem instead of one at a time.
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: npx tsc --noEmit
+      - name: Build Worker bundle (OpenNext)
+        if: ${{ !cancelled() }}
+        run: npx opennextjs-cloudflare build
+
   # `dashboard` Worker: news-market-ai-dashboard, the Next.js app in
   # dashboard-next/ built by OpenNext (one Worker: UI + login + the session-gated
   # API in front of the private backend). Own path-filtered job and concurrency
@@ -377,13 +415,13 @@ jobs:
   #
   # Leaner than the backend jobs on purpose: dashboard-next/ is its own npm
   # project, so the root `npm ci` is skipped, and lint/tsc are not repeated here
-  # (the PR check dashboard-next.yml, named deploy-dashboard, runs them, and the OpenNext build compiles the
+  # (the check-dashboard job above runs them first and gates this job, and the OpenNext build compiles the
   # app again anyway). The gateway tests (test/dashboard_gateway*.test.js) run in
   # the root `test` job this job already waits on. Keeps the Worker name, so the
   # workers.dev URL and secrets already stored on it survive.
   deploy-dashboard:
-    needs: [changes, deploy]
-    if: always() && needs.deploy.result == 'success' && needs.changes.outputs.dashboard == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [changes, deploy, check-dashboard]
+    if: always() && needs.deploy.result == 'success' && needs.check-dashboard.result == 'success' && needs.changes.outputs.dashboard == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
