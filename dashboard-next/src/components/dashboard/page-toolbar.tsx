@@ -1,25 +1,21 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { RefreshCw, Download, Clock, MoreHorizontal } from "lucide-react";
+import { RefreshCw, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Switch } from "@/components/ui/switch";
-import { useState, useEffect } from "react";
-import { NOW_ISO } from "@/lib/mock-data";
+import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { fmtTime } from "@/lib/format";
 
 // ============================================================
 // Page toolbar — appears above each section
+//
+// "Loaded" is the time of the newest data in the query cache (not a mock
+// clock), and Refresh refetches every active query. Views already poll every
+// 30s on their own, so there is no separate auto-refresh switch; the old
+// Auto/Export controls did nothing and were removed.
 // ============================================================
 export function PageToolbar({
   env,
-  onEnvChange,
   envAware,
   className,
 }: {
@@ -28,16 +24,14 @@ export function PageToolbar({
   envAware: boolean;
   className?: string;
 }) {
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lastLoaded, setLastLoaded] = useState(NOW_ISO);
-
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const id = setInterval(() => setLastLoaded(new Date().toISOString()), 30_000);
-    return () => clearInterval(id);
-  }, [autoRefresh]);
-
-  const onManualRefresh = () => setLastLoaded(new Date().toISOString());
+  const qc = useQueryClient();
+  const fetching = useIsFetching() > 0; // re-renders this component as fetches start/finish
+  const updatedAt = qc
+    .getQueryCache()
+    .getAll()
+    .map((q) => q.state.dataUpdatedAt)
+    .filter((t) => t > 0);
+  const lastLoaded = updatedAt.length > 0 ? new Date(Math.max(...updatedAt)).toISOString() : null;
 
   return (
     <div
@@ -52,40 +46,16 @@ export function PageToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
-        {/* Auto-refresh */}
-        <label className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-xs">
-          <span className="text-muted-foreground">Auto</span>
-          <Switch
-            checked={autoRefresh}
-            onCheckedChange={setAutoRefresh}
-            className="scale-75"
-            aria-label="Toggle auto-refresh"
-          />
-        </label>
-
         <Button
           variant="outline"
           size="sm"
-          onClick={onManualRefresh}
+          onClick={() => qc.invalidateQueries()}
+          disabled={fetching}
           className="h-8 gap-1.5"
         >
-          <RefreshCw className="h-3 w-3" />
+          <RefreshCw className={cn("h-3 w-3", fetching && "animate-spin")} />
           <span className="hidden sm:inline">Refresh</span>
         </Button>
-
-        {/* Export */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 gap-1.5">
-              <Download className="h-3 w-3" />
-              <span className="hidden sm:inline">Export</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem>Export as CSV</DropdownMenuItem>
-            <DropdownMenuItem>Export as JSON</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
 
       {envAware && <EnvPill env={env} />}
