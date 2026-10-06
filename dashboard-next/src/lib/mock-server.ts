@@ -241,6 +241,21 @@ export function mockResolve(
         },
       };
     }
+    if (p === "/backtest/replay/news") {
+      const ticker = (params.get("ticker") ?? "").toUpperCase();
+      const date = params.get("date") ?? "";
+      return {
+        status: 200,
+        body: {
+          ticker,
+          date,
+          items: [
+            { id: "mock-news-1", publishedAt: `${date}T13:05:00.000Z`, title: `${ticker} mock headline one` },
+            { id: "mock-news-2", publishedAt: `${date}T15:40:00.000Z`, title: `${ticker} mock headline two` },
+          ],
+        },
+      };
+    }
     if (p === "/envs") {
       return { status: 200, body: { envs: ENVIRONMENTS } };
     }
