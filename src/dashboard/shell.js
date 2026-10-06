@@ -792,8 +792,7 @@ const STYLE = `
     opacity: 0.85;
   }
   /* Minor-scale tick rule under the value, like a gauge's calibration marks --
-     reinforces "instrument readout" over a plain stat tile. Replaces the old
-     radial accent-glow (::after used --stat-accent-glow, now unused). */
+     reinforces "instrument readout" over a plain stat tile. */
   .stat-card::after {
     content: ""; position: absolute; left: 1.25rem; right: 1.25rem; bottom: 0.9rem; height: 1px;
     background: repeating-linear-gradient(90deg, var(--border-strong) 0 2px, transparent 2px 8px);
