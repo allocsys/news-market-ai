@@ -6,23 +6,16 @@ const svg = (inner, size = 22) => `<svg viewBox="0 0 24 24" width="${size}" heig
 
 const MORE_ICONS = {
   controls: svg(`<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>`),
-  llm: svg(`<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/>`),
   backfill: svg(`<path d="M12 13V3"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14a2 2 0 0 0 2-2v-4"/><path d="M3 15h4"/><path d="M3 19h4"/>`),
   backtest: svg(`<path d="M9 3h6"/><path d="M10 3v6.5L5 19a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 19l-5-9.5V3"/><path d="M7 15h10"/>`),
 };
 const CHEVRON = svg(`<path d="m9 18 6-6-6-6"/>`, 18);
 
-// Grouped so the phone list reads as three short blocks. Activity lives in Signals and Charts in Book, so they are not repeated here.
+// Grouped so the phone list reads as short blocks. Activity and LLM calls live in Signals and Charts in Book, so they are not repeated here.
 const MORE_GROUPS = [
   {
     title: "Operate",
     items: [{ id: "controls", title: "Pause switches", desc: "Pause ingestion, trading, LLM calls or backtests.", icon: MORE_ICONS.controls }],
-  },
-  {
-    title: "Research",
-    items: [
-      { id: "llm", title: "LLM calls", desc: "Every Gemini prompt and response (live only).", icon: MORE_ICONS.llm },
-    ],
   },
   {
     title: "Backtest & data",
