@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, AlertTriangle, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,23 @@ import { useLogin } from "@/lib/api";
 import { useTheme } from "@/components/theme-provider";
 import { Moon, Sun } from "lucide-react";
 
+/** Only follow same-origin relative paths; anything else falls back to "/". */
+function safeFrom(raw: string | null): string {
+  if (raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\")) {
+    return raw;
+  }
+  return "/";
+}
+
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, loading, mock } = useAuth();
@@ -26,7 +42,7 @@ export default function LoginPage() {
   // If already logged in, jump to where we came from (or overview)
   useEffect(() => {
     if (!loading && user) {
-      const from = searchParams.get("from") ?? "/";
+      const from = safeFrom(searchParams.get("from"));
       router.replace(from);
     }
   }, [user, loading, router, searchParams]);
@@ -38,7 +54,7 @@ export default function LoginPage() {
       { username, password },
       {
         onSuccess: () => {
-          const from = searchParams.get("from") ?? "/";
+          const from = safeFrom(searchParams.get("from"));
           router.replace(from);
           // Hard reload to ensure the auth cookie is picked up by the next fetch
           setTimeout(() => window.location.reload(), 50);
