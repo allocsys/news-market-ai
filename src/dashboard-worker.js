@@ -448,6 +448,28 @@ export default {
     const { pathname } = url;
     const config = loadConfig(env);
 
+    // GET /api/* -- read-only JSON passthrough for the Next.js dashboard
+    // (dashboard-next/, its own Worker, bound to this one by a service
+    // binding). The JSON API lives on the private `backend` Worker, so this
+    // forwards over env.BACKEND after the same session gate every /dashboard/*
+    // route uses (401 JSON instead of a redirect, 503 if login is unconfigured).
+    // GET only: every write keeps going through the POST routes below.
+    if (pathname.startsWith("/api/") && request.method === "GET") {
+      const auth = await requireSession(request, config);
+      if (auth.redirect === "__disabled__") return jsonResponse({ error: "dashboard is not configured" }, { status: 503 });
+      if (auth.redirect) return jsonResponse({ error: "unauthorized" }, { status: 401 });
+      try {
+        const res = await callBackend(env, `${pathname}${url.search}`);
+        return new Response(res.body, {
+          status: res.status,
+          headers: { "content-type": res.headers.get("content-type") || "application/json" },
+        });
+      } catch (err) {
+        console.error("dashboard /api passthrough failed", { pathname, message: err.message });
+        return jsonResponse({ error: "backend request failed", message: err.message }, { status: 502 });
+      }
+    }
+
     // Live progress polling target for the run-accepted page's client-side
     // JS (dashboard/views/status.js) -- proxies backend's GET /api/jobs/:id
     // the same way every other /dashboard/* read does, just returning raw
