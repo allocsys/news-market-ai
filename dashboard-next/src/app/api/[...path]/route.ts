@@ -10,13 +10,8 @@
 // backend), the route falls back to the mock server so the UI keeps working.
 
 import { NextRequest, NextResponse } from "next/server";
-import {
-  BACKEND_URL,
-  HAS_BACKEND,
-  SESSION_COOKIE_NAME,
-  DASHBOARD_USERNAME,
-  DASHBOARD_PASSWORD,
-} from "@/lib/server-config";
+import { SESSION_COOKIE_NAME } from "@/lib/server-config";
+import { getBackend } from "@/lib/backend";
 import { mockResolve } from "@/lib/mock-server";
 
 // Always run dynamically — never cache. Every request depends on the
@@ -54,8 +49,16 @@ async function handle(
   const url = new URL(request.url);
   const params = url.searchParams;
 
-  // === Mock mode ===
-  if (!HAS_BACKEND) {
+  const backend = getBackend();
+  if (backend.kind === "unconfigured") {
+    return NextResponse.json(
+      { error: "dashboard backend is not configured (missing DASHBOARD service binding)" },
+      { status: 503 },
+    );
+  }
+
+  // === Mock mode (local dev only, see lib/backend.ts) ===
+  if (backend.kind === "mock") {
     let body: Record<string, unknown> | null = null;
     if (method === "POST" || method === "PUT") {
       try {
@@ -126,8 +129,7 @@ async function handle(
     upstreamPath = "/api" + path;
   }
 
-  const upstream = new URL(upstreamPath, BACKEND_URL);
-  upstream.search = url.search;
+  const upstreamTarget = upstreamPath + url.search;
 
   // Build upstream request headers
   const upstreamHeaders = new Headers();
@@ -148,7 +150,7 @@ async function handle(
 
   let upstreamRes: Response;
   try {
-    upstreamRes = await fetch(upstream.toString(), {
+    upstreamRes = await backend.fetch(upstreamTarget, {
       method,
       headers: upstreamHeaders,
       body: bodyForward,
@@ -156,7 +158,7 @@ async function handle(
     });
   } catch (err) {
     return NextResponse.json(
-      { error: `failed to reach backend at ${BACKEND_URL}: ${String(err)}` },
+      { error: `failed to reach backend: ${String(err)}` },
       { status: 502 },
     );
   }
@@ -242,7 +244,3 @@ function rewriteSetCookie(sc: string, expectedName: string): string | null {
   if (process.env.NODE_ENV === "production") attrs.push("Secure");
   return attrs.join("; ");
 }
-
-// Suppress unused-import lint
-void DASHBOARD_USERNAME;
-void DASHBOARD_PASSWORD;
