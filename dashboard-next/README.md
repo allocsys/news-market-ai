@@ -78,9 +78,10 @@ The gateway tests run from the repo root: `node --test test/dashboard_gateway*.t
 
 ## Deploy
 
-CI (`.github/workflows/dashboard-next.yml`) lints, type-checks and builds the
-Worker bundle on every PR touching this folder. On push to `main`, the
-`deploy-dashboard` job in `.github/workflows/deploy.yml` (the 8th job: after
+CI is all in `.github/workflows/deploy.yml`. The `check-dashboard` job lints,
+type-checks and builds the Worker bundle on every PR and push touching this
+folder, and `deploy-dashboard` waits for it. On push to `main`, the
+`deploy-dashboard` job (the 8th job: after
 the backend `deploy` job, gated by the `dashboard` filter in
 `.github/path-filters.yml`, so only `dashboard-next/**` changes redeploy it) runs
 `npm run deploy` (`opennextjs-cloudflare build && deploy`) using the repo's
