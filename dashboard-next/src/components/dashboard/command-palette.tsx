@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { Search, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_SECTIONS } from "@/lib/nav";
-import { WATCHLIST } from "@/lib/mock-data";
+import { useTickers } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -31,6 +31,8 @@ export function CommandPalette({
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const wasOpenRef = useRef(false);
+  const tickerList = useTickers();
+  const tickerSymbols = tickerList.data?.tickers;
 
   const items = useMemo<CommandItem[]>(() => {
     const sections = NAV_SECTIONS.map((s) => ({
@@ -43,18 +45,18 @@ export function CommandPalette({
         onOpenChange(false);
       },
     }));
-    const tickers = WATCHLIST.map((t) => ({
-      id: `ticker:${t.ticker}`,
-      label: t.ticker,
-      hint: `${t.name} · ${t.group}`,
+    const tickers = (tickerSymbols ?? []).map((symbol) => ({
+      id: `ticker:${symbol}`,
+      label: symbol,
+      hint: "Ticker",
       type: "ticker" as const,
       onSelect: () => {
-        onNavigateTicker(t.ticker);
+        onNavigateTicker(symbol);
         onOpenChange(false);
       },
     }));
     return [...sections, ...tickers];
-  }, [onNavigateSection, onNavigateTicker, onOpenChange]);
+  }, [onNavigateSection, onNavigateTicker, onOpenChange, tickerSymbols]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return items;
