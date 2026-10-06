@@ -108,7 +108,7 @@ export async function handleApiTickersRoute(request, env, config) {
   return jsonResponse(await getTickersData(env, { env: envParam }));
 }
 
-/** GET /api/watchlist -- `{ tickers }`, the configured watchlist (config.watchlist, WATCHLIST_TICKERS) in order. The dashboard's ticker pickers (dashboard/ticker_picker.js) choose from it; the dashboard Worker has no watchlist config of its own. */
+/** GET /api/watchlist -- `{ tickers }`, the configured watchlist (config.watchlist, WATCHLIST_TICKERS) in order. The dashboard-next ticker pickers choose from it; the dashboard Worker has no watchlist config of its own. */
 export async function handleApiWatchlistRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();
