@@ -119,7 +119,7 @@ Yahoo/yfinance 429s on Workers, so **Tiingo** is the daily-bar source (AAPL/MSFT
 ## Repo Structure (under `src/` unless noted)
 ```
 index.js               # `backend` Worker: API, /backfill, /backtest/run, cron
-dashboard-worker.js    # `dashboard`: login, session, SSR UI
+dashboard-worker.js    # `dashboard`: login, session, JSON gateway (the UI is dashboard-next/)
 ingest-worker.js       # `ingest`: INGEST + BACKFILL consumers
 llm-worker.js          # `llm`: ANALYZE + exit_check
 backtest-worker.js     # `backtest`: BACKTEST consumer
