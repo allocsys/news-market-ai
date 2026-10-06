@@ -378,6 +378,8 @@ export function useBacktestRunDetail(id: string | null) {
       return apiFetch<BacktestRunDetailResponse>(`/api/backtest-runs/${id}`);
     },
     enabled: Boolean(id),
+    // Poll while the run still has an in-flight job (progress bar), and once more after it ends so the final result replaces the bar.
+    refetchInterval: (query) => (query.state.data?.activeJob ? 5_000 : false),
     retry: 1,
   });
 }
