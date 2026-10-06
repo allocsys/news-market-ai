@@ -1,8 +1,9 @@
 // `backend` Worker entry point. `fetch` serves the JSON API (/api/*,
 // /backfill, /backtest/run) and `scheduled` runs the cron tick, exactly
 // as before -- what changed in Step 2 is everything HTML/login: that moved
-// to the new `dashboard` Worker (src/dashboard-worker.js), which is now the
-// only public entry point. `backend` has no public route (see wrangler.toml)
+// to the `dashboard` Worker (src/dashboard-worker.js), now a login + session
+// + JSON gateway, with the UI itself in dashboard-next/. The gateway is the
+// only public entry point to this Worker. `backend` has no public route (see wrangler.toml)
 // -- reachable only via `dashboard`'s BACKEND service binding -- so the
 // routes below no longer check a session cookie themselves; the caller
 // already did, one hop up. This is the "fails closed instead of serving an
