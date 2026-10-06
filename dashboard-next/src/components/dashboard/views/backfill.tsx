@@ -13,8 +13,8 @@ import {
   useLatestJob,
   usePostBackfill,
   usePostBackfillPrices,
+  useWatchlist,
 } from "@/lib/api";
-import { WATCHLIST } from "@/lib/mock-data";
 import type { JobProgress } from "@/lib/types";
 import { SectionHeading, StatusBadge, Pill, ErrorState } from "../primitives";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { fmtTime, fmtRelative, fmtCompact } from "@/lib/format";
 import { toast } from "sonner";
 import type { ViewProps } from "./types";
+
+const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 const RANGE_PRESETS = [
   { label: "7d", days: 7 },
@@ -31,16 +33,18 @@ const RANGE_PRESETS = [
 ];
 
 export function BackfillView({}: ViewProps) {
-  const [newsFrom, setNewsFrom] = useState("2026-09-06");
-  const [newsTo, setNewsTo] = useState("2026-10-06");
-  const [priceFrom, setPriceFrom] = useState("2026-08-01");
-  const [priceTo, setPriceTo] = useState("2026-09-30");
-  const [priceTickers, setPriceTickers] = useState<string[]>(["AAPL", "MSFT", "TSLA", "USO", "XAUUSD"]);
+  const [newsFrom, setNewsFrom] = useState(() => daysAgo(30));
+  const [newsTo, setNewsTo] = useState(() => daysAgo(0));
+  const [priceFrom, setPriceFrom] = useState(() => daysAgo(90));
+  const [priceTo, setPriceTo] = useState(() => daysAgo(0));
+  const [priceTickers, setPriceTickers] = useState<string[]>([]);
 
   const newsJob = useLatestJob("backfill");
   const priceJob = useLatestJob("backfill_prices");
   const newsMutation = usePostBackfill();
   const priceMutation = usePostBackfillPrices();
+  const watchlistQuery = useWatchlist();
+  const watchlist = (watchlistQuery.data?.tickers ?? []).map((ticker) => ({ ticker }));
 
   const toggleTicker = (t: string) => {
     setPriceTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -181,7 +185,7 @@ export function BackfillView({}: ViewProps) {
           <div>
             <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Tickers</p>
             <div className="flex flex-wrap gap-2">
-              {WATCHLIST.map((t) => (
+              {watchlist.map((t) => (
                 <label
                   key={t.ticker}
                   className={cn(
