@@ -59,9 +59,10 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError("unauthorized", 401);
   }
 
-  // Some POSTs return { accepted: true, redirect: ... } when the original
-  // Worker returned a 303. Pass through.
-  if (!res.ok && res.status !== 400) {
+  // Every non-2xx is an error, 400 included: the Worker answers validation
+  // failures ({ error }) with a 400, and a write that resolved "successfully"
+  // on one would show a false success toast.
+  if (!res.ok) {
     let msg = `request failed (${res.status})`;
     try {
       const body = await res.json();
@@ -414,6 +415,60 @@ export function useControls() {
   });
 }
 
+// --- Watchlist (configured tickers, in order) ---
+export interface WatchlistResponse {
+  tickers: string[];
+}
+export function useWatchlist() {
+  return useQuery({
+    queryKey: ["watchlist"],
+    queryFn: () => apiFetch<WatchlistResponse>(`/api/watchlist`),
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
+}
+
+// --- Live ticker selection (which watchlist tickers the live pipeline runs) ---
+export interface ActiveTickersResponse {
+  watchlist: string[];
+  active: string[];
+  disabled: string[];
+  meta: Record<string, { updatedAt?: string | null; updatedBy?: string | null }>;
+  error: string | null;
+}
+export function useActiveTickers() {
+  return useQuery({
+    queryKey: ["active-tickers"],
+    queryFn: () => apiFetch<ActiveTickersResponse>(`/api/active-tickers`),
+    refetchInterval: REFRESH_MS,
+    retry: 1,
+  });
+}
+
+// --- News replay: ingested news items for one ticker on one UTC day ---
+export interface ReplayNewsItem {
+  id: string;
+  publishedAt: string | null;
+  title: string | null;
+}
+export interface ReplayNewsResponse {
+  ticker: string;
+  date: string;
+  items: ReplayNewsItem[];
+}
+export function useReplayNews(q: { ticker: string; date: string } | null) {
+  return useQuery({
+    queryKey: ["replay-news", q?.ticker ?? "", q?.date ?? ""],
+    queryFn: () => {
+      const qs = new URLSearchParams({ ticker: q!.ticker, date: q!.date });
+      return apiFetch<ReplayNewsResponse>(`/api/backtest/replay/news?${qs.toString()}`);
+    },
+    enabled: q != null,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 // ============================================================
 // Mutations — POST endpoints
 // ============================================================
@@ -520,6 +575,67 @@ export function usePostControlsSet() {
       });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["controls"] }),
+  });
+}
+
+export function usePostActiveTickers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { tickers: string[] }) => {
+      return apiFetch<ActiveTickersResponse>("/api/controls/tickers", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["active-tickers"] }),
+  });
+}
+
+// Both maintenance routes are bounded per call and answer with counts; the
+// shapes vary, so the result is read defensively by the caller.
+export type MaintenanceResult = { accepted?: boolean } & Record<string, unknown>;
+
+export function usePostBacktestCleanup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { olderThanDays: number }) => {
+      return apiFetch<MaintenanceResult>("/api/backtest/cleanup", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["backtest-runs"] }),
+  });
+}
+
+export function usePostBacktestPurge() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      return apiFetch<MaintenanceResult>("/api/backtest/purge", { method: "POST" });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["backtest-runs"] }),
+  });
+}
+
+export function usePostReplayRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      ticker: string;
+      newsItemIds: string[];
+      asOf?: string;
+      enableLlmLog?: boolean;
+    }) => {
+      return apiFetch<{ accepted: boolean; id: string }>("/api/backtest/replay/run", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["backtest-runs"] });
+      qc.invalidateQueries({ queryKey: ["job-active"] });
+    },
   });
 }
 
