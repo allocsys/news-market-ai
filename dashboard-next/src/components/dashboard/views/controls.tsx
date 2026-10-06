@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Pause, Play, AlertTriangle, ChevronDown, Loader2 } from "lucide-react";
-import { useControls, usePostControlsSet } from "@/lib/api";
-import { WATCHLIST } from "@/lib/mock-data";
+import { Pause, Play, ChevronDown, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { useControls, usePostControlsSet, useActiveTickers, usePostActiveTickers } from "@/lib/api";
 import { SectionHeading, Pill, ErrorState } from "../primitives";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -33,7 +33,6 @@ const PAUSE_META = [
 export function ControlsView({}: ViewProps) {
   const controls = useControls();
   const setFlag = usePostControlsSet();
-  const [activeTickers, setActiveTickers] = useState<string[]>(WATCHLIST.map((w) => w.ticker));
 
   if (controls.isLoading) {
     return (
@@ -52,11 +51,10 @@ export function ControlsView({}: ViewProps) {
   const pausedCount = Object.values(flags).filter(Boolean).length;
 
   const toggleFlag = (key: keyof typeof flags) => {
-    setFlag.mutate({ key, paused: !flags[key] });
-  };
-
-  const toggleTicker = (t: string) => {
-    setActiveTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+    setFlag.mutate(
+      { key, paused: !flags[key] },
+      { onError: (e) => toast.error(`Failed: ${e.message}`) },
+    );
   };
 
   return (
@@ -169,59 +167,138 @@ export function ControlsView({}: ViewProps) {
         })}
       </ul>
 
-      {/* Live tickers */}
-      <Collapsible>
-        <section className="rounded-xl border border-border bg-card">
-          <CollapsibleTrigger asChild>
-            <button type="button" className="flex w-full items-center gap-2 px-4 py-3 text-left">
-              <span className="font-display text-base font-semibold">Live tickers</span>
-              <Pill tone="muted" size="sm">
-                {activeTickers.length} of {WATCHLIST.length} active
-              </Pill>
-              <ChevronDown className="ml-auto h-4 w-4 text-muted-foreground" />
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <div className="space-y-3 border-t border-border p-4">
-              <div className="flex flex-wrap gap-2">
-                {WATCHLIST.map((t) => (
-                  <label
-                    key={t.ticker}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors",
-                      activeTickers.includes(t.ticker)
-                        ? "border-primary bg-primary/15 text-primary"
-                        : "border-border bg-muted/40 text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Checkbox
-                      checked={activeTickers.includes(t.ticker)}
-                      onCheckedChange={() => toggleTicker(t.ticker)}
-                      className="h-3.5 w-3.5"
-                    />
-                    <span className="font-mono">{t.ticker}</span>
-                  </label>
-                ))}
-              </div>
-              {activeTickers.length < WATCHLIST.length && (
-                <button
-                  type="button"
-                  onClick={() => setActiveTickers(WATCHLIST.map((w) => w.ticker))}
-                  className="text-xs text-primary hover:underline"
-                >
-                  Select all
-                </button>
-              )}
-              <p className="text-[11px] text-muted-foreground">
-                Affects new ingestion and analysis only. Open positions, pending entries, and in-flight backtests are not affected.
-              </p>
-              <div className="flex justify-end">
-                <Button size="sm">Save selection</Button>
-              </div>
-            </div>
-          </CollapsibleContent>
-        </section>
-      </Collapsible>
+      <LiveTickers />
     </div>
+  );
+}
+
+/**
+ * Which watchlist tickers the live pipeline fetches and analyzes. Reads the
+ * backend's selection (GET /api/active-tickers) and saves the whole set
+ * (POST /controls/tickers). `draft` holds unsaved edits; null = show what the
+ * server has.
+ */
+function LiveTickers() {
+  const active = useActiveTickers();
+  const save = usePostActiveTickers();
+  const [draft, setDraft] = useState<string[] | null>(null);
+
+  if (active.isLoading) {
+    return (
+      <section className="flex items-center rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Loading live tickers…
+      </section>
+    );
+  }
+  if (active.isError || !active.data) {
+    return <ErrorState message={active.error?.message ?? "Failed to load the live ticker selection"} />;
+  }
+
+  const watchlist = active.data.watchlist ?? [];
+  if (watchlist.length === 0) return null;
+
+  const serverActive = active.data.active ?? watchlist;
+  const selected = draft ?? serverActive;
+  const off = watchlist.filter((t) => !serverActive.includes(t));
+  const dirty =
+    draft != null && (draft.length !== serverActive.length || draft.some((t) => !serverActive.includes(t)));
+
+  const toggleTicker = (t: string) => {
+    setDraft((prev) => {
+      const cur = prev ?? serverActive;
+      return cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t];
+    });
+  };
+
+  const onSave = () => {
+    save.mutate(
+      { tickers: selected },
+      {
+        onSuccess: () => {
+          setDraft(null);
+          toast.success("Live tickers saved");
+        },
+        onError: (e) => toast.error(`Failed: ${e.message}`),
+      },
+    );
+  };
+
+  return (
+    <Collapsible defaultOpen={off.length > 0}>
+      <section className="rounded-xl border border-border bg-card">
+        <CollapsibleTrigger asChild>
+          <button type="button" className="flex w-full items-center gap-2 px-4 py-3 text-left">
+            <span className="font-display text-base font-semibold">Live tickers</span>
+            <Pill tone="muted" size="sm">
+              {serverActive.length} of {watchlist.length} active
+            </Pill>
+            <ChevronDown className="ml-auto h-4 w-4 text-muted-foreground" />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="space-y-3 border-t border-border p-4">
+            {active.data.error && (
+              <p className="text-xs text-[color:var(--paused)]">
+                Could not read the ticker selection ({active.data.error}); showing every ticker as active.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {off.length === 0 ? "All tickers are active." : `Off: ${off.join(", ")}.`}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {watchlist.map((t) => (
+                <label
+                  key={t}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                    selected.includes(t)
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-border bg-muted/40 text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Checkbox
+                    checked={selected.includes(t)}
+                    onCheckedChange={() => toggleTicker(t)}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span className="font-mono">{t}</span>
+                </label>
+              ))}
+            </div>
+            {selected.length < watchlist.length && (
+              <button
+                type="button"
+                onClick={() => setDraft(watchlist)}
+                className="text-xs text-primary hover:underline"
+              >
+                Select all
+              </button>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              Affects new ingestion and analysis only. Open positions and pending entries keep being managed, and backtests are not affected.
+              {selected.length === 0 && " Select at least one ticker (use the pause switches to stop everything)."}
+            </p>
+            <div className="flex justify-end gap-2">
+              {dirty && (
+                <Button variant="outline" size="sm" type="button" onClick={() => setDraft(null)}>
+                  Reset
+                </Button>
+              )}
+              <Button size="sm" type="button" onClick={onSave} disabled={!dirty || selected.length === 0 || save.isPending}>
+                {save.isPending ? (
+                  <>
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save selection"
+                )}
+              </Button>
+            </div>
+          </div>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
   );
 }
