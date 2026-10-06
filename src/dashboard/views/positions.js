@@ -1,7 +1,27 @@
 import {
-  pillLinks, positionsTable, POSITIONS_LIMIT_OPTIONS, errorState,
+  pillLinks, POSITIONS_LIMIT_OPTIONS, errorState, escapeHtml,
   donutChart, gaugeChart, miniStats, fmtShare,
 } from "../helpers.js";
+import { openPositionCards, closedPositionCards } from "../position_cards.js";
+
+// Book (phone-first redesign step 3): exposure at a glance, open positions as cards,
+// recently closed as cards; the donuts, gauge and exit-quality stats sit behind one expander.
+function renderExposureRow({ openPositions, openPositionsError, totalExposurePct }) {
+  const pct = Number.isFinite(totalExposurePct) ? totalExposurePct : 0;
+  const tone = pct >= 80 ? "bad" : pct >= 50 ? "warn" : "ok";
+  const width = Math.max(0, Math.min(100, pct));
+  const longCount = openPositions.filter((p) => p.direction === "long").length;
+  const shortCount = openPositions.filter((p) => p.direction === "short").length;
+  const sub = openPositionsError ? "" : `<p class="book-exposure-sub">${openPositions.length} open &middot; ${longCount} long / ${shortCount} short</p>`;
+  return `<div class="panel book-exposure"><div class="panel-body">
+    <div class="book-exposure-top">
+      <span class="book-exposure-value">${escapeHtml(pct.toFixed(1))}%</span>
+      <span class="book-exposure-label">of portfolio deployed</span>
+    </div>
+    <div class="book-bar" role="img" aria-label="Open exposure ${escapeHtml(pct.toFixed(1))} percent"><span class="book-bar-fill book-bar-fill--${tone}" style="width:${width.toFixed(1)}%"></span></div>
+    ${sub}
+  </div></div>`;
+}
 
 export function renderPositionsView({ openPositions, openPositionsError, closedPositions, closedPositionsError, params, totalExposurePct }) {
   const positionsFilterBar = `<div class="filter-bar">
@@ -86,31 +106,29 @@ export function renderPositionsView({ openPositions, openPositionsError, closedP
     { cols: 3 }
   );
 
-  return `<div class="grid">
-    <section id="positions">
-      <h2>Open positions${openPositionsError ? "" : ` <span class="h2-count">${openPositions.length}</span>`}</h2>
-      ${positionsFilterBar}
-      ${openPositionsError ? errorState(openPositionsError) : `
-        <div class="chart-row-2 chart-row-gap">
-          ${openDirectionDonut}
-          ${exposureGauge}
-        </div>
-        ${positionsTable(openPositions)}
-      `}
-    </section>
-    <section>
-      <h2>Recently closed${closedPositionsError ? "" : ` <span class="h2-count">${closedPositions.length}</span>`}</h2>
-      <p class="note">The exit price is recorded on close (a dash means none was available, e.g. a time-based exit with no price data).</p>
-      ${closedPositionsError ? errorState(closedPositionsError) : `
-        <div class="chart-row-2 chart-row-gap">
-          ${closeReasonsDonut}
-          <div class="panel">
-            <div class="panel-header"><span class="panel-title">Exit quality</span></div>
-            <div class="panel-body">${exitQuality}</div>
-          </div>
-        </div>
-        ${positionsTable(closedPositions, { closed: true })}
-      `}
-    </section>
-  </div>`;
+  // Charts and exit stats stay available, one tap away, and only for the halves that loaded.
+  const chartsBody = `
+    ${openPositionsError ? "" : `<div class="chart-row-2 chart-row-gap">${openDirectionDonut}${exposureGauge}</div>`}
+    ${closedPositionsError ? "" : `<div class="chart-row-2 chart-row-gap">
+      ${closeReasonsDonut}
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Exit quality</span></div>
+        <div class="panel-body">${exitQuality}</div>
+      </div>
+    </div>`}`;
+  const chartsExpander = openPositionsError && closedPositionsError
+    ? ""
+    : `<details class="llm-answer book-more"><summary>Charts and exit stats</summary><div class="llm-answer-body maxw-none">${chartsBody}</div></details>`;
+
+  return `<section id="positions" class="book">
+    <h2>Book</h2>
+    ${renderExposureRow({ openPositions, openPositionsError, totalExposurePct })}
+    <h2>Open positions${openPositionsError ? "" : ` <span class="h2-count">${openPositions.length}</span>`}</h2>
+    ${positionsFilterBar}
+    ${openPositionsError ? errorState(openPositionsError) : openPositionCards(openPositions)}
+    <h2>Recently closed${closedPositionsError ? "" : ` <span class="h2-count">${closedPositions.length}</span>`}</h2>
+    <p class="note">The exit price is recorded on close (a dash means none was available, e.g. a time-based exit with no price data).</p>
+    ${closedPositionsError ? errorState(closedPositionsError) : closedPositionCards(closedPositions)}
+    ${chartsExpander}
+  </section>`;
 }
