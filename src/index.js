@@ -197,8 +197,8 @@ export default {
     if (pathname === "/api/jobs/latest") return handleApiLatestJobRoute(request, env, config);
 
     // Live progress for one job (src/storage/jobs.js's job_progress table),
-    // read by `dashboard` at /dashboard/jobs/:id (which polls this on the
-    // operator's behalf -- see src/dashboard-worker.js). :id is whatever
+    // read by the dashboard (dashboard-next/, which polls this on the
+    // operator's behalf through its BACKEND service binding). :id is whatever
     // POST /backfill or POST /backtest/run returned as `id` below.
     if (pathname.startsWith("/api/jobs/")) {
       const id = pathname.slice("/api/jobs/".length);
