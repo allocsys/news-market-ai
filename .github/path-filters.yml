@@ -15,7 +15,6 @@ dashboard:
   - 'src/dashboard-worker.js'
   - 'wrangler.dashboard.toml'
   - 'src/dashboard/**'
-  - 'src/login.js'
   - 'src/auth/**'
   - 'src/config.js'
   - '.github/workflows/deploy.yml'
