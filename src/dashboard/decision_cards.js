@@ -36,7 +36,7 @@ export function decisionCards(decisions) {
         </div>
         <div class="sig-card-mid">
           <span class="sig-card-size">${sizePct}</span>
-          <span class="sig-card-reason" title="${escapeHtml(rawReason)}">${reasonEscaped || "\u2014"}</span>
+          <span class="sig-card-reason">${reasonEscaped || "\u2014"}</span>
         </div>
         ${llmAnswerDetails(d)}
       </article>`;
