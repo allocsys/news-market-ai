@@ -108,4 +108,41 @@ details.sig-activity .panel-body {
   border-radius: 0 0 var(--radius-md) var(--radius-md);
   padding: 16px;
 }
+.sig-link-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: var(--text-main);
+}
+.sig-link-row:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+.sig-link-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sig-link-title {
+  font-family: var(--font-display);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.sig-link-desc {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+.sig-link-chevron {
+  color: var(--text-subtle);
+  font-size: 1.5rem;
+  line-height: 1;
+}
 `;

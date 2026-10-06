@@ -1521,8 +1521,8 @@ export const NAV_SECTIONS = [
 export const NAV_GROUPS = [
   { id: "overview", label: "Today", sections: ["overview"] },
   { id: "book", label: "Book", sections: ["positions", "snapshot", "charts"] },
-  { id: "signals", label: "Signals", sections: ["decisions", "pipeline", "activity"] },
-  { id: "system", label: "System", sections: ["health", "llm", "backfill", "backtest"] },
+  { id: "signals", label: "Signals", sections: ["decisions", "pipeline", "activity", "llm"] },
+  { id: "system", label: "System", sections: ["health", "backfill", "backtest"] },
 ];
 
 // Phone-first redesign step 1: the 'system' group is not a bottom-nav tab,
