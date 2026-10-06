@@ -1,0 +1,68 @@
+# Deploys the Next.js dashboard (dashboard-next/) as its own Cloudflare Worker
+# (`news-market-ai-dashboard-next`, built by @opennextjs/cloudflare).
+#
+# Separate from deploy.yml on purpose: that workflow's change detection and
+# per-target baselines are built around the five existing Workers, and this
+# app is a different toolchain (npm project in dashboard-next/, no lockfile
+# yet, OpenNext build). Pull requests are covered by dashboard-next.yml
+# (lint, typecheck, OpenNext build); this one only runs on main.
+#
+# It talks to the existing `news-market-ai-dashboard` Worker through the
+# DASHBOARD service binding in dashboard-next/wrangler.jsonc, so that Worker
+# must already exist (it does: deploy.yml's deploy-dashboard job). That
+# Worker's session-gated GET /api/* passthrough ships via deploy.yml; if both
+# land in one push the two workflows run in parallel and the passthrough may
+# go live a minute after this Worker -- harmless, requests just 404 until it does.
+#
+# Login credentials/JWT secret are NOT set here: the new Worker never sees
+# them. Login is proxied to the old dashboard Worker, which owns them.
+
+name: Deploy Dashboard Next
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard-next/**'
+      - '.github/workflows/deploy-dashboard-next.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-news-market-ai-dashboard-next
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: dashboard-next
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check required secrets present
+        working-directory: .
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
+            exit 1
+          fi
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Build and deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy
