@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+.next/
+out/
+build/
+dist/
+
+# Production (Next.js standalone)
+server.log
+
+# Dev logs
+dev.log
+*.log
+
+# Local env files (NEVER commit secrets)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database
+db/
+*.db
+*.db-journal
+prisma/*.db
+prisma/migrations/dev.db*
+
+# Vercel / Next.js internals
+.vercel
+next-env.d.ts
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cache
+.eslintcache
+.cache/
+.turbo/
+
+# Misc
+upload/
+download/
+tool-results/

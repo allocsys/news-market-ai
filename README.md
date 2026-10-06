@@ -3,6 +3,25 @@
 News ingestion -> multi-agent LLM analysis -> trade signal pipeline, with
 rigorous point-in-time backtesting. This file is setup only.
 
+## `dashboard-next/` — UI/UX redesign prototype
+
+A mobile-friendly Next.js 16 redesign of the ops dashboard, wired to the
+existing Cloudflare `dashboard` Worker through a server-side BFF proxy.
+See [`dashboard-next/README.md`](./dashboard-next/README.md) for the full
+architecture, path-mapping, and auth-flow docs.
+
+Run locally in MOCK mode (no backend needed):
+```bash
+cd dashboard-next
+npm install
+npm run dev
+```
+Open http://localhost:3000/ and sign in with any credentials.
+
+Switch to real backend by setting `BACKEND_URL`, `DASHBOARD_USERNAME`,
+`DASHBOARD_PASSWORD` in `dashboard-next/.env` (see `.env.example`).
+
+
 ## Where things are documented
 
 - [`plan.md`](./plan.md): design, rationale, architecture, repo structure, known gaps and the current to-do list. Start here.
