@@ -5,6 +5,7 @@ import { RefreshCw, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { fmtTime } from "@/lib/format";
+import { EnvSelector } from "@/components/dashboard/shell";
 
 // ============================================================
 // Page toolbar — appears above each section
@@ -16,6 +17,7 @@ import { fmtTime } from "@/lib/format";
 // ============================================================
 export function PageToolbar({
   env,
+  onEnvChange,
   envAware,
   className,
 }: {
@@ -40,6 +42,8 @@ export function PageToolbar({
         className,
       )}
     >
+      {envAware && <EnvSelector env={env} onEnvChange={onEnvChange} className="w-44 sm:w-60" />}
+
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Clock className="h-3 w-3" aria-hidden />
         <span className="font-mono nums">Loaded {fmtTime(lastLoaded)}</span>
@@ -57,24 +61,6 @@ export function PageToolbar({
           <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
-
-      {envAware && <EnvPill env={env} />}
-    </div>
-  );
-}
-
-function EnvPill({ env }: { env: string }) {
-  const isLive = env === "live";
-  return (
-    <div
-      className={cn(
-        "hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium sm:flex md:ml-2",
-        isLive
-          ? "border-[color:var(--long)]/25 bg-[color:var(--long)]/8 text-[color:var(--long)]"
-          : "border-[color:var(--info)]/25 bg-[color:var(--info)]/8 text-[color:var(--info)]",
-      )}
-    >
-      {isLive ? "Live env" : "Backtest env"}
     </div>
   );
 }
