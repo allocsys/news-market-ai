@@ -11,14 +11,6 @@ code:
   - '!**/*.md'
 migrations:
   - 'migrations/**'
-dashboard:
-  - 'src/dashboard-worker.js'
-  - 'wrangler.dashboard.toml'
-  - 'src/dashboard/**'
-  - 'src/auth/**'
-  - 'src/config.js'
-  - '.github/workflows/deploy.yml'
-  - '.github/path-filters.yml'
 ingest:
   - 'src/ingest-worker.js'
   - 'wrangler.ingest.toml'
