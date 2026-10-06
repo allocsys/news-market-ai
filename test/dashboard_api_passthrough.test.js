@@ -97,7 +97,7 @@ test("non-GET /api/* is NOT forwarded (writes only go through the explicit POST 
   const env = configuredEnv(backend);
   const cookie = await sessionCookie(env);
   const res = await worker.fetch(new Request("https://dashboard.example/api/overview", { method: "POST", headers: { Cookie: cookie } }), env);
-  assert.equal(res.status, 200); // falls through to the default "dashboard is running" response
-  assert.match(await res.text(), /dashboard is running/);
+  assert.equal(res.status, 404); // unknown route: the Worker's JSON 404, not a forward
+  assert.deepEqual(await res.json(), { error: "not found" });
   assert.equal(backend.calls.length, 0);
 });
