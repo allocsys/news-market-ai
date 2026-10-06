@@ -2,8 +2,9 @@
 
 // Typed API client + TanStack Query hooks.
 //
-// Every fetch goes through the BFF at /api/* (relative). The BFF forwards
-// to the real Cloudflare dashboard Worker (or returns mock data when no
+// Every fetch goes through this app's own /api/* routes (relative), which run
+// in the same Worker: the session gate in server/gateway.mjs, then the private
+// backend over the BACKEND service binding (or mock data in local dev when no
 // backend is configured). The session cookie is attached automatically
 // by the browser (same-origin).
 //
