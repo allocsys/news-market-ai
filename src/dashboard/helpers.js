@@ -644,18 +644,6 @@ export function tickerStageCards(rows) {
 }
 
 export function statCard(value, label, sub = null, accent = "var(--accent)") {
-  // Maps a named accent token to a matching soft glow color used for the
-  // radial spotlight in the top-right of the card (see .stat-card::after in
-  // shell.js). Without this, the spotlight would always be blue even on a
-  // "danger" or "success" themed card, which read as inconsistent.
-  const glowMap = {
-    "var(--accent)": "var(--accent-glow)",
-    "var(--color-success-text)": "rgba(16, 185, 129, 0.18)",
-    "var(--color-danger-text)": "rgba(239, 68, 68, 0.18)",
-    "var(--color-warning-text)": "rgba(245, 158, 11, 0.18)",
-    "var(--color-info-text)": "var(--accent-glow)",
-  };
-  const glow = glowMap[accent] ?? "var(--accent-glow)";
   return `<div class="stat-card" style="--stat-accent:${accent}">
     <div class="stat-value">${escapeHtml(value)}</div>
     <div class="stat-label">${escapeHtml(label)}</div>
