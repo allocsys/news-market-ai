@@ -1,7 +1,8 @@
 // Backtest trade timeline (/dashboard/backtest/:id): the shared realized-return
 // function, RunStore#listPositionsWithDecisions against a REAL sqlite D1, the
-// chart/summary helpers, the view, GET /api/backtest-runs/:id, and the dashboard
-// Worker route (incl. that /dashboard/backtest/confirm still works).
+// chart/summary helpers, the view, and GET /api/backtest-runs/:id. (The
+// /dashboard/backtest/:id page itself was served by the old dashboard Worker,
+// retired in favor of dashboard-next.)
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +14,6 @@ import { computeRealizedReturn } from "../src/shared/returns.js";
 import { cumulativeReturns, signedPct, tradeTimelineChart, tradeTimelineDataTable, outcomeText, tradeTimelineSummary, newsBasis, backtestRunsList } from "../src/dashboard/helpers.js";
 import { renderBacktestDetailView } from "../src/dashboard/views/backtest_detail.js";
 import backendWorker from "../src/index.js";
-import dashboardWorker from "../src/dashboard-worker.js";
 
 const RUN = "backtest-1789988827184-yk8suu";
 const SERIES = { dates: ["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17"], on: [0, 0.01, -0.005, 0.02], off: [0.01, 0.01, 0.01, 0.01], onExposure: [0, 0.05, 0.05, 0.05] };
@@ -276,101 +276,3 @@ test("GET /api/backtest-runs/:id nets realizedReturn by the run's recorded trade
   }
 });
 
-async function dashboardEnv(backend) {
-  backend ??= await backendEnv();
-  return {
-    BACKEND: { fetch: (input, init) => backendWorker.fetch(new Request(input, init), backend, { waitUntil() {} }) },
-    DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key",
-  };
-}
-
-async function cookieFor(env) {
-  const res = await dashboardWorker.fetch(new Request("https://dashboard.example/login", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "username=admin&password=correct-horse-battery-staple" }), env);
-  return res.headers.get("set-cookie").split(";")[0];
-}
-
-test("GET /dashboard/backtest/:id renders the timeline, 404s unknown/malformed ids, redirects without a session, and leaves /confirm alone", async () => {
-  const env = await dashboardEnv();
-  const cookie = await cookieFor(env);
-  const get = (path, headers = { Cookie: cookie }) => dashboardWorker.fetch(new Request(`https://dashboard.example${path}`, { headers }), env);
-
-  const ok = await get(`/dashboard/backtest/${RUN}`);
-  assert.equal(ok.status, 200);
-  const html = await ok.text();
-  assert.match(html, /Trade timeline/);
-  assert.match(html, /<svg/);
-  assert.match(html, /Apple beat estimates/);
-
-  const unknown = await get("/dashboard/backtest/backtest-1-abc");
-  assert.equal(unknown.status, 404);
-  assert.match(await unknown.text(), /Backtest run not found/);
-  assert.equal((await get("/dashboard/backtest/..x")).status, 404);
-
-  const anon = await get(`/dashboard/backtest/${RUN}`, {});
-  assert.equal(anon.status, 302);
-  assert.equal(anon.headers.get("location"), "/login");
-
-  const confirm = await get("/dashboard/backtest/confirm?testStart=2026-09-01&testEnd=2026-09-10&tickers=AAPL");
-  assert.equal(confirm.status, 200);
-  assert.match(await confirm.text(), /Confirm manual backtest/);
-});
-
-
-/** The seeded env plus a second, still-running run in the same SIM_DB (optionally with its job_progress row, as the backtest Worker writes it). */
-async function envWithRunningRun({ withJob }) {
-  const backend = await backendEnv();
-  await insertBacktestRun(backend.SIM_DB, { id: RUNNING_RUN, tickers: ["AAPL"], testStart: "2026-09-14T00:00:00.000Z", testEnd: "2026-09-18T00:00:00.000Z", trainDays: 0, testDays: 4, startedAt: "2026-09-21T00:00:00.000Z" });
-  if (withJob) {
-    // A backtest job lives in SIM_DB under its OWN run id (src/backtest-worker.js), and its job id is that same run id.
-    await new RunStore(backend.SIM_DB, RUNNING_RUN).markJobRunning({ id: RUNNING_RUN, type: "backtest", params: { tickers: ["AAPL"], testStart: "2026-09-14", testEnd: "2026-09-18" } });
-  }
-  return dashboardEnv(backend);
-}
-
-test("GET /dashboard/backtest/:id for a still-running run with a job row renders the live progress panel polling that run's env", async () => {
-  const env = await envWithRunningRun({ withJob: true });
-  const cookie = await cookieFor(env);
-  const res = await dashboardWorker.fetch(new Request(`https://dashboard.example/dashboard/backtest/${RUNNING_RUN}`, { headers: { Cookie: cookie } }), env);
-  assert.equal(res.status, 200);
-  const html = await res.text();
-  assert.match(html, PROGRESS_BAR);
-  assert.ok(html.includes(`var pollUrl = "/dashboard/jobs/${RUNNING_RUN}?env=${RUNNING_RUN}";`));
-  assert.match(html, /Running a backtest for AAPL from 2026-09-14 to 2026-09-18\./);
-  assert.doesNotMatch(html, STILL_RUNNING);
-});
-
-test("GET /dashboard/backtest/:id for a still-running run whose job lookup 404s falls back to the static text (non-fatal)", async () => {
-  const env = await envWithRunningRun({ withJob: false });
-  const cookie = await cookieFor(env);
-  const warn = console.warn;
-  const warnings = [];
-  console.warn = (...args) => warnings.push(args);
-  let res;
-  try {
-    res = await dashboardWorker.fetch(new Request(`https://dashboard.example/dashboard/backtest/${RUNNING_RUN}`, { headers: { Cookie: cookie } }), env);
-  } finally {
-    console.warn = warn;
-  }
-  assert.equal(res.status, 200);
-  const html = await res.text();
-  assert.match(html, STILL_RUNNING);
-  assert.doesNotMatch(html, PROGRESS_BAR);
-  assert.ok(warnings.some(([msg]) => /active-job lookup failed/.test(msg)), "the failed lookup is logged, not thrown");
-});
-
-test("GET /dashboard/backtest/:id for a complete run never looks up a job or draws the progress panel", async () => {
-  const env = await envWithRunningRun({ withJob: true });
-  const cookie = await cookieFor(env);
-  const backendPaths = [];
-  const backendFetch = env.BACKEND.fetch;
-  env.BACKEND.fetch = (input, init) => {
-    backendPaths.push(new URL(typeof input === "string" ? input : input.url).pathname);
-    return backendFetch(input, init);
-  };
-  const res = await dashboardWorker.fetch(new Request(`https://dashboard.example/dashboard/backtest/${RUN}`, { headers: { Cookie: cookie } }), env);
-  const html = await res.text();
-  assert.match(html, /<svg/);
-  assert.doesNotMatch(html, PROGRESS_BAR);
-  assert.ok(backendPaths.includes(`/api/backtest-runs/${RUN}`), "the run itself is still fetched");
-  assert.deepEqual(backendPaths.filter((p) => p.startsWith("/api/jobs/")), [], "no job_progress lookup for a finished run");
-});
