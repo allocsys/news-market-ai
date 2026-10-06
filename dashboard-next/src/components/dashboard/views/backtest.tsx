@@ -23,6 +23,7 @@ import {
   type MaintenanceResult,
 } from "@/lib/api";
 import { ReplayPanel } from "./replay";
+import { JobProgressCard } from "../job-progress";
 import type { BacktestRun } from "@/lib/types";
 import { SectionHeading, StatusBadge, Pill, MiniStat, EmptyState, ErrorState } from "../primitives";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -134,29 +135,20 @@ export function BacktestView({ onNavigate }: ViewProps) {
   return (
     <div className="space-y-5">
       {/* Active backtest progress banner */}
-      {activeJob.data?.job && activeJob.data.job.status === "running" && (
-        <section className="overflow-hidden rounded-xl border border-[color:var(--info)]/25 bg-[color:var(--info)]/5 p-4">
-          <div className="flex items-center gap-2">
-            <span className="live-dot inline-block h-2 w-2 rounded-full bg-[color:var(--info)]" />
-            <span className="text-xs font-semibold uppercase tracking-wide text-[color:var(--info)]">
-              Backtest running
-            </span>
+      {activeJob.data?.job && (activeJob.data.job.status === "running" || activeJob.data.job.status === "queued") && (
+        <JobProgressCard
+          job={activeJob.data.job}
+          label="Backtest"
+          action={
             <button
               type="button"
               onClick={() => onNavigate("backtest", { backtestId: activeJob.data.job!.id })}
-              className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-[color:var(--info)] hover:underline"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[color:var(--info)] hover:underline"
             >
               Open timeline <ChevronRight className="h-3 w-3" />
             </button>
-          </div>
-          <p className="mt-2 text-sm">{activeJob.data.job.detail}</p>
-          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-[color:var(--info)] transition-all"
-              style={{ width: `${activeJob.data.job.percent}%` }}
-            />
-          </div>
-        </section>
+          }
+        />
       )}
 
       {/* New backtest run */}
