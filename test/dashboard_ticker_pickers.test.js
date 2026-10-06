@@ -1,12 +1,12 @@
 // Covers dashboard/ticker_picker.js and the four forms that use it (backtest
 // trigger, news-replay trigger, price backfill, LLM-calls filter): tap-to-choose
-// from the watchlist instead of typing a symbol. The option list comes from
-// backend's GET /api/watchlist, fetched best-effort by dashboard-worker.js, and
-// every form falls back to its old text field when that list is empty.
+// from the watchlist instead of typing a symbol, with each form falling back to
+// its old text field when the option list is empty. Plus backend's GET
+// /api/watchlist, the option list's source. (The pages that embedded these
+// forms were served by the old dashboard Worker, retired for dashboard-next.)
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
@@ -79,7 +79,7 @@ test("trigger forms use pickers instead of text fields when given the watchlist"
 });
 
 // --------------------------------------------------------------------
-// GET /api/watchlist and the dashboard pages that use it
+// GET /api/watchlist
 // --------------------------------------------------------------------
 
 function backendFor(extra = {}) {
@@ -93,98 +93,8 @@ function backendFor(extra = {}) {
   return { fetch: (input, init) => backendWorker.fetch(new Request(input, init), backendEnv, { waitUntil() {} }) };
 }
 
-function dashEnv(backend = backendFor()) {
-  return { BACKEND: backend, DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key" };
-}
-
-async function cookieFor(env) {
-  const response = await worker.fetch(
-    new Request("https://dashboard.example/login", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ username: "admin", password: "correct-horse-battery-staple" }).toString(),
-    }),
-    env,
-  );
-  return response.headers.get("Set-Cookie").split(";")[0];
-}
-
-async function page(path, env = dashEnv()) {
-  const cookie = await cookieFor(env);
-  const response = await worker.fetch(new Request(`https://dashboard.example${path}`, { headers: { Cookie: cookie } }), env);
-  assert.equal(response.status, 200, `${path} should render`);
-  return response.text();
-}
-
-/** A backend whose /api/watchlist fails, everything else real -- the pickers must degrade to text fields, not take the page down. */
-function backendWithoutWatchlist() {
-  const real = backendFor();
-  return {
-    fetch: (input, init) =>
-      String(input).includes("/api/watchlist")
-        ? Promise.resolve(new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "content-type": "application/json" } }))
-        : real.fetch(input, init),
-  };
-}
-
 test("GET /api/watchlist returns the configured watchlist in order", async () => {
   const response = await backendFor().fetch("https://backend/api/watchlist");
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { tickers: ["AAPL", "MSFT", "XAUUSD"] });
-});
-
-test("/dashboard/backtest offers the watchlist as checkboxes and the replay form as a dropdown", async () => {
-  const html = await page("/dashboard/backtest");
-  assert.match(html, /<input type="checkbox" id="backtestTicker-XAUUSD" name="tickers" value="XAUUSD">/);
-  assert.match(html, /<select name="ticker" id="replayTicker" required>/);
-  assert.doesNotMatch(html, /id="backtestTickers"/);
-});
-
-test("/dashboard/backfill offers the watchlist as checkboxes for the price backfill", async () => {
-  const html = await page("/dashboard/backfill");
-  assert.match(html, /<input type="checkbox" id="priceBackfillTicker-XAUUSD" name="tickers" value="XAUUSD">/);
-});
-
-test("/dashboard/llm filters by ticker with a dropdown; the current and deep-linked tickers stay selected", async () => {
-  const plain = await page("/dashboard/llm");
-  assert.match(plain, /<select name="llmTicker" id="llmTicker"><option value="" selected>All tickers<\/option>/);
-
-  const msft = await page("/dashboard/llm?llmTicker=MSFT");
-  assert.match(msft, /<option value="MSFT" selected>MSFT<\/option>/);
-
-  const linked = await page("/dashboard/llm?llmTicker=NVDA");
-  assert.match(linked, /<option value="NVDA" selected>NVDA<\/option>/);
-});
-
-test("when the watchlist lookup fails every page still renders, with the old text fields", async () => {
-  const env = dashEnv(backendWithoutWatchlist());
-  const backtest = await page("/dashboard/backtest", env);
-  assert.match(backtest, /<input class="filter-form" id="backtestTickers" type="text" name="tickers"/);
-  assert.match(backtest, /<input class="filter-form" id="replayTicker" type="text" name="ticker" placeholder="AAPL" required>/);
-
-  const backfill = await page("/dashboard/backfill", env);
-  assert.match(backfill, /<input class="filter-form" id="priceBackfillTickers" type="text" name="tickers" placeholder="blank = watchlist/);
-
-  const llm = await page("/dashboard/llm", env);
-  assert.match(llm, /<input class="filter-form" id="llmTicker" type="text" name="llmTicker"/);
-});
-
-test("the backtest confirm page joins repeated tickers params into one comma list for the run form", async () => {
-  const html = await page("/dashboard/backtest/confirm?testStart=2026-09-01&testEnd=2026-09-10&tickers=AAPL&tickers=MSFT");
-  assert.match(html, /<span class="ticker">AAPL,MSFT<\/span>/);
-  assert.match(html, /<input type="hidden" name="tickers" value="AAPL,MSFT">/);
-});
-
-test("the backtest confirm page still reads a comma list, and says 'Watchlist' when no ticker was ticked", async () => {
-  const listed = await page("/dashboard/backtest/confirm?testStart=2026-09-01&testEnd=2026-09-10&tickers=aapl,msft");
-  assert.match(listed, /<input type="hidden" name="tickers" value="AAPL,MSFT">/);
-
-  const none = await page("/dashboard/backtest/confirm?testStart=2026-09-01&testEnd=2026-09-10");
-  assert.match(none, /<span class="ticker">Watchlist<\/span>/);
-  assert.doesNotMatch(none, /name="tickers"/);
-});
-
-test("the price backfill confirm page joins repeated tickers params into one comma list", async () => {
-  const html = await page("/dashboard/backfill-prices/confirm?from=2026-01-01&to=2026-09-01&tickers=AAPL&tickers=XAUUSD");
-  assert.match(html, /<input type="hidden" name="tickers" value="AAPL,XAUUSD">/);
 });
