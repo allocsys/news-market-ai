@@ -16,6 +16,7 @@ import { parseLlmParams, llmQuery, backtestRunsList } from "../src/dashboard/hel
 import { renderLlmView, renderLlmCallView } from "../src/dashboard/views/llm.js";
 import { renderShell } from "../src/dashboard/shell.js";
 import { renderMoreView } from "../src/dashboard/views/more.js";
+import { renderSignalsView } from "../src/dashboard/views/signals.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
@@ -60,11 +61,12 @@ test("backtestRunsList links each run to its own LLM calls", () => {
   assert.ok(html.includes('href="/dashboard/llm?llmJob=backtest-7-abc&env=backtest-7-abc"'));
 });
 
-test("the LLM page is reachable: desktop nav, the mobile More menu, and the More cards", () => {
+test("the LLM page is reachable: desktop nav, the Signals page link, and not the More cards", () => {
   const shell = renderShell({ activeSection: "llm", sessionUsername: "admin", bodyHtml: "<p>x</p>" });
   assert.ok(shell.includes('href="/dashboard/llm"'));
   assert.match(shell, /LLM Calls/);
-  assert.ok(renderMoreView().includes('href="/dashboard/llm"'));
+  assert.ok(renderSignalsView({ decisions: [], tickerStages: [], checkpoints: [], params: {} }).includes('href="/dashboard/llm"'));
+  assert.ok(!renderMoreView().includes('href="/dashboard/llm"'));
 });
 
 // ---------------------------------------------------------------------------
