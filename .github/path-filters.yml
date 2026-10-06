@@ -12,12 +12,11 @@ code:
 migrations:
   - 'migrations/**'
 dashboard:
-  - 'src/dashboard-worker.js'
-  - 'wrangler.dashboard.toml'
-  - 'src/dashboard/**'
-  - 'src/login.js'
-  - 'src/auth/**'
-  - 'src/config.js'
+  # The Next.js app is its own npm project and bundles nothing from src/ (the
+  # gateway in dashboard-next/src/server/ is self-contained; PAUSE_KEYS and
+  # BACKTEST_ID_RE are copies kept in sync by test/dashboard_gateway_parity.test.js),
+  # so only its own folder and the wiring decide whether it redeploys.
+  - 'dashboard-next/**'
   - '.github/workflows/deploy.yml'
   - '.github/path-filters.yml'
 ingest:

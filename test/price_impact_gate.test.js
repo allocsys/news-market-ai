@@ -11,7 +11,7 @@ import { runPipelineForTicker } from "../src/graph/pipeline.js";
 import { checkpoint, resumeFrom } from "../src/graph/checkpointer.js";
 import { AnalystTeamOpinion, DebateSide, DebateVerdict, TradeThesis } from "../src/schemas/index.js";
 import { TRADE_DECISION_STATUS } from "../src/shared/constants.js";
-import { decisionBadge } from "../src/dashboard/helpers.js";
+import { DECISION_STATUS_OPTIONS } from "../src/dashboard/helpers.js";
 import { makeCtx, seedBar, seedIntradayBar, stateRows } from "./helpers/engine_ctx.js";
 
 const AS_OF = "2026-01-15T00:00:00Z";
@@ -187,8 +187,6 @@ test("a run resumed from 'analyzed' whose checkpointed opinions say 'none' is sk
   assert.equal((await stateRows(ctx.stateDb, "trade_decisions"))[0].status, "skipped_irrelevant");
 });
 
-test("skipped_irrelevant shows as a neutral 'skipped (no impact)' badge and is a filterable status", () => {
-  const html = decisionBadge("skipped_irrelevant");
-  assert.match(html, /status-neutral/);
-  assert.match(html, /skipped \(no impact\)/);
+test("skipped_irrelevant is a filterable status on the dashboard", () => {
+  assert.ok(DECISION_STATUS_OPTIONS.includes("skipped_irrelevant"));
 });

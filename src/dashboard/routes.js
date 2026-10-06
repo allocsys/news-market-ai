@@ -1,6 +1,6 @@
 // Backend no longer renders any dashboard HTML (plan.md "Step 2 -- Dashboard
-// Worker" -- that moved to src/dashboard-worker.js, the new `dashboard`
-// Worker). All that's left here is checkAuth, still imported by
+// Worker" -- that moved to the `dashboard` Worker,
+// now the Next.js app in dashboard-next/). All that's left here is checkAuth, still imported by
 // src/dashboard/api.js so the /api/* handlers don't duplicate this logic.
 //
 // Since backend no longer holds DASHBOARD_USERNAME/DASHBOARD_PASSWORD/

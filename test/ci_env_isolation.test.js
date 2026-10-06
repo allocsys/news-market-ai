@@ -23,7 +23,7 @@ import { STATE_DIR, INPUTS_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f) => parseWranglerToml(readFileSync(path.join(ROOT, f), "utf8"));
-const WRANGLER_FILES = ["wrangler.toml", "wrangler.dashboard.toml", "wrangler.ingest.toml", "wrangler.llm.toml", "wrangler.backtest.toml", "wrangler.sim-migrate.toml"];
+const WRANGLER_FILES = ["wrangler.toml", "wrangler.ingest.toml", "wrangler.llm.toml", "wrangler.backtest.toml", "wrangler.sim-migrate.toml"];
 
 const byBinding = (cfg, key) => Object.fromEntries((cfg.arrays[key] ?? []).map((b) => [b.binding, b]));
 
@@ -249,8 +249,8 @@ test("every queue any wrangler config references is ensured by CI, in backend's 
   }
 });
 
-test("each satellite Worker (dashboard, ingest, llm, backtest) has a script, a path filter, a changes output + baseline, a paths-filter step, a deploy job and a package script", () => {
-  for (const name of ["dashboard", "ingest", "llm", "backtest"]) {
+test("each satellite Worker (ingest, llm, backtest) has a script, a path filter, a changes output + baseline, a paths-filter step, a deploy job and a package script", () => {
+  for (const name of ["ingest", "llm", "backtest"]) {
     const cfg = read(`wrangler.${name}.toml`);
     const main = cfg.top.main;
     assert.ok(main && readFileSync(path.join(ROOT, main), "utf8"), `wrangler.${name}.toml's main (${main}) exists`);

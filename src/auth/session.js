@@ -3,26 +3,25 @@
 // request's Cookie header back into a verified username (or null). No
 // user table, no multi-user anything -- config.dashboardUsername/
 // dashboardPassword (src/config.js) is exactly one operator credential
-// pair, checked in src/index.js's POST /login route; this file only ever
+// pair, checked in dashboard-next/src/server/gateway.mjs#login (which keeps its own copy of this file); this file only ever
 // deals with the SESSION side (the cookie), not the credential check
 // itself.
 //
 // HONEST SCOPE: the session token is a plain signed JWT with no server-
-// side revocation list -- logging out (POST /logout) clears the browser's
+// side revocation list -- logging out (GET /logout) clears the browser's
 // cookie but does NOT invalidate the token itself; a copied/stolen token
 // stays valid until its own `exp` (config.sessionTtlSeconds after
 // issuance). Acceptable for a single-operator internal ops tool with a
 // same-day-scale TTL, not a substitute for real session revocation if
 // this ever grows multiple users or a longer TTL.
 //
-// COOKIE ATTRIBUTES: HttpOnly (no client-JS access -- irrelevant to XSS
-// exfiltration of this cookie even though this page's one inline script,
-// setDateRange in dashboard.js, doesn't touch cookies anyway), Secure
+// COOKIE ATTRIBUTES: HttpOnly (no client-JS access, so page scripts can't
+// read or exfiltrate it), Secure
 // (HTTPS-only -- true in production on Workers, but means the cookie
 // silently won't be set/sent under plain-http local dev via `wrangler
 // dev`; a known, accepted trade-off, not a bug if local login appears to
-// not "stick"), SameSite=Lax (sent on top-level navigation, e.g. the
-// /login form's own POST redirect chain, but not on cross-site requests --
+// not "stick"), SameSite=Lax (sent on top-level navigation, but not on
+// cross-site requests --
 // blocks the common CSRF vector without needing a separate CSRF token,
 // though a dedicated CSRF token would still be the stronger fix if this
 // ever needs it).

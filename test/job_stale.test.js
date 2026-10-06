@@ -3,7 +3,7 @@
 // queue message). getActiveJob already hides such an orphan after 15 minutes,
 // but GET /api/jobs/:id returned it verbatim, so the progress panel polled a
 // dead row for ever. This pins the fix: storage/jobs.js#isJobStale, the
-// `stale` flag on GET /api/jobs/:id, and the panel script that acts on it.
+// `stale` flag on GET /api/jobs/:id.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,7 +14,6 @@ import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR, SIM_DIR } from "./helpers/engine_ctx.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { isJobStale, ACTIVE_JOB_MAX_IDLE_MS } from "../src/storage/jobs.js";
-import { renderRunAcceptedPage, renderActiveJobPanel } from "../src/dashboard/views/status.js";
 
 const NOW_MS = Date.parse("2026-10-03T12:00:00.000Z");
 const minutesAgo = (m) => new Date(NOW_MS - m * 60_000).toISOString();
@@ -97,18 +96,4 @@ test("GET /api/jobs/:id never flags a finished job as stale, however old", async
   const body = await getJob(loginConfiguredEnv({ LIVE_DB: db }), "backfill-done");
   assert.equal(body.status, "complete");
   assert.equal(body.stale, false);
-});
-
-// --------------------------------------------------------------------
-// Panel script
-// --------------------------------------------------------------------
-
-test("the progress script stops polling and shows a stalled state when the job comes back stale", () => {
-  const accepted = renderRunAcceptedPage({ title: "Backfill", detail: "Backfilling.", backLink: "/dashboard/backfill", backLabel: "Backfill", jobId: "backfill-1-abc", type: "backfill" });
-  assert.ok(accepted.includes("if (job.stale) {"), "run-accepted page handles stale");
-  assert.ok(accepted.includes('showNextSteps("stalled")'));
-  assert.ok(accepted.includes("No progress for over 15 minutes"));
-
-  const active = renderActiveJobPanel({ id: "backtest-1-abc", type: "backtest", params: {} });
-  assert.ok(active.includes("if (job.stale) {"), "the active-job panel shares the same script");
 });

@@ -3,6 +3,27 @@
 News ingestion -> multi-agent LLM analysis -> trade signal pipeline, with
 rigorous point-in-time backtesting. This file is setup only.
 
+## `dashboard-next/` — the ops dashboard
+
+A mobile-friendly Next.js 16 app that is the `news-market-ai-dashboard`
+Cloudflare Worker: the UI, the login and the session-gated API in front of the
+private backend, all in one Worker. See
+[`dashboard-next/README.md`](./dashboard-next/README.md) for the architecture,
+path mapping, auth flow and secrets.
+
+Run locally in MOCK mode (no backend needed):
+```bash
+cd dashboard-next
+npm install
+npm run dev
+```
+Open http://localhost:3000/ and sign in with any credentials.
+
+Switch to a real backend by setting `BACKEND_URL` (a `wrangler dev` of the
+backend), `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` and `JWT_SECRET` in
+`dashboard-next/.env` (see `.env.example`).
+
+
 ## Where things are documented
 
 - [`plan.md`](./plan.md): design, rationale, architecture, repo structure, known gaps and the current to-do list. Start here.

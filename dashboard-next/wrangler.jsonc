@@ -1,0 +1,43 @@
+{
+  // The ops dashboard: the Next.js app (dashboard-next/) as ONE Cloudflare
+  // Worker, built by @opennextjs/cloudflare. It serves the UI and, in the same
+  // Worker, the login, the session cookie and the session-gated API in front of
+  // the private backend (src/server/gateway.mjs). It replaced the separate
+  // gateway Worker that used to hold this name (src/dashboard-worker.js).
+  //
+  // Keeping the name news-market-ai-dashboard keeps the public workers.dev URL
+  // and the login secrets already stored on that Worker. Secrets are not in this
+  // file; deploy.yml's deploy-dashboard job sets them with `wrangler secret put`:
+  //   DASHBOARD_USERNAME, DASHBOARD_PASSWORD, JWT_SECRET -- all three must be
+  //   set together or the login stays disabled (503).
+  //   SESSION_TTL_SECONDS -- optional override of the 24h default.
+  //
+  // No D1/KV of its own: every read and write goes through the BACKEND service
+  // binding to the private `news-market-ai` Worker (wrangler.toml, no public
+  // route). The binding is required: same-account workers.dev fetches are
+  // blocked, and without it the API routes answer 503 (see src/lib/backend.ts).
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "news-market-ai-dashboard",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "BACKEND",
+      "service": "news-market-ai"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  }
+}

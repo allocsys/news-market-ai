@@ -7,8 +7,6 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "dev:dashboard": "wrangler dev --config wrangler.dashboard.toml",
-    "deploy:dashboard": "wrangler deploy --config wrangler.dashboard.toml",
     "dev:ingest": "wrangler dev --config wrangler.ingest.toml",
     "deploy:ingest": "wrangler deploy --config wrangler.ingest.toml",
     "dev:llm": "wrangler dev --config wrangler.llm.toml",

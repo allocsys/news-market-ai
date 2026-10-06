@@ -528,19 +528,17 @@ export function loadConfig(env) {
     // wiring), but this has NOT yet been validated against a live SEC
     // fetch + real headline traffic, which is why it stays opt-in.
     entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX === "true",
-    // Dashboard login (src/index.js's GET/POST /login, src/auth/session.js)
-    // -- a one-time login that then authorizes POST /backfill and POST
-    // /backtest/run via a session cookie; it is now the ONLY way to call
-    // either route (the shared BACKFILL_API_SECRET/BACKTEST_API_SECRET
-    // fallback that used to exist alongside it has been removed entirely).
-    // A single operator credential pair, not a user table -- same "no
-    // default without an explicit reason" convention as every other
-    // secret in this file: unset means the LOGIN feature stays inactive
-    // (GET /dashboard remains unauthenticated, exactly as it always has
-    // been) rather than either being silently open with a guessable
-    // default or silently locking everyone out of a dashboard that used
-    // to be public. See src/index.js's dashboard route for the exact
-    // isDashboardAuthConfigured() gate this powers.
+    // Dashboard login (dashboard-next/src/server/gateway.mjs#login,
+    // src/auth/session.js) -- a one-time login that then authorizes the
+    // dashboard's /api/* reads and POST trigger routes via a session
+    // cookie; it is the ONLY way to call them (the shared
+    // BACKFILL_API_SECRET/BACKTEST_API_SECRET fallback that used to exist
+    // alongside it has been removed entirely). A single operator
+    // credential pair, not a user table -- same "no default without an
+    // explicit reason" convention as every other secret in this file:
+    // unset means the dashboard Worker fails closed (503) rather than
+    // either being silently open with a guessable default. See
+    // gateway.mjs's isDashboardAuthConfigured() gate.
     dashboardUsername: env.DASHBOARD_USERNAME || "",
     dashboardPassword: env.DASHBOARD_PASSWORD || "",
     // HMAC signing key for the session JWT (src/auth/jwt.js). No default,

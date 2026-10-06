@@ -10,7 +10,6 @@ import { checkTickerSelection, getActiveTickers, getDisabledTickers, normalizeTi
 import backend from "../src/index.js";
 import ingestWorker from "../src/ingest-worker.js";
 import llmWorker from "../src/llm-worker.js";
-import { renderControlsView } from "../src/dashboard/views/controls.js";
 
 const STATE_DIR = fileURLToPath(new URL("../migrations/state", import.meta.url));
 const WATCHLIST = ["AAPL", "MSFT", "XAUUSD"];
@@ -202,28 +201,4 @@ test("llm worker: analyze for a disabled ticker is acked without running", async
   await llmWorker.queue({ messages: [message] }, env);
   assert.ok(message.acked && !message.retried);
   assert.equal(logs.filter((l) => String(l).includes("ticker disabled by the operator")).length, 1);
-});
-
-// ---------------------------------------------------------------------------
-// view
-// ---------------------------------------------------------------------------
-
-test("controls view: live tickers card ticks the active ones and offers Select all only when something is off", () => {
-  const selection = { watchlist: WATCHLIST, active: ["XAUUSD"], disabled: ["AAPL", "MSFT"], meta: {}, error: null };
-  const html = renderControlsView({ flags: {}, meta: {}, error: null, tickerSelection: selection });
-  assert.match(html, /Live tickers/);
-  assert.match(html, /action="\/controls\/tickers"/);
-  assert.match(html, /id="live-ticker-XAUUSD"[^>]*checked/);
-  assert.doesNotMatch(html, /id="live-ticker-AAPL"[^>]*checked/);
-  assert.match(html, /Select all/);
-
-  const allOn = renderControlsView({ tickerSelection: { watchlist: WATCHLIST, active: WATCHLIST, disabled: [], meta: {}, error: null } });
-  assert.doesNotMatch(allOn, /Select all/);
-  assert.match(allOn, /All tickers are active/);
-});
-
-test("controls view: no ticker card without a selection, pause switches unchanged", () => {
-  const html = renderControlsView({ flags: { llm: true }, meta: {}, error: null });
-  assert.doesNotMatch(html, /Live tickers/);
-  assert.match(html, /Pause switches/);
 });

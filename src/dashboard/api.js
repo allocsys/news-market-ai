@@ -1,15 +1,11 @@
 // JSON API layer for the dashboard (plan.md Step 1). One route per
-// dashboard section, each backed by the same src/dashboard/data.js
-// functions routes.js's SSR handlers call -- there is exactly one place
-// each section's D1 reads happen, not two copies that could drift.
+// dashboard section, each backed by the src/dashboard/data.js functions --
+// there is exactly one place each section's D1 reads happen.
 //
-// Auth-gated via routes.js's own `checkAuth` (reused, not duplicated) --
-// same session-cookie check the SSR dashboard uses. Unlike the SSR routes,
-// though, a failed check here returns a 401 JSON error rather than a
-// redirect to /login: redirecting a scripted/API caller to an HTML login
-// page would make no sense, and this mirrors how POST /backfill and
-// POST /backtest/run (src/index.js) already answer unauthenticated
-// scripted callers with JSON rather than a redirect.
+// Auth-gated via routes.js's `checkAuth` (reused, not duplicated). A failed
+// check returns a 401 JSON error rather than a redirect, which mirrors how
+// POST /backfill and POST /backtest/run (src/index.js) answer unauthenticated
+// scripted callers.
 //
 // JSON responses are built with `new Response(JSON.stringify(...), {...})`,
 // not the static `Response.json(...)` helper -- matches the one existing
@@ -108,7 +104,7 @@ export async function handleApiTickersRoute(request, env, config) {
   return jsonResponse(await getTickersData(env, { env: envParam }));
 }
 
-/** GET /api/watchlist -- `{ tickers }`, the configured watchlist (config.watchlist, WATCHLIST_TICKERS) in order. The dashboard's ticker pickers (dashboard/ticker_picker.js) choose from it; the dashboard Worker has no watchlist config of its own. */
+/** GET /api/watchlist -- `{ tickers }`, the configured watchlist (config.watchlist, WATCHLIST_TICKERS) in order. The dashboard-next ticker pickers choose from it; the dashboard Worker has no watchlist config of its own. */
 export async function handleApiWatchlistRoute(request, env, config) {
   const auth = await checkAuth(request, config);
   if (auth.redirect) return unauthorized();

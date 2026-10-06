@@ -1,8 +1,9 @@
 // `backend` Worker entry point. `fetch` serves the JSON API (/api/*,
 // /backfill, /backtest/run) and `scheduled` runs the cron tick, exactly
 // as before -- what changed in Step 2 is everything HTML/login: that moved
-// to the new `dashboard` Worker (src/dashboard-worker.js), which is now the
-// only public entry point. `backend` has no public route (see wrangler.toml)
+// to the `dashboard` Worker, now the Next.js app in dashboard-next/ (the UI,
+// login, session and JSON gateway in one Worker, src/server/gateway.mjs). That
+// Worker is the only public entry point to this Worker. `backend` has no public route (see wrangler.toml)
 // -- reachable only via `dashboard`'s BACKEND service binding -- so the
 // routes below no longer check a session cookie themselves; the caller
 // already did, one hop up. This is the "fails closed instead of serving an
@@ -196,8 +197,8 @@ export default {
     if (pathname === "/api/jobs/latest") return handleApiLatestJobRoute(request, env, config);
 
     // Live progress for one job (src/storage/jobs.js's job_progress table),
-    // read by `dashboard` at /dashboard/jobs/:id (which polls this on the
-    // operator's behalf -- see src/dashboard-worker.js). :id is whatever
+    // read by the dashboard (dashboard-next/, which polls this on the
+    // operator's behalf through its BACKEND service binding). :id is whatever
     // POST /backfill or POST /backtest/run returned as `id` below.
     if (pathname.startsWith("/api/jobs/")) {
       const id = pathname.slice("/api/jobs/".length);
