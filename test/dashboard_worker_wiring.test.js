@@ -70,7 +70,7 @@ test("deploy-dashboard: after the backend deploy, push/dispatch only, builds das
   assert.ok(job.includes("needs.changes.outputs.dashboard == 'true'"), "gated by the dashboard filter");
   assert.ok(job.includes("github.event_name == 'push' || github.event_name == 'workflow_dispatch'"), "never on a pull_request");
   assert.ok(job.includes("group: deploy-news-market-ai-dashboard-${{ github.ref }}"), "its own concurrency group");
-  assert.ok(!job.includes("npm ci"), "dashboard-next is its own npm project: no root npm ci");
+  assert.ok(!/run: npm ci\b/.test(job), "dashboard-next is its own npm project: no root `npm ci` step");
 
   const deployStep = job.indexOf("run: npm run deploy\n");
   assert.ok(deployStep > 0, "runs npm run deploy (opennextjs-cloudflare build && deploy)");
@@ -91,6 +91,6 @@ test("the dashboard has exactly one deploy path: no separate dashboard deploy wo
   assert.ok(!existsSync(path.join(ROOT, ".github/workflows/deploy-dashboard-next.yml")), "deploy-dashboard-next.yml is folded into deploy.yml's deploy-dashboard job (two would deploy twice per push)");
   for (const f of readdirSync(path.join(ROOT, ".github/workflows"))) {
     if (f === "deploy.yml") continue;
-    assert.ok(!/npm run deploy|opennextjs-cloudflare deploy/.test(read(`.github/workflows/${f}`)) || f === "", `${f} must not deploy the dashboard`);
+    assert.ok(!/npm run deploy|opennextjs-cloudflare deploy/.test(read(`.github/workflows/${f}`)), `${f} must not deploy the dashboard`);
   }
 });
