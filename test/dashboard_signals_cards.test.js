@@ -100,7 +100,7 @@ test("renderSignalsView generates strip, filter bar, decisions-summary and activ
   // (c) exactly one .decisions-summary and stack-bar aria-label format
   const matches = html.match(/decisions-summary/g);
   assert.equal(matches.length, 1);
-  assert.match(html, /aria-label="Approved: 1 of 1 \(100\.0%\)"/);
+  assert.match(html, /aria-label="Approved: 1 of 1 \(100%\)"/);
 
   // (d) activity details present and not open
   assert.match(html, /<details class="sig-activity">/);
