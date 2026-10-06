@@ -13,8 +13,9 @@
 # `npm install` and cannot use the npm cache. Switch to `npm ci` (+ cache)
 # once a package-lock.json is committed.
 #
-# The build runs with BACKEND_URL unset, i.e. in MOCK mode, so it needs no
-# secrets.
+# The build runs `opennextjs-cloudflare build` (which runs `next build`, then
+# bundles the Worker into .open-next/), so a bundling problem fails here
+# rather than in the deploy job. Needs no secrets.
 
 name: Dashboard Next CI
 
@@ -46,8 +47,6 @@ jobs:
       run:
         working-directory: dashboard-next
     env:
-      # prisma generate only needs the variable to exist; nothing connects.
-      DATABASE_URL: file:./ci.db
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
@@ -56,8 +55,6 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Generate Prisma client
-        run: npx prisma generate
       # The next three run even if an earlier one failed, so one CI run
       # shows every problem instead of one at a time.
       - name: Lint
@@ -66,8 +63,6 @@ jobs:
       - name: Typecheck
         if: ${{ !cancelled() }}
         run: npx tsc --noEmit
-      - name: Build (mock mode)
+      - name: Build Worker bundle (OpenNext)
         if: ${{ !cancelled() }}
-        env:
-          BACKEND_URL: ''
-        run: npx next build
+        run: npx opennextjs-cloudflare build
