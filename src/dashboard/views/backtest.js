@@ -72,47 +72,49 @@ function backtestPurgeForm() {
 
 export function renderBacktestView({ backtestRuns, error, replayJobs, replayError, tickerOptions = [] }) {
   return `<section id="backtest">
-    <h2>Backtest results</h2>
-    <p class="note">Each run compares the strategy (real pipeline) against buy &amp; hold. The price-impact gate is a separate per-run option on the confirm page. Manual only; needs login. No backfilled news in the window = empty strategy side.</p>
+    <h2>Backtest</h2>
+    <p class="note">Each run compares the strategy (real pipeline) against buy &amp; hold. Manual only; needs login. No backfilled news in the window = empty strategy side.</p>
 
-    <div class="panel" style="margin-bottom:1.5rem">
-      <div class="panel-header"><span class="panel-title">Trigger a new run</span></div>
-      <div class="panel-body">
+    <details class="bt-exp">
+      <summary>New backtest run</summary>
+      <div class="bt-exp-body">
+        <p class="note">The price-impact gate is a separate per-run option on the confirm page.</p>
         ${backtestTriggerForm(tickerOptions)}
       </div>
-    </div>
+    </details>
 
-    <div class="panel">
-      <div class="panel-header"><span class="panel-title">Recent runs</span></div>
-      <div class="panel-body">
-        ${error ? errorState(error) : backtestCompareTable(backtestRuns) + backtestRunsList(backtestRuns)}
-      </div>
-    </div>
+    <h3 class="bt-h">Recent runs</h3>
+    ${error ? errorState(error) : backtestCompareTable(backtestRuns) + backtestRunsList(backtestRuns)}
 
-    <div class="panel" style="margin-top:1.5rem">
-      <div class="panel-header"><span class="panel-title">News replay comparison</span></div>
-      <div class="panel-body">
+    <details class="bt-exp" style="margin-top:1.25rem">
+      <summary>News replay comparison</summary>
+      <div class="bt-exp-body">
         <p class="note">Compare old parallel vs. current batched analyst calls on ingested news items. Read-only.</p>
         ${replayTriggerForm(tickerOptions)}
-      </div>
-    </div>
-
-    <div class="panel" style="margin-top:1.5rem">
-      <div class="panel-header"><span class="panel-title">Recent replay comparisons</span></div>
-      <div class="panel-body">
+        <h3 class="bt-h">Recent replay comparisons</h3>
         ${replayError ? errorState(replayError) : replayJobsList(replayJobs)}
       </div>
-    </div>
+    </details>
 
-    <details class="panel" style="margin-top:1.5rem">
-      <summary class="panel-header"><span class="panel-title">Maintenance: delete old run data</span></summary>
-      <div class="panel-body">
+    <details class="bt-exp">
+      <summary>Maintenance: delete old run data</summary>
+      <div class="bt-exp-body">
         <p class="note">Deletes per-trade data of finished runs; summaries stay. Running runs are never touched.</p>
         ${backtestCleanupForm()}
         <p class="note" style="margin-top:1rem">Or remove failed/cancelled runs entirely, including error history.</p>
         ${backtestPurgeForm()}
       </div>
     </details>
+    <style>
+      details.bt-exp { margin-bottom:0.75rem; }
+      details.bt-exp > summary { display:flex; align-items:center; min-height:48px; padding:0 1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; font-weight:600; list-style:none; user-select:none; }
+      details.bt-exp > summary::-webkit-details-marker { display:none; }
+      details.bt-exp > summary::before { content:"\\25b8"; margin-right:0.6rem; opacity:0.7; }
+      details.bt-exp[open] > summary::before { content:"\\25be"; }
+      details.bt-exp[open] > summary { border-radius:var(--radius-md) var(--radius-md) 0 0; }
+      .bt-exp-body { padding:1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-top:none; border-radius:0 0 var(--radius-md) var(--radius-md); }
+      .bt-h { margin:1.25rem 0 0.6rem; font-size:1rem; font-weight:600; }
+    </style>
   </section>`;
 }
 
