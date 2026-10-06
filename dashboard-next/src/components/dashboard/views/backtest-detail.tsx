@@ -1,7 +1,20 @@
 "use client";
 
-import { ChevronLeft, ArrowUpRight, ArrowDownRight, TrendingUp, Loader2 } from "lucide-react";
-import { useBacktestRunDetail } from "@/lib/api";
+import { ChevronLeft, Play, Pause, Square, TrendingUp, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { useBacktestRunDetail, usePostBacktestAction } from "@/lib/api";
+import { JobProgressCard } from "../job-progress";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { SectionHeading, StatusBadge, Pill, MiniStat, EmptyState, ErrorState } from "../primitives";
 import { EquityCurve } from "../charts";
 import { OpenPositionCard } from "../position-cards";
@@ -14,6 +27,7 @@ export function BacktestDetailView({
   onClose,
 }: ViewProps & { backtestId: string | null; onClose: () => void }) {
   const run = useBacktestRunDetail(backtestId);
+  const actionMutation = usePostBacktestAction();
 
   if (!backtestId) {
     return (
@@ -87,9 +101,17 @@ export function BacktestDetailView({
     r.status === "paused" ? "paused" :
     r.status === "running" ? "info" : "neutral";
 
+  const act = (action: "cancel" | "pause" | "resume") =>
+    actionMutation.mutate(
+      { id: r.id, action },
+      {
+        onSuccess: () => run.refetch(),
+        onError: (e) => toast.error(`Failed: ${e.message}`),
+      },
+    );
+  const activeJob = run.data.activeJob ?? null;
+
   return (
-    <div className="space-y-5">
-      <Button variant="ghost" size="sm" onClick={onClose} className="-ml-2 gap-1">
         <ChevronLeft className="h-4 w-4" />
         Back to backtests
       </Button>
