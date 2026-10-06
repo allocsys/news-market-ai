@@ -96,6 +96,7 @@ jobs:
       ingest: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.ingest == '' || steps.f_ingest.outputs.ingest == 'true')) }}
       llm: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.llm == '' || steps.f_llm.outputs.llm == 'true')) }}
       backtest: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.backtest == '' || steps.f_backtest.outputs.backtest == 'true')) }}
+      dashboard: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.dashboard == '' || steps.f_dashboard.outputs.dashboard == 'true')) }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_dispatch'
@@ -111,7 +112,7 @@ jobs:
           # Deliberately no `set -e`: any failure here must fall through to
           # empty outputs (= deploy), never fail the workflow.
           set -u
-          declare -A want=( [code]=deploy [migrations]=migrate [ingest]=deploy-ingest [llm]=deploy-llm [backtest]=deploy-backtest )
+          declare -A want=( [code]=deploy [migrations]=migrate [ingest]=deploy-ingest [llm]=deploy-llm [backtest]=deploy-backtest [dashboard]=deploy-dashboard )
           declare -A found=()
           runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/deploy.yml/runs?branch=main&status=completed&per_page=50" \
             --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | "\(.id) \(.head_sha)"') || runs=""
@@ -174,6 +175,12 @@ jobs:
         if: github.event_name == 'push' && steps.base.outputs.backtest != ''
         with:
           base: ${{ steps.base.outputs.backtest }}
+          filters: .github/path-filters.yml
+      - uses: dorny/paths-filter@v3
+        id: f_dashboard
+        if: github.event_name == 'push' && steps.base.outputs.dashboard != ''
+        with:
+          base: ${{ steps.base.outputs.dashboard }}
           filters: .github/path-filters.yml
 
   test:
@@ -360,10 +367,78 @@ jobs:
       # secrets comment and deploy-ingest's FINNHUB_API_KEY step below,
       # which is now the only place this secret is pushed.)
 
-  # (The dashboard is NOT deployed from this workflow. Since the single-Worker
-  # collapse, news-market-ai-dashboard is the Next.js app in dashboard-next/,
-  # deployed by deploy-dashboard-next.yml, which also sets its login secrets.
-  # A job here would deploy the retired gateway over it.)
+  # `dashboard` Worker: news-market-ai-dashboard, the Next.js app in
+  # dashboard-next/ built by OpenNext (one Worker: UI + login + the session-gated
+  # API in front of the private backend). Own path-filtered job and concurrency
+  # group, like every other Worker here. Depends on backend's `deploy` job because
+  # dashboard-next/wrangler.jsonc binds BACKEND -> news-market-ai (a service
+  # binding needs that Worker to exist; same-account workers.dev fetches are
+  # blocked, so there is no URL fallback).
+  #
+  # Leaner than the backend jobs on purpose: dashboard-next/ is its own npm
+  # project, so the root `npm ci` is skipped, and lint/tsc are not repeated here
+  # (the PR check Dashboard Next CI runs them, and the OpenNext build compiles the
+  # app again anyway). The gateway tests (test/dashboard_gateway*.test.js) run in
+  # the root `test` job this job already waits on. Keeps the Worker name, so the
+  # workers.dev URL and secrets already stored on it survive.
+  deploy-dashboard:
+    needs: [changes, deploy]
+    if: always() && needs.deploy.result == 'success' && needs.changes.outputs.dashboard == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-news-market-ai-dashboard-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check required secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
+            exit 1
+          fi
+      # No lockfile is committed in dashboard-next/ yet, so `npm install` (not
+      # `npm ci`) and no setup-node cache.
+      - name: Install dependencies
+        working-directory: dashboard-next
+        run: npm install --no-audit --no-fund
+      - name: Build and deploy dashboard Worker
+        working-directory: dashboard-next
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy
+      - name: Set login secrets on the dashboard Worker
+        # Pushed after the deploy so the Worker exists. Same idempotent,
+        # non-blocking shape as the other Workers' secret steps. Without all
+        # three of DASHBOARD_USERNAME/DASHBOARD_PASSWORD/JWT_SECRET the Worker
+        # still deploys but the login answers 503 and every /api/* call is
+        # refused (fails closed). SESSION_TTL_SECONDS is an optional override
+        # of the 24h default.
+        working-directory: dashboard-next
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DASHBOARD_USERNAME: ${{ secrets.DASHBOARD_USERNAME }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SESSION_TTL_SECONDS: ${{ secrets.SESSION_TTL_SECONDS }}
+        run: |
+          if [ -z "$DASHBOARD_USERNAME" ] || [ -z "$DASHBOARD_PASSWORD" ] || [ -z "$JWT_SECRET" ]; then
+            echo "DASHBOARD_USERNAME/DASHBOARD_PASSWORD/JWT_SECRET not all set -- skipping. The dashboard Worker is deployed but the login returns 503 (disabled) until all three are configured."
+            exit 0
+          fi
+          echo "$DASHBOARD_USERNAME" | npx wrangler secret put DASHBOARD_USERNAME --config wrangler.jsonc
+          echo "$DASHBOARD_PASSWORD" | npx wrangler secret put DASHBOARD_PASSWORD --config wrangler.jsonc
+          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET --config wrangler.jsonc
+          if [ -n "$SESSION_TTL_SECONDS" ]; then
+            echo "$SESSION_TTL_SECONDS" | npx wrangler secret put SESSION_TTL_SECONDS --config wrangler.jsonc
+          fi
 
   # `ingest` Worker (plan.md Step 5, extended by a Step 5 follow-up,
   # 2026-09-20) -- own path-filtered job, own concurrency group (same
