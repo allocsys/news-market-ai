@@ -553,6 +553,8 @@ export function usePostBacktestRun() {
       testEnd: string;
       tickers?: string[];
       enableLlmLog?: boolean;
+      /** This run only: turn the price-impact gate off (gateway maps it to skipNoPriceImpact=0). */
+      disableGate?: boolean;
     }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backtest/run", {
         method: "POST",
