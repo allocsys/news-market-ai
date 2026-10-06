@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   Filter,
@@ -41,6 +41,14 @@ export function LlmView({ tickerFilter, onNavigate, env }: ViewProps & { tickerF
   const [limit, setLimit] = useState(50);
   const [filtersOpen, setFiltersOpen] = useState(Boolean(tickerFilter));
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Paging: each "Older" push remembers the cursor (nextBeforeId) of the page being left; "Newest" clears the stack. The last entry is the current page's `llmBefore`.
+  const [cursors, setCursors] = useState<number[]>([]);
+  const llmBefore = cursors.length > 0 ? cursors[cursors.length - 1] : null;
+
+  // A different filter or environment starts again from the newest call.
+  useEffect(() => {
+    setCursors((c) => (c.length > 0 ? [] : c));
+  }, [source, status, limit, tickerFilter, env]);
 
   const calls = useLlmCalls({
     env,
@@ -48,7 +56,9 @@ export function LlmView({ tickerFilter, onNavigate, env }: ViewProps & { tickerF
     llmStatus: status === "all" ? undefined : status,
     llmLimit: limit,
     llmTicker: tickerFilter,
+    llmBefore,
   });
+  const nextBeforeId = calls.data?.nextBeforeId ?? null;
 
   const detail = useLlmCallDetail(selectedId, env);
 
@@ -227,21 +237,27 @@ export function LlmView({ tickerFilter, onNavigate, env }: ViewProps & { tickerF
       </section>
 
       {/* Pager */}
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ChevronLeft className="h-3 w-3" /> Newest
-        </button>
-        <span className="text-xs text-muted-foreground">cursor pagination</span>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        >
-          Older → <ChevronRight className="h-3 w-3" />
-        </button>
-      </div>
+      {(cursors.length > 0 || nextBeforeId != null) && (
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => setCursors([])}
+            disabled={cursors.length === 0}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronLeft className="h-3 w-3" /> Newest
+          </button>
+          <span className="text-xs text-muted-foreground">page {cursors.length + 1}</span>
+          <button
+            type="button"
+            onClick={() => nextBeforeId != null && setCursors((c) => [...c, nextBeforeId])}
+            disabled={nextBeforeId == null}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Older <ChevronRight className="h-3 w-3" />
+          </button>
+        </div>
+      )}
 
       {/* Detail drawer (right side on desktop, full sheet on mobile) */}
       <Sheet open={selectedId != null} onOpenChange={(v) => !v && setSelectedId(null)}>
