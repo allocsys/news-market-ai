@@ -1,16 +1,14 @@
-// Covers the dashboard's "LLM calls" page end to end: query-param parsing
-// (helpers.js), the list and detail views (views/llm.js), backend's
-// /api/llm-calls[/:id] routes (src/index.js -> dashboard/api.js), and the
-// dashboard Worker's /dashboard/llm[/:id] routes with their session gate.
-// The dashboard tests run the REAL backend Worker behind a fake service
-// binding (same approach as dashboard_worker.test.js) over a REAL sqlite state
-// DB bound as LIVE_DB (M2b: llm_calls lives in the state schema, read through
-// a read-only RunStore), so the filter/paging query strings travel the whole
-// way to SQL.
+// Covers the dashboard's "LLM calls" page: query-param parsing (helpers.js),
+// the list and detail views (views/llm.js), and backend's /api/llm-calls[/:id]
+// routes (src/index.js -> dashboard/api.js). The tests run the REAL backend
+// Worker over a REAL sqlite state DB bound as LIVE_DB (M2b: llm_calls lives in
+// the state schema, read through a read-only RunStore), so the filter/paging
+// query strings travel the whole way to SQL. (The /dashboard/llm pages
+// themselves were served by the old dashboard Worker, retired in favor of
+// dashboard-next.)
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker from "../src/dashboard-worker.js";
 import backendWorker from "../src/index.js";
 import { parseLlmParams, llmQuery, backtestRunsList } from "../src/dashboard/helpers.js";
 import { renderLlmView, renderLlmCallView } from "../src/dashboard/views/llm.js";
@@ -271,81 +269,6 @@ test("the dashboard's LLM/job reads go through a read-only handle: a write metho
   assert.deepEqual((await store.getRecentLlmCalls()).calls, [], "reads still work");
 });
 
-function makeBackend(backendEnv) {
-  return { fetch: (input, init) => backendWorker.fetch(new Request(input, init), backendEnv, { waitUntil() {} }) };
-}
-
-async function dashboardEnv() {
-  return {
-    BACKEND: makeBackend({ LIVE_DB: await seededDb() }),
-    DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key",
-  };
-}
-
-async function sessionCookie(env) {
-  const res = await worker.fetch(
-    new Request("https://dashboard.example/login", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ username: "admin", password: "correct-horse-battery-staple" }).toString(),
-    }),
-    env
-  );
-  return res.headers.get("set-cookie").split(";")[0];
-}
-
-const dashGet = (path, env, cookie) => worker.fetch(new Request(`https://dashboard.example${path}`, { headers: cookie ? { cookie } : {} }), env);
-
-test("GET /dashboard/llm redirects to /login without a session, and 503s when login isn't configured", async () => {
-  const env = await dashboardEnv();
-  const res = await dashGet("/dashboard/llm", env);
-  assert.equal(res.status, 302);
-  assert.equal(res.headers.get("location"), "/login");
-
-  const unconfigured = await dashGet("/dashboard/llm", { BACKEND: env.BACKEND });
-  assert.equal(unconfigured.status, 503);
-});
-
-test("GET /dashboard/llm/:id also requires a session", async () => {
-  const env = await dashboardEnv();
-  const res = await dashGet("/dashboard/llm/1", env);
-  assert.equal(res.status, 302);
-  assert.equal(res.headers.get("location"), "/login");
-});
-
-test("GET /dashboard/llm renders the list from backend, and the query string filters it", async () => {
-  const env = await dashboardEnv();
-  const cookie = await sessionCookie(env);
-
-  const all = await (await dashGet("/dashboard/llm", env, cookie)).text();
-  assert.ok(all.includes('href="/dashboard/llm/1"') && all.includes('href="/dashboard/llm/2"'));
-  assert.match(all, /debate:judge/);
-  assert.match(all, /PROMPT-ONE/);
-
-  const filtered = await (await dashGet("/dashboard/llm?llmSource=backtest", env, cookie)).text();
-  assert.ok(filtered.includes('href="/dashboard/llm/2"'));
-  assert.ok(!filtered.includes('href="/dashboard/llm/1"'));
-  assert.match(filtered, /pill pill-active">backtest</, "the active filter pill reflects the query string");
-});
-
-test("GET /dashboard/llm/:id renders the full prompt and response; unknown or non-numeric ids get a 404 page", async () => {
-  const env = await dashboardEnv();
-  const cookie = await sessionCookie(env);
-
-  const res = await dashGet("/dashboard/llm/2", env, cookie);
-  assert.equal(res.status, 200);
-  const html = await res.text();
-  assert.match(html, /Prompt sent/);
-  assert.match(html, /PROMPT-TWO/);
-  assert.match(html, /garbage/);
-  assert.match(html, /not json/);
-
-  const missing = await dashGet("/dashboard/llm/999", env, cookie);
-  assert.equal(missing.status, 404);
-  assert.match(await missing.text(), /Call not found/);
-  assert.equal((await dashGet("/dashboard/llm/abc", env, cookie)).status, 404);
-});
-
 // ---------------------------------------------------------------------------
 // M4b: the LLM call detail page's environment selector (owner's 3fd767d,
 // which added resolvedEnv/envError to /api/llm-calls/:id, and 68bb093,
@@ -382,33 +305,6 @@ test("GET /api/llm-calls/:id?env=<well-formed but unregistered> heals to live: r
   assert.equal(call.prompt, "PROMPT-ONE");
   assert.equal(call.resolvedEnv, "live");
   assert.match(call.envError, /not found/);
-});
-
-test("GET /dashboard/llm/:id?env=<registered backtest> shows the selector with that run's pill active, and the scope + back links carry the env", async () => {
-  const backendEnv = { LIVE_DB: createTestD1([STATE_DIR]), SIM_DB: await seededSimDb() };
-  const env = { BACKEND: makeBackend(backendEnv), DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key" };
-  const cookie = await sessionCookie(env);
-  const html = await (await dashGet(`/dashboard/llm/1?env=${BT}`, env, cookie)).text();
-
-  assert.match(html, /id="env-selector"/);
-  assert.match(html, /class="env-option active"[^>]*>[\s\S]*?AAPL/, "the backtest's own dropdown option is active, not Live");
-  assert.match(html, /SIM-PROMPT/);
-
-  assert.ok(html.includes(`href="/dashboard/llm?env=${BT}"`), "back link carries the env");
-  const scopeMatch = html.match(/href="([^"]*)">All calls in this run<\/a>/);
-  assert.ok(scopeMatch, "scope link found");
-  assert.ok(scopeMatch[1].includes(`env=${BT}`) && scopeMatch[1].includes("llmRun=w%7CAAPL%7Cn1"), "scope link carries both the env and the run filter");
-});
-
-test("GET /dashboard/llm/:id?env=<unregistered> heals to live: Live pill active, envError note shown, and live's own call is displayed rather than a broken page", async () => {
-  const backendEnv = { LIVE_DB: await seededDb(), SIM_DB: createTestD1([STATE_DIR, SIM_DIR]) };
-  const env = { BACKEND: makeBackend(backendEnv), DASHBOARD_USERNAME: "admin", DASHBOARD_PASSWORD: "correct-horse-battery-staple", JWT_SECRET: "test-jwt-signing-key" };
-  const cookie = await sessionCookie(env);
-  const html = await (await dashGet(`/dashboard/llm/1?env=${BT}`, env, cookie)).text();
-
-  assert.match(html, /class="env-option active"[\s\S]*?>Live<\/span>/);
-  assert.match(html, /not found/);
-  assert.match(html, /PROMPT-ONE/, "healed to live -- shows live's call 1, not a blank/error page");
 });
 
 test("renderLlmCallView: back/scope links carry a non-live env, and default to plain live links when env is omitted", () => {
