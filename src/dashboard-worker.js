@@ -73,8 +73,8 @@ function parseTickerList(values) {
  * Reads a request body as `{ get(key), getAll(key) }`, whichever way it was
  * sent: form fields (urlencoded/multipart, what scripted callers and the login
  * proxy send) or a JSON object (what the Next.js app sends). `null` = no body
- * of either kind (all inputs then come from the query string); `{ invalid: true }`
- * = a JSON body that isn't an object. JSON booleans read back as "1"/"0" and
+ * of either kind, or an empty one (all inputs then come from the query string);
+ * `{ invalid: true }` = a JSON body that isn't an object. JSON booleans read back as "1"/"0" and
  * arrays as comma lists, so one buildQuery works for every caller.
  */
 async function readBody(request) {
@@ -84,9 +84,11 @@ async function readBody(request) {
     return { get: (key) => form.get(key), getAll: (key) => form.getAll(key).map(String) };
   }
   if (contentType.includes("application/json")) {
+    const text = await request.text();
+    if (!text.trim()) return null;
     let data;
     try {
-      data = await request.json();
+      data = JSON.parse(text);
     } catch {
       return { invalid: true };
     }
