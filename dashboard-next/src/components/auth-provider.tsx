@@ -17,37 +17,53 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+interface AuthState {
+  user: AuthUser | null;
+  /** undefined = leave the current mock flag unchanged */
+  mock?: boolean;
+}
+
+async function fetchAuth(): Promise<AuthState> {
+  try {
+    const res = await fetch("/api/auth", { credentials: "same-origin" });
+    if (!res.ok) return { user: null };
+    const body = await res.json();
+    if (body.authenticated) {
+      return { user: body.user ?? { username: "operator" }, mock: Boolean(body.mock) };
+    }
+    return { user: null, mock: Boolean(body.mock) };
+  } catch {
+    return { user: null };
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [mock, setMock] = useState(false);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/auth", { credentials: "same-origin" });
-      if (!res.ok) {
-        setUser(null);
-        return;
-      }
-      const body = await res.json();
-      if (body.authenticated) {
-        setUser(body.user ?? { username: "operator" });
-        setMock(Boolean(body.mock));
-      } else {
-        setUser(null);
-        setMock(Boolean(body.mock));
-      }
-    } catch {
-      setUser(null);
-    } finally {
-      setLoading(false);
-    }
+  const apply = useCallback((s: AuthState) => {
+    setUser(s.user);
+    if (s.mock !== undefined) setMock(s.mock);
+    setLoading(false);
   }, []);
 
+  const refresh = useCallback(async () => {
+    apply(await fetchAuth());
+  }, [apply]);
+
+  // Initial load: state is only set from the promise callback, never
+  // synchronously inside the effect body.
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    let active = true;
+    fetchAuth().then((s) => {
+      if (active) apply(s);
+    });
+    return () => {
+      active = false;
+    };
+  }, [apply]);
 
   const logout = useCallback(async () => {
     await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
