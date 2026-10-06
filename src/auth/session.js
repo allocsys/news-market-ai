@@ -3,7 +3,7 @@
 // request's Cookie header back into a verified username (or null). No
 // user table, no multi-user anything -- config.dashboardUsername/
 // dashboardPassword (src/config.js) is exactly one operator credential
-// pair, checked in src/dashboard-worker.js's POST /login route; this file only ever
+// pair, checked in dashboard-next/src/server/gateway.mjs#login (which keeps its own copy of this file); this file only ever
 // deals with the SESSION side (the cookie), not the credential check
 // itself.
 //
