@@ -57,13 +57,13 @@ async function apiFetch(path, env, { cookie } = {}) {
 // without pinning to exact values, which an empty database can't
 // meaningfully provide anyway.
 const API_ROUTES = [
-  { path: "/api/overview", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "snapshotError", "health", "healthError", "checkpoints", "pipelineError", "latestDecision", "latestDecisionError", "resolvedEnv", "envError"] },
-  { path: "/api/snapshot", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "error", "resolvedEnv", "envError"] },
+  { path: "/api/overview", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "riskLimits", "snapshotError", "health", "healthError", "checkpoints", "pipelineError", "latestDecision", "latestDecisionError", "resolvedEnv", "envError"] },
+  { path: "/api/snapshot", keys: ["openPositions", "closedPositions", "decisionStats", "totalExposurePct", "riskLimits", "error", "resolvedEnv", "envError"] },
   { path: "/api/activity", keys: ["decisionStats", "error", "resolvedEnv", "envError"] },
   { path: "/api/charts", keys: ["priceBarsByTicker", "error", "resolvedEnv", "envError"] },
   { path: "/api/health", keys: ["health", "error"] },
   { path: "/api/decisions", keys: ["decisions", "error", "resolvedEnv", "envError"] },
-  { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct", "resolvedEnv", "envError"] },
+  { path: "/api/positions", keys: ["openPositions", "openPositionsError", "closedPositions", "closedPositionsError", "totalExposurePct", "riskLimits", "resolvedEnv", "envError"] },
   { path: "/api/pipeline", keys: ["checkpoints", "tickerStages", "error", "resolvedEnv", "envError"] },
   { path: "/api/tickers", keys: ["tickers", "error", "resolvedEnv", "envError"] },
   { path: "/api/watchlist", keys: ["tickers"] },
