@@ -56,17 +56,22 @@ function renderTickerSelection(selection) {
   const off = watchlist.filter((t) => !active.includes(t));
   const errorNote = selection.error ? `<p class="note">Could not read the ticker selection (${escapeHtml(selection.error)}); showing every ticker as active.</p>` : "";
   const state = off.length === 0 ? "All tickers are active." : `Active: ${escapeHtml(active.join(", ") || "none")}. Off: ${escapeHtml(off.join(", "))}.`;
-  return `<h2 class="mt-lg" id="liveTickersTitle">Live tickers</h2>
+  const countText = `${active.length} of ${watchlist.length} active`;
+  return `<details class="sw-exp"${off.length > 0 ? " open" : ""}>
+    <summary><span id="liveTickersTitle">Live tickers</span><span class="sw-exp-sub">${countText}</span></summary>
+    <div class="sw-exp-body">
     <p class="note">Which tickers the live pipeline fetches and analyzes. Open positions and pending entries keep being managed, and backtests are not affected.</p>
     ${errorNote}
-    <div class="pause-row" style="flex-direction:column;align-items:flex-start">
+    <div class="sw-tickers">
       <div class="pause-desc" style="margin:0">${state}</div>
       <form method="POST" action="/controls/tickers" style="display:flex;flex-direction:column;gap:0.75rem;width:100%">
         ${tickerChecklist({ name: "tickers", idPrefix: "live-ticker", options: watchlist, selected: active, labelId: "liveTickersTitle" })}
         <div><button type="submit" class="pause-btn is-running">Save selection</button></div>
       </form>
       ${off.length > 0 ? `<form method="POST" action="/controls/tickers"><input type="hidden" name="tickers" value="all" /><button type="submit" class="pause-btn">Select all</button></form>` : ""}
-    </div>`;
+    </div>
+    </div>
+  </details>`;
 }
 
 /** `data` is backend's GET /api/controls body: `{ flags, meta, error }`; `tickerSelection` is GET /api/active-tickers (null when unavailable). */
@@ -93,28 +98,47 @@ export function renderControlsView({ flags = {}, meta = {}, error = null, ticker
     </div>`;
 
   const errorNote = error ? `<p class="note">Could not read the switches (${escapeHtml(error)}); showing everything as running.</p>` : "";
+  const pausedCount = PAUSE_KEYS.filter((k) => flags[k] === true).length;
+  const statusLine = `<div class="sw-status ${pausedCount > 0 ? "is-paused" : "is-running"}" role="status">${pausedCount === 0 ? "Everything is running" : `${pausedCount} of ${PAUSE_KEYS.length} paused`}</div>`;
 
   return `<section id="controls">
     <h2>Pause switches</h2>
     <p class="note">Independent kill switches to free headroom. The intraday backfill, the retention purge and manual backfills are never paused.</p>
     ${errorNote}
-    ${masterForms}
+    ${statusLine}
     <div class="pause-list">${rows}</div>
+    ${masterForms}
     ${renderTickerSelection(tickerSelection)}
     <style>
-      .pause-master { display:flex; gap:0.6rem; margin:0.75rem 0 1rem; flex-wrap:wrap; }
+      .sw-status { display:inline-flex; align-items:center; min-height:32px; padding:0 0.8rem; margin:0.25rem 0 0.9rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-elevated); font-size:0.8125rem; font-weight:600; }
+      .sw-status.is-running { color:var(--color-success-text); }
+      .sw-status.is-paused { color:var(--color-warning-text); border-color:var(--color-warning-strong); }
+      .pause-master { display:flex; gap:0.6rem; margin:1rem 0 1.25rem; flex-wrap:wrap; }
+      .pause-master form { flex:1 1 0; min-width:9rem; }
+      .pause-master .pause-btn { width:100%; }
       .pause-list { display:flex; flex-direction:column; gap:0.75rem; }
-      .pause-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:0.9rem 1.1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); }
+      .pause-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); }
+      @media (max-width: 767px) {
+        .pause-row { flex-direction:column; align-items:stretch; gap:0.75rem; }
+        .pause-row .pause-form, .pause-row .pause-btn { width:100%; }
+      }
       .pause-text { min-width:0; }
       .pause-title { font-family:var(--font-display); font-weight:600; color:var(--text-main); }
       .pause-desc, .pause-meta { font-size:0.75rem; color:var(--text-muted); line-height:1.5; margin-top:0.2rem; }
       .pause-state { font-size:0.6875rem; font-weight:700; letter-spacing:0.05em; margin-left:0.4rem; }
       .pause-state.is-paused { color:var(--color-warning-text); }
       .pause-state.is-running { color:var(--text-subtle); }
-      .pause-btn { min-height:44px; padding:0 1.1rem; border-radius:var(--radius-sm); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--text-main); font-weight:600; cursor:pointer; }
+      .pause-btn { min-height:48px; padding:0 1.1rem; border-radius:var(--radius-sm); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--text-main); font-weight:600; cursor:pointer; }
       .pause-btn.is-paused { border-color:var(--color-warning-strong); }
       .pause-btn:hover { background:var(--bg-hover); }
       .pause-btn:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; }
+      details.sw-exp { margin-top:1.25rem; }
+      details.sw-exp > summary { display:flex; align-items:center; justify-content:space-between; gap:0.75rem; min-height:48px; padding:0 1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; font-weight:600; list-style:none; user-select:none; }
+      details.sw-exp > summary::-webkit-details-marker { display:none; }
+      details.sw-exp[open] > summary { border-radius:var(--radius-md) var(--radius-md) 0 0; }
+      .sw-exp-sub { font-size:0.8125rem; font-weight:400; color:var(--text-muted); }
+      .sw-exp-body { padding:1rem; background:var(--bg-surface); border:1px solid var(--border-color); border-top:none; border-radius:0 0 var(--radius-md) var(--radius-md); }
+      .sw-tickers { display:flex; flex-direction:column; align-items:flex-start; gap:0.75rem; }
     </style>
   </section>`;
 }
