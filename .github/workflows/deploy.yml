@@ -377,7 +377,7 @@ jobs:
   #
   # Leaner than the backend jobs on purpose: dashboard-next/ is its own npm
   # project, so the root `npm ci` is skipped, and lint/tsc are not repeated here
-  # (the PR check Dashboard Next CI runs them, and the OpenNext build compiles the
+  # (the PR check dashboard-next.yml, named deploy-dashboard, runs them, and the OpenNext build compiles the
   # app again anyway). The gateway tests (test/dashboard_gateway*.test.js) run in
   # the root `test` job this job already waits on. Keeps the Worker name, so the
   # workers.dev URL and secrets already stored on it survive.
