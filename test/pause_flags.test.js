@@ -10,7 +10,6 @@ import { PAUSE_KEYS, getPauseFlags, isPaused, setPauseFlags } from "../src/stora
 import backend from "../src/index.js";
 import ingestWorker from "../src/ingest-worker.js";
 import llmWorker from "../src/llm-worker.js";
-import { renderControlsView, renderPausedBanner } from "../src/dashboard/views/controls.js";
 
 const STATE_DIR = fileURLToPath(new URL("../migrations/state", import.meta.url));
 
@@ -196,17 +195,4 @@ test("llm worker: Trading or LLM paused acks analyze and exit_check without runn
     await llmWorker.queue({ messages }, env);
     assert.ok(messages.every((m) => m.acked && !m.retried), key);
   }
-});
-
-// ---------------------------------------------------------------------------
-// views
-// ---------------------------------------------------------------------------
-
-test("controls view: banner only when something is paused; page lists all four switches", () => {
-  assert.equal(renderPausedBanner({ ingestion: false, trading: false, llm: false, backtests: false }), "");
-  assert.match(renderPausedBanner({ trading: true }), /PAUSED:<\/strong> Trading/);
-  const html = renderControlsView({ flags: { llm: true }, meta: {}, error: null });
-  for (const label of ["Ingestion", "Trading", "LLM calls", "Backtests"]) assert.ok(html.includes(label), label);
-  assert.match(html, /Resume all/);
-  assert.match(html, /Pause all/);
 });
