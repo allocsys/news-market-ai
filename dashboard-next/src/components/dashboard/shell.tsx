@@ -294,9 +294,45 @@ export function SectionTabs({
 // ============================================================
 // Env selector — sticky pill row, switch between live and backtests
 // ============================================================
-import { ENVIRONMENTS } from "@/lib/mock-data";
+import { useBacktestRuns } from "@/lib/api";
+import type { BacktestRun } from "@/lib/types";
 import { useState } from "react";
 import { ChevronDown, Check } from "lucide-react";
+
+type EnvStatus = "live" | "running" | "paused" | "complete" | "failed";
+interface EnvOption {
+  id: string;
+  label: string;
+  status: EnvStatus;
+}
+
+/** "AAPL, MSFT +2 · 2026-09-01", plus a status suffix for anything not complete (same as the old selector). */
+function runEnvLabel(run: BacktestRun): string {
+  const tickers = Array.isArray(run.tickers) ? run.tickers : [];
+  const shown = tickers.slice(0, 3).join(", ");
+  const more = tickers.length > 3 ? ` +${tickers.length - 3}` : "";
+  const date = typeof run.testStart === "string" ? run.testStart.slice(0, 10) : "";
+  const base = [shown + more || run.id, date].filter(Boolean).join(" · ");
+  return run.status && run.status !== "complete" ? `${base} (${run.status})` : base;
+}
+
+function runEnvStatus(run: BacktestRun): EnvStatus {
+  const s = String(run.status);
+  if (s === "running" || s === "queued") return "running";
+  if (s === "paused") return "paused";
+  if (s === "failed" || s === "cancelled") return "failed";
+  return "complete";
+}
+
+/** Live first, then non-failed runs, then failed ones; the active env is always present. */
+function buildEnvironments(runs: BacktestRun[], active: string): EnvOption[] {
+  const toOption = (r: BacktestRun): EnvOption => ({ id: r.id, label: runEnvLabel(r), status: runEnvStatus(r) });
+  const ok = runs.filter((r) => runEnvStatus(r) !== "failed").map(toOption);
+  const failed = runs.filter((r) => runEnvStatus(r) === "failed").map(toOption);
+  const list: EnvOption[] = [{ id: "live", label: "Live", status: "live" }, ...ok, ...failed];
+  if (!list.some((e) => e.id === active)) list.push({ id: active, label: active, status: "complete" });
+  return list;
+}
 
 export function EnvSelector({
   env,
@@ -308,7 +344,9 @@ export function EnvSelector({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const current = ENVIRONMENTS.find((e) => e.id === env) ?? ENVIRONMENTS[0];
+  const backtestRuns = useBacktestRuns();
+  const environments = buildEnvironments(backtestRuns.data?.backtestRuns ?? [], env);
+  const current = environments.find((e) => e.id === env) ?? environments[0];
   const isLive = current.id === "live";
 
   return (
@@ -340,7 +378,7 @@ export function EnvSelector({
             role="listbox"
             className="absolute z-50 mt-1 max-h-72 w-full min-w-[260px] overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-xl"
           >
-            {ENVIRONMENTS.map((e) => {
+            {environments.map((e) => {
               const active = e.id === env;
               return (
                 <li key={e.id}>
