@@ -415,6 +415,22 @@ export function useControls() {
   });
 }
 
+// --- Tickers (search palette universe; env-aware) ---
+export interface TickersResponse {
+  tickers: string[];
+  error: string | null;
+  resolvedEnv: EnvId;
+  envError: string | null;
+}
+export function useTickers(env?: string) {
+  return useQuery({
+    queryKey: ["tickers", env ?? "live"],
+    queryFn: () => apiFetch<TickersResponse>(`/api/tickers${envParam(env)}`),
+    staleTime: 60_000,
+    retry: 1,
+  });
+}
+
 // --- Watchlist (configured tickers, in order) ---
 export interface WatchlistResponse {
   tickers: string[];
