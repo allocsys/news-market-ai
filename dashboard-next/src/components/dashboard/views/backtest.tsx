@@ -17,8 +17,12 @@ import {
   useActiveJob,
   usePostBacktestRun,
   usePostBacktestAction,
+  usePostBacktestCleanup,
+  usePostBacktestPurge,
+  useWatchlist,
+  type MaintenanceResult,
 } from "@/lib/api";
-import { WATCHLIST } from "@/lib/mock-data";
+import { ReplayPanel } from "./replay";
 import type { BacktestRun } from "@/lib/types";
 import { SectionHeading, StatusBadge, Pill, MiniStat, EmptyState, ErrorState } from "../primitives";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -39,6 +43,37 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import type { ViewProps } from "./types";
 
+const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+// Toast for the bulk-maintenance routes. Both are bounded per call and answer
+// with counts ({ scanned, totalDeleted, processed } / { scanned, purged, ... });
+// cleanup reports a failed candidate lookup as `error` inside a 200.
+function reportMaintenance(what: string, r: MaintenanceResult | null) {
+  if (!r) {
+    toast.success(`${what} done`);
+    return;
+  }
+  if (typeof r.error === "string" && r.error) {
+    toast.error(`${what}: ${r.error}`);
+    return;
+  }
+  const num = (k: string) => (typeof r[k] === "number" ? (r[k] as number) : null);
+  const scanned = num("scanned");
+  const purged = num("purged");
+  const deleted = num("totalDeleted");
+  if (scanned === 0) {
+    toast.success(`${what}: nothing matched`);
+    return;
+  }
+  const parts: string[] = [];
+  if (purged != null) parts.push(`${purged} run${purged === 1 ? "" : "s"} deleted`);
+  else if (scanned != null) parts.push(`${scanned} run${scanned === 1 ? "" : "s"} cleaned`);
+  if (deleted != null) parts.push(`${deleted} row${deleted === 1 ? "" : "s"} removed`);
+  const processed = Array.isArray(r.processed) ? (r.processed as { complete?: boolean }[]) : [];
+  const more = processed.some((p) => p.complete === false);
+  toast.success(`${what}: ${parts.join(", ") || "done"}${more ? ". Some runs were cut short; run it again to finish." : ""}`);
+}
+
 const RANGE_PRESETS = [
   { label: "7d", days: 7 },
   { label: "14d", days: 14 },
@@ -50,11 +85,36 @@ export function BacktestView({ onNavigate }: ViewProps) {
   const [showNewRun, setShowNewRun] = useState(true);
   const [showRecent, setShowRecent] = useState(true);
   const [showMaintenance, setShowMaintenance] = useState(false);
+  const [showReplay, setShowReplay] = useState(false);
+  const [cleanupDays, setCleanupDays] = useState("30");
 
   const runs = useBacktestRuns();
   const activeJob = useActiveJob("backtest");
   const runMutation = usePostBacktestRun();
   const actionMutation = usePostBacktestAction();
+  const cleanup = usePostBacktestCleanup();
+  const purge = usePostBacktestPurge();
+
+  const runCleanup = () => {
+    const n = Number(cleanupDays);
+    if (!Number.isFinite(n) || n <= 0) {
+      toast.error("Enter a number of days greater than 0");
+      return;
+    }
+    cleanup.mutate(
+      { olderThanDays: n },
+      {
+        onSuccess: (r) => reportMaintenance("Clean up", r),
+        onError: (e) => toast.error(`Clean up failed: ${e.message}`),
+      },
+    );
+  };
+  const runPurge = () => {
+    purge.mutate(undefined, {
+      onSuccess: (r) => reportMaintenance("Delete", r),
+      onError: (e) => toast.error(`Delete failed: ${e.message}`),
+    });
+  };
 
   if (runs.isLoading) {
     return (
@@ -208,6 +268,25 @@ export function BacktestView({ onNavigate }: ViewProps) {
         </section>
       </Collapsible>
 
+      {/* News replay */}
+      <Collapsible open={showReplay} onOpenChange={setShowReplay}>
+        <section className="rounded-xl border border-border bg-card">
+          <CollapsibleTrigger asChild>
+            <button type="button" className="flex w-full items-center gap-2 px-4 py-3 text-left">
+              <FlaskConical className="h-4 w-4 text-muted-foreground" aria-hidden />
+              <span className="font-display text-base font-semibold">News replay</span>
+              <Pill tone="muted" size="sm">{(runs.data.replayJobs ?? []).length}</Pill>
+              <ChevronRight className={cn("ml-auto h-4 w-4 text-muted-foreground transition-transform", showReplay && "rotate-90")} />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="border-t border-border p-4">
+              <ReplayPanel replayJobs={runs.data.replayJobs ?? []} replayError={runs.data.replayError ?? null} />
+            </div>
+          </CollapsibleContent>
+        </section>
+      </Collapsible>
+
       {/* Maintenance */}
       <Collapsible open={showMaintenance} onOpenChange={setShowMaintenance}>
         <section className="rounded-xl border border-border bg-card">
@@ -230,7 +309,9 @@ export function BacktestView({ onNavigate }: ViewProps) {
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
-                    defaultValue={30}
+                    value={cleanupDays}
+                    onChange={(e) => setCleanupDays(e.target.value)}
+                    min={1}
                     className="w-20 rounded-md border border-border bg-card px-2 py-1.5 text-sm font-mono nums"
                     aria-label="Older than days"
                   />
@@ -243,7 +324,7 @@ export function BacktestView({ onNavigate }: ViewProps) {
                       <AlertDialogHeader>
                         <AlertDialogTitle>Clean up old runs?</AlertDialogTitle>
                         <AlertDialogDescription>
-                          This will delete trade-level data for terminal runs older than 30 days. Run summaries are kept. This cannot be undone.
+                          This will delete trade-level data for terminal runs older than {cleanupDays || "?"} days (a bounded batch per click). Run summaries are kept, but their trade timelines will be empty. This cannot be undone.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
@@ -300,9 +381,11 @@ interface BacktestFormProps {
 }
 
 function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
-  const [tickers, setTickers] = useState<string[]>(["AAPL"]);
-  const [testStart, setTestStart] = useState("2026-09-01");
-  const [testEnd, setTestEnd] = useState("2026-09-30");
+  const watchlistQuery = useWatchlist();
+  const watchlist = (watchlistQuery.data?.tickers ?? []).map((ticker) => ({ ticker }));
+  const [tickers, setTickers] = useState<string[]>([]);
+  const [testStart, setTestStart] = useState(() => daysAgo(30));
+  const [testEnd, setTestEnd] = useState(() => daysAgo(0));
   const [enableLlmLog, setEnableLlmLog] = useState(false);
 
   const toggleTicker = (t: string) => {
@@ -324,7 +407,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
       <div>
         <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Tickers</p>
         <div className="flex flex-wrap gap-2">
-          {WATCHLIST.map((t) => (
+          {watchlist.map((t) => (
             <label
               key={t.ticker}
               className={cn(
@@ -414,7 +497,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
           ) : (
             <>
               <Play className="mr-1 h-3 w-3" />
-              Run backtest
+              {tickers.length === 0 && watchlist.length > 0 ? `Run backtest (all ${watchlist.length} tickers)` : "Run backtest"}
             </>
           )}
         </Button>
