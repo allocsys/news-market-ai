@@ -329,7 +329,10 @@ export function BacktestView({ onNavigate }: ViewProps) {
                       </AlertDialogHeader>
                       <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={runCleanup}
+                        >
                           Clean up
                         </AlertDialogAction>
                       </AlertDialogFooter>
@@ -360,7 +363,10 @@ export function BacktestView({ onNavigate }: ViewProps) {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                      <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={runPurge}
+                      >
                         Delete
                       </AlertDialogAction>
                     </AlertDialogFooter>
