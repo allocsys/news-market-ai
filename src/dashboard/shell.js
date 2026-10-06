@@ -1197,7 +1197,11 @@ const STYLE = `
       padding: 0.1rem 0.4rem; border-radius: 999px;
       color: var(--color-info-text); background: var(--accent-subtle);
     }
-    .env-dropdown-label { max-width: 32vw; }
+    /* The chip must stay inside its flex cell (it shares a row with the page
+       controls): cap it at the cell width and let the label ellipsize. */
+    .env-dropdown { max-width: 100%; }
+    .env-dropdown > summary { max-width: 100%; min-width: 0; box-sizing: border-box; }
+    .env-dropdown-label { max-width: none; min-width: 0; flex: 1 1 auto; }
     /* Refresh shrinks to its icon. */
     .page-toolbar-refresh-label { display: none; }
     .page-toolbar .btn-secondary { min-width: 32px; padding: 0; justify-content: center; }
