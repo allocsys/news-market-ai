@@ -26,6 +26,7 @@
 // `data-theme` attribute and there's no flash of the wrong theme.
 
 import { escapeHtml, fmtTime, ENV_SECTIONS, envSuffix } from "./helpers.js";
+import { signalsCss } from "./signals_css.js";
 
 // ---- Inline SVG icon set (Lucide-style stroke icons, 20x20, currentColor) ----
 // Stored as raw <svg> strings so they can be dropped into nav links, badges,
@@ -1758,7 +1759,7 @@ ${themeColorMeta}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>${STYLE}</style>
+<style>${STYLE}${signalsCss}</style>
 <script>
   function setDateRange(fromId, toId, days) {
     const to = new Date();
