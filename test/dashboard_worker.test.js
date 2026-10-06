@@ -470,6 +470,32 @@ test("POST /backtest/replay/run takes ticker + a JSON newsItemIds array and forw
   assert.equal(missing.response.status, 400);
 });
 
+test("GET /backtest/replay/news (the replay picker's item list, outside /api) is session-gated and forwarded with its query string", async () => {
+  const backend = recordingBackend();
+  const env = loginConfiguredEnv({ BACKEND: backend });
+  const url = "https://dashboard.example/backtest/replay/news?ticker=AAPL&date=2024-01-15";
+
+  const anonymous = await worker.fetch(new Request(url), env);
+  assert.equal(anonymous.status, 401);
+  assert.equal(backend.calls.length, 0);
+
+  const cookie = await loggedInCookie(env);
+  const response = await worker.fetch(new Request(url, { headers: { Cookie: cookie } }), env);
+  assert.equal(response.status, 200);
+  assert.equal(backend.calls.length, 1);
+  assert.equal(backend.calls[0].method, "GET");
+  assert.equal(backend.calls[0].url.pathname, "/backtest/replay/news");
+  assert.equal(backend.calls[0].url.searchParams.get("ticker"), "AAPL");
+  assert.equal(backend.calls[0].url.searchParams.get("date"), "2024-01-15");
+});
+
+test("GET /backtest/replay/news returns 503 when the dashboard login isn't configured", async () => {
+  const backend = recordingBackend();
+  const response = await worker.fetch(new Request("https://dashboard.example/backtest/replay/news?ticker=AAPL&date=2024-01-15"), baseEnv({ BACKEND: backend }));
+  assert.equal(response.status, 503);
+  assert.equal(backend.calls.length, 0);
+});
+
 test("backend's status and body pass through unchanged (a 4xx from backend stays a 4xx JSON error)", async () => {
   const backend = recordingBackend(409);
   const env = loginConfiguredEnv({ BACKEND: backend });
