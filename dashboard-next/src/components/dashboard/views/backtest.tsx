@@ -393,6 +393,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [testStart, setTestStart] = useState(() => daysAgo(30));
   const [testEnd, setTestEnd] = useState(() => daysAgo(0));
   const [enableLlmLog, setEnableLlmLog] = useState(false);
+  const [disableGate, setDisableGate] = useState(false);
 
   const toggleTicker = (t: string) => {
     setTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -400,7 +401,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
 
   const submit = () => {
     mutation.mutate(
-      { testStart, testEnd, tickers, enableLlmLog },
+      { testStart, testEnd, tickers, enableLlmLog, disableGate },
       {
         onSuccess: (data) => onSubmitted(data.id),
         onError: (e) => toast.error(`Failed: ${e.message}`),
@@ -483,6 +484,12 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         <Checkbox checked={enableLlmLog} onCheckedChange={(v) => v !== "indeterminate" && setEnableLlmLog(!!v)} className="h-3.5 w-3.5" />
         <span className="text-xs">Enable LLM call logging for this run</span>
         <span className="text-[10px] text-muted-foreground">(spends extra D1 writes)</span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={disableGate} onCheckedChange={(v) => v !== "indeterminate" && setDisableGate(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Disable price-impact gate</span>
+        <span className="text-[10px] text-muted-foreground">(this run only; unchecked = gate on)</span>
       </label>
 
       <div className="flex items-start gap-2 rounded-lg border border-[color:var(--paused)]/25 bg-[color:var(--paused)]/8 px-3 py-2 text-xs">
