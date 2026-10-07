@@ -42,7 +42,7 @@
 // same safety-net split as backend's queue().
 
 import { loadConfig } from "./config.js";
-import { ingestTickerData, ingestFeedNews, backfillHistoricalNews, backfillHistoricalPriceBars, MACRO_TICKER } from "./ingestion/ingest.js";
+import { ingestTickerData, ingestFeedNews, ingestMacro, backfillHistoricalNews, backfillHistoricalPriceBars, MACRO_TICKER } from "./ingestion/ingest.js";
 import { isMacroEnabled } from "./storage/macro_flag.js";
 import { runIntradayBackfillTick } from "./ingestion/intraday_backfill.js";
 import { purgeOldIntradayBars } from "./ingestion/intraday_purge.js";
@@ -295,6 +295,31 @@ export default {
             await reporter.complete({ inserted: result.inserted, tickers: result.tickers, failedTickers, tickersWithNoBars: result.tickersWithNoBars }, summary.detail);
           } catch (err) {
             console.error("backfill_prices job failed", { id, from, to, message: err.message });
+            await reporter.fail(err.message);
+          }
+        } else if (job.type === "backfill_macro") {
+          // Operator-triggered macro history (FRED + CFTC COT for XAUUSD) from `from` to now.
+          // Same BACKFILL queue/consumer, same reporter and ack-and-log convention as
+          // backfill_prices above: single invocation, no continuation, never re-enqueued.
+          // Deliberately does NOT read the feature:macro flag -- that gates live ticks only.
+          // ingestMacro swallows a VendorError per half (logged), so "nothing stored from
+          // either half" is reported as failed rather than a misleading 0-row 'complete'.
+          const { id, from } = job;
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill_macro", params: { from } });
+          await reporter.start();
+          try {
+            const result = await ingestMacro(config, env.INPUTS_DB, { from, backfill: true });
+            const fredSkipped = !config.fredApiKey;
+            console.log("backfill_macro job finished", { id, from, fredCount: result.fredCount, cotCount: result.cotCount, fredSkipped });
+            if (result.count === 0) {
+              throw new Error(`No macro rows stored from ${from}${fredSkipped ? " (FRED skipped: FRED_API_KEY is not set)" : ""} -- check the vendor logs`);
+            }
+            await reporter.complete(
+              { fredCount: result.fredCount, cotCount: result.cotCount, fredSkipped },
+              `Stored ${result.fredCount} FRED + ${result.cotCount} COT row${result.count === 1 ? "" : "s"} from ${from}${fredSkipped ? " (FRED skipped: no API key)" : ""}`
+            );
+          } catch (err) {
+            console.error("backfill_macro job failed", { id, from, message: err.message });
             await reporter.fail(err.message);
           }
         } else if (job.type === "intraday_backfill_tick") {
