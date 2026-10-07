@@ -409,5 +409,19 @@ export async function handleGateway(request, env) {
     });
   }
 
+  // POST /controls/macro -- turn the live XAUUSD macro context (FRED + CFTC COT) on or off. `enabled` is 1/0 or a boolean; forwarded with the operator's username as `by`.
+  if (pathname === "/controls/macro" && request.method === "POST") {
+    return handleTriggerRoute(request, env, {
+      backendPath: "/controls/macro",
+      buildQuery: (searchParams, fromBody, sessionUsername) => {
+        const enabled = searchParams.get("enabled") ?? fromBody("enabled");
+        if (enabled !== "1" && enabled !== "0") return { error: "enabled must be 1 or 0 (or a boolean)" };
+        const params = { enabled };
+        if (sessionUsername) params.by = sessionUsername;
+        return { params };
+      },
+    });
+  }
+
   return jsonResponse({ error: "not found" }, { status: 404 });
 }
