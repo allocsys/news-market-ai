@@ -15,6 +15,7 @@ import {
 } from "@/components/dashboard/shell";
 import { PageToolbar } from "@/components/dashboard/page-toolbar";
 import { CommandPalette } from "@/components/dashboard/command-palette";
+import { ViewErrorBoundary } from "@/components/dashboard/error-boundary";
 import { MoreSheet } from "@/components/dashboard/more-sheet";
 import { useAuth } from "@/components/auth-provider";
 import { useLogout } from "@/lib/api";
@@ -179,7 +180,12 @@ export default function Home() {
           )}
 
           <div className="mx-auto max-w-5xl">
-            {renderSection()}
+            <ViewErrorBoundary
+              key={`${section}|${env}|${backtestDetailId ?? ""}`}
+              onReset={env !== "live" ? () => setEnv("live") : undefined}
+            >
+              {renderSection()}
+            </ViewErrorBoundary>
           </div>
         </main>
 
