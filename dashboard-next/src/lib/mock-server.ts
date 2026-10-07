@@ -45,6 +45,15 @@ const MOCK_RISK_LIMITS = {
 };
 const STATUSES = ["opened", "rejected", "superseded", "held", "skipped_irrelevant"] as const;
 
+// Live macro switch (FRED + CFTC COT for XAUUSD). In-memory only, resets on server restart. Default OFF like the real flag.
+const mockMacro = {
+  enabled: false,
+  updatedAt: null as string | null,
+  updatedBy: null as string | null,
+  error: null as string | null,
+  hasFredKey: true,
+};
+
 function filterDecisions(params: URLSearchParams): TradeDecision[] {
   const status = params.get("decisionStatus") ?? "all";
   const limit = Number(params.get("decisionLimit") ?? 20);
@@ -240,6 +249,9 @@ export function mockResolve(
     if (p === "/controls") {
       return { status: 200, body: PAUSE_FLAGS };
     }
+    if (p === "/macro") {
+      return { status: 200, body: mockMacro };
+    }
     if (p === "/active-tickers") {
       return {
         status: 200,
@@ -295,6 +307,14 @@ export function mockResolve(
     }
     if (p === "/controls/set" || p === "/controls/tickers") {
       return { status: 200, body: { accepted: true } };
+    }
+    if (p === "/controls/macro") {
+      const enabled = params.get("enabled") ?? (body && "enabled" in body ? (body.enabled ? "1" : "0") : null);
+      if (enabled !== "1" && enabled !== "0") return { status: 400, body: { error: "enabled must be 1 or 0" } };
+      mockMacro.enabled = enabled === "1";
+      mockMacro.updatedAt = new Date().toISOString();
+      mockMacro.updatedBy = "mock";
+      return { status: 200, body: mockMacro };
     }
     return null;
   }
