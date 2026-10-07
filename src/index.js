@@ -308,6 +308,38 @@ export default {
       }
     }
 
+    // Operator-triggered macro history backfill (FRED vintages + CFTC gold COT for
+    // XAUUSD), SAME pattern as POST /backfill-prices: job row in LIVE_DB's job_progress
+    // under run_id 'live' (type "backfill_macro"), enqueued onto the BACKFILL queue,
+    // consumed by ingest-worker.js. Only `from` (YYYY-MM-DD): FRED has no end bound,
+    // so the window is always from..now. Deliberately NOT gated on the feature:macro
+    // live flag -- that flag only gates live ticks/analysts, this is an explicit action.
+    if (pathname === "/backfill-macro" && request.method === "POST") {
+      const from = url.searchParams.get("from");
+      if (!isPlausibleDateString(from)) {
+        return jsonResponse({ error: "from query param is required, as YYYY-MM-DD" }, { status: 400 });
+      }
+      if (!isRealDate(from)) {
+        return jsonResponse({ error: "from must be a real calendar date (YYYY-MM-DD)" }, { status: 400 });
+      }
+      if (from < MIN_MACRO_BACKFILL_FROM) {
+        return jsonResponse({ error: `from must not be before ${MIN_MACRO_BACKFILL_FROM}` }, { status: 400 });
+      }
+      if (from > new Date().toISOString().slice(0, 10)) {
+        return jsonResponse({ error: "from must not be in the future" }, { status: 400 });
+      }
+
+      const id = newJobId("backfill-macro");
+      await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill_macro", params: { from } }).queued();
+      try {
+        await env.BACKFILL.send({ type: "backfill_macro", id, from });
+        return jsonResponse({ accepted: true, id, from });
+      } catch (err) {
+        console.error("backfill-macro enqueue failed", { id, from, message: err.message });
+        return jsonResponse({ error: "backfill-macro enqueue failed", message: err.message }, { status: 500 });
+      }
+    }
+
     // POST /backtest/run: RE-ENABLED (M3) -- enqueues onto BACKTEST for the
     // new `backtest` Worker (wrangler.backtest.toml) instead of running
     // inline or (pre-M2) via LLM_JOBS. Query-string only, same shape as the
