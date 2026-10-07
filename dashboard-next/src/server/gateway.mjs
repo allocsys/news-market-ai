@@ -9,7 +9,7 @@
 //   3. handleGateway(request, env) -- the session gate in front of the private
 //      `backend` Worker (env.BACKEND, a service binding):
 //        GET /api/*, GET /backtest/replay/news   read-only JSON passthrough
-//        POST /backfill, /backfill-prices, /backtest/*, /controls/*
+//        POST /backfill, /backfill-prices, /backfill-macro, /backtest/*, /controls/*
 //                                                body validated, then forwarded
 //
 // `backend` is private (no public route, see wrangler.toml) and holds no login
@@ -81,6 +81,7 @@ export async function getSession(request, env) {
 const NON_API_ROUTES = new Set([
   "/backfill",
   "/backfill-prices",
+  "/backfill-macro",
   "/backtest/run",
   "/backtest/cleanup",
   "/backtest/purge",
@@ -285,6 +286,20 @@ export async function handleGateway(request, env) {
         const params = { from, to };
         if (tickers) params.tickers = tickers;
         return { params };
+      },
+    });
+  }
+
+  // Macro (FRED + COT) history backfill. Only `from`: FRED has no end bound, so the window is from..now.
+  if (pathname === "/backfill-macro" && request.method === "POST") {
+    return handleTriggerRoute(request, env, {
+      backendPath: "/backfill-macro",
+      buildQuery: (searchParams, fromBody) => {
+        const from = searchParams.get("from") ?? fromBody("from");
+        if (!isPlausibleDateString(from)) {
+          return { error: "from is required, as YYYY-MM-DD" };
+        }
+        return { params: { from } };
       },
     });
   }
