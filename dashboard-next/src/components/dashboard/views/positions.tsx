@@ -69,8 +69,9 @@ export function PositionsView({ env }: ViewProps) {
             {exposurePctOfCeiling > 80 ? "high" : exposurePctOfCeiling > 50 ? "moderate" : "low"}
           </Pill>
         </div>
-        <div className="mt-4 flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+        <div className="mt-3 flex flex-col items-center gap-4 sm:flex-row sm:items-start sm:gap-6">
           <Gauge
+            size={180}
             value={exposurePctOfCeiling}
             min={0}
             max={100}
@@ -84,7 +85,8 @@ export function PositionsView({ env }: ViewProps) {
                   : "var(--primary)"
             }
           />
-          <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-4">
+          {/* w-full: in the stacked (mobile) layout items-center shrinks a flex-1 child to its content width, which is what left the tiles floating in a narrow centered block */}
+          <div className="grid w-full grid-cols-2 gap-3 sm:w-auto sm:flex-1 sm:grid-cols-4">
             <MiniStat value={open.length} label="Open positions" sub={`${longCount} long · ${shortCount} short`} />
             <MiniStat value={fmtPct(exposure, 1)} label="Gross exposure" sub="sum of position sizes" />
             <MiniStat
