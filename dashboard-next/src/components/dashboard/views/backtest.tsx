@@ -522,8 +522,8 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
       </div>
 
       <div className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" type="button">Cancel</Button>
-        <Button size="sm" type="button" onClick={submit} disabled={mutation.isPending}>
+        <Button variant="outline" size="sm" type="button" onClick={reset} disabled={mutation.isPending}>Reset</Button>
+        <Button size="sm" type="button" onClick={requestSubmit} disabled={mutation.isPending}>
           {mutation.isPending ? (
             <>
               <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -537,6 +537,22 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
           )}
         </Button>
       </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start this backtest?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {tickers.length === 0 ? `All ${watchlist.length} watchlist tickers` : `${tickers.length} ticker${tickers.length === 1 ? "" : "s"} (${tickers.join(", ")})`}
+              {" "}from {testStart} to {testEnd}. This spends real Gemini quota.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={submit}>Start backtest</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
