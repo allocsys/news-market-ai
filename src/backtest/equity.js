@@ -24,7 +24,9 @@
 // close-to-close move, and one closed during day E (exit price = the prior
 // close) stops earning at day E-1's close. That is why a position is "active" on
 // grid date g exactly when  openDate <= g < closeDate  (UTC dates), with no
-// need to look up the entry or exit bar. The equal-weight baseline is bought at
+// need to look up the entry or exit bar. (That holds for an exit at the prior close. A position closed
+// at an intraday price -- a flip, stop or target -- is additionally realized at its stored exit_price
+// on its close date; see onEquityReturns.) The equal-weight baseline is bought at
 // the prior close of the first day too, so both sides earn every day's move.
 //
 // Returned series are FRACTIONAL daily returns (0.01 = +1%), aligned with
@@ -275,8 +277,8 @@ export function onEquityReturns(grid, positions, { costBps = 0 } = {}) {
       // has openDate === closeDate; the plain `date >= closeDate` check below
       // would then exclude it on its only active day, silently dropping every
       // same-day round trip from the curve. Let it be active for exactly that
-      // one day (never any day after), consistent with the header's own
-      // "priced at the same prior close both times, a 0% round trip" intent.
+      // one day (never any day after). It is valued at its stored exit price when it has one (see the
+      // function header), else at that day's close (a 0% round trip when entry and close coincide).
       if (pos.closeDate !== null && date >= pos.closeDate && pos.closeDate !== pos.openDate) continue;
       if (pos.closeDate !== null && pos.closeDate === pos.openDate && date !== pos.openDate) continue;
 
