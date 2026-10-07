@@ -24,6 +24,7 @@ browser ──► news-market-ai-dashboard (this app, one Cloudflare Worker)
 - **Reads:** `GET /api/<x>` → session check → `GET /api/<x>` on the backend. 401
   JSON when there is no valid session, 503 when the login isn't configured.
 - **Writes:** the POST trigger routes (`/backfill`, `/backfill-prices`,
+  `/backfill-macro`,
   `/backtest/run`, `/backtest/:id/{cancel,pause,resume}`, `/backtest/cleanup`,
   `/backtest/purge`, `/backtest/replay/run`, `/controls/set`,
   `/controls/tickers`). The catch-all `src/app/api/[...path]/route.ts` maps the
