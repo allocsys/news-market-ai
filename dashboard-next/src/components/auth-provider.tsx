@@ -9,7 +9,6 @@ interface AuthUser {
 
 interface AuthContextValue {
   user: AuthUser | null;
-  mock: boolean;
   loading: boolean;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -17,35 +16,27 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-interface AuthState {
-  user: AuthUser | null;
-  /** undefined = leave the current mock flag unchanged */
-  mock?: boolean;
-}
-
-async function fetchAuth(): Promise<AuthState> {
+async function fetchAuth(): Promise<AuthUser | null> {
   try {
     const res = await fetch("/api/auth", { credentials: "same-origin" });
-    if (!res.ok) return { user: null };
+    if (!res.ok) return null;
     const body = await res.json();
     if (body.authenticated) {
-      return { user: body.user ?? { username: "operator" }, mock: Boolean(body.mock) };
+      return body.user ?? { username: "operator" };
     }
-    return { user: null, mock: Boolean(body.mock) };
+    return null;
   } catch {
-    return { user: null };
+    return null;
   }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [mock, setMock] = useState(false);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  const apply = useCallback((s: AuthState) => {
-    setUser(s.user);
-    if (s.mock !== undefined) setMock(s.mock);
+  const apply = useCallback((u: AuthUser | null) => {
+    setUser(u);
     setLoading(false);
   }, []);
 
@@ -57,8 +48,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // synchronously inside the effect body.
   useEffect(() => {
     let active = true;
-    fetchAuth().then((s) => {
-      if (active) apply(s);
+    fetchAuth().then((u) => {
+      if (active) apply(u);
     });
     return () => {
       active = false;
@@ -72,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   return (
-    <AuthContext.Provider value={{ user, mock, loading, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );

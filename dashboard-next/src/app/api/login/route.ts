@@ -6,13 +6,9 @@
 // JWT with JWT_SECRET. The session cookie is set directly on the response:
 // the app and its API share one origin, so there is nothing to forward or
 // rewrite.
-//
-// In MOCK mode (no backend configured, local dev only) any credentials are
-// accepted (or the ones in .env, if set) and a fake session cookie is issued,
-// so the UI flow can be exercised end to end.
 
 import { NextRequest, NextResponse } from "next/server";
-import { SESSION_COOKIE_NAME, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, COOKIE_SECURE } from "@/lib/server-config";
+import { COOKIE_SECURE } from "@/lib/server-config";
 import { getBackend } from "@/lib/backend";
 import { login } from "@/server/gateway.mjs";
 
@@ -37,38 +33,11 @@ export async function POST(request: NextRequest) {
   const backend = getBackend();
   if (backend.kind === "unconfigured") {
     return NextResponse.json(
-      { error: "dashboard backend is not configured (missing BACKEND service binding)" },
+      { error: "dashboard backend is not configured (set the BACKEND service binding, or BACKEND_URL for local dev)" },
       { status: 503 },
     );
   }
 
-  // === Mock mode (local dev only) ===
-  if (backend.kind === "mock") {
-    if (DASHBOARD_USERNAME && DASHBOARD_PASSWORD) {
-      // If local env has credentials set even in mock mode, validate against them
-      if (username !== DASHBOARD_USERNAME || password !== DASHBOARD_PASSWORD) {
-        return NextResponse.json({ error: "Invalid username or password." }, { status: 401 });
-      }
-    }
-    const fakeJwt = btoa(JSON.stringify({ sub: username || "mock-user", iat: Date.now(), exp: Date.now() + 86400_000 }));
-    const attrs = [
-      `${SESSION_COOKIE_NAME}=${fakeJwt}`,
-      "Path=/",
-      "HttpOnly",
-      "SameSite=Lax",
-      "Max-Age=86400",
-    ];
-    if (COOKIE_SECURE) attrs.push("Secure");
-    return NextResponse.json(
-      { ok: true, user: { username: username || "mock-user" }, mock: true },
-      {
-        status: 200,
-        headers: { "set-cookie": attrs.join("; ") },
-      },
-    );
-  }
-
-  // === Real mode ===
   const result = await login(backend.env, username, password, { secure: COOKIE_SECURE });
   if (result.status !== 200 || !result.cookie) {
     return NextResponse.json({ error: result.error ?? "login failed" }, { status: result.status });
