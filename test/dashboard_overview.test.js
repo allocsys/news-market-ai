@@ -10,6 +10,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getOverviewData } from "../src/dashboard/data.js";
+import { computeRealizedReturn } from "../src/shared/returns.js";
+import { loadConfig } from "../src/config.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR, INPUTS_DIR, seedBar, seedNews } from "./helpers/engine_ctx.js";
@@ -118,6 +120,39 @@ test("getOverviewData: latestDecision skips newer skipped_irrelevant rows (they 
   assert.equal(none.latestDecision, null, "only skipped_irrelevant rows -> no latest decision rather than a debate-less one");
 });
 
+test("getOverviewData: realizedPnlPct sums size * net return over EVERY closed position of the run (not just the 20 listed), ignoring open positions and other runs", async () => {
+  const env = baseEnv();
+  const live = new RunStore(env.LIVE_DB, "live");
+  const other = new RunStore(env.LIVE_DB, "bt-1");
+  const costBps = loadConfig(env).tradeCostBps;
+
+  const empty = await getOverviewData(env, BASE_PARAMS);
+  assert.equal(empty.realizedPnlPct, 0, "nothing closed -> 0, not null");
+  assert.equal(empty.realizedPnlError, null);
+
+  const seeded = [];
+  async function closed(store, id, { direction, size, entry, exit }) {
+    await store.openPosition({ id, ticker: id, tradeThesisId: id, positionSizePct: size, direction, entryPrice: entry, stopLossPct: 0.03, takeProfitPct: 0.06, openedAt: "2026-01-01T00:00:00.000Z" });
+    await store.closePosition({ id, closedAt: "2026-01-05T00:00:00.000Z", closeReason: "take_profit", exitPrice: exit });
+  }
+  // 25 closed longs: more than the 20 the closedPositions list is capped to.
+  for (let i = 0; i < 25; i++) {
+    await closed(live, `L${i}`, { direction: "long", size: 0.01, entry: 100, exit: 102 });
+    seeded.push({ size: 0.01, direction: "long", entryPrice: 100, exitPrice: 102 });
+  }
+  await closed(live, "S1", { direction: "short", size: 0.05, entry: 100, exit: 103 });
+  seeded.push({ size: 0.05, direction: "short", entryPrice: 100, exitPrice: 103 });
+  // An open position and another run's closed position must not count.
+  await live.openPosition({ id: "OPEN", ticker: "OPEN", tradeThesisId: "OPEN", positionSizePct: 0.1, direction: "long", entryPrice: 100, stopLossPct: 0.03, takeProfitPct: 0.06, openedAt: "2026-01-02T00:00:00.000Z" });
+  await closed(other, "OTHER", { direction: "long", size: 0.2, entry: 100, exit: 150 });
+
+  const expected = seeded.reduce((sum, p) => sum + p.size * computeRealizedReturn({ direction: p.direction, entryPrice: p.entryPrice, exitPrice: p.exitPrice, costBps }), 0);
+  const data = await getOverviewData(env, BASE_PARAMS);
+  assert.equal(data.realizedPnlError, null);
+  assert.equal(data.closedPositions.length, 20, "the list stays capped");
+  assert.ok(Math.abs(data.realizedPnlPct - expected) < 1e-12, `expected ${expected}, got ${data.realizedPnlPct}`);
+});
+
 test("getOverviewData: a broken LIVE_DB surfaces as snapshotError/pipelineError/latestDecisionError independently, while healthError (INPUTS_DB) stays unaffected", async () => {
   const env = baseEnv({ LIVE_DB: { prepare() { throw new Error("LIVE_DB unavailable"); } } });
   await seedBar(env.INPUTS_DB, { ticker: "AAPL", date: "2026-01-01", close: 100 });
@@ -130,6 +165,8 @@ test("getOverviewData: a broken LIVE_DB surfaces as snapshotError/pipelineError/
   assert.equal(data.health.priceBars.count, 1);
   assert.deepEqual(data.openPositions, []);
   assert.deepEqual(data.checkpoints, []);
+  assert.match(data.realizedPnlError, /LIVE_DB unavailable/);
+  assert.equal(data.realizedPnlPct, null);
   assert.equal(data.latestDecision, null);
 });
 
