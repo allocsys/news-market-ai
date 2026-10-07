@@ -1044,18 +1044,27 @@ export class RunStore {
     };
   }
 
-  /** Most recent trade_decisions rows, newest first. `status`, if given, filters to that exact status ("approved"/"rejected"/...). */
-  async listRecentTradeDecisions({ limit = 20, status } = {}) {
+  /**
+   * Most recent trade_decisions rows, newest first. `status`, if given, filters to that exact status ("approved"/"rejected"/...).
+   * `excludeStatus`, if given (and `status` is not), drops rows of that status -- the Overview's "latest decision" uses it to skip
+   * skipped_irrelevant rows, which never reach the debate and are the bulk of the table.
+   */
+  async listRecentTradeDecisions({ limit = 20, status, excludeStatus } = {}) {
     const cols = `id, ticker, as_of, thesis, risk_decision, portfolio_decision, status, created_at, opinions, debate`;
     const { results } = status
       ? await this.db
           .prepare(`SELECT ${cols} FROM trade_decisions WHERE run_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?`)
           .bind(this.runId, status, limit)
           .all()
-      : await this.db
-          .prepare(`SELECT ${cols} FROM trade_decisions WHERE run_id = ? ORDER BY created_at DESC LIMIT ?`)
-          .bind(this.runId, limit)
-          .all();
+      : excludeStatus
+        ? await this.db
+            .prepare(`SELECT ${cols} FROM trade_decisions WHERE run_id = ? AND status != ? ORDER BY created_at DESC LIMIT ?`)
+            .bind(this.runId, excludeStatus, limit)
+            .all()
+        : await this.db
+            .prepare(`SELECT ${cols} FROM trade_decisions WHERE run_id = ? ORDER BY created_at DESC LIMIT ?`)
+            .bind(this.runId, limit)
+            .all();
 
     return results.map((r) => ({
       id: r.id,
