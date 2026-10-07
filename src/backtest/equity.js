@@ -24,7 +24,9 @@
 // close-to-close move, and one closed during day E (exit price = the prior
 // close) stops earning at day E-1's close. That is why a position is "active" on
 // grid date g exactly when  openDate <= g < closeDate  (UTC dates), with no
-// need to look up the entry or exit bar. The equal-weight baseline is bought at
+// need to look up the entry or exit bar. (That holds for an exit at the prior close. A position closed
+// at an intraday price -- a flip, stop or target -- is additionally realized at its stored exit_price
+// on its close date; see onEquityReturns.) The equal-weight baseline is bought at
 // the prior close of the first day too, so both sides earn every day's move.
 //
 // Returned series are FRACTIONAL daily returns (0.01 = +1%), aligned with
@@ -38,6 +40,9 @@ import { sideCostFraction } from "../shared/returns.js";
 export const DEFAULT_MAX_PRICE_GAP_DAYS = 5;
 
 const DAY_MS = 86400000;
+
+/** Value of one unit of allocation after the price has moved to `move` x its entry price (a short is floored at 0). */
+const positionValueFactor = (direction, move) => (direction === "long" ? move : Math.max(0, 2 - move));
 
 /** Whole calendar days from `a` to `b` (both `YYYY-MM-DD`); negative if b is before a. */
 export function daysBetween(a, b) {
@@ -181,9 +186,18 @@ export function offEquityReturns(grid, { costBps = 0 } = {}) {
  * of the equity sits in cash at 0%. Equity starts at 1.
  *
  * A position is active on grid date g iff  openDate <= g  and  (still open or
- * g < closeDate)  in UTC dates -- see the header for why that is exactly right.
- * A position that opened and closed within one UTC day is never active (it is
- * priced at the same prior close both times, a 0% round trip).
+ * g < closeDate)  in UTC dates: it is marked at the grid close on each active day.
+ *
+ * EXIT PRICE: a closed position with a usable `exitPrice` is realized at it, not at a
+ * grid close. The header's "exit = the prior close" convention only holds for a daily-close
+ * exit; a flip, stop or target exits intraday at its own price, and the move from the last
+ * active close to that price used to be booked by nobody (while the live P&L, which uses
+ * exit_price, counted it). Now, on the first grid date on/after the close date, the position
+ * is revalued at exitPrice and the difference is booked that day. When exitPrice equals the
+ * last active close (the old convention) that difference is exactly 0, so such positions are
+ * scored as before. A position that opened and closed within one UTC day is active that one
+ * day and is marked at exitPrice instead of that day's close. A position with no usable
+ * exitPrice (null: no data) keeps the old behavior -- never guessed at.
  *
  * Positions on a ticker outside the scored universe, or without a usable
  * entry price, direction or size, cannot be replayed and are COUNTED in
@@ -226,6 +240,8 @@ export function onEquityReturns(grid, positions, { costBps = 0 } = {}) {
       allocation: null,
       previousValue: null,
       exitCharged: false,
+      hasExit: p.closedAt != null && Number.isFinite(p.exitPrice) && p.exitPrice > 0,
+      exitRealized: false,
     });
   }
 
@@ -241,6 +257,15 @@ export function onEquityReturns(grid, positions, { costBps = 0 } = {}) {
 
     for (const pos of replayable) {
       if (pos.openDate > date) continue;
+      // Realize the final stretch at the stored exit price, on the first grid date on/after the close date
+      // (see the function header). Before the exit-cost block below, so the cost scales with the exit value.
+      // Same-day positions are realized in the active branch instead (date > openDate excludes them here).
+      if (pos.hasExit && !pos.exitRealized && pos.allocation !== null && pos.closeDate !== null && date >= pos.closeDate && date > pos.openDate) {
+        const exitValue = pos.allocation * positionValueFactor(pos.direction, pos.exitPrice / pos.entryPrice);
+        pnl += exitValue - pos.previousValue;
+        pos.previousValue = exitValue;
+        pos.exitRealized = true;
+      }
       // Exit cost, on the first grid date the position is no longer held: on/after
       // its close date and, for a same-day round trip (closeDate === openDate,
       // active only that one day), strictly after the open date.
@@ -252,8 +277,8 @@ export function onEquityReturns(grid, positions, { costBps = 0 } = {}) {
       // has openDate === closeDate; the plain `date >= closeDate` check below
       // would then exclude it on its only active day, silently dropping every
       // same-day round trip from the curve. Let it be active for exactly that
-      // one day (never any day after), consistent with the header's own
-      // "priced at the same prior close both times, a 0% round trip" intent.
+      // one day (never any day after). It is valued at its stored exit price when it has one (see the
+      // function header), else at that day's close (a 0% round trip when entry and close coincide).
       if (pos.closeDate !== null && date >= pos.closeDate && pos.closeDate !== pos.openDate) continue;
       if (pos.closeDate !== null && pos.closeDate === pos.openDate && date !== pos.openDate) continue;
 
@@ -264,8 +289,11 @@ export function onEquityReturns(grid, positions, { costBps = 0 } = {}) {
         traded.add(pos.id);
       }
 
-      const move = grid.closes[pos.ticker][k] / pos.entryPrice;
-      const value = pos.allocation * (pos.direction === "long" ? move : Math.max(0, 2 - move));
+      // A same-day round trip is active for one day only and is valued at its real exit price, not that day's close.
+      const sameDayExit = pos.hasExit && pos.closeDate === pos.openDate;
+      const markPrice = sameDayExit ? pos.exitPrice : grid.closes[pos.ticker][k];
+      const value = pos.allocation * positionValueFactor(pos.direction, markPrice / pos.entryPrice);
+      if (sameDayExit) pos.exitRealized = true;
       invested += pos.previousValue;
       pnl += value - pos.previousValue;
       pos.previousValue = value;
