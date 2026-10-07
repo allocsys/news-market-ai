@@ -1171,21 +1171,24 @@ export class RunStore {
    * `datetime('now', ...)`).
    */
   async getDecisionStats({ days = 14, anchor = null } = {}) {
-    const totalsResult = await this.db
-      .prepare(`SELECT status, COUNT(*) AS count FROM trade_decisions WHERE run_id = ? GROUP BY status`)
-      .bind(this.runId)
-      .all();
-
-    const dailyResult = await this.db
-      .prepare(
-        `SELECT substr(created_at, 1, 10) AS day, status, COUNT(*) AS count
-         FROM trade_decisions
-         WHERE run_id = ? AND created_at >= datetime(?, ?)
-         GROUP BY day, status
-         ORDER BY day ASC`
-      )
-      .bind(this.runId, anchor ?? "now", `-${days} days`)
-      .all();
+    // The two reads are independent, so both start in the same tick (not awaited one after the other): over an
+    // autoBatch()-wrapped handle they leave as one db.batch(), and on a plain handle they simply overlap.
+    const [totalsResult, dailyResult] = await Promise.all([
+      this.db
+        .prepare(`SELECT status, COUNT(*) AS count FROM trade_decisions WHERE run_id = ? GROUP BY status`)
+        .bind(this.runId)
+        .all(),
+      this.db
+        .prepare(
+          `SELECT substr(created_at, 1, 10) AS day, status, COUNT(*) AS count
+           FROM trade_decisions
+           WHERE run_id = ? AND created_at >= datetime(?, ?)
+           GROUP BY day, status
+           ORDER BY day ASC`
+        )
+        .bind(this.runId, anchor ?? "now", `-${days} days`)
+        .all(),
+    ]);
 
     const totals = totalsResult.results.reduce((acc, r) => {
       acc[r.status] = r.count;
