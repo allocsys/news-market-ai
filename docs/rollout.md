@@ -91,11 +91,19 @@ Each backtest run takes the knobs as request params, so a sweep needs no redeplo
 
 `POST /backtest/run?...&tradeCostBps=5&drawdownBreakerPct=0.02&drawdownBreakerWindowDays=14&splitGuardTolerance=0.05&flipMinConfidence=0.7`
 
-- Only the allowlisted knobs are accepted (see `KNOB_OVERRIDES` in `src/backtest/knobOverrides.js`; the example above shows five, plus `dailyBothTouchedNearestOpen` and `skipNoPriceImpact`). A blank value means "use the default"; a present but invalid or out-of-range value returns 400 before any job row is created.
+- Only the allowlisted knobs are accepted (see `KNOB_OVERRIDES` in `src/backtest/knobOverrides.js`; the example above shows five, plus `dailyBothTouchedNearestOpen`, `skipNoPriceImpact` and `macroEnabled`). A blank value means "use the default"; a present but invalid or out-of-range value returns 400 before any job row is created.
 - `0` is a real value: it disables the breaker (`drawdownBreakerPct`) or the split guard (`splitGuardTolerance`), and `flipMinConfidence=0` means always flip.
 - The overrides ride on the queue message and every continuation part, so a run finishes under the knobs it started with.
 - `skipNoPriceImpact=0|1` switches the price-impact gate off/on for that run only (default: the Worker's `SKIP_NO_PRICE_IMPACT`, on unless set to `false`), which allows gate on/off comparison runs without a redeploy. It is recorded as `true`/`false` in `result.knobs`.
+- `macroEnabled=0|1` switches the XAUUSD macro context (FRED rates/dollar/inflation + CFTC gold COT in the analyst prompt) on/off for that run only. Default OFF, recorded as `true`/`false` in `result.knobs`. The dashboard's backtest form sends it as the "Macro context (XAUUSD)" checkbox (`enableMacro=1`). It only affects XAUUSD, and only when `macro_observations` has rows for the run's window; with no rows the prompt simply has no macro section, so backfill macro history before comparing macro on/off runs.
+- A backtest NEVER reads the live macro switch (below): the run's own `macroEnabled` decides, so a run reproduces the same way whatever the live switch is set to. Use paired runs (same window, `macroEnabled=0` vs `1`) to judge whether the macro block helps.
 - Each run's stored result has `result.knobs`, the effective values it used (override or default), so results are self-describing.
+
+## Live macro switch
+
+The live macro context (FRED + COT fetches, and the macro block in XAUUSD analyst prompts) is gated by ONE operator switch: the `feature:macro` row in `system_flags` (LIVE_DB). `paused = 0` means ON; no row, a missing binding or any D1 read error means OFF. It defaults OFF, and when OFF the live path makes no FRED/COT requests, writes no macro rows and adds nothing to the prompts. Without `FRED_API_KEY` only COT runs.
+
+The switch changes what the strategy sees, so treat flipping it like a knob change: decide it in backtest (see `macroEnabled` above), and do not flip it mid paper or live stage (Rules 1 and 5).
 
 ## Code gate
 
@@ -104,5 +112,6 @@ Not built. Stage advancement is a manual, owner-approved decision. If wanted lat
 ## Open decisions for the owner
 
 - Confirm or change every PROPOSED number above.
+- Whether `macroEnabled` is on for the Stage 1 backtest, and that the live `feature:macro` switch matches it before paper starts.
 - Micro-live size and hard-stop loss limit (must be set before Stage 3).
 - Whether a code gate is wanted.
