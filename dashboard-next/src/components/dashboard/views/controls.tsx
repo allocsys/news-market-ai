@@ -4,7 +4,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Pause, Play, ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { useControls, usePostControlsSet, useActiveTickers, usePostActiveTickers } from "@/lib/api";
+import { useControls, usePostControlsSet, useActiveTickers, usePostActiveTickers, useMacro, usePostMacro } from "@/lib/api";
 import { SectionHeading, Pill, ErrorState } from "../primitives";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -218,7 +218,106 @@ export function ControlsView({}: ViewProps) {
       </div>
 
       <LiveTickers />
+      <MacroSwitch />
     </div>
+  );
+}
+
+/**
+ * Live XAUUSD macro context (FRED + CFTC COT). Reads GET /api/macro and flips
+ * it with POST /controls/macro. Default OFF; turning it on starts the vendor
+ * fetches and adds the macro block to the analysts' prompts. Backtests have
+ * their own per-run option and ignore this switch.
+ */
+function MacroSwitch() {
+  const macro = useMacro();
+  const setMacro = usePostMacro();
+
+  if (macro.isLoading) {
+    return (
+      <section className="flex items-center rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Loading macro context…
+      </section>
+    );
+  }
+  if (macro.isError || !macro.data) {
+    return <ErrorState message={macro.error?.message ?? "Failed to load the macro context switch"} />;
+  }
+
+  const { enabled, updatedAt, updatedBy, hasFredKey, error } = macro.data;
+  const set = (next: boolean) =>
+    setMacro.mutate(
+      { enabled: next },
+      {
+        onSuccess: () => toast.success(next ? "Macro context enabled" : "Macro context disabled"),
+        onError: (e) => toast.error(`Failed: ${e.message}`),
+      },
+    );
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-4 card-hairline">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-display text-base font-semibold">Macro context (XAUUSD)</span>
+            <Pill tone={enabled ? "long" : "muted"} size="sm">
+              {enabled ? "On" : "Off"}
+            </Pill>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            FRED series and CFTC positioning for gold, added to the analysts' input. Off by default; backtests choose per run.
+          </p>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            Last changed {updatedAt ? fmtRelative(updatedAt) : "—"} by {updatedBy ?? "—"}
+          </p>
+          {error && (
+            <p className="mt-1 text-xs text-[color:var(--paused)]">
+              Could not read the switch ({error}); treated as off.
+            </p>
+          )}
+          {!hasFredKey && (
+            <p className="mt-1 text-xs text-[color:var(--paused)]">
+              FRED_API_KEY is not set on the backend, so turning this on would only fetch CFTC positioning.
+            </p>
+          )}
+        </div>
+        <div className="shrink-0">
+          {enabled ? (
+            <Button variant="outline" size="sm" onClick={() => set(false)} disabled={setMacro.isPending}>
+              <Pause className="mr-1 h-3 w-3" />
+              Turn off
+            </Button>
+          ) : (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-[color:var(--long)]/40 text-[color:var(--long)]"
+                  disabled={setMacro.isPending}
+                >
+                  <Play className="mr-1 h-3 w-3" />
+                  Turn on
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Turn on macro context?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Each XAUUSD tick will fetch FRED and CFTC data, and the analysts will see it in their prompts. This uses vendor requests and extra prompt tokens, and can change live decisions.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => set(true)}>Turn on</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
