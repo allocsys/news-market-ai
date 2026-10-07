@@ -386,14 +386,13 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [testEnd, setTestEnd] = useState(() => daysAgo(0));
   const [enableLlmLog, setEnableLlmLog] = useState(false);
   const [disableGate, setDisableGate] = useState(false);
-
-  const toggleTicker = (t: string) => {
+  const [enableMacro, setEnableMacro] = useState(false); = (t: string) => {
     setTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   };
 
   const submit = () => {
     mutation.mutate(
-      { testStart, testEnd, tickers, enableLlmLog, disableGate },
+      { testStart, testEnd, tickers, enableLlmLog, disableGate, enableMacro },
       {
         onSuccess: (data) => onSubmitted(data.id),
         onError: (e) => toast.error(`Failed: ${e.message}`),
@@ -482,6 +481,12 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         <Checkbox checked={disableGate} onCheckedChange={(v) => v !== "indeterminate" && setDisableGate(!!v)} className="h-3.5 w-3.5" />
         <span className="text-xs">Disable price-impact gate</span>
         <span className="text-[10px] text-muted-foreground">(this run only; unchecked = gate on)</span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={enableMacro} onCheckedChange={(v) => v !== "indeterminate" && setEnableMacro(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Include macro context (XAUUSD)</span>
+        <span className="text-[10px] text-muted-foreground">(FRED + COT; this run only, unchecked = off; ignores the live switch)</span>
       </label>
 
       <div className="flex items-start gap-2 rounded-lg border border-[color:var(--paused)]/25 bg-[color:var(--paused)]/8 px-3 py-2 text-xs">
