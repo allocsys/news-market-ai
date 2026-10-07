@@ -54,6 +54,15 @@ const mockMacro = {
   hasFredKey: true,
 };
 
+function mockHealth(): IngestionHealth & { macro: NonNullable<IngestionHealth["macro"]> } {
+  // Switch on: a just-ingested row. Off: a 3-day-old row, so Health must show "Disabled" rather than "Stale".
+  const last = new Date(Date.now() - (mockMacro.enabled ? 5 * 60_000 : 3 * 86_400_000)).toISOString();
+  return {
+    ...INGESTION_HEALTH,
+    macro: { count: 412, lastIngestedAt: last, fresh: mockMacro.enabled },
+  };
+}
+
 function filterDecisions(params: URLSearchParams): TradeDecision[] {
   const status = params.get("decisionStatus") ?? "all";
   const limit = Number(params.get("decisionLimit") ?? 20);
@@ -106,7 +115,7 @@ export function mockResolve(
           totalExposurePct: MOCK_EXPOSURE_PERCENT,
           riskLimits: MOCK_RISK_LIMITS,
           snapshotError: null,
-          health: INGESTION_HEALTH,
+          health: mockHealth(),
           healthError: null,
           checkpoints: PIPELINE_CHECKPOINTS,
           pipelineError: null,
@@ -145,7 +154,7 @@ export function mockResolve(
       };
     }
     if (p === "/health") {
-      return { status: 200, body: { health: INGESTION_HEALTH, error: null } };
+      return { status: 200, body: { health: mockHealth(), error: null } };
     }
     if (p === "/decisions") {
       const decisions = filterDecisions(params);
