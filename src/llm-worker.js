@@ -51,6 +51,8 @@ import { createJobReporter } from "./storage/jobs.js";
 import { withLlmLogContext } from "./storage/llm_calls.js";
 import { getPauseFlags } from "./storage/pause_flags.js";
 import { getDisabledTickers } from "./storage/active_tickers.js";
+import { isMacroEnabled } from "./storage/macro_flag.js";
+import { MACRO_TICKERS } from "./agents/analysts/macroContext.js";
 import { cooldownMapKv } from "./shared/cooldown_map_kv.js";
 
 // How long a loaded Gemini cooldown map is trusted inside one invocation before it is re-read:
@@ -87,6 +89,10 @@ export default {
     // fails open. A dropped analyze message is not retried, same as under the pause switches.
     let disabledTickers = null;
     const getDisabled = async () => (disabledTickers ??= (await getDisabledTickers(env.LIVE_DB)).disabled);
+    // Operator macro switch (storage/macro_flag.js), read lazily and at most once per batch, and ONLY for a ticker the macro
+    // feature covers (so every other analyze message costs no extra D1 read). Fails closed: any doubt reads as OFF.
+    let macroOn = null;
+    const getMacroOn = async () => (macroOn ??= await isMacroEnabled(env.LIVE_DB));
     for (const message of batch.messages) {
       const job = message.body;
       // The Gemini cascade reads cooldowns through ONE KV key per message (shared/cooldown_map_kv.js)
@@ -124,7 +130,9 @@ export default {
           // set by the ingest Worker); inside the engine it is the
           // pipelineRunId that keys checkpoints and the thesis id.
           const { runId, ticker, newsItem, asOf: itemAsOf } = job;
-          await runPipelineForTicker(gemEnv, withLlmLogContext(config, { source: "pipeline" }), buildLiveContext(env), { pipelineRunId: runId, ticker, newsItem, asOf: itemAsOf });
+          // The pipeline only ever looks at config.macroEnabled (agents/analysts/macroContext.js); the live flag is mapped here, once.
+          const liveConfig = MACRO_TICKERS.includes(ticker) && (await getMacroOn()) ? { ...config, macroEnabled: true } : config;
+          await runPipelineForTicker(gemEnv, withLlmLogContext(liveConfig, { source: "pipeline" }), buildLiveContext(env), { pipelineRunId: runId, ticker, newsItem, asOf: itemAsOf });
         } else if (job.type === "backtest") {
           // M2: backtests no longer run here. The engine now takes a
           // {inputs, store} context, and a backtest needs a SIM_DB-backed

@@ -32,6 +32,10 @@ export const KNOB_OVERRIDES = Object.freeze({
   // Price-impact gate (graph/pipeline.js). Requested as 0 (off) / 1 (on) like the knob above, but the config key
   // is a boolean: `boolean: true` makes applyKnobOverrides store `n !== 0` and effectiveKnobs report true/false.
   skipNoPriceImpact: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  // XAUUSD macro context (FRED + CFTC COT) in the analyst prompt. Same 0/1 -> boolean handling as the gate above, but the
+  // default is OFF and a backtest NEVER reads the live macro flag (storage/macro_flag.js): the run's own knob decides, so a
+  // run is reproducible no matter what the live switch is set to.
+  macroEnabled: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
 });
 
 /**
@@ -81,6 +85,8 @@ export function effectiveKnobs(config) {
   for (const name of Object.keys(KNOB_OVERRIDES)) knobs[name] = config[name] ?? null;
   // The gate treats a missing key as on (config.js), so the record shows true, not null.
   knobs.skipNoPriceImpact = config.skipNoPriceImpact !== false;
+  // Opposite default to the gate: a missing key means macro context is OFF, so the record shows false, not null.
+  knobs.macroEnabled = config.macroEnabled === true;
   knobs.flipMinConfidence = config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE;
   return knobs;
 }

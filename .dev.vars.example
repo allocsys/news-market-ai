@@ -29,6 +29,11 @@ FINNHUB_API_KEY=your-finnhub-key-here
 # PRICE_BACKFILL_SOURCE=tiingo
 # TIINGO_MIN_REQUEST_INTERVAL_MS=0
 
+# FRED -- XAUUSD macro context (src/ingestion/sources/fred.js). Free key from
+# https://fred.stlouisfed.org/docs/api/api_key.html. Optional: without it the
+# macro switch (default off) only fetches CFTC positioning.
+# FRED_API_KEY=your-fred-key-here
+
 # POST /backfill and POST /backtest/run (src/index.js) no longer accept a
 # shared secret -- a logged-in dashboard session is the only way to call
 # either route now. To exercise them locally: set DASHBOARD_USERNAME/

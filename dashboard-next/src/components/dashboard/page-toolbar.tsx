@@ -38,23 +38,25 @@ export function PageToolbar({
   return (
     <div
       className={cn(
-        "sticky top-14 z-20 flex flex-wrap items-center gap-2 border-b border-border bg-background/85 px-3 py-2 backdrop-blur md:top-0 md:px-6",
+        "sticky top-12 z-20 flex items-center gap-2 border-b border-border bg-background/85 px-3 py-1.5 backdrop-blur md:top-0 md:px-6",
         className,
       )}
     >
-      {envAware && <EnvSelector env={env} onEnvChange={onEnvChange} className="w-44 sm:w-60" />}
+      {envAware && <EnvSelector env={env} onEnvChange={onEnvChange} className="min-w-0 flex-1 sm:w-60 sm:flex-none" />}
 
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
         <Clock className="h-3 w-3" aria-hidden />
         <span className="font-mono nums">Loaded {fmtTime(lastLoaded)}</span>
       </div>
 
-      <div className="ml-auto flex items-center gap-1.5">
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
         <Button
           variant="outline"
           size="sm"
           onClick={() => qc.invalidateQueries()}
           disabled={fetching}
+          aria-label="Refresh"
+          title={`Refresh · loaded ${fmtTime(lastLoaded)}`}
           className="h-8 gap-1.5"
         >
           <RefreshCw className={cn("h-3 w-3", fetching && "animate-spin")} />

@@ -25,7 +25,7 @@ import {
 import { ReplayPanel } from "./replay";
 import { JobProgressCard } from "../job-progress";
 import type { BacktestRun } from "@/lib/types";
-import { SectionHeading, StatusBadge, Pill, MiniStat, EmptyState, ErrorState } from "../primitives";
+import { SectionHeading, StatusBadge, Pill, MiniStat, ErrorState } from "../primitives";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { backtestStatusLabel, pauseReasonLabel, fmtDate, fmtTime, fmtPct } from "@/lib/format";
 import {
@@ -42,9 +42,8 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { daysAgo, RANGE_PRESETS, presetRange } from "@/lib/date-range";
 import type { ViewProps } from "./types";
-
-const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 // Toast for the bulk-maintenance routes. Both are bounded per call and answer
 // with counts ({ scanned, totalDeleted, processed } / { scanned, purged, ... });
@@ -74,13 +73,6 @@ function reportMaintenance(what: string, r: MaintenanceResult | null) {
   const more = processed.some((p) => p.complete === false);
   toast.success(`${what}: ${parts.join(", ") || "done"}${more ? ". Some runs were cut short; run it again to finish." : ""}`);
 }
-
-const RANGE_PRESETS = [
-  { label: "7d", days: 7 },
-  { label: "14d", days: 14 },
-  { label: "30d", days: 30 },
-  { label: "90d", days: 90 },
-];
 
 export function BacktestView({ onNavigate }: ViewProps) {
   const [showNewRun, setShowNewRun] = useState(true);
@@ -386,14 +378,38 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [testEnd, setTestEnd] = useState(() => daysAgo(0));
   const [enableLlmLog, setEnableLlmLog] = useState(false);
   const [disableGate, setDisableGate] = useState(false);
+  const [enableMacro, setEnableMacro] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const toggleTicker = (t: string) => {
     setTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   };
 
+  const reset = () => {
+    setTickers([]);
+    setTestStart(daysAgo(30));
+    setTestEnd(daysAgo(0));
+    setEnableLlmLog(false);
+    setDisableGate(false);
+    setEnableMacro(false);
+  };
+
+  // ISO dates (YYYY-MM-DD) compare correctly as strings.
+  const requestSubmit = () => {
+    if (!testStart || !testEnd) {
+      toast.error("Pick both a start and an end date");
+      return;
+    }
+    if (testStart >= testEnd) {
+      toast.error("The start date must be before the end date");
+      return;
+    }
+    setConfirmOpen(true);
+  };
+
   const submit = () => {
     mutation.mutate(
-      { testStart, testEnd, tickers, enableLlmLog, disableGate },
+      { testStart, testEnd, tickers, enableLlmLog, disableGate, enableMacro },
       {
         onSuccess: (data) => onSubmitted(data.id),
         onError: (e) => toast.error(`Failed: ${e.message}`),
@@ -458,11 +474,9 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
               key={p.label}
               type="button"
               onClick={() => {
-                const end = new Date();
-                const start = new Date(end.getTime() - p.days * 24 * 60 * 60 * 1000);
-                const fmt = (d: Date) => d.toISOString().slice(0, 10);
-                setTestStart(fmt(start));
-                setTestEnd(fmt(end));
+                const r = presetRange(p.days);
+                setTestStart(r.from);
+                setTestEnd(r.to);
               }}
               className="rounded-md border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
             >
@@ -484,6 +498,12 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         <span className="text-[10px] text-muted-foreground">(this run only; unchecked = gate on)</span>
       </label>
 
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={enableMacro} onCheckedChange={(v) => v !== "indeterminate" && setEnableMacro(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Include macro context (XAUUSD)</span>
+        <span className="text-[10px] text-muted-foreground">(FRED + COT; this run only, unchecked = off; ignores the live switch)</span>
+      </label>
+
       <div className="flex items-start gap-2 rounded-lg border border-[color:var(--paused)]/25 bg-[color:var(--paused)]/8 px-3 py-2 text-xs">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[color:var(--paused)]" aria-hidden />
         <p className="text-muted-foreground">
@@ -492,8 +512,8 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
       </div>
 
       <div className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" type="button">Cancel</Button>
-        <Button size="sm" type="button" onClick={submit} disabled={mutation.isPending}>
+        <Button variant="outline" size="sm" type="button" onClick={reset} disabled={mutation.isPending}>Reset</Button>
+        <Button size="sm" type="button" onClick={requestSubmit} disabled={mutation.isPending}>
           {mutation.isPending ? (
             <>
               <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -507,6 +527,22 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
           )}
         </Button>
       </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start this backtest?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {tickers.length === 0 ? `All ${watchlist.length} watchlist tickers` : `${tickers.length} ticker${tickers.length === 1 ? "" : "s"} (${tickers.join(", ")})`}
+              {" "}from {testStart} to {testEnd}. This spends real Gemini quota.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={submit}>Start backtest</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -521,6 +557,13 @@ function BacktestRunRow({
   actionMutation: ReturnType<typeof usePostBacktestAction>;
 }) {
   const [open, setOpen] = useState(false);
+  const act = (action: "resume" | "pause" | "cancel") =>
+    actionMutation.mutate(
+      { id: run.id, action },
+      { onError: (e) => toast.error(`Could not ${action} the run: ${e.message}`) },
+    );
+  // The mutation is shared by every row, so only this run's own in-flight action disables its buttons.
+  const busy = actionMutation.isPending && actionMutation.variables?.id === run.id;
   const variant =
     run.status === "complete" ? "approved" :
     run.status === "failed" ? "rejected" :
@@ -618,7 +661,8 @@ function BacktestRunRow({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => actionMutation.mutate({ id: run.id, action: "resume" })}
+                  disabled={busy}
+                  onClick={() => act("resume")}
                 >
                   <Play className="mr-1 h-3 w-3" />
                   Resume
@@ -627,7 +671,8 @@ function BacktestRunRow({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => actionMutation.mutate({ id: run.id, action: "pause" })}
+                  disabled={busy}
+                  onClick={() => act("pause")}
                 >
                   <Pause className="mr-1 h-3 w-3" />
                   Pause
@@ -635,7 +680,7 @@ function BacktestRunRow({
               )}
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button size="sm" variant="outline" className="border-[color:var(--short)]/40 text-[color:var(--short)]">
+                  <Button size="sm" variant="outline" disabled={busy} className="border-[color:var(--short)]/40 text-[color:var(--short)]">
                     <Square className="mr-1 h-3 w-3" />
                     Terminate
                   </Button>
@@ -651,7 +696,7 @@ function BacktestRunRow({
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
                       className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      onClick={() => actionMutation.mutate({ id: run.id, action: "cancel" })}
+                      onClick={() => act("cancel")}
                     >
                       Terminate
                     </AlertDialogAction>

@@ -42,7 +42,8 @@
 // same safety-net split as backend's queue().
 
 import { loadConfig } from "./config.js";
-import { ingestTickerData, ingestFeedNews, backfillHistoricalNews, backfillHistoricalPriceBars } from "./ingestion/ingest.js";
+import { ingestTickerData, ingestFeedNews, backfillHistoricalNews, backfillHistoricalPriceBars, MACRO_TICKER } from "./ingestion/ingest.js";
+import { isMacroEnabled } from "./storage/macro_flag.js";
 import { runIntradayBackfillTick } from "./ingestion/intraday_backfill.js";
 import { purgeOldIntradayBars } from "./ingestion/intraday_purge.js";
 import { sendInChunks } from "./ingestion/enqueue.js";
@@ -186,7 +187,10 @@ export default {
           // ingest_ticker message for this same ticker just tries again.
           const { ticker, asOf } = job;
           try {
-            const { fetched, fresh } = await ingestTickerData(config, env.INPUTS_DB, env.CACHE_KV, { ticker, asOf });
+            // Macro switch (storage/macro_flag.js): read only for the macro ticker; any
+            // doubt reads as OFF, so no FRED/COT request is made.
+            const macroEnabled = ticker === MACRO_TICKER ? await isMacroEnabled(env.LIVE_DB) : false;
+            const { fetched, fresh } = await ingestTickerData(config, env.INPUTS_DB, env.CACHE_KV, { ticker, asOf, macroEnabled });
             await enqueueAnalyze(env.ANALYZE, { jobName: "ingest_ticker", context: { ticker }, fetched, fresh, skipAnalyze });
           } catch (err) {
             console.error("ingest_ticker job failed", { ticker, message: err.message });

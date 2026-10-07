@@ -390,6 +390,28 @@ test("POST /backtest/run JSON with tickers as an array queues the run; disableGa
   assert.equal(off.backtestQueue.sent[0].knobOverrides?.skipNoPriceImpact, undefined);
 });
 
+test("POST /backtest/run form with enableMacro=1 queues the run with macro context on (macroEnabled override 1)", async () => {
+  const { response, backtestQueue } = await postBacktest("form", { enableMacro: "1" });
+  assert.equal(response.status, 200);
+  assert.equal(backtestQueue.sent.length, 1);
+  assert.deepEqual(backtestQueue.sent[0].knobOverrides, { macroEnabled: 1 });
+});
+
+test("POST /backtest/run without enableMacro sends no macro override (default OFF)", async () => {
+  const form = await postBacktest("form", {});
+  assert.equal(form.response.status, 200);
+  assert.equal(form.backtestQueue.sent[0].knobOverrides?.macroEnabled, undefined);
+  const json = await postBacktest("json", { enableMacro: false });
+  assert.equal(json.response.status, 200);
+  assert.equal(json.backtestQueue.sent[0].knobOverrides?.macroEnabled, undefined);
+});
+
+test("POST /backtest/run: enableMacro and disableGate are independent overrides", async () => {
+  const { response, backtestQueue } = await postBacktest("json", { enableMacro: true, disableGate: true });
+  assert.equal(response.status, 200);
+  assert.deepEqual(backtestQueue.sent[0].knobOverrides, { skipNoPriceImpact: 0, macroEnabled: 1 });
+});
+
 test("POST /backtest/run JSON: enableLlmLog true is forwarded as 1, false is NOT forwarded (a JSON false must not read as 'checked')", async () => {
   const on = await postJson("/backtest/run", { testStart: "2024-01-01", testEnd: "2024-01-31", enableLlmLog: true });
   assert.equal(on.calls[0].url.searchParams.get("enableLlmLog"), "1");

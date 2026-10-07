@@ -28,6 +28,7 @@
 import { getPriceBarsAsOf } from "../storage/inputs_view.js";
 import { resolveCurrentPrice } from "./price_resolution.js";
 import { runAnalystTeam } from "../agents/analysts/analystTeam.js";
+import { loadMacroContext } from "../agents/analysts/macroContext.js";
 import { runBullResearcher } from "../agents/researchers/bull.js";
 import { runBearResearcher } from "../agents/researchers/bear.js";
 import { runResearchManager } from "../agents/managers/research_manager.js";
@@ -105,7 +106,10 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     // sources") makes it return null rather than asking the LLM to analyze
     // nothing.
     const priceBars = await getPriceBarsAsOf(inputs, { ticker, asOf });
-    state.opinions = await runAnalystTeam(env, config, { ticker, newsItem, bars: priceBars });
+    // XAUUSD macro block: null (and NO D1 read) unless config.macroEnabled === true and the ticker is covered, so the
+    // budget-paced backtest walks' hardcoded per-stage call counts are unchanged when the feature is off.
+    const macroContext = await loadMacroContext(config, inputs, { ticker, asOf });
+    state.opinions = await runAnalystTeam(env, config, { ticker, newsItem, bars: priceBars, macroContext });
     // Carried forward in `state` (not re-fetched later) so the risk_checked
     // stage's ATR sizing (risk_mgmt/risk.js) gets these same bars WITHOUT an
     // extra D1 read -- subrequestBudget-paced walks (see

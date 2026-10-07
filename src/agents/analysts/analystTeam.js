@@ -26,7 +26,7 @@ import { computeTechnicalSnapshot } from "./technicalIndicators.js";
  * does its own `.filter(Boolean)`-equivalent internally so the caller doesn't
  * need to.
  */
-export async function runAnalystTeam(env, config, { ticker, newsItem, bars }) {
+export async function runAnalystTeam(env, config, { ticker, newsItem, bars, macroContext = null }) {
   const snapshot = computeTechnicalSnapshot(bars);
   const needsTechnical = snapshot.hasData;
 
@@ -62,6 +62,19 @@ ${JSON.stringify(snapshot, null, 2)}`
 There is no price-bar data for ${ticker} yet, so do NOT include a "technical" key in your response \
 at all -- omit it entirely rather than guessing or returning an empty object.`;
 
+  // XAUUSD macro context (agents/analysts/macroContext.js#loadMacroContext): a non-empty string only when the feature is on for
+  // this run and the ticker is covered. Otherwise the section is "" and the prompt is byte-for-byte what it was before.
+  const macroSection = macroContext
+    ? `
+
+MACRO CONTEXT for ${ticker} (point-in-time facts known as of this article; every value carries its own observation date, and slower
+series can be weeks old). Use ONLY the figures listed here when you reason about the PRICE IMPACT, and never invent a macro number
+that is not listed. This is background, not a verdict: it does not replace the article, and a stale or flat reading is not a reason
+by itself to call the article bullish or bearish.
+
+${macroContext}`
+    : "";
+
   const prompt = `You are the Analyst Team for a trading pipeline: several specialists reporting \
 independently on the SAME article, in ONE response. Every one of the "summary"/"justification" \
 fields below is mandatory -- never omit them.
@@ -69,7 +82,7 @@ fields below is mandatory -- never omit them.
 1. NEWS/EVENT: identify the event type, entities/tickers involved, and a short factual summary.
 2. SENTIMENT: score the sentiment on this 5-band scale: ${SentimentBand.options.join(", ")}. \
 The "sentiment" field must be EXACTLY one of those five words and nothing else -- never a \
-sentence or explanation. Put all reasoning in "justification" instead.${priceImpactSection}${technicalSection}
+sentence or explanation. Put all reasoning in "justification" instead.${priceImpactSection}${technicalSection}${macroSection}
 
 Respond as JSON only, matching exactly:
 {

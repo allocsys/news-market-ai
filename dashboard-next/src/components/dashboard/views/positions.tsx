@@ -5,11 +5,11 @@ import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronUp, Wallet, Activity, Loader2 } from "lucide-react";
 import { usePositions } from "@/lib/api";
 import { resolveRiskLimits, exposureFraction, describeGroupCapOverrides } from "@/lib/risk";
-import { SectionHeading, StatCard, MiniStat, Pill, EmptyState, ErrorState } from "../primitives";
+import { SectionHeading, MiniStat, Pill, EmptyState, ErrorState } from "../primitives";
 import { OpenPositionCard, ClosedPositionCard } from "../position-cards";
-import { DonutChart, Gauge, Sparkline } from "../charts";
+import { DonutChart, Gauge } from "../charts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { fmtPct, signedPct } from "@/lib/format";
+import { fmtPct } from "@/lib/format";
 import type { ViewProps } from "./types";
 
 const POSITIONS_LIMIT_OPTIONS = [10, 25, 50, 100];
@@ -41,7 +41,13 @@ export function PositionsView({ env }: ViewProps) {
 
   const closedTp = closed.filter((p) => p.closeReason === "take_profit").length;
   const closedSl = closed.filter((p) => p.closeReason === "stop_loss").length;
-  const closedOther = closed.length - closedTp - closedSl;
+  // Trailing and break-even stops are protective exits that often lock in a gain, so they get their own slice instead of hiding in "Other".
+  const closedTrail = closed.filter((p) => p.closeReason === "trailing_stop" || p.closeReason === "breakeven_stop").length;
+  const closedTime = closed.filter((p) => p.closeReason === "time_based").length;
+  const closedOther = closed.length - closedTp - closedSl - closedTrail - closedTime;
+  // Win rate from what each position actually returned (a stop can win and a target can lose after costs), over closes that have a return.
+  const returned = closed.filter((p) => typeof p.realizedReturn === "number");
+  const wins = returned.filter((p) => (p.realizedReturn as number) > 0).length;
 
   const limits = resolveRiskLimits(d.riskLimits);
   // The API sends exposure in percent units; limits and fmtPct work in fractions.
@@ -174,6 +180,8 @@ export function PositionsView({ env }: ViewProps) {
                     segments={[
                       { value: closedTp, color: "var(--long)", label: "Take profit" },
                       { value: closedSl, color: "var(--short)", label: "Stop loss" },
+                      { value: closedTrail, color: "var(--info)", label: "Trailing / break-even" },
+                      { value: closedTime, color: "var(--paused)", label: "Time exit" },
                       { value: closedOther, color: "var(--muted-foreground)", label: "Other" },
                     ]}
                     centerValue={closed.length}
@@ -186,12 +194,12 @@ export function PositionsView({ env }: ViewProps) {
               <div>
                 <p className="mb-2 text-xs font-medium text-muted-foreground">Exit quality</p>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <MiniStat value={closedTp} label="Take profit" sub="winning exits" />
-                  <MiniStat value={closedSl} label="Stop loss" sub="losing exits" />
+                  <MiniStat value={closedTp} label="Take profit" sub="hit the target" />
+                  <MiniStat value={closedSl} label="Stop loss" sub="hit the stop" />
                   <MiniStat
-                    value={closedTp + closedSl > 0 ? `${((closedTp / (closedTp + closedSl)) * 100).toFixed(0)}%` : "—"}
-                    label="TP / SL ratio"
-                    sub="win rate (closed)"
+                    value={returned.length > 0 ? `${((wins / returned.length) * 100).toFixed(0)}%` : "—"}
+                    label="Win rate"
+                    sub={`${returned.length} closed with a return`}
                   />
                   <MiniStat
                     value={fmtPct(open.length + closed.length > 0 ? open.length / (open.length + closed.length) : 0, 0)}

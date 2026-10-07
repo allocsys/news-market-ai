@@ -146,7 +146,7 @@ export function DonutChart({
             />
           ))}
         </g>
-        {centerValue && (
+        {centerValue != null && (
           <text x="50%" y="48%" textAnchor="middle" dominantBaseline="middle" className="fill-foreground font-mono text-base font-semibold nums">
             {centerValue}
           </text>

@@ -45,6 +45,24 @@ const MOCK_RISK_LIMITS = {
 };
 const STATUSES = ["opened", "rejected", "superseded", "held", "skipped_irrelevant"] as const;
 
+// Live macro switch (FRED + CFTC COT for XAUUSD). In-memory only, resets on server restart. Default OFF like the real flag.
+const mockMacro = {
+  enabled: false,
+  updatedAt: null as string | null,
+  updatedBy: null as string | null,
+  error: null as string | null,
+  hasFredKey: true,
+};
+
+function mockHealth(): IngestionHealth & { macro: NonNullable<IngestionHealth["macro"]> } {
+  // Switch on: a just-ingested row. Off: a 3-day-old row, so Health must show "Disabled" rather than "Stale".
+  const last = new Date(Date.now() - (mockMacro.enabled ? 5 * 60_000 : 3 * 86_400_000)).toISOString();
+  return {
+    ...INGESTION_HEALTH,
+    macro: { count: 412, lastIngestedAt: last, fresh: mockMacro.enabled },
+  };
+}
+
 function filterDecisions(params: URLSearchParams): TradeDecision[] {
   const status = params.get("decisionStatus") ?? "all";
   const limit = Number(params.get("decisionLimit") ?? 20);
@@ -97,7 +115,7 @@ export function mockResolve(
           totalExposurePct: MOCK_EXPOSURE_PERCENT,
           riskLimits: MOCK_RISK_LIMITS,
           snapshotError: null,
-          health: INGESTION_HEALTH,
+          health: mockHealth(),
           healthError: null,
           checkpoints: PIPELINE_CHECKPOINTS,
           pipelineError: null,
@@ -136,7 +154,7 @@ export function mockResolve(
       };
     }
     if (p === "/health") {
-      return { status: 200, body: { health: INGESTION_HEALTH, error: null } };
+      return { status: 200, body: { health: mockHealth(), error: null } };
     }
     if (p === "/decisions") {
       const decisions = filterDecisions(params);
@@ -185,7 +203,7 @@ export function mockResolve(
       };
     }
     if (p.startsWith("/llm-calls/")) {
-      const idStr = p.slice("/api/llm-calls/".length);
+      const idStr = p.slice("/llm-calls/".length);
       const id = Number(idStr);
       if (!Number.isFinite(id)) return { status: 400, body: { error: "llm call id must be a number" } };
       if (LLM_CALL_DETAIL.id !== id) {
@@ -201,7 +219,7 @@ export function mockResolve(
       };
     }
     if (p.startsWith("/backtest-runs/")) {
-      const id = p.slice("/api/backtest-runs/".length);
+      const id = p.slice("/backtest-runs/".length);
       const run = BACKTEST_RUNS.find((r) => r.id === id);
       if (!run) return { status: 404, body: { error: "backtest run not found" } };
       const positions = buildBacktestPositions(id);
@@ -239,6 +257,9 @@ export function mockResolve(
     }
     if (p === "/controls") {
       return { status: 200, body: PAUSE_FLAGS };
+    }
+    if (p === "/macro") {
+      return { status: 200, body: mockMacro };
     }
     if (p === "/active-tickers") {
       return {
@@ -295,6 +316,14 @@ export function mockResolve(
     }
     if (p === "/controls/set" || p === "/controls/tickers") {
       return { status: 200, body: { accepted: true } };
+    }
+    if (p === "/controls/macro") {
+      const enabled = params.get("enabled") ?? (body && "enabled" in body ? (body.enabled ? "1" : "0") : null);
+      if (enabled !== "1" && enabled !== "0") return { status: 400, body: { error: "enabled must be 1 or 0" } };
+      mockMacro.enabled = enabled === "1";
+      mockMacro.updatedAt = new Date().toISOString();
+      mockMacro.updatedBy = "mock";
+      return { status: 200, body: mockMacro };
     }
     return null;
   }

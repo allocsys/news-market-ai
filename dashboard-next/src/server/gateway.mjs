@@ -88,6 +88,7 @@ const NON_API_ROUTES = new Set([
   "/backtest/replay/news",
   "/controls/set",
   "/controls/tickers",
+  "/controls/macro",
 ]);
 const BACKTEST_ACTION_RE = /^\/backtest\/[^/]+\/(cancel|pause|resume)$/;
 
@@ -353,6 +354,8 @@ export async function handleGateway(request, env) {
         if (isChecked(searchParams.get("enableLlmLog")) || isChecked(fromBody("enableLlmLog"))) params.enableLlmLog = "1";
         // "Disable price-impact gate": this run only goes out with the gate off (backend's skipNoPriceImpact=0 knob override). Absent sends nothing, so the Worker default (gate on) applies.
         if (isChecked(searchParams.get("disableGate")) || isChecked(fromBody("disableGate"))) params.skipNoPriceImpact = "0";
+        // "Macro context (XAUUSD)": this run only goes out with FRED/COT context on (backend's macroEnabled=1 knob override). Absent sends nothing, so the default (off) applies. Independent of the live macro switch.
+        if (isChecked(searchParams.get("enableMacro")) || isChecked(fromBody("enableMacro"))) params.macroEnabled = "1";
         return { params };
       },
     });
@@ -402,6 +405,20 @@ export async function handleGateway(request, env) {
         const tickers = fromQuery.length > 0 ? fromQuery : parseTickerList(body ? body.getAll("tickers") : []);
         if (tickers.length === 0) return { error: "select at least one ticker (use the pause switches to stop everything)" };
         const params = { tickers: tickers.join(",") };
+        if (sessionUsername) params.by = sessionUsername;
+        return { params };
+      },
+    });
+  }
+
+  // POST /controls/macro -- turn the live XAUUSD macro context (FRED + CFTC COT) on or off. `enabled` is 1/0 or a boolean; forwarded with the operator's username as `by`.
+  if (pathname === "/controls/macro" && request.method === "POST") {
+    return handleTriggerRoute(request, env, {
+      backendPath: "/controls/macro",
+      buildQuery: (searchParams, fromBody, sessionUsername) => {
+        const enabled = searchParams.get("enabled") ?? fromBody("enabled");
+        if (enabled !== "1" && enabled !== "0") return { error: "enabled must be 1 or 0 (or a boolean)" };
+        const params = { enabled };
         if (sessionUsername) params.by = sessionUsername;
         return { params };
       },

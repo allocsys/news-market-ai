@@ -38,13 +38,13 @@ export function ThemeToggle({ className }: { className?: string }) {
 // ============================================================
 // Wordmark
 // ============================================================
-export function Wordmark({ className }: { className?: string }) {
+export function Wordmark({ className, compact }: { className?: string; compact?: boolean }) {
   return (
     <div className={cn("flex items-center gap-2", className)}>
       <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
         <span className="font-display text-sm font-semibold text-primary">N</span>
       </div>
-      <div className="leading-none">
+      <div className={cn("leading-none", compact && "hidden")}>
         <p className="font-display text-sm font-semibold tracking-tight">
           news<span className="text-primary">·</span>market<span className="text-primary">·</span>ai
         </p>
@@ -151,11 +151,11 @@ export function MobileHeader({
   return (
     <header
       className={cn(
-        "glass sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border px-3 pt-safe lg:hidden",
+        "sticky top-0 z-30 flex h-12 items-center gap-2 border-b border-border bg-background px-3 pt-safe lg:hidden",
         className,
       )}
     >
-      <Wordmark />
+      <Wordmark compact />
       <div className="ml-auto flex items-center gap-1">
         <Button
           variant="ghost"
@@ -198,7 +198,7 @@ export function BottomNav({
     <nav
       aria-label="Mobile primary"
       className={cn(
-        "glass pb-safe fixed inset-x-0 bottom-0 z-30 flex items-stretch border-t border-border lg:hidden",
+        "pb-safe fixed inset-x-0 bottom-0 z-30 flex items-stretch border-t border-border bg-background lg:hidden",
         className,
       )}
     >

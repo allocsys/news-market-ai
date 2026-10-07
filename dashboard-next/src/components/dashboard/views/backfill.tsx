@@ -16,21 +16,23 @@ import {
   useWatchlist,
 } from "@/lib/api";
 import type { JobProgress } from "@/lib/types";
-import { SectionHeading, StatusBadge, Pill, ErrorState } from "../primitives";
+import { SectionHeading, StatusBadge } from "../primitives";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { fmtTime, fmtRelative, fmtCompact } from "@/lib/format";
 import { toast } from "sonner";
+import { daysAgo, RANGE_PRESETS, presetRange } from "@/lib/date-range";
 import type { ViewProps } from "./types";
-
-const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
-const RANGE_PRESETS = [
-  { label: "7d", days: 7 },
-  { label: "14d", days: 14 },
-  { label: "30d", days: 30 },
-  { label: "90d", days: 90 },
-];
 
 export function BackfillView({}: ViewProps) {
   const [newsFrom, setNewsFrom] = useState(() => daysAgo(30));
@@ -38,6 +40,7 @@ export function BackfillView({}: ViewProps) {
   const [priceFrom, setPriceFrom] = useState(() => daysAgo(90));
   const [priceTo, setPriceTo] = useState(() => daysAgo(0));
   const [priceTickers, setPriceTickers] = useState<string[]>([]);
+  const [confirm, setConfirm] = useState<"news" | "prices" | null>(null);
 
   const newsJob = useLatestJob("backfill");
   const priceJob = useLatestJob("backfill_prices");
@@ -48,6 +51,25 @@ export function BackfillView({}: ViewProps) {
 
   const toggleTicker = (t: string) => {
     setPriceTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  };
+
+  // ISO dates (YYYY-MM-DD) compare correctly as strings.
+  const validRange = (from: string, to: string) => {
+    if (!from || !to) {
+      toast.error("Pick both a start and an end date");
+      return false;
+    }
+    if (from > to) {
+      toast.error("The start date must be on or before the end date");
+      return false;
+    }
+    return true;
+  };
+  const requestNews = () => {
+    if (validRange(newsFrom, newsTo)) setConfirm("news");
+  };
+  const requestPrices = () => {
+    if (validRange(priceFrom, priceTo)) setConfirm("prices");
   };
 
   const submitNews = () => {
@@ -111,11 +133,9 @@ export function BackfillView({}: ViewProps) {
                   key={p.label}
                   type="button"
                   onClick={() => {
-                    const end = new Date();
-                    const start = new Date(end.getTime() - p.days * 24 * 60 * 60 * 1000);
-                    const fmt = (d: Date) => d.toISOString().slice(0, 10);
-                    setNewsFrom(fmt(start));
-                    setNewsTo(fmt(end));
+                    const r = presetRange(p.days);
+                    setNewsFrom(r.from);
+                    setNewsTo(r.to);
                   }}
                   className="rounded-md border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
                 >
@@ -133,7 +153,7 @@ export function BackfillView({}: ViewProps) {
           </div>
 
           <div className="flex justify-end">
-            <Button size="sm" onClick={submitNews} disabled={newsMutation.isPending}>
+            <Button size="sm" onClick={requestNews} disabled={newsMutation.isPending}>
               {newsMutation.isPending ? (
                 <>
                   <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -208,7 +228,7 @@ export function BackfillView({}: ViewProps) {
           </div>
 
           <div className="flex justify-end">
-            <Button size="sm" onClick={submitPrices} disabled={priceMutation.isPending}>
+            <Button size="sm" onClick={requestPrices} disabled={priceMutation.isPending}>
               {priceMutation.isPending ? (
                 <>
                   <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -224,6 +244,23 @@ export function BackfillView({}: ViewProps) {
           </div>
         </div>
       </section>
+
+      <AlertDialog open={confirm !== null} onOpenChange={(o) => { if (!o) setConfirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirm === "news" ? "Start news backfill?" : "Start price backfill?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirm === "news"
+                ? `Fetches Finnhub news from ${newsFrom} to ${newsTo} and spends free-tier API quota.`
+                : `Fetches Tiingo daily bars from ${priceFrom} to ${priceTo} for ${priceTickers.length === 0 ? `the whole watchlist (${watchlist.length} tickers)` : priceTickers.join(", ")}.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => (confirm === "news" ? submitNews() : submitPrices())}>Start</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

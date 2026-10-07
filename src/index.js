@@ -51,6 +51,7 @@ import { RunStore, readOnly } from "./storage/run_store.js";
 import { getNewsItemsInRange } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { getActiveTickers, getDisabledTickers, setActiveTickers, checkTickerSelection } from "./storage/active_tickers.js";
+import { getMacroFlag, setMacroEnabled } from "./storage/macro_flag.js";
 import { SimClock } from "./backtest/simClock.js";
 import { parseKnobOverrides } from "./backtest/knobOverrides.js";
 import { cancelBacktestRun, getBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
@@ -166,6 +167,28 @@ export default {
       }
       console.log("active tickers updated", { tickers: checked.tickers, by: url.searchParams.get("by") });
       return jsonResponse(await getActiveTickers(env.LIVE_DB, watchlist));
+    }
+
+    // Live macro-context switch (storage/macro_flag.js). GET reads it; POST /controls/macro?enabled=1|0[&by=]
+    // turns the XAUUSD FRED/COT ingestion (and the analysts' macro block) on or off. Default OFF.
+    // Backtests ignore it (their own per-run knob). `hasFredKey` lets the dashboard warn that
+    // turning it on without FRED_API_KEY would only run the COT half.
+    const macroState = async () => ({ ...(await getMacroFlag(env.LIVE_DB)), hasFredKey: Boolean(config.fredApiKey) });
+    if (pathname === "/api/macro") return jsonResponse(await macroState());
+    if (pathname === "/controls/macro" && request.method === "POST") {
+      const enabledParam = url.searchParams.get("enabled");
+      if (enabledParam !== "1" && enabledParam !== "0") {
+        return jsonResponse({ error: "enabled must be 1 or 0" }, { status: 400 });
+      }
+      if (!env.LIVE_DB) return jsonResponse({ error: "LIVE_DB is not bound" }, { status: 500 });
+      try {
+        await setMacroEnabled(env.LIVE_DB, enabledParam === "1", { by: url.searchParams.get("by") });
+      } catch (err) {
+        console.error("macro flag update failed", { message: err.message });
+        return jsonResponse({ error: "macro flag update failed", message: err.message }, { status: 500 });
+      }
+      console.log("macro flag updated", { enabled: enabledParam === "1", by: url.searchParams.get("by") });
+      return jsonResponse(await macroState());
     }
 
     // JSON API layer (plan.md Step 1), unauthenticated at this layer since

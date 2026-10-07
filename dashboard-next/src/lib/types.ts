@@ -215,6 +215,8 @@ export interface IngestionHealth {
   news: IngestionHealthSource | null;
   priceBars: IngestionHealthSource | null;
   fundamentals: IngestionHealthSource | null;
+  /** XAUUSD macro observations (FRED + COT). Absent on a backend that predates the macro feature. */
+  macro?: IngestionHealthSource | null;
 }
 
 export interface PriceBar {

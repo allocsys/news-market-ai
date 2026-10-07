@@ -2,9 +2,10 @@
 
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ChevronRight, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
-import { useOverview, useActiveJob } from "@/lib/api";
+import { useOverview, useActiveJob, useActiveTickers, useMacro } from "@/lib/api";
+import { activeOrNull, hasEdgarTicker, hasMacroTicker } from "@/lib/ingest-scope";
 import { resolveRiskLimits, exposureFraction } from "@/lib/risk";
-import { StatCard, SectionHeading, StatusDot, Pill, DirectionPill, ErrorState, EmptyState } from "../primitives";
+import { SectionHeading, StatusDot, Pill, DirectionPill, ErrorState, EmptyState } from "../primitives";
 import { Sparkline, StackedBar } from "../charts";
 import { VerdictCard } from "../verdict-card";
 import {
@@ -19,6 +20,8 @@ import type { ViewProps } from "./types";
 export function OverviewView({ onNavigate, env }: ViewProps) {
   const overview = useOverview(env);
   const activeJob = useActiveJob("backtest", env);
+  const activeTickers = useActiveTickers();
+  const macro = useMacro();
 
   if (overview.isLoading) {
     return (
@@ -48,9 +51,27 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
 
   const attentionItems: { label: string; tone: "warn" | "bad" | "info"; action?: string; onAction?: () => void }[] = [];
   if (d.health) {
-    if (d.health.fundamentals && !d.health.fundamentals.fresh) {
+    // null = selection unknown: keep the warning rather than hide it.
+    const activeList = activeOrNull(activeTickers.data);
+    if (d.health.fundamentals && !d.health.fundamentals.fresh && hasEdgarTicker(activeList)) {
       attentionItems.push({
         label: "Fundamentals ingestion stale (last 2d+)",
+        tone: "warn",
+        action: "View health",
+        onAction: () => onNavigate("health"),
+      });
+    }
+    // Macro is default-off: only alert when the switch is known to be on and XAUUSD is active.
+    if (
+      d.health.macro &&
+      d.health.macro.fresh === false &&
+      macro.data &&
+      !macro.data.error &&
+      macro.data.enabled &&
+      hasMacroTicker(activeList)
+    ) {
+      attentionItems.push({
+        label: "Macro (FRED + COT) ingestion stale",
         tone: "warn",
         action: "View health",
         onAction: () => onNavigate("health"),
@@ -97,9 +118,6 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
           <StatusDot status="live" />
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {env === "live" ? "Live environment" : "Backtest environment"}
-          </span>
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            Updated {fmtRelative(new Date().toISOString())}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -249,7 +267,7 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
         />
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {d.openPositions.map((p) => {
-            const longCount = p.direction === "long";
+            const isLong = p.direction === "long";
             return (
               <button
                 key={p.ticker}
@@ -270,7 +288,7 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
                   values={[p.entryPrice ?? 100, (p.entryPrice ?? 100) * (1 + (p.mfePct ?? 0)), (p.entryPrice ?? 100) * (1 + (p.maePct ?? 0) * 0.5), (p.entryPrice ?? 100) * (1 + ((p.mfePct ?? 0) + (p.maePct ?? 0)) / 2)]}
                   width={80}
                   height={28}
-                  stroke={longCount ? "var(--long)" : "var(--short)"}
+                  stroke={isLong ? "var(--long)" : "var(--short)"}
                   showArea={false}
                 />
                 <div className="text-right">
@@ -278,7 +296,7 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
                     "flex items-center gap-0.5 font-mono text-xs font-medium nums",
                     (p.mfePct ?? 0) >= 0 ? "text-[color:var(--long)]" : "text-[color:var(--short)]",
                   )}>
-                    {longCount ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                    {isLong ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                     {signedPct(p.mfePct, 1)}
                   </div>
                   <div className="text-[10px] text-muted-foreground">MFE</div>
