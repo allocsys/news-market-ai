@@ -136,6 +136,14 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
   // The API sends exposure in percent units; limits and fmtPct work in fractions.
   const exposure = exposureFraction(d.totalExposurePct);
   const exposureTone = exposure > limits.maxPortfolioRiskPct * 0.8 ? "short" : "default";
+  // Fraction of the book, all closed trades of this environment; null when absent (older backend) or its read failed.
+  const realizedPnl = d.realizedPnlError ? null : (d.realizedPnlPct ?? null);
+  const realizedPnlTone =
+    realizedPnl == null || realizedPnl === 0
+      ? "text-muted-foreground"
+      : realizedPnl > 0
+        ? "text-[color:var(--long)]"
+        : "text-[color:var(--short)]";
 
   return (
     <div className="space-y-5">
@@ -177,6 +185,15 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
             <div className="font-mono text-4xl font-semibold tracking-tight nums">{closedCount}</div>
             <div className="mt-0.5 text-xs text-muted-foreground">Recently closed</div>
             <div className="mt-1 text-[10px] text-muted-foreground">last 20 exits</div>
+          </div>
+        </div>
+        <div className="mt-4 flex items-end justify-between gap-3 border-t border-border/60 pt-3">
+          <div>
+            <div className="text-xs text-muted-foreground">Realized P&L</div>
+            <div className="mt-0.5 text-[10px] text-muted-foreground">all closed trades · % of book</div>
+          </div>
+          <div className={cn("font-mono text-3xl font-semibold tracking-tight nums", realizedPnlTone)}>
+            {realizedPnl == null ? "—" : signedPct(realizedPnl, 2)}
           </div>
         </div>
       </section>

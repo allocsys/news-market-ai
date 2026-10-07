@@ -92,6 +92,9 @@ export interface OverviewResponse {
   closedPositions: Position[];
   decisionStats: DecisionStats;
   totalExposurePct: number;
+  /** Realized book P&L as a fraction of the book (every closed position, net of costs). Absent on a backend that predates it. */
+  realizedPnlPct?: number | null;
+  realizedPnlError?: string | null;
   /** Absent when the backend predates riskLimits; see resolveRiskLimits. */
   riskLimits?: RiskLimits;
   snapshotError: string | null;
