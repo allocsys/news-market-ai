@@ -581,6 +581,8 @@ export function usePostBacktestRun() {
       enableLlmLog?: boolean;
       /** This run only: turn the price-impact gate off (gateway maps it to skipNoPriceImpact=0). */
       disableGate?: boolean;
+      /** This run only: include FRED/COT macro context for XAUUSD (gateway maps it to macroEnabled=1). Independent of the live switch. */
+      enableMacro?: boolean;
     }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backtest/run", {
         method: "POST",
