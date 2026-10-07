@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, ChevronRight, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
 import { useOverview, useActiveJob, useActiveTickers, useMacro } from "@/lib/api";
 import { activeOrNull, hasEdgarTicker, hasMacroTicker } from "@/lib/ingest-scope";
 import { resolveRiskLimits, exposureFraction } from "@/lib/risk";
@@ -10,6 +11,7 @@ import { Sparkline, StackedBar } from "../charts";
 import { VerdictCard } from "../verdict-card";
 import {
   fmtPct,
+  fmtConfidence,
   signedPct,
   fmtRelative,
   fmtTime,
@@ -35,6 +37,8 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
   const activeJob = useActiveJob("backtest", env);
   const activeTickers = useActiveTickers();
   const macro = useMacro();
+  // The decision card is long (analysts + debate + verdict): folded by default.
+  const [decisionOpen, setDecisionOpen] = useState(false);
 
   if (overview.isLoading) {
     return (
@@ -118,6 +122,16 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
   }
 
   const latestDecision = d.latestDecision;
+  // Folded summary line: verdict confidence (or "No debate") and position size.
+  const decisionMeta: string[] = [];
+  if (latestDecision) {
+    decisionMeta.push(
+      latestDecision.debate ? `${fmtConfidence(latestDecision.debate.confidence)} confidence` : "No debate",
+    );
+    if (latestDecision.riskDecision.positionSizePct > 0) {
+      decisionMeta.push(`${fmtPct(latestDecision.riskDecision.positionSizePct, 1)} of book`);
+    }
+  }
   const limits = resolveRiskLimits(d.riskLimits);
   // The API sends exposure in percent units; limits and fmtPct work in fractions.
   const exposure = exposureFraction(d.totalExposurePct);
@@ -243,20 +257,32 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
             }
           />
           <div className="mt-3">
-            <div className="mb-2 flex items-center gap-2">
-              <span className="font-mono text-base font-semibold">{latestDecision.ticker}</span>
-              <DirectionPill direction={latestDecision.thesis.direction} size="sm" />
-              <StatusBadge
-                variant={DECISION_VARIANT[latestDecision.status] ?? "neutral"}
-                label={decisionStatusLabel(latestDecision.status)}
-              />
-              {latestDecision.riskDecision.positionSizePct > 0 && (
-                <span className="ml-auto text-[11px] text-muted-foreground">
-                  {fmtPct(latestDecision.riskDecision.positionSizePct, 1)} of book
-                </span>
+            <button
+              type="button"
+              onClick={() => setDecisionOpen((o) => !o)}
+              aria-expanded={decisionOpen}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-left card-hairline transition-colors hover:bg-accent/40",
+                decisionOpen && "mb-2",
               )}
-            </div>
-            <VerdictCard decision={latestDecision} />
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-base font-semibold">{latestDecision.ticker}</span>
+                  <DirectionPill direction={latestDecision.thesis.direction} size="sm" />
+                  <StatusBadge
+                    variant={DECISION_VARIANT[latestDecision.status] ?? "neutral"}
+                    label={decisionStatusLabel(latestDecision.status)}
+                  />
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">{decisionMeta.join(" · ")}</p>
+              </div>
+              <ChevronDown
+                className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", decisionOpen && "rotate-180")}
+                aria-hidden
+              />
+            </button>
+            {decisionOpen && <VerdictCard decision={latestDecision} />}
           </div>
         </section>
       ) : (
