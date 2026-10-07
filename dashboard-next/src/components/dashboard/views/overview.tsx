@@ -5,7 +5,7 @@ import { AlertTriangle, ChevronRight, ArrowUpRight, ArrowDownRight, Loader2 } fr
 import { useOverview, useActiveJob, useActiveTickers, useMacro } from "@/lib/api";
 import { activeOrNull, hasEdgarTicker, hasMacroTicker } from "@/lib/ingest-scope";
 import { resolveRiskLimits, exposureFraction } from "@/lib/risk";
-import { StatCard, SectionHeading, StatusDot, Pill, DirectionPill, ErrorState, EmptyState } from "../primitives";
+import { SectionHeading, StatusDot, Pill, DirectionPill, ErrorState, EmptyState } from "../primitives";
 import { Sparkline, StackedBar } from "../charts";
 import { VerdictCard } from "../verdict-card";
 import {
@@ -270,7 +270,7 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
         />
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {d.openPositions.map((p) => {
-            const longCount = p.direction === "long";
+            const isLong = p.direction === "long";
             return (
               <button
                 key={p.ticker}
@@ -291,7 +291,7 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
                   values={[p.entryPrice ?? 100, (p.entryPrice ?? 100) * (1 + (p.mfePct ?? 0)), (p.entryPrice ?? 100) * (1 + (p.maePct ?? 0) * 0.5), (p.entryPrice ?? 100) * (1 + ((p.mfePct ?? 0) + (p.maePct ?? 0)) / 2)]}
                   width={80}
                   height={28}
-                  stroke={longCount ? "var(--long)" : "var(--short)"}
+                  stroke={isLong ? "var(--long)" : "var(--short)"}
                   showArea={false}
                 />
                 <div className="text-right">
@@ -299,7 +299,7 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
                     "flex items-center gap-0.5 font-mono text-xs font-medium nums",
                     (p.mfePct ?? 0) >= 0 ? "text-[color:var(--long)]" : "text-[color:var(--short)]",
                   )}>
-                    {longCount ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                    {isLong ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                     {signedPct(p.mfePct, 1)}
                   </div>
                   <div className="text-[10px] text-muted-foreground">MFE</div>
