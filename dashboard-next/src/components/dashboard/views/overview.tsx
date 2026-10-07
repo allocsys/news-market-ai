@@ -119,9 +119,6 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {env === "live" ? "Live environment" : "Backtest environment"}
           </span>
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            Updated {fmtRelative(new Date().toISOString())}
-          </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div>
