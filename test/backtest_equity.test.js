@@ -161,6 +161,48 @@ test("onEquityReturns: a position that opens and closes inside one UTC day is ac
   closeAll(carried.returns, [0.01, 0.011 / 1.01, 0, 0]);
 });
 
+// A flip (or stop/target) exits INTRADAY at positions.exit_price, not at a daily close. The final stretch, from the last
+// active close to that price, used to be booked by nobody; it is now booked on the close date.
+test("onEquityReturns: a position closed at an exit price other than the prior close books the difference on its close date", () => {
+  // Long A opened Jan 3 at 110 (Jan 2 close), closed during Jan 5 at 125 -- the prior close (Jan 4) was 121.
+  const r = onEquityReturns(grid(), [pos({ id: "p1", closedAt: "2024-01-05T10:00:00.000Z", exitPrice: 125 })]);
+  // Jan 3: 0.10 * 121/110 = 0.11, pnl 0.01. Jan 4: 121 -> 121, pnl 0. Jan 5: realized at 125: 0.10 * 125/110 = 0.113636..., pnl 0.003636... on equity 1.01.
+  closeAll(r.returns, [0, 0.01, 0, (0.1 * (125 / 110) - 0.11) / 1.01]);
+  // Exposure is deliberately unchanged: still counted only on active (grid-close) days.
+  closeAll(r.exposure, [0, 0.1, 0.11 / 1.01, 0]);
+});
+
+test("onEquityReturns: a flipped-out position's total P&L is size x (exit/entry - 1), exactly the realized return", () => {
+  // Long A opened Jan 3 at 110, flipped out during Jan 4 at 118 (the Jan 3 close was 121). Nothing else in the book.
+  const r = onEquityReturns(grid(), [pos({ id: "old", closedAt: "2024-01-04T09:00:00.000Z", exitPrice: 118, closeReason: "flipped" })]);
+  const finalEquity = r.returns.reduce((e, x) => e * (1 + x), 1);
+  close(finalEquity, 1 + 0.1 * (118 / 110 - 1), "final equity");
+  // Day by day: Jan 3 +0.01; Jan 4 realizes 0.10 * 118/110 - 0.11 = -0.002727... on equity 1.01.
+  closeAll(r.returns, [0, 0.01, (0.1 * (118 / 110) - 0.11) / 1.01, 0]);
+});
+
+test("onEquityReturns: a short closed at an exit price is realized the same way", () => {
+  // Short B opened Jan 4 at 55 (Jan 3 close). Jan 4: 44/55 = 0.8 -> 0.10 * 1.2 = 0.12, pnl 0.02. Closed during Jan 5 at 40 (prior close 44): 40/55 -> 0.10 * (2 - 40/55).
+  const r = onEquityReturns(grid(), [pos({ id: "s", ticker: "B", direction: "short", entryPrice: 55, openedAt: "2024-01-04T10:00:00.000Z", closedAt: "2024-01-05T10:00:00.000Z", exitPrice: 40 })]);
+  closeAll(r.returns, [0, 0, 0.02, (0.1 * (2 - 40 / 55) - 0.12) / 1.02]);
+});
+
+test("onEquityReturns: a same-day round trip is valued at its exit price, not that day's close; without an exit price it keeps the old behavior", () => {
+  // Long A opened Jan 3 09:00 at 110, closed 15:00 the same day at 112 (the Jan 3 close, 121, is irrelevant).
+  const r = onEquityReturns(grid(), [pos({ id: "d", openedAt: "2024-01-03T09:00:00.000Z", closedAt: "2024-01-03T15:00:00.000Z", exitPrice: 112 })]);
+  closeAll(r.returns, [0, 0.1 * (112 / 110) - 0.1, 0, 0]);
+  // No usable exit price (null: no price data): marked at the day's close exactly as before.
+  const noExit = onEquityReturns(grid(), [pos({ id: "d2", openedAt: "2024-01-03T09:00:00.000Z", closedAt: "2024-01-03T15:00:00.000Z", exitPrice: null })]);
+  closeAll(noExit.returns, [0, 0.01, 0, 0]);
+});
+
+test("onEquityReturns: a position closed before it was ever active books nothing", () => {
+  // Opened and closed before the first grid date's activity (closeDate <= first active day): never traded, so no realization either.
+  const r = onEquityReturns(grid(), [pos({ id: "early", entryPrice: 100, openedAt: "2023-12-28T00:00:00.000Z", closedAt: "2024-01-02T00:00:00.000Z", exitPrice: 999 })]);
+  assert.deepEqual(r.returns, [0, 0, 0, 0]);
+  assert.equal(r.positionsTraded, 0);
+});
+
 test("onEquityReturns counts, and does not guess at, positions it cannot replay", () => {
   const r = onEquityReturns(grid(), [
     pos({ id: "no-price", entryPrice: null }),
