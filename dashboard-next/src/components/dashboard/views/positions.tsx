@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronUp, Wallet, Activity, Loader2 } from "lucide-react";
 import { usePositions } from "@/lib/api";
 import { resolveRiskLimits, exposureFraction, describeGroupCapOverrides } from "@/lib/risk";
-import { SectionHeading, StatCard, MiniStat, Pill, EmptyState, ErrorState } from "../primitives";
+import { SectionHeading, MiniStat, Pill, EmptyState, ErrorState } from "../primitives";
 import { OpenPositionCard, ClosedPositionCard } from "../position-cards";
 import { DonutChart, Gauge } from "../charts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
