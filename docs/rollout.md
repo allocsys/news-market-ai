@@ -113,7 +113,7 @@ Backtests with `macroEnabled=1` need `macro_observations` rows covering the run'
 - It runs as a `backfill_macro` job on the backfill queue and IGNORES the live `feature:macro` switch, so history can be loaded while the switch is OFF.
 - The FRED half needs `FRED_API_KEY`; without it only COT rows are stored. A run that stores 0 rows fails instead of reporting success.
 - COT availability dates stay release-derived (not the backfill time), so a backfilled row is only visible to a backtest from when it would really have been published.
-- It is idempotent: rerunning the same range overwrites the same observations.
+- It is safe to rerun: rows are keyed by (series, obs_date, available_at) and conflicts are skipped, so a rerun never overwrites or duplicates history. The reported row counts are rows submitted, not rows newly inserted.
 
 ## Code gate
 
