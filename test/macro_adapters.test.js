@@ -270,7 +270,7 @@ test("cot.fetchLatest: a row missing any required field (or with a non-numeric o
   mockFetch(t, [
     {
       body: [
-        cotRow("2026-09-01", { long: undefined }),
+        { ...cotRow("2026-09-01"), m_money_positions_long_all: undefined },
         { ...cotRow("2026-09-08"), m_money_positions_short_all: undefined },
         { ...cotRow("2026-09-15"), open_interest_all: "" },
         cotRow("2026-09-22", { oi: "n/a" }),
