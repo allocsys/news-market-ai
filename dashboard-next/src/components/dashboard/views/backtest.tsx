@@ -25,7 +25,7 @@ import {
 import { ReplayPanel } from "./replay";
 import { JobProgressCard } from "../job-progress";
 import type { BacktestRun } from "@/lib/types";
-import { SectionHeading, StatusBadge, Pill, MiniStat, EmptyState, ErrorState } from "../primitives";
+import { SectionHeading, StatusBadge, Pill, MiniStat, ErrorState } from "../primitives";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { backtestStatusLabel, pauseReasonLabel, fmtDate, fmtTime, fmtPct } from "@/lib/format";
 import {
