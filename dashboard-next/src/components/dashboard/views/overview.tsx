@@ -2,7 +2,8 @@
 
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ChevronRight, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
-import { useOverview, useActiveJob } from "@/lib/api";
+import { useOverview, useActiveJob, useActiveTickers, useMacro } from "@/lib/api";
+import { activeOrNull, hasEdgarTicker, hasMacroTicker } from "@/lib/ingest-scope";
 import { resolveRiskLimits, exposureFraction } from "@/lib/risk";
 import { StatCard, SectionHeading, StatusDot, Pill, DirectionPill, ErrorState, EmptyState } from "../primitives";
 import { Sparkline, StackedBar } from "../charts";
@@ -19,6 +20,8 @@ import type { ViewProps } from "./types";
 export function OverviewView({ onNavigate, env }: ViewProps) {
   const overview = useOverview(env);
   const activeJob = useActiveJob("backtest", env);
+  const activeTickers = useActiveTickers();
+  const macro = useMacro();
 
   if (overview.isLoading) {
     return (
@@ -48,9 +51,27 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
 
   const attentionItems: { label: string; tone: "warn" | "bad" | "info"; action?: string; onAction?: () => void }[] = [];
   if (d.health) {
-    if (d.health.fundamentals && !d.health.fundamentals.fresh) {
+    // null = selection unknown: keep the warning rather than hide it.
+    const activeList = activeOrNull(activeTickers.data);
+    if (d.health.fundamentals && !d.health.fundamentals.fresh && hasEdgarTicker(activeList)) {
       attentionItems.push({
         label: "Fundamentals ingestion stale (last 2d+)",
+        tone: "warn",
+        action: "View health",
+        onAction: () => onNavigate("health"),
+      });
+    }
+    // Macro is default-off: only alert when the switch is known to be on and XAUUSD is active.
+    if (
+      d.health.macro &&
+      d.health.macro.fresh === false &&
+      macro.data &&
+      !macro.data.error &&
+      macro.data.enabled &&
+      hasMacroTicker(activeList)
+    ) {
+      attentionItems.push({
+        label: "Macro (FRED + COT) ingestion stale",
         tone: "warn",
         action: "View health",
         onAction: () => onNavigate("health"),
