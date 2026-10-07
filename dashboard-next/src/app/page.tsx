@@ -54,7 +54,7 @@ interface NavigateOpts {
 }
 
 export default function Home() {
-  const { user, loading, mock, logout: _logout } = useAuth();
+  const { user, loading, logout: _logout } = useAuth();
   const router = useRouter();
   const logoutMutation = useLogout();
 
@@ -137,17 +137,9 @@ export default function Home() {
           <div className="flex items-center gap-3">
             <SearchTrigger onClick={() => setPaletteOpen(true)} />
             <ThemeToggle />
-            <UserMenu username={user.username} mock={mock} onLogout={() => logoutMutation.mutate()} />
+            <UserMenu username={user.username} onLogout={() => logoutMutation.mutate()} />
           </div>
         </div>
-
-        {/* Mock-mode banner — visible only when no real backend is configured */}
-        {mock && (
-          <div className="border-b border-[color:var(--info)]/25 bg-[color:var(--info)]/8 px-4 py-1.5 text-xs text-[color:var(--info)]">
-            <strong>MOCK mode</strong> — set <code className="font-mono">BACKEND_URL</code> in
-            <code className="font-mono"> .env</code> to wire to the real Cloudflare dashboard Worker.
-          </div>
-        )}
 
         {/* Page toolbar (env selector + refresh + auto-refresh + export) */}
         <PageToolbar
@@ -269,11 +261,9 @@ export default function Home() {
 
 function UserMenu({
   username,
-  mock,
   onLogout,
 }: {
   username: string;
-  mock: boolean;
   onLogout: () => void;
 }) {
   return (
@@ -287,11 +277,6 @@ function UserMenu({
             <User className="h-3 w-3" />
           </span>
           <span className="hidden sm:inline">{username}</span>
-          {mock && (
-            <span className="rounded bg-[color:var(--info)]/15 px-1 py-0.5 text-[9px] font-semibold uppercase text-[color:var(--info)]">
-              mock
-            </span>
-          )}
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
