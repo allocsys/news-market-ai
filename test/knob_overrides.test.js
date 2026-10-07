@@ -136,6 +136,7 @@ test("effective: reports every knob from the config", () => {
     flipMinConfidence: 0.7,
     dailyBothTouchedNearestOpen: 0,
     skipNoPriceImpact: false,
+    macroEnabled: false,
   });
 });
 
@@ -190,4 +191,31 @@ test("gate: effective reports true by default (a missing key means on) and the o
   assert.equal(effectiveKnobs({ skipNoPriceImpact: true }).skipNoPriceImpact, true);
   assert.equal(effectiveKnobs({ skipNoPriceImpact: false }).skipNoPriceImpact, false);
   assert.equal(effectiveKnobs(applyKnobOverrides({}, { skipNoPriceImpact: 0 })).skipNoPriceImpact, false);
+});
+
+// ---------------------------------------------------------------------------
+// macroEnabled (XAUUSD macro context): requested as 0/1, stored as a boolean, default OFF
+// ---------------------------------------------------------------------------
+
+test("macro: parse accepts 0 and 1, rejects anything else, blank = default", () => {
+  assert.deepEqual(parseKnobOverrides(from({ macroEnabled: "0" })), { overrides: { macroEnabled: 0 } });
+  assert.deepEqual(parseKnobOverrides(from({ macroEnabled: "1" })), { overrides: { macroEnabled: 1 } });
+  assert.ok(parseKnobOverrides(from({ macroEnabled: "2" })).error?.includes("macroEnabled"));
+  assert.ok(parseKnobOverrides(from({ macroEnabled: "true" })).error);
+  assert.deepEqual(parseKnobOverrides(from({ macroEnabled: "" })), { overrides: {} });
+});
+
+test("macro: apply turns 1 into true and 0 into false, never mutating the input", () => {
+  const config = { tradeCostBps: 5 };
+  const on = applyKnobOverrides(config, { macroEnabled: 1 });
+  assert.equal(on.macroEnabled, true);
+  assert.equal(on.tradeCostBps, 5);
+  assert.equal("macroEnabled" in config, false);
+  assert.equal(applyKnobOverrides({ macroEnabled: true }, { macroEnabled: 0 }).macroEnabled, false);
+});
+
+test("macro: effective is false by default (opposite of the gate) and follows the override", () => {
+  assert.equal(effectiveKnobs({}).macroEnabled, false);
+  assert.equal(effectiveKnobs({ macroEnabled: false }).macroEnabled, false);
+  assert.equal(effectiveKnobs(applyKnobOverrides({}, { macroEnabled: 1 })).macroEnabled, true);
 });
