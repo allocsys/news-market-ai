@@ -109,6 +109,9 @@ function isRealDate(value) {
 // POST /backfill-prices ticker list: Yahoo-style symbols (BRK-B, ^GSPC, EURUSD=X), bounded.
 const MAX_PRICE_BACKFILL_TICKERS = 10;
 const PRICE_TICKER_PATTERN = /^[A-Z0-9^.=-]{1,12}$/;
+// POST /backfill-macro: earliest accepted `from` -- a sanity bound (FRED vintages and the
+// CFTC gold COT are fetched from `from` to now, so an absurdly old date is just a slow no-op).
+const MIN_MACRO_BACKFILL_FROM = "2000-01-01";
 // POST /backtest/replay/run newsItemIds: "one or a few" -- bounded the same
 // way MAX_PRICE_BACKFILL_TICKERS bounds a comma-separated list, small enough
 // that a run stays quick (2 pipeline passes x up to this many items).
@@ -305,6 +308,38 @@ export default {
       } catch (err) {
         console.error("backfill-prices enqueue failed", { id, from, to, message: err.message });
         return jsonResponse({ error: "backfill-prices enqueue failed", message: err.message }, { status: 500 });
+      }
+    }
+
+    // Operator-triggered macro history backfill (FRED vintages + CFTC gold COT for
+    // XAUUSD), SAME pattern as POST /backfill-prices: job row in LIVE_DB's job_progress
+    // under run_id 'live' (type "backfill_macro"), enqueued onto the BACKFILL queue,
+    // consumed by ingest-worker.js. Only `from` (YYYY-MM-DD): FRED has no end bound,
+    // so the window is always from..now. Deliberately NOT gated on the feature:macro
+    // live flag -- that flag only gates live ticks/analysts, this is an explicit action.
+    if (pathname === "/backfill-macro" && request.method === "POST") {
+      const from = url.searchParams.get("from");
+      if (!isPlausibleDateString(from)) {
+        return jsonResponse({ error: "from query param is required, as YYYY-MM-DD" }, { status: 400 });
+      }
+      if (!isRealDate(from)) {
+        return jsonResponse({ error: "from must be a real calendar date (YYYY-MM-DD)" }, { status: 400 });
+      }
+      if (from < MIN_MACRO_BACKFILL_FROM) {
+        return jsonResponse({ error: `from must not be before ${MIN_MACRO_BACKFILL_FROM}` }, { status: 400 });
+      }
+      if (from > new Date().toISOString().slice(0, 10)) {
+        return jsonResponse({ error: "from must not be in the future" }, { status: 400 });
+      }
+
+      const id = newJobId("backfill-macro");
+      await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill_macro", params: { from } }).queued();
+      try {
+        await env.BACKFILL.send({ type: "backfill_macro", id, from });
+        return jsonResponse({ accepted: true, id, from });
+      } catch (err) {
+        console.error("backfill-macro enqueue failed", { id, from, message: err.message });
+        return jsonResponse({ error: "backfill-macro enqueue failed", message: err.message }, { status: 500 });
       }
     }
 

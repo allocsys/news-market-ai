@@ -214,7 +214,7 @@ interface QueryOpts {
   // Positions
   positionsLimit?: number;
   // Jobs
-  jobType?: "backfill" | "backfill_prices" | "backtest" | "replay";
+  jobType?: "backfill" | "backfill_prices" | "backfill_macro" | "backtest" | "replay";
 }
 
 function envParam(env?: string): string {
@@ -404,7 +404,7 @@ export function useActiveJob(type: QueryOpts["jobType"], env?: string) {
 }
 
 // --- Latest finished job (backfill page) ---
-export function useLatestJob(type: "backfill" | "backfill_prices") {
+export function useLatestJob(type: "backfill" | "backfill_prices" | "backfill_macro") {
   return useQuery({
     queryKey: ["job-latest", type],
     queryFn: () => apiFetch<JobResponse>(`/api/jobs/latest?type=${type}`),
@@ -563,6 +563,19 @@ export function usePostBackfillPrices() {
   return useMutation({
     mutationFn: async (vars: { from: string; to: string; tickers?: string[] }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backfill-prices", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["job-active"] }),
+  });
+}
+
+export function usePostBackfillMacro() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { from: string }) => {
+      return apiFetch<{ accepted: boolean; id: string }>("/api/backfill-macro", {
         method: "POST",
         body: JSON.stringify(vars),
       });

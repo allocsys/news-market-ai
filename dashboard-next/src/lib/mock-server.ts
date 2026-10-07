@@ -20,6 +20,7 @@ import {
   ACTIVE_JOB,
   LAST_BACKFILL_JOB,
   LAST_PRICE_BACKFILL_JOB,
+  LAST_MACRO_BACKFILL_JOB,
   ENVIRONMENTS,
   WATCHLIST,
   buildBacktestPositions,
@@ -233,14 +234,16 @@ export function mockResolve(
       if (type === "backtest") return { status: 200, body: { job: ACTIVE_JOB } };
       if (type === "backfill") return { status: 200, body: { job: null } };
       if (type === "backfill_prices") return { status: 200, body: { job: null } };
+      if (type === "backfill_macro") return { status: 200, body: { job: null } };
       if (type === "replay") return { status: 200, body: { job: null } };
-      return { status: 400, body: { error: "type must be one of: backfill, backfill_prices, backtest, replay" } };
+      return { status: 400, body: { error: "type must be one of: backfill, backfill_prices, backfill_macro, backtest, replay" } };
     }
     if (p === "/jobs/latest") {
       const type = params.get("type");
       if (type === "backfill") return { status: 200, body: { job: LAST_BACKFILL_JOB } };
       if (type === "backfill_prices") return { status: 200, body: { job: LAST_PRICE_BACKFILL_JOB } };
-      return { status: 400, body: { error: "type must be: backfill or backfill_prices" } };
+      if (type === "backfill_macro") return { status: 200, body: { job: LAST_MACRO_BACKFILL_JOB } };
+      return { status: 400, body: { error: "type must be: backfill, backfill_prices or backfill_macro" } };
     }
     if (p.startsWith("/jobs/")) {
       // No real per-id job lookup in mock mode
@@ -296,7 +299,7 @@ export function mockResolve(
 
   // POST endpoints — mock acknowledges with a fake id and 200 (no real side-effect)
   if (method === "POST") {
-    if (p === "/backfill" || p === "/backfill-prices") {
+    if (p === "/backfill" || p === "/backfill-prices" || p === "/backfill-macro") {
       return {
         status: 200,
         body: { accepted: true, id: `mock-${Date.now()}`, ...(body ?? {}) },

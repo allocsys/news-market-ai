@@ -657,13 +657,23 @@ export const MACRO_TICKER = "XAUUSD";
  * usable by backtests; on later runs a newly seen week is stamped with the time it
  * was first seen (cftc_cot.js firstSeenAt), never back-dated.
  *
+ * BACKFILL (operator-triggered, `backfill: true` + `from: 'YYYY-MM-DD'`): `from`
+ * overrides the lookback window as the observation start for BOTH sources (FRED has
+ * no end bound, so the window is always from..now). COT availability is ALWAYS
+ * release-derived in a backfill -- never the first-seen-now stamp -- even when live
+ * ticks already stored recent weeks (otherwise seeding would be false and old weeks
+ * would be stamped as first seen today, unusable for historical backtests). Rows
+ * already stored keep their stamps via skipObsDates. Callers validate `from`; an
+ * invalid one here falls back to the lookback window.
+ *
  * Returns `{ count, fredCount, cotCount }` (rows submitted, not net-new).
  */
-export async function ingestMacro(config, db, { asOf } = {}) {
+export async function ingestMacro(config, db, { asOf, from, backfill = false } = {}) {
   const now = asOf ? new Date(asOf) : new Date();
   const base = Number.isNaN(now.getTime()) ? new Date() : now;
   const lookbackDays = Number(config.macroLookbackDays) > 0 ? Number(config.macroLookbackDays) : 120;
-  const observationStart = new Date(base.getTime() - lookbackDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const lookbackStart = new Date(base.getTime() - lookbackDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const observationStart = typeof from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : lookbackStart;
 
   let fredCount = 0;
   if (!config.fredApiKey) {
@@ -684,7 +694,7 @@ export async function ingestMacro(config, db, { asOf } = {}) {
   let cotCount = 0;
   try {
     const stored = await getStoredMacroObsDates(db, { series: COT_SERIES.MM_LONG, from: observationStart });
-    const seeding = stored.size === 0;
+    const seeding = backfill || stored.size === 0;
     const rows = await fetchCotLatest(config, {
       from: observationStart,
       firstSeenAt: seeding ? undefined : new Date().toISOString(),

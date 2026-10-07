@@ -1075,3 +1075,21 @@ export const LAST_PRICE_BACKFILL_JOB: JobProgress = {
   finishedAt: iso(5 * day + 4 * 3600 * 1000),
   stale: false,
 };
+
+// Macro (FRED + COT) history backfill: `from` only, FRED has no end bound. The detail mirrors the worker's wording.
+export const LAST_MACRO_BACKFILL_JOB: JobProgress = {
+  id: "backfill-macro-1790950000000-ghi789",
+  type: "backfill_macro",
+  status: "complete",
+  percent: 100,
+  done: 412,
+  total: 412,
+  phase: "Finished",
+  detail: "Stored 380 FRED + 32 COT rows from 2024-10-07",
+  error: null,
+  params: { from: "2024-10-07" },
+  createdAt: iso(4 * day),
+  updatedAt: iso(4 * day - 10 * 60 * 1000),
+  finishedAt: iso(4 * day - 10 * 60 * 1000),
+  stale: false,
+};

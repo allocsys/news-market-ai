@@ -160,10 +160,11 @@ export async function handleApiLlmCallRoute(request, env, config, id) {
 }
 
 // `backfill_prices` is the historical price-bar backfill (POST /backfill-prices), a live-environment job like `backfill`.
+// `backfill_macro` is the operator-triggered FRED + COT history backfill (POST /backfill-macro), also a live-environment job.
 // `replay` (backtest/newsReplay.js) lives under its own SIM_DB run_id, same as `backtest` -- see data.js#getActiveJob's replay branch.
-const ACTIVE_JOB_TYPES = new Set(["backfill", "backfill_prices", "backtest", "replay"]);
+const ACTIVE_JOB_TYPES = new Set(["backfill", "backfill_prices", "backfill_macro", "backtest", "replay"]);
 // Finished-job lookups are backfill-only (a backtest's result is the backtest run itself, see handleApiLatestJobRoute).
-const LATEST_JOB_TYPES = new Set(["backfill", "backfill_prices"]);
+const LATEST_JOB_TYPES = new Set(["backfill", "backfill_prices", "backfill_macro"]);
 
 /**
  * GET /api/jobs/active?type=backfill|backtest&env=... -- `{ job }`, where `job`
@@ -182,7 +183,7 @@ export async function handleApiActiveJobRoute(request, env, config) {
   if (auth.redirect) return unauthorized();
   const searchParams = new URL(request.url).searchParams;
   const type = searchParams.get("type");
-  if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backfill_prices, backtest, replay" }, { status: 400 });
+  if (!ACTIVE_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be one of: backfill, backfill_prices, backfill_macro, backtest, replay" }, { status: 400 });
   return jsonResponse({ job: await getActiveJob(env, type, parseEnvParam(searchParams)) });
 }
 
@@ -200,7 +201,7 @@ export async function handleApiLatestJobRoute(request, env, config) {
   if (auth.redirect) return unauthorized();
   const searchParams = new URL(request.url).searchParams;
   const type = searchParams.get("type");
-  if (!LATEST_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be: backfill or backfill_prices" }, { status: 400 });
+  if (!LATEST_JOB_TYPES.has(type)) return jsonResponse({ error: "type must be: backfill, backfill_prices or backfill_macro" }, { status: 400 });
   const { store } = await resolveEnv(env, parseEnvParam(searchParams));
   return jsonResponse({ job: await store.getLatestFinishedJob(type) });
 }

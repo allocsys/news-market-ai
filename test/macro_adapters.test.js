@@ -152,6 +152,36 @@ test("fred.fetchSeries: 429 and 5xx are transient, 4xx is not; messages never co
   }
 });
 
+test("fred.fetchSeries: a non-OK error carries FRED's error_message; key/api_key scrubbed, capped, empty body adds nothing", async (t) => {
+  mockFetch(t, [{ status: 400, body: { error_code: 400, error_message: "Bad Request.  The series does not exist." } }]);
+  await assert.rejects(
+    () => fetchSeries(config, { series: "DFF", observationStart: "2026-06-01" }),
+    (err) => err.message === "FRED returned 400 for series DFF: Bad Request. The series does not exist."
+  );
+  t.mock.restoreAll();
+
+  // a body that echoes the key (raw or as a query string) never reaches the message
+  mockFetch(t, [{ status: 400, body: { error_message: `bad url ?api_key=${KEY}&x=1 and ${KEY}` } }]);
+  await assert.rejects(
+    () => fetchSeries(config, { series: "DFF", observationStart: "2026-06-01" }),
+    (err) => !err.message.includes(KEY) && err.message.includes("api_key=***")
+  );
+  t.mock.restoreAll();
+
+  mockFetch(t, [{ status: 400, body: { error_message: "x".repeat(1000) } }]);
+  await assert.rejects(
+    () => fetchSeries(config, { series: "DFF", observationStart: "2026-06-01" }),
+    (err) => err.message.length < 300
+  );
+  t.mock.restoreAll();
+
+  mockFetch(t, [{ status: 500 }]); // empty `{}` body: message unchanged
+  await assert.rejects(
+    () => fetchSeries(config, { series: "DFF", observationStart: "2026-06-01" }),
+    (err) => err.message === "FRED returned 500 for series DFF" && err.transient === true
+  );
+});
+
 test("fred.fetchSeries: a network failure is a transient VendorError that does not echo the URL/key", async (t) => {
   mockFetch(t, [new Error(`connect ECONNRESET ${config.fredApiBase}?api_key=${KEY}`)]);
   await assert.rejects(
