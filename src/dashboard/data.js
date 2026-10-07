@@ -309,14 +309,31 @@ export async function getPipelineData(env, params = {}) {
  * independent widgets on one page (alert strip, stat cards, pipeline pulse,
  * latest-decision panel), so one panel's failure shouldn't blank the others.
  */
+// getRealizedPnlPctAsOf takes a trailing window in days; this is simply wider than any run, i.e. "all time".
+const ALL_TIME_DAYS = 36500;
+
+/**
+ * Realized book P&L for the Overview hero, as a FRACTION of the book: sum of position_size_pct * return over EVERY
+ * closed position of the resolved environment (RunStore#getRealizedPnlPctAsOf with an unbounded window), net of the
+ * environment's costBps (gross for a backtest older than the cost model, same rule as withRealizedReturn). Not
+ * derived from `closedPositions`, which is capped to the last 20 exits. REALIZED only: open positions are not
+ * marked to market. 0 when nothing has closed; null (with realizedPnlError) when the read failed.
+ */
+async function getRealizedPnlData(env, params) {
+  const { store, costBps } = await resolveEnv(env, params.env);
+  const result = await safe(() => store.getRealizedPnlPctAsOf({ asOf: new Date().toISOString(), windowDays: ALL_TIME_DAYS, costBps }));
+  return { realizedPnlPct: result.data, realizedPnlError: result.error };
+}
+
 export async function getOverviewData(env, params) {
-  const [snapshot, health, pipelineResult, latestDecisionResult] = await Promise.all([
+  const [snapshot, health, pipelineResult, latestDecisionResult, realizedPnl] = await Promise.all([
     getSnapshotData(env, params),
     getHealthData(env),
     getPipelineData(env, params),
     // The newest decision that went through the debate: skipped_irrelevant rows (price-impact gate, no debate) are
     // most of the table and say nothing about what the book is doing, so they never fill this panel.
     getDecisionsData(env, { ...params, decisionLimit: 1, decisionStatus: "all", decisionExcludeStatus: "skipped_irrelevant" }),
+    getRealizedPnlData(env, params),
   ]);
 
   const now = Date.now();
@@ -345,6 +362,8 @@ export async function getOverviewData(env, params) {
     closedPositions: snapshot.closedPositions,
     decisionStats: snapshot.decisionStats,
     totalExposurePct: snapshot.totalExposurePct,
+    realizedPnlPct: realizedPnl.realizedPnlPct,
+    realizedPnlError: realizedPnl.realizedPnlError,
     riskLimits: snapshot.riskLimits,
     snapshotError: snapshot.error,
     health: healthWithFresh,
