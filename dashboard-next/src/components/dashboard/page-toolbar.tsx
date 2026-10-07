@@ -4,13 +4,14 @@ import { cn } from "@/lib/utils";
 import { RefreshCw, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
-import { fmtTime } from "@/lib/format";
+import { useEffect, useState } from "react";
+import { fmtRelative, fmtTime } from "@/lib/format";
 import { EnvSelector } from "@/components/dashboard/shell";
 
 // ============================================================
 // Page toolbar — appears above each section
 //
-// "Loaded" is the time of the newest data in the query cache (not a mock
+// "Updated … ago" is the age of the newest data in the query cache (not a mock
 // clock), and Refresh refetches every active query. Views already poll every
 // 30s on their own, so there is no separate auto-refresh switch; the old
 // Auto/Export controls did nothing and were removed.
@@ -33,7 +34,18 @@ export function PageToolbar({
     .getAll()
     .map((q) => q.state.dataUpdatedAt)
     .filter((t) => t > 0);
-  const lastLoaded = updatedAt.length > 0 ? new Date(Math.max(...updatedAt)).toISOString() : null;
+  const newest = updatedAt.length > 0 ? Math.max(...updatedAt) : null;
+  const lastLoaded = newest !== null ? new Date(newest).toISOString() : null;
+
+  // Ticks every second so "Updated 15s ago" stays live. `now` starts null and is set
+  // after mount, so the server render and the first client render match.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const ago = newest === null || now === null ? "—" : now - newest < 5000 ? "just now" : `${fmtRelative(lastLoaded, now)} ago`;
 
   return (
     <div
@@ -44,9 +56,9 @@ export function PageToolbar({
     >
       {envAware && <EnvSelector env={env} onEnvChange={onEnvChange} className="min-w-0 flex-1 sm:w-60 sm:flex-none" />}
 
-      <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+      <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground" title={fmtTime(lastLoaded)}>
         <Clock className="h-3 w-3" aria-hidden />
-        <span className="font-mono nums">Loaded {fmtTime(lastLoaded)}</span>
+        <span className="font-mono nums">Updated {ago}</span>
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
