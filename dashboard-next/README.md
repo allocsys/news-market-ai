@@ -48,10 +48,9 @@ Upstream selection lives in `src/lib/backend.ts`:
 | --- | --- | --- |
 | binding | `BACKEND` service binding present (Cloudflare) | production path |
 | url | `BACKEND_URL` set | local dev against a reachable `backend` Worker (`wrangler dev` in the repo root); login secrets from `.env` |
-| mock | dev, no binding/URL (or `ALLOW_MOCK=1`) | canned data, any login works |
-| unconfigured | production, none of the above | API routes answer 503 |
+| unconfigured | none of the above (production without the binding, or dev without `BACKEND_URL`) | API routes answer 503 |
 
-Mock data is never used in production unless `ALLOW_MOCK=1` is set on purpose.
+There is no mock mode: with no backend the routes answer 503, so fake data can never be shown.
 
 ## Secrets
 
@@ -69,7 +68,7 @@ They are read from the Worker env at request time, never at module load.
 ```bash
 cd dashboard-next
 npm install
-npm run dev          # mock mode, http://localhost:3000
+npm run dev          # needs BACKEND_URL and the login values in .env, http://localhost:3000
 npm run lint
 npm run typecheck
 npm run preview      # OpenNext build + local workerd preview
