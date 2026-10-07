@@ -562,6 +562,8 @@ function BacktestRunRow({
       { id: run.id, action },
       { onError: (e) => toast.error(`Could not ${action} the run: ${e.message}`) },
     );
+  // The mutation is shared by every row, so only this run's own in-flight action disables its buttons.
+  const busy = actionMutation.isPending && actionMutation.variables?.id === run.id;
   const variant =
     run.status === "complete" ? "approved" :
     run.status === "failed" ? "rejected" :
@@ -659,6 +661,7 @@ function BacktestRunRow({
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={busy}
                   onClick={() => act("resume")}
                 >
                   <Play className="mr-1 h-3 w-3" />
@@ -668,6 +671,7 @@ function BacktestRunRow({
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={busy}
                   onClick={() => act("pause")}
                 >
                   <Pause className="mr-1 h-3 w-3" />
@@ -676,7 +680,7 @@ function BacktestRunRow({
               )}
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button size="sm" variant="outline" className="border-[color:var(--short)]/40 text-[color:var(--short)]">
+                  <Button size="sm" variant="outline" disabled={busy} className="border-[color:var(--short)]/40 text-[color:var(--short)]">
                     <Square className="mr-1 h-3 w-3" />
                     Terminate
                   </Button>
