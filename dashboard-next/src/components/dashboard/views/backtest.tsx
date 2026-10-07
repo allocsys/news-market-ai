@@ -567,6 +567,11 @@ function BacktestRunRow({
   actionMutation: ReturnType<typeof usePostBacktestAction>;
 }) {
   const [open, setOpen] = useState(false);
+  const act = (action: "resume" | "pause" | "cancel") =>
+    actionMutation.mutate(
+      { id: run.id, action },
+      { onError: (e) => toast.error(`Could not ${action} the run: ${e.message}`) },
+    );
   const variant =
     run.status === "complete" ? "approved" :
     run.status === "failed" ? "rejected" :
@@ -664,7 +669,7 @@ function BacktestRunRow({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => actionMutation.mutate({ id: run.id, action: "resume" })}
+                  onClick={() => act("resume")}
                 >
                   <Play className="mr-1 h-3 w-3" />
                   Resume
@@ -673,7 +678,7 @@ function BacktestRunRow({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => actionMutation.mutate({ id: run.id, action: "pause" })}
+                  onClick={() => act("pause")}
                 >
                   <Pause className="mr-1 h-3 w-3" />
                   Pause
@@ -697,7 +702,7 @@ function BacktestRunRow({
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
                       className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      onClick={() => actionMutation.mutate({ id: run.id, action: "cancel" })}
+                      onClick={() => act("cancel")}
                     >
                       Terminate
                     </AlertDialogAction>
