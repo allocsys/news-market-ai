@@ -109,6 +109,9 @@ function isRealDate(value) {
 // POST /backfill-prices ticker list: Yahoo-style symbols (BRK-B, ^GSPC, EURUSD=X), bounded.
 const MAX_PRICE_BACKFILL_TICKERS = 10;
 const PRICE_TICKER_PATTERN = /^[A-Z0-9^.=-]{1,12}$/;
+// POST /backfill-macro: earliest accepted `from` -- a sanity bound (FRED vintages and the
+// CFTC gold COT are fetched from `from` to now, so an absurdly old date is just a slow no-op).
+const MIN_MACRO_BACKFILL_FROM = "2000-01-01";
 // POST /backtest/replay/run newsItemIds: "one or a few" -- bounded the same
 // way MAX_PRICE_BACKFILL_TICKERS bounds a comma-separated list, small enough
 // that a run stays quick (2 pipeline passes x up to this many items).
