@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   Filter,
@@ -42,14 +42,11 @@ export function LlmView({ tickerFilter, onNavigate, env }: ViewProps & { tickerF
   const [filtersOpen, setFiltersOpen] = useState(Boolean(tickerFilter));
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Paging: each "Older" push remembers the cursor (nextBeforeId) of the page being left; "Newest" clears the stack. The last entry is the current page's `llmBefore`.
-  const [cursors, setCursors] = useState<number[]>([]);
+  // The stack is tagged with the filter scope it was built under, so a different filter or environment starts again from the newest call without an effect.
+  const scope = `${env ?? "live"}|${source}|${status}|${limit}|${tickerFilter ?? ""}`;
+  const [paging, setPaging] = useState<{ scope: string; stack: number[] }>({ scope, stack: [] });
+  const cursors = paging.scope === scope ? paging.stack : [];
   const llmBefore = cursors.length > 0 ? cursors[cursors.length - 1] : null;
-
-  // A different filter or environment starts again from the newest call.
-  useEffect(() => {
-    setCursors((c) => (c.length > 0 ? [] : c));
-  }, [source, status, limit, tickerFilter, env]);
-
   const calls = useLlmCalls({
     env,
     llmSource: source === "all" ? undefined : source,
@@ -241,7 +238,7 @@ export function LlmView({ tickerFilter, onNavigate, env }: ViewProps & { tickerF
         <div className="flex items-center justify-between">
           <button
             type="button"
-            onClick={() => setCursors([])}
+            onClick={() => setPaging({ scope, stack: [] })}
             disabled={cursors.length === 0}
             className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -250,7 +247,7 @@ export function LlmView({ tickerFilter, onNavigate, env }: ViewProps & { tickerF
           <span className="text-xs text-muted-foreground">page {cursors.length + 1}</span>
           <button
             type="button"
-            onClick={() => nextBeforeId != null && setCursors((c) => [...c, nextBeforeId])}
+            onClick={() => nextBeforeId != null && setPaging({ scope, stack: [...cursors, nextBeforeId] })}
             disabled={nextBeforeId == null}
             className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
