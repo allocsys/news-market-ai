@@ -105,6 +105,16 @@ The live macro context (FRED + COT fetches, and the macro block in XAUUSD analys
 
 The switch changes what the strategy sees, so treat flipping it like a knob change: decide it in backtest (see `macroEnabled` above), and do not flip it mid paper or live stage (Rules 1 and 5).
 
+### Macro history backfill
+
+Backtests with `macroEnabled=1` need `macro_observations` rows covering the run's window. The Backfill page's macro section (or `POST /backfill-macro?from=YYYY-MM-DD`) loads FRED + COT history from a start date:
+
+- `from` is the only parameter. It must be a real date, on or after 2000-01-01 and not in the future; otherwise 400 before any job row is created.
+- It runs as a `backfill_macro` job on the backfill queue and IGNORES the live `feature:macro` switch, so history can be loaded while the switch is OFF.
+- The FRED half needs `FRED_API_KEY`; without it only COT rows are stored. A run that stores 0 rows fails instead of reporting success.
+- COT availability dates stay release-derived (not the backfill time), so a backfilled row is only visible to a backtest from when it would really have been published.
+- It is idempotent: rerunning the same range overwrites the same observations.
+
 ## Code gate
 
 Not built. Stage advancement is a manual, owner-approved decision. If wanted later, a gate could refuse to start live-size runs unless a stage-approval flag is set in config.
