@@ -756,20 +756,25 @@ export async function getFundamentalFactsAsOf(db, { ticker, tag, asOf, limit = 2
  * lastIngestedAt is the only real signal.
  */
 export async function getIngestionHealth(db) {
-  const [news, bars, facts] = await Promise.all([
+  // macro_observations is newer than the other tables: an inputs DB that has not run
+  // migration 0005 yet must still report health, so a failed read counts as empty. It is
+  // started in the same tick as the other three (not after them) so autoBatch coalesces all
+  // four; the catch is on THIS read only, so it can never swallow a failure of the others.
+  const readMacro = async () => {
+    try {
+      return await db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM macro_observations`).first();
+    } catch (err) {
+      console.warn("macro health read failed -- reporting no macro rows", { message: err.message });
+      return null;
+    }
+  };
+
+  const [news, bars, facts, macro] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM news_items`).first(),
     db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM price_bars`).first(),
     db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM fundamental_facts`).first(),
+    readMacro(),
   ]);
-
-  // macro_observations is newer than the other tables: an inputs DB that has not run
-  // migration 0005 yet must still report health, so a failed read counts as empty.
-  let macro = null;
-  try {
-    macro = await db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM macro_observations`).first();
-  } catch (err) {
-    console.warn("macro health read failed -- reporting no macro rows", { message: err.message });
-  }
 
   return {
     news: { count: news?.count ?? 0, lastIngestedAt: news?.last ?? null },

@@ -263,11 +263,14 @@ export async function getPositionsData(env, params) {
 
 export async function getPipelineData(env, params = {}) {
   const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
-  const checkpointsResult = await safe(() => store.listRecentCheckpoints({ limit: 30 }));
-  // Aggregate (not capped to 30 rows) behind the Operations tab's per-ticker
-  // cards. A failure here degrades to the raw checkpoints rather than erroring
-  // the page, so `checkpoints` (used by Overview) stays the source of truth.
-  const stageCountsResult = await safe(() => store.listCheckpointStageCounts());
+  // The two reads are independent, so they start in the same tick (autoBatch coalesces them into one round trip).
+  // Each keeps its own safe(): the stage-count aggregate (not capped to 30 rows) behind the Operations tab's
+  // per-ticker cards degrades to the raw checkpoints on failure rather than erroring the page, so `checkpoints`
+  // (used by Overview) stays the source of truth.
+  const [checkpointsResult, stageCountsResult] = await Promise.all([
+    safe(() => store.listRecentCheckpoints({ limit: 30 })),
+    safe(() => store.listCheckpointStageCounts()),
+  ]);
   return {
     checkpoints: checkpointsResult.data ?? [],
     tickerStages: stageCountsResult.data ?? [],
