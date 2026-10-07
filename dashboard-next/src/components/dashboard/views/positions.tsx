@@ -7,9 +7,9 @@ import { usePositions } from "@/lib/api";
 import { resolveRiskLimits, exposureFraction, describeGroupCapOverrides } from "@/lib/risk";
 import { SectionHeading, StatCard, MiniStat, Pill, EmptyState, ErrorState } from "../primitives";
 import { OpenPositionCard, ClosedPositionCard } from "../position-cards";
-import { DonutChart, Gauge, Sparkline } from "../charts";
+import { DonutChart, Gauge } from "../charts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { fmtPct, signedPct } from "@/lib/format";
+import { fmtPct } from "@/lib/format";
 import type { ViewProps } from "./types";
 
 const POSITIONS_LIMIT_OPTIONS = [10, 25, 50, 100];
