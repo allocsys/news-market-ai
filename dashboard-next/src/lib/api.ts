@@ -214,7 +214,7 @@ interface QueryOpts {
   // Positions
   positionsLimit?: number;
   // Jobs
-  jobType?: "backfill" | "backfill_prices" | "backtest" | "replay";
+  jobType?: "backfill" | "backfill_prices" | "backfill_macro" | "backtest" | "replay";
 }
 
 function envParam(env?: string): string {
@@ -563,6 +563,19 @@ export function usePostBackfillPrices() {
   return useMutation({
     mutationFn: async (vars: { from: string; to: string; tickers?: string[] }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backfill-prices", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["job-active"] }),
+  });
+}
+
+export function usePostBackfillMacro() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { from: string }) => {
+      return apiFetch<{ accepted: boolean; id: string }>("/api/backfill-macro", {
         method: "POST",
         body: JSON.stringify(vars),
       });
