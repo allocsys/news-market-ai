@@ -197,37 +197,27 @@ export function Gauge({
   const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
   const thickness = 12;
   const r = (size - thickness) / 2;
-  const c = Math.PI * r; // semicircle
   const cx = size / 2;
   const cy = size / 2;
+  // Both arcs run left -> right THROUGH THE TOP (sweep-flag 1 is clockwise on screen). The SVG is only
+  // size/2 + 12 tall, so the arc has to live in the upper half: an earlier version drew it under a
+  // rotate(180), which put it below the viewBox and left just the two end caps visible.
+  const track = `M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`;
+  const ex = cx - r * Math.cos(pct * Math.PI);
+  const ey = cy - r * Math.sin(pct * Math.PI);
+  // pct <= 1 means the value arc never exceeds 180 degrees, so large-arc is always 0. Nothing to draw at 0
+  // (a round cap would paint a dot that reads as a value).
+  const valueArc = pct > 0 ? `M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${ex} ${ey}` : null;
 
   return (
     <div className={cn("flex flex-col items-center", className)}>
       <svg width={size} height={size / 2 + 12} viewBox={`0 0 ${size} ${size / 2 + 12}`}>
-        <g transform={`translate(${cx}, ${cy}) rotate(180)`}>
-          {/* Track */}
-          <path
-            d={`M ${-r} 0 A ${r} ${r} 0 0 1 ${r} 0`}
-            fill="none"
-            stroke="var(--muted)"
-            strokeWidth={thickness}
-            opacity={0.4}
-          />
-          {/* Value */}
-          <path
-            d={`M ${-r} 0 A ${r} ${r} 0 0 1 ${r * Math.cos(Math.PI - pct * Math.PI)} ${r * Math.sin(Math.PI - pct * Math.PI) * -1}`}
-            fill="none"
-            stroke={accent}
-            strokeWidth={thickness}
-            strokeLinecap="round"
-            style={{
-              strokeDasharray: `${c * pct} ${c}`,
-              strokeDashoffset: 0,
-            }}
-          />
-        </g>
+        {/* Track */}
+        <path d={track} fill="none" stroke="var(--muted)" strokeWidth={thickness} strokeLinecap="round" opacity={0.4} />
+        {/* Value */}
+        {valueArc && <path d={valueArc} fill="none" stroke={accent} strokeWidth={thickness} strokeLinecap="round" />}
         {valueLabel && (
-          <text x="50%" y="40%" textAnchor="middle" dominantBaseline="middle" className="fill-foreground font-mono text-xl font-semibold nums">
+          <text x="50%" y="62%" textAnchor="middle" dominantBaseline="middle" className="fill-foreground font-mono text-xl font-semibold nums">
             {valueLabel}
           </text>
         )}
