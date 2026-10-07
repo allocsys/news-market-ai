@@ -408,8 +408,8 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
       toast.error("Pick both a start and an end date");
       return;
     }
-    if (testStart > testEnd) {
-      toast.error("The start date must be on or before the end date");
+    if (testStart >= testEnd) {
+      toast.error("The start date must be before the end date");
       return;
     }
     setConfirmOpen(true);
