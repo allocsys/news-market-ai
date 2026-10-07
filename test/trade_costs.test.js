@@ -91,12 +91,13 @@ test("onEquityReturns: a still-open position pays its entry but no exit cost", (
 });
 
 test("onEquityReturns: a same-day round trip pays entry that day and exit on the next grid date", () => {
-  // Opened and closed during Jan 3 at the prior close 110; active on Jan 3 only.
+  // Opened and closed during Jan 3, entry 110 and exit 110 (the prior close); active on Jan 3 only.
+  // The round trip is valued at its stored exit price (110), NOT Jan 3's close (121), so it is flat gross.
   const p = pos({ entryPrice: 110, openedAt: "2024-01-03T10:00:00.000Z", closedAt: "2024-01-03T15:00:00.000Z", exitPrice: 110 });
   const net = onEquityReturns(grid(), [p], { costBps: C });
-  // Jan 3: alloc 0.10, value 0.10 * 121/110 = 0.11, pnl 0.01 - entry 0.001 = 0.009, equity 1.009.
-  // Jan 4: exit cost 0.11 * 0.01 = 0.0011 -> -0.0011 / 1.009. Jan 5: nothing.
-  closeAll(net.returns, [0, 0.009, -0.0011 / 1.009, 0]);
+  // Jan 3: alloc 0.10, value 0.10 * 110/110 = 0.10, gross pnl 0, entry cost 0.001 -> -0.001 on equity 1; equity 0.999.
+  // Jan 4: exit cost 0.10 * 0.01 = 0.001 -> -0.001 / 0.999. Jan 5: nothing.
+  closeAll(net.returns, [0, -0.001, -0.001 / 0.999, 0]);
 });
 
 test("onEquityReturns: a flip is two trades -- the old position's exit and the new position's entry both hit the same day", () => {
