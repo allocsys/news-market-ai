@@ -75,7 +75,7 @@ test("formatMacroContext: real-yield change, CPI year over year, and COT net pos
   const text = formatMacroContext(SNAPSHOT);
   assert.match(text, /10y TIPS real yield \(DFII10\): 1\.90% as of 2026-03-09; about a month earlier 2\.10%, change -0\.20 pp/);
   assert.match(text, /US CPI, all items \(CPIAUCSL\): index 320\.4 for the month starting 2026-02-01, \+3\.4% year over year/);
-  assert.match(text, /week of 2026-03-03: net 120,000 contracts \(long 150,000, short 30,000\); prior week net 108,000, change \+12,000; open interest 500,000/);
+  assert.match(text, /week of 2026-03-03: net 120,000 contracts \(long 150,000, short 30,000\); prior week net 108,000, change \+12000; open interest 500,000/);
 });
 
 test("formatMacroContext: junk and empty input yields '' and never zero-fills", () => {
