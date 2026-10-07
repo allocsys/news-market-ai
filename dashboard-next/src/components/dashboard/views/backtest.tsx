@@ -387,9 +387,32 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [enableLlmLog, setEnableLlmLog] = useState(false);
   const [disableGate, setDisableGate] = useState(false);
   const [enableMacro, setEnableMacro] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const toggleTicker = (t: string) => {
     setTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  };
+
+  const reset = () => {
+    setTickers([]);
+    setTestStart(daysAgo(30));
+    setTestEnd(daysAgo(0));
+    setEnableLlmLog(false);
+    setDisableGate(false);
+    setEnableMacro(false);
+  };
+
+  // ISO dates (YYYY-MM-DD) compare correctly as strings.
+  const requestSubmit = () => {
+    if (!testStart || !testEnd) {
+      toast.error("Pick both a start and an end date");
+      return;
+    }
+    if (testStart > testEnd) {
+      toast.error("The start date must be on or before the end date");
+      return;
+    }
+    setConfirmOpen(true);
   };
 
   const submit = () => {
