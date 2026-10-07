@@ -58,7 +58,8 @@ async function fredErrorDetail(response, apiKey) {
   }
   detail = detail.replace(/api_key=[^&\s"']*/gi, "api_key=***");
   if (apiKey) detail = detail.split(apiKey).join("***");
-  return detail.replace(/\s+/g, " ").trim().slice(0, ERROR_DETAIL_MAX);
+  detail = detail.replace(/\s+/g, " ").trim().slice(0, ERROR_DETAIL_MAX);
+  return detail === "{}" || detail === "[]" ? "" : detail;
 }
 
 /**
