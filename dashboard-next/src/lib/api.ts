@@ -4,9 +4,8 @@
 //
 // Every fetch goes through this app's own /api/* routes (relative), which run
 // in the same Worker: the session gate in server/gateway.mjs, then the private
-// backend over the BACKEND service binding (or mock data in local dev when no
-// backend is configured). The session cookie is attached automatically
-// by the browser (same-origin).
+// backend over the BACKEND service binding (or BACKEND_URL in local dev). The
+// session cookie is attached automatically by the browser (same-origin).
 //
 // 401 responses trigger a redirect to /login via the global error handler.
 
