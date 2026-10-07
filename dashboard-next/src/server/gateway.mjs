@@ -88,6 +88,7 @@ const NON_API_ROUTES = new Set([
   "/backtest/replay/news",
   "/controls/set",
   "/controls/tickers",
+  "/controls/macro",
 ]);
 const BACKTEST_ACTION_RE = /^\/backtest\/[^/]+\/(cancel|pause|resume)$/;
 
