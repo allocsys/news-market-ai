@@ -92,7 +92,7 @@ export interface TradeDecision {
   portfolioDecision: { reason: string };
   riskDecision: { positionSizePct: number; reason: string };
   opinions: AnalystOpinion[];
-  debate: Debate;
+  debate: Debate | null; // null for skipped_irrelevant (price-impact gate, no debate run)
   createdAt: string;
 }
 
