@@ -31,7 +31,7 @@ export default function LoginPage() {
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading, mock } = useAuth();
+  const { user, loading } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const login = useLogin();
 
@@ -86,11 +86,6 @@ function LoginForm() {
           <p className="text-center text-sm text-muted-foreground">
             Sign in to the operations dashboard.
           </p>
-          {mock && (
-            <p className="rounded-md border border-[color:var(--info)]/25 bg-[color:var(--info)]/8 px-3 py-1.5 text-[11px] text-[color:var(--info)]">
-              MOCK mode — set BACKEND_URL in <code className="font-mono">.env</code> to use real data.
-            </p>
-          )}
         </div>
 
         <form

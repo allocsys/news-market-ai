@@ -11,17 +11,16 @@ private backend, all in one Worker. See
 [`dashboard-next/README.md`](./dashboard-next/README.md) for the architecture,
 path mapping, auth flow and secrets.
 
-Run locally in MOCK mode (no backend needed):
+Run locally against a backend (`wrangler dev` in the repo root). Set
+`BACKEND_URL`, `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` and `JWT_SECRET` in
+`dashboard-next/.env` (see `.env.example`), then:
 ```bash
 cd dashboard-next
 npm install
 npm run dev
 ```
-Open http://localhost:3000/ and sign in with any credentials.
-
-Switch to a real backend by setting `BACKEND_URL` (a `wrangler dev` of the
-backend), `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` and `JWT_SECRET` in
-`dashboard-next/.env` (see `.env.example`).
+Open http://localhost:3000/ and sign in with the username and password from
+`.env`. There is no mock mode: without a backend the API answers 503.
 
 
 ## Where things are documented

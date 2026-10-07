@@ -9,10 +9,9 @@
 //   url          Local dev only: BACKEND_URL points at a reachable `backend`
 //                Worker (e.g. `wrangler dev` in the repo root). Login secrets
 //                then come from dashboard-next/.env.
-//   mock         Local dev only: canned data from lib/mock-server.ts. Never
-//                used in production unless ALLOW_MOCK=1 is set on purpose, so
-//                a missing binding can't silently show fake trading data.
-//   unconfigured Production with neither of the above: callers return 503.
+//   unconfigured Neither of the above (production without the binding, or local
+//                dev without BACKEND_URL): callers return 503. There is no mock
+//                data fallback, so a missing backend never shows fake trading data.
 
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { BACKEND_URL } from "./server-config";
@@ -28,7 +27,6 @@ export interface GatewayEnv {
 
 export type Backend =
   | { kind: "binding" | "url"; env: GatewayEnv }
-  | { kind: "mock" }
   | { kind: "unconfigured" };
 
 /** A Worker secret/var if set, else the process env (local `next dev`). Read per request, never at module load: Worker secrets aren't available while the module is evaluated. */
@@ -77,8 +75,5 @@ export function getBackend(): Backend {
     };
   }
 
-  if (process.env.NODE_ENV !== "production" || process.env.ALLOW_MOCK === "1") {
-    return { kind: "mock" };
-  }
   return { kind: "unconfigured" };
 }

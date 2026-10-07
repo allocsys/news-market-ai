@@ -8,13 +8,9 @@
 //
 // Login, logout and the auth probe have their own routes (api/login, api/logout,
 // api/auth); Next.js prefers those over this catch-all.
-//
-// When no backend is configured in local dev (see lib/backend.ts), the route
-// falls back to the mock server so the UI keeps working.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getBackend } from "@/lib/backend";
-import { mockResolve } from "@/lib/mock-server";
 import { handleGateway, toGatewayPath } from "@/server/gateway.mjs";
 
 // Always run dynamically, never cache: every request depends on the session
@@ -39,40 +35,12 @@ async function handle(method: "GET" | "POST", request: NextRequest, ctx: Ctx) {
   const backend = getBackend();
   if (backend.kind === "unconfigured") {
     return NextResponse.json(
-      { error: "dashboard backend is not configured (missing BACKEND service binding)" },
+      { error: "dashboard backend is not configured (set the BACKEND service binding, or BACKEND_URL for local dev)" },
       { status: 503 },
     );
   }
 
-  // === Mock mode (local dev only, see lib/backend.ts) ===
-  if (backend.kind === "mock") {
-    let body: Record<string, unknown> | null = null;
-    if (method === "POST") {
-      try {
-        const text = await request.text();
-        if (text) {
-          // Try JSON first, fall back to form-encoded
-          try {
-            body = JSON.parse(text);
-          } catch {
-            body = Object.fromEntries(new URLSearchParams(text));
-          }
-        }
-      } catch {
-        /* empty body */
-      }
-    }
-    const result = mockResolve(method, path, url.searchParams, body);
-    if (!result) {
-      return NextResponse.json({ error: "not found (mock mode)" }, { status: 404 });
-    }
-    return NextResponse.json(result.body, {
-      status: result.status,
-      headers: result.headers,
-    });
-  }
-
-  // === Real backend mode: the gateway does the session check, validation and forwarding ===
+  // The gateway does the session check, validation and forwarding.
   const target = new URL(toGatewayPath(path) + url.search, url.origin);
   const init: RequestInit = { method, headers: request.headers };
   if (method === "POST") init.body = await request.arrayBuffer();
