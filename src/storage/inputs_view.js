@@ -762,11 +762,97 @@ export async function getIngestionHealth(db) {
     db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM fundamental_facts`).first(),
   ]);
 
+  // macro_observations is newer than the other tables: an inputs DB that has not run
+  // migration 0005 yet must still report health, so a failed read counts as empty.
+  let macro = null;
+  try {
+    macro = await db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM macro_observations`).first();
+  } catch (err) {
+    console.warn("macro health read failed -- reporting no macro rows", { message: err.message });
+  }
+
   return {
     news: { count: news?.count ?? 0, lastIngestedAt: news?.last ?? null },
     priceBars: { count: bars?.count ?? 0, lastIngestedAt: bars?.last ?? null },
     fundamentals: { count: facts?.count ?? 0, lastIngestedAt: facts?.last ?? null },
+    macro: { count: macro?.count ?? 0, lastIngestedAt: macro?.last ?? null },
   };
+}
+
+// D1 batch size for macro rows (one subrequest per db.batch(), same reasoning as
+// FUNDAMENTALS_INSERT_CHUNK_SIZE in ingestion/ingest.js).
+const MACRO_INSERT_CHUNK_SIZE = 200;
+
+/**
+ * Stores macro observations (`{ series, obsDate, availableAt, val, source }`). The
+ * key is (series, obs_date, available_at), so re-seeing a vintage is a no-op and a
+ * revision (same obs_date, later available_at) is a NEW row -- nothing is ever
+ * overwritten, which is what keeps getMacroSnapshotAsOf point-in-time. Returns the
+ * number of rows submitted.
+ */
+export async function insertMacroObservations(db, observations) {
+  if (observations.length === 0) return 0;
+  const stmt = db.prepare(
+    `INSERT INTO macro_observations (series, obs_date, available_at, val, source, ingested_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(series, obs_date, available_at) DO NOTHING`
+  );
+  const ingestedAt = new Date().toISOString();
+  for (let i = 0; i < observations.length; i += MACRO_INSERT_CHUNK_SIZE) {
+    const chunk = observations.slice(i, i + MACRO_INSERT_CHUNK_SIZE);
+    await db.batch(chunk.map((o) => stmt.bind(o.series, o.obsDate, o.availableAt, o.val, o.source, ingestedAt)));
+  }
+  return observations.length;
+}
+
+/** obs_dates of `series` already stored (COT live ticks skip these so a stored week is not re-inserted under a later availability). */
+export async function getStoredMacroObsDates(db, { series, from }) {
+  const { results } = await db
+    .prepare(`SELECT DISTINCT obs_date FROM macro_observations WHERE series = ? AND obs_date >= ?`)
+    .bind(series, from)
+    .all();
+  return new Set(results.map((row) => row.obs_date));
+}
+
+/**
+ * Point-in-time macro read: per series, the most recent `perSeries` observations,
+ * each with the value as it was KNOWN at `asOf` (the latest vintage whose
+ * available_at <= asOf). Required asOf, same convention as every agent-facing read
+ * above. Returns `{ [series]: [{ obsDate, availableAt, val }] }`, newest obs first;
+ * a series with nothing available is absent.
+ */
+export async function getMacroSnapshotAsOf(db, { asOf, perSeries = 30, windowDays = 400 }) {
+  if (!asOf) {
+    throw new LookaheadViolationError("getMacroSnapshotAsOf requires an explicit asOf timestamp");
+  }
+  const asOfMs = Date.parse(asOf);
+  if (Number.isNaN(asOfMs)) {
+    throw new LookaheadViolationError(`getMacroSnapshotAsOf got an unparseable asOf "${asOf}"`);
+  }
+  const since = new Date(asOfMs - windowDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const { results } = await db
+    .prepare(
+      `SELECT series, obs_date, available_at, val
+       FROM (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY series, obs_date ORDER BY available_at DESC
+         ) AS rn
+         FROM macro_observations
+         WHERE available_at <= ? AND obs_date >= ?
+       )
+       WHERE rn = 1
+       ORDER BY series ASC, obs_date DESC`
+    )
+    .bind(asOf, since)
+    .all();
+
+  const snapshot = {};
+  for (const row of results) {
+    const list = (snapshot[row.series] ??= []);
+    if (list.length < perSeries) list.push({ obsDate: row.obs_date, availableAt: row.available_at, val: row.val });
+  }
+  return snapshot;
 }
 
 /**
