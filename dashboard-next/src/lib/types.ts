@@ -226,7 +226,7 @@ export interface PriceBar {
 
 export interface JobProgress {
   id: string;
-  type: "backfill" | "backfill_prices" | "backtest" | "replay";
+  type: "backfill" | "backfill_prices" | "backfill_macro" | "backtest" | "replay";
   status: "queued" | "running" | "complete" | "failed" | "cancelled";
   percent: number;
   done: number | null;
