@@ -1,15 +1,33 @@
 "use client";
 
 import { Loader2, HeartPulse } from "lucide-react";
-import { useHealth } from "@/lib/api";
+import { useHealth, useActiveTickers, useMacro } from "@/lib/api";
 import { SectionHeading, StatusDot, Pill, ErrorState } from "../primitives";
 import { fmtTime, fmtRelative, fmtCompact } from "@/lib/format";
+import {
+  activeOrNull,
+  hasEdgarTicker,
+  hasMacroTicker,
+  type SourceState,
+} from "@/lib/ingest-scope";
+import type { IngestionHealthSource } from "@/lib/types";
 import type { ViewProps } from "./types";
 
 const STALE_HOURS = 26;
 
+interface SourceRow {
+  key: string;
+  label: string;
+  data: IngestionHealthSource | null | undefined;
+  state: SourceState;
+  /** Why the source is not counted (shown under the label for na/off). */
+  note?: string;
+}
+
 export function HealthView({}: ViewProps) {
   const health = useHealth();
+  const activeTickers = useActiveTickers();
+  const macro = useMacro();
 
   if (health.isLoading) {
     return (
@@ -24,27 +42,71 @@ export function HealthView({}: ViewProps) {
   }
 
   const h = health.data.health;
-  const sources = [
-    { key: "news", label: "News items", data: h.news },
-    { key: "priceBars", label: "Price bars", data: h.priceBars },
-    { key: "fundamentals", label: "Fundamentals", data: h.fundamentals },
+  // null = unknown (loading / failed): every source is then treated as applicable.
+  const active = activeOrNull(activeTickers.data);
+  const timed = (d: IngestionHealthSource | null | undefined): SourceState =>
+    (d?.fresh ?? isFresh(d?.lastIngestedAt)) ? "fresh" : "stale";
+
+  const sources: SourceRow[] = [
+    { key: "news", label: "News items", data: h.news, state: timed(h.news) },
+    { key: "priceBars", label: "Price bars", data: h.priceBars, state: timed(h.priceBars) },
+    hasEdgarTicker(active)
+      ? { key: "fundamentals", label: "Fundamentals", data: h.fundamentals, state: timed(h.fundamentals) }
+      : {
+          key: "fundamentals",
+          label: "Fundamentals",
+          data: h.fundamentals,
+          state: "na",
+          note: "No active ticker has an EDGAR filer",
+        },
   ];
-  const freshCount = sources.filter((s) => s.data?.fresh ?? isFresh(s.data?.lastIngestedAt)).length;
+
+  // Macro row: only when the backend reports it (older backends omit it) and the
+  // switch state is known. An unknown switch hides the row rather than risk a
+  // false "stale" on a default-off feature.
+  const macroFlag = macro.data && !macro.data.error ? macro.data.enabled : null;
+  if (h.macro !== undefined && macroFlag !== null) {
+    if (!hasMacroTicker(active)) {
+      sources.push({ key: "macro", label: "Macro (FRED + COT)", data: h.macro, state: "na", note: "XAUUSD is not active" });
+    } else if (!macroFlag) {
+      sources.push({ key: "macro", label: "Macro (FRED + COT)", data: h.macro, state: "off", note: "Switched off in Controls" });
+    } else {
+      sources.push({ key: "macro", label: "Macro (FRED + COT)", data: h.macro, state: timed(h.macro) });
+    }
+  }
+
+  const counted = sources.filter((s) => s.state === "fresh" || s.state === "stale");
+  const freshCount = counted.filter((s) => s.state === "fresh").length;
+  const skipped = sources.length - counted.length;
 
   return (
     <div className="space-y-5">
       <section>
         <SectionHeading
           title="Ingestion health"
-          description={`${freshCount}/${sources.length} sources fresh · ${STALE_HOURS}h staleness threshold`}
+          description={`${freshCount}/${counted.length} sources fresh · ${STALE_HOURS}h staleness threshold${
+            skipped > 0 ? ` · ${skipped} not counted` : ""
+          }`}
           action={
-            <Pill tone={freshCount === sources.length ? "long" : freshCount > 0 ? "paused" : "short"} size="sm">
-              {freshCount}/{sources.length} fresh
+            <Pill
+              tone={
+                counted.length === 0
+                  ? "muted"
+                  : freshCount === counted.length
+                    ? "long"
+                    : freshCount > 0
+                      ? "paused"
+                      : "short"
+              }
+              size="sm"
+            >
+              {freshCount}/{counted.length} fresh
             </Pill>
           }
         />
         <p className="mt-2 text-xs text-muted-foreground">
           Each source is fresh when <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">lastIngestedAt</code> falls within the last {STALE_HOURS} hours.
+          Sources that cannot apply to the active tickers, or are switched off, are shown but not counted.
         </p>
       </section>
 
@@ -52,12 +114,15 @@ export function HealthView({}: ViewProps) {
         <ul className="divide-y divide-border">
           {sources.map((s) => {
             const data = s.data;
-            const fresh = data?.fresh ?? isFresh(data?.lastIngestedAt);
+            const inactive = s.state === "na" || s.state === "off";
             return (
               <li key={s.key} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
-                <div className="flex items-center gap-2 sm:w-48">
-                  <StatusDot status={fresh ? "ok" : "stale"} />
-                  <span className="text-sm font-medium">{s.label}</span>
+                <div className="sm:w-48">
+                  <div className="flex items-center gap-2">
+                    <StatusDot status={s.state === "fresh" ? "ok" : s.state === "stale" ? "stale" : "complete"} />
+                    <span className="text-sm font-medium">{s.label}</span>
+                  </div>
+                  {s.note && <p className="mt-0.5 pl-4 text-[10px] text-muted-foreground">{s.note}</p>}
                 </div>
                 <div className="flex flex-1 items-center gap-3 text-xs">
                   <div>
@@ -77,8 +142,8 @@ export function HealthView({}: ViewProps) {
                       </p>
                     )}
                   </div>
-                  <Pill tone={fresh ? "long" : "short"} size="sm">
-                    {fresh ? "Fresh" : "Stale"}
+                  <Pill tone={inactive ? "muted" : s.state === "fresh" ? "long" : "short"} size="sm">
+                    {s.state === "na" ? "Not applicable" : s.state === "off" ? "Disabled" : s.state === "fresh" ? "Fresh" : "Stale"}
                   </Pill>
                 </div>
               </li>
