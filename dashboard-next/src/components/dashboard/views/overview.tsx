@@ -5,7 +5,7 @@ import { AlertTriangle, ChevronRight, ArrowUpRight, ArrowDownRight, Loader2 } fr
 import { useOverview, useActiveJob, useActiveTickers, useMacro } from "@/lib/api";
 import { activeOrNull, hasEdgarTicker, hasMacroTicker } from "@/lib/ingest-scope";
 import { resolveRiskLimits, exposureFraction } from "@/lib/risk";
-import { SectionHeading, StatusDot, Pill, DirectionPill, ErrorState, EmptyState } from "../primitives";
+import { SectionHeading, StatusDot, DirectionPill, StatusBadge, ErrorState, EmptyState } from "../primitives";
 import { Sparkline, StackedBar } from "../charts";
 import { VerdictCard } from "../verdict-card";
 import {
@@ -14,8 +14,21 @@ import {
   fmtRelative,
   fmtTime,
   stageLabel,
+  decisionStatusLabel,
 } from "@/lib/format";
+import type { TradeDecisionStatus } from "@/lib/types";
 import type { ViewProps } from "./types";
+
+const DECISION_VARIANT: Record<TradeDecisionStatus, "approved" | "rejected" | "neutral" | "paused" | "info"> = {
+  opened: "approved",
+  rejected: "rejected",
+  superseded: "neutral",
+  held: "paused",
+  pending_entry: "info",
+  skipped_no_price_data: "neutral",
+  skipped_no_fill: "neutral",
+  skipped_irrelevant: "neutral",
+};
 
 export function OverviewView({ onNavigate, env }: ViewProps) {
   const overview = useOverview(env);
@@ -233,10 +246,15 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
             <div className="mb-2 flex items-center gap-2">
               <span className="font-mono text-base font-semibold">{latestDecision.ticker}</span>
               <DirectionPill direction={latestDecision.thesis.direction} size="sm" />
-              <Pill tone="approved" size="sm">Opened</Pill>
-              <span className="ml-auto text-[11px] text-muted-foreground">
-                {fmtPct(latestDecision.riskDecision.positionSizePct, 1)} of book
-              </span>
+              <StatusBadge
+                variant={DECISION_VARIANT[latestDecision.status] ?? "neutral"}
+                label={decisionStatusLabel(latestDecision.status)}
+              />
+              {latestDecision.riskDecision.positionSizePct > 0 && (
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  {fmtPct(latestDecision.riskDecision.positionSizePct, 1)} of book
+                </span>
+              )}
             </div>
             <VerdictCard decision={latestDecision} />
           </div>

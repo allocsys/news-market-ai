@@ -99,6 +99,25 @@ test("getOverviewData: latestDecision is null with no decisions, and the SINGLE 
   assert.deepEqual(data.latestDecision.opinions, [{ agent: "news_event" }], "reasoning chain rides along unmodified");
 });
 
+test("getOverviewData: latestDecision skips newer skipped_irrelevant rows (they carry no debate) but still surfaces other non-opened statuses", async () => {
+  const env = baseEnv();
+  const store = new RunStore(env.LIVE_DB, "live");
+
+  await decision(store, { id: "d-rejected", ticker: "MSFT", status: "rejected", createdAt: "2026-01-01T00:00:00.000Z", withReasoning: true });
+  await decision(store, { id: "d-skip-1", status: "skipped_irrelevant", createdAt: "2026-01-02T00:00:00.000Z" });
+  await decision(store, { id: "d-skip-2", status: "skipped_irrelevant", createdAt: "2026-01-03T00:00:00.000Z" });
+
+  const data = await getOverviewData(env, BASE_PARAMS);
+  assert.equal(data.latestDecisionError, null);
+  assert.equal(data.latestDecision.id, "d-rejected", "newest rows are skipped_irrelevant -> fall back to the latest real decision");
+
+  const onlySkipped = baseEnv();
+  const skippedStore = new RunStore(onlySkipped.LIVE_DB, "live");
+  await decision(skippedStore, { id: "d-only-skip", status: "skipped_irrelevant", createdAt: "2026-01-01T00:00:00.000Z" });
+  const none = await getOverviewData(onlySkipped, BASE_PARAMS);
+  assert.equal(none.latestDecision, null, "only skipped_irrelevant rows -> no latest decision rather than a debate-less one");
+});
+
 test("getOverviewData: a broken LIVE_DB surfaces as snapshotError/pipelineError/latestDecisionError independently, while healthError (INPUTS_DB) stays unaffected", async () => {
   const env = baseEnv({ LIVE_DB: { prepare() { throw new Error("LIVE_DB unavailable"); } } });
   await seedBar(env.INPUTS_DB, { ticker: "AAPL", date: "2026-01-01", close: 100 });

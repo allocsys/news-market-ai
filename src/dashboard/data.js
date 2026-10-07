@@ -228,7 +228,11 @@ export async function getHealthData(env) {
 export async function getDecisionsData(env, params) {
   const { store, resolvedEnv, envError } = await resolveEnv(env, params.env);
   const decisionsResult = await safe(() =>
-    store.listRecentTradeDecisions({ limit: params.decisionLimit, status: params.decisionStatus === "all" ? undefined : params.decisionStatus })
+    store.listRecentTradeDecisions({
+      limit: params.decisionLimit,
+      status: params.decisionStatus === "all" ? undefined : params.decisionStatus,
+      excludeStatus: params.decisionExcludeStatus,
+    })
   );
   return { decisions: decisionsResult.data ?? [], error: decisionsResult.error, resolvedEnv, envError };
 }
@@ -310,7 +314,9 @@ export async function getOverviewData(env, params) {
     getSnapshotData(env, params),
     getHealthData(env),
     getPipelineData(env, params),
-    getDecisionsData(env, { ...params, decisionLimit: 1, decisionStatus: "all" }),
+    // The newest decision that went through the debate: skipped_irrelevant rows (price-impact gate, no debate) are
+    // most of the table and say nothing about what the book is doing, so they never fill this panel.
+    getDecisionsData(env, { ...params, decisionLimit: 1, decisionStatus: "all", decisionExcludeStatus: "skipped_irrelevant" }),
   ]);
 
   const now = Date.now();
