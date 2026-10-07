@@ -7,6 +7,7 @@
 import { getIngestionHealth, getRecentPriceBars } from "../storage/inputs_view.js";
 import { getRecentBacktestRuns, getBacktestRun, getActiveBacktestRunId, getActiveReplayRunId, getRecentReplayJobs } from "../storage/sim_registry.js";
 import { RunStore, readOnly } from "../storage/run_store.js";
+import { autoBatch } from "../storage/auto_batch.js";
 import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT, STALE_INGESTION_HOURS, PIPELINE_STALE_HOURS } from "./helpers.js";
 import { STAGES } from "../graph/checkpointer.js";
 
@@ -276,6 +277,19 @@ export async function getPipelineData(env, params = {}) {
   };
 }
 
+/**
+ * A copy of `env` whose three D1 bindings are autoBatch()-wrapped, for ONE read-only composition (getOverviewData).
+ * A binding that is absent stays absent (readOnly()/the panel's safe() report it as before); a db without batch()
+ * (test doubles) comes back unchanged from autoBatch.
+ */
+function batchedReadEnv(env) {
+  const wrapped = { ...env };
+  for (const name of ["LIVE_DB", "INPUTS_DB", "SIM_DB"]) {
+    if (env?.[name]) wrapped[name] = autoBatch(env[name]);
+  }
+  return wrapped;
+}
+
 // getRealizedPnlPctAsOf takes a trailing window in days; this is simply wider than any run, i.e. "all time".
 const ALL_TIME_DAYS = 36500;
 
@@ -325,7 +339,12 @@ async function getRealizedPnlData(env, params) {
  * independent widgets on one page (alert strip, stat cards, pipeline pulse,
  * latest-decision panel), so one panel's failure shouldn't blank the others.
  */
-export async function getOverviewData(env, params) {
+export async function getOverviewData(rawEnv, params) {
+  // One autoBatch handle per binding, shared by all five composed reads: the reads they start in the same tick leave
+  // as ONE db.batch() per database instead of ~13 round trips. Each function still wraps its handle in readOnly(), so
+  // the layering is readOnly(autoBatch(db)) as auto_batch.js requires. Scoped to this call (never module-level) so no
+  // queue is shared across requests.
+  const env = batchedReadEnv(rawEnv);
   const [snapshot, health, pipelineResult, latestDecisionResult, realizedPnl] = await Promise.all([
     getSnapshotData(env, params),
     getHealthData(env),
