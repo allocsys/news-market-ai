@@ -16,7 +16,7 @@ import {
   useWatchlist,
 } from "@/lib/api";
 import type { JobProgress } from "@/lib/types";
-import { SectionHeading, StatusBadge, ErrorState } from "../primitives";
+import { SectionHeading, StatusBadge } from "../primitives";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
