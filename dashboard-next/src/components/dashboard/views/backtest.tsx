@@ -386,7 +386,9 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [testEnd, setTestEnd] = useState(() => daysAgo(0));
   const [enableLlmLog, setEnableLlmLog] = useState(false);
   const [disableGate, setDisableGate] = useState(false);
-  const [enableMacro, setEnableMacro] = useState(false); = (t: string) => {
+  const [enableMacro, setEnableMacro] = useState(false);
+
+  const toggleTicker = (t: string) => {
     setTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   };
 
