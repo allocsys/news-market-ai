@@ -526,7 +526,7 @@ export function useLogin() {
       });
       const body = await res.json().catch(() => ({ error: "invalid response" }));
       if (!res.ok) throw new Error(body?.error ?? `login failed (${res.status})`);
-      return body as { ok: boolean; user?: { username: string }; mock?: boolean };
+      return body as { ok: boolean; user?: { username: string } };
     },
   });
 }
