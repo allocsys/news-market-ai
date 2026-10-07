@@ -60,7 +60,9 @@ import { fetchLatest as fetchScrapeLatest } from "../ingestion/sources/html_scra
 import { fetchDailyBars, fetchHistoricalBars } from "../ingestion/sources/yfinance.js";
 import { fetchDailyBars as fetchTiingoDailyBars, fetchHistoricalBars as fetchTiingoHistoricalBars } from "../ingestion/sources/tiingo.js";
 import { fetchLatest as fetchEdgarFactsLatest } from "../ingestion/sources/edgar_fundamentals.js";
-import { insertNewsItems, insertPriceBar, insertPriceBars, insertFundamentalFacts } from "../storage/inputs_view.js";
+import { fetchLatest as fetchFredLatest } from "../ingestion/sources/fred.js";
+import { fetchLatest as fetchCotLatest, COT_SERIES } from "../ingestion/sources/cftc_cot.js";
+import { insertNewsItems, insertPriceBar, insertPriceBars, insertFundamentalFacts, insertMacroObservations, getStoredMacroObsDates } from "../storage/inputs_view.js";
 import { VendorError } from "../shared/errors.js";
 
 // D1/subrequest budget for the batched news-item inserts below (backfill,
@@ -637,7 +639,67 @@ export async function backfillHistoricalPriceBars(config, db, kv, { tickers, fro
  * 100-message sendBatch cap, and past the Queues daily-ops budget had that cap
  * been worked around by chunking alone.
  */
-export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
+/** The one ticker the macro context (FRED + CFTC COT gold positioning) is ingested for. */
+export const MACRO_TICKER = "XAUUSD";
+
+/**
+ * Live macro tick for XAUUSD: FRED (every vintage since now - config.macroLookbackDays)
+ * and the CFTC gold COT, stored in macro_observations. CALLERS decide whether the
+ * feature is on (storage/macro_flag.js) -- this function never reads the flag, so
+ * when it is off it simply is not called: no fetches, no rows.
+ *
+ * Same failure isolation as the other ingestion paths: a VendorError from one half
+ * is logged and the other half still runs; a missing FRED key is logged once and
+ * skips FRED only. `kv` is unused (neither source has a cooldown cache).
+ *
+ * COT point-in-time: on a SEEDING run (no COT rows stored yet) rows keep the
+ * release-derived availability (Saturday after the Friday release), so history is
+ * usable by backtests; on later runs a newly seen week is stamped with the time it
+ * was first seen (cftc_cot.js firstSeenAt), never back-dated.
+ *
+ * Returns `{ count, fredCount, cotCount }` (rows submitted, not net-new).
+ */
+export async function ingestMacro(config, db, { asOf } = {}) {
+  const now = asOf ? new Date(asOf) : new Date();
+  const base = Number.isNaN(now.getTime()) ? new Date() : now;
+  const lookbackDays = Number(config.macroLookbackDays) > 0 ? Number(config.macroLookbackDays) : 120;
+  const observationStart = new Date(base.getTime() - lookbackDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  let fredCount = 0;
+  if (!config.fredApiKey) {
+    console.warn("macro ingestion -- FRED skipped: FRED_API_KEY is not set");
+  } else {
+    try {
+      const { observations, errors } = await fetchFredLatest(config, { observationStart });
+      for (const { series, error } of errors) {
+        logSkippedSource("macro ingestion", "fred", error, { series });
+      }
+      fredCount = await insertMacroObservations(db, observations);
+    } catch (err) {
+      if (err instanceof VendorError) logSkippedSource("macro ingestion", "fred", err);
+      else throw err;
+    }
+  }
+
+  let cotCount = 0;
+  try {
+    const stored = await getStoredMacroObsDates(db, { series: COT_SERIES.MM_LONG, from: observationStart });
+    const seeding = stored.size === 0;
+    const rows = await fetchCotLatest(config, {
+      from: observationStart,
+      firstSeenAt: seeding ? undefined : new Date().toISOString(),
+      skipObsDates: stored,
+    });
+    cotCount = await insertMacroObservations(db, rows);
+  } catch (err) {
+    if (err instanceof VendorError) logSkippedSource("macro ingestion", "cftc", err);
+    else throw err;
+  }
+
+  return { count: fredCount + cotCount, fredCount, cotCount };
+}
+
+export async function ingestTickerData(config, db, kv, { ticker, asOf, macroEnabled = false }) {
   const { items, errors } = await fetchFinnhubLatest(config, { queries: [{ ticker }] }, { kv });
   for (const { error } of errors) {
     logSkippedSource("ticker ingest", "finnhub", error);
@@ -673,6 +735,17 @@ export async function ingestTickerData(config, db, kv, { ticker, asOf }) {
   // extra try/catch is needed here.
   await ingestPriceBars(config, db, kv, { tickers: [ticker] });
   await ingestFundamentals(config, db, kv, { tickers: [ticker] });
+
+  // Macro context: only for MACRO_TICKER and only when the caller says the operator
+  // switch is on. A strict enhancement like prices/fundamentals -- any failure here
+  // is logged and must not lose this tick's news (`fresh`) for the analysts.
+  if (macroEnabled && ticker === MACRO_TICKER) {
+    try {
+      await ingestMacro(config, db, { asOf });
+    } catch (err) {
+      console.error("macro ingestion failed", { ticker, message: err.message });
+    }
+  }
 
   return { fetched: items.length, fresh };
 }
