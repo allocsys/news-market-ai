@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ChevronRight, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
 import { useOverview, useActiveJob } from "@/lib/api";
-import { RISK_CEILINGS } from "@/lib/mock-data";
+import { resolveRiskLimits, exposureFraction } from "@/lib/risk";
 import { StatCard, SectionHeading, StatusDot, Pill, DirectionPill, ErrorState, EmptyState } from "../primitives";
 import { Sparkline, StackedBar } from "../charts";
 import { VerdictCard } from "../verdict-card";
@@ -84,8 +84,10 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
   }
 
   const latestDecision = d.latestDecision;
-  const exposureTone =
-    d.totalExposurePct > RISK_CEILINGS.maxPortfolioRiskPct * 0.8 ? "short" : "default";
+  const limits = resolveRiskLimits(d.riskLimits);
+  // The API sends exposure in percent units; limits and fmtPct work in fractions.
+  const exposure = exposureFraction(d.totalExposurePct);
+  const exposureTone = exposure > limits.maxPortfolioRiskPct * 0.8 ? "short" : "default";
 
   return (
     <div className="space-y-5">
@@ -112,11 +114,11 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
           </div>
           <div>
             <div className={cn("font-mono text-4xl font-semibold tracking-tight nums", exposureTone === "short" ? "text-[color:var(--short)]" : "text-[color:var(--long)]")}>
-              {fmtPct(d.totalExposurePct, 1)}
+              {fmtPct(exposure, 1)}
             </div>
             <div className="mt-0.5 text-xs text-muted-foreground">Open exposure</div>
             <div className="mt-1 text-[10px] text-muted-foreground">
-              of {fmtPct(RISK_CEILINGS.maxPortfolioRiskPct, 0)} ceiling
+              of {fmtPct(limits.maxPortfolioRiskPct, 0)} ceiling
             </div>
           </div>
           <div>
@@ -307,13 +309,13 @@ export function OverviewView({ onNavigate, env }: ViewProps) {
             <div className="mb-1 flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Exposure vs ceiling</span>
               <span className="font-mono nums">
-                {fmtPct(d.totalExposurePct, 1)} / {fmtPct(RISK_CEILINGS.maxPortfolioRiskPct, 0)}
+                {fmtPct(exposure, 1)} / {fmtPct(limits.maxPortfolioRiskPct, 0)}
               </span>
             </div>
             <StackedBar
               segments={[
-                { value: d.totalExposurePct, color: "var(--primary)", label: "Used" },
-                { value: Math.max(0, RISK_CEILINGS.maxPortfolioRiskPct - d.totalExposurePct), color: "var(--muted)", label: "Available" },
+                { value: exposure, color: "var(--primary)", label: "Used" },
+                { value: Math.max(0, limits.maxPortfolioRiskPct - exposure), color: "var(--muted)", label: "Available" },
               ]}
             />
           </div>

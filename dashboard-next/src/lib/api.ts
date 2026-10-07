@@ -26,6 +26,7 @@ import type {
   PriceBar,
   EnvId,
 } from "./types";
+import type { RiskLimits } from "./risk";
 
 // ============================================================
 // Low-level fetch wrapper
@@ -92,6 +93,8 @@ export interface OverviewResponse {
   closedPositions: Position[];
   decisionStats: DecisionStats;
   totalExposurePct: number;
+  /** Absent when the backend predates riskLimits; see resolveRiskLimits. */
+  riskLimits?: RiskLimits;
   snapshotError: string | null;
   health: IngestionHealth | null;
   healthError: string | null;
@@ -108,6 +111,7 @@ export interface SnapshotResponse {
   closedPositions: Position[];
   decisionStats: DecisionStats;
   totalExposurePct: number;
+  riskLimits?: RiskLimits;
   error: string | null;
   resolvedEnv: EnvId;
   envError: string | null;
@@ -145,6 +149,7 @@ export interface PositionsResponse {
   closedPositions: Position[];
   closedPositionsError: string | null;
   totalExposurePct: number;
+  riskLimits?: RiskLimits;
   resolvedEnv: EnvId;
   envError: string | null;
 }
@@ -378,6 +383,8 @@ export function useBacktestRunDetail(id: string | null) {
       return apiFetch<BacktestRunDetailResponse>(`/api/backtest-runs/${id}`);
     },
     enabled: Boolean(id),
+    // Poll while the run still has an in-flight job (progress bar), and once more after it ends so the final result replaces the bar.
+    refetchInterval: (query) => (query.state.data?.activeJob ? 5_000 : false),
     retry: 1,
   });
 }

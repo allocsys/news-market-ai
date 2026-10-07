@@ -4,7 +4,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronUp, Wallet, Activity, Loader2 } from "lucide-react";
 import { usePositions } from "@/lib/api";
-import { RISK_CEILINGS } from "@/lib/mock-data";
+import { resolveRiskLimits, exposureFraction, describeGroupCapOverrides } from "@/lib/risk";
 import { SectionHeading, StatCard, MiniStat, Pill, EmptyState, ErrorState } from "../primitives";
 import { OpenPositionCard, ClosedPositionCard } from "../position-cards";
 import { DonutChart, Gauge, Sparkline } from "../charts";
@@ -43,7 +43,11 @@ export function PositionsView({ env }: ViewProps) {
   const closedSl = closed.filter((p) => p.closeReason === "stop_loss").length;
   const closedOther = closed.length - closedTp - closedSl;
 
-  const exposurePctOfCeiling = (d.totalExposurePct / RISK_CEILINGS.maxPortfolioRiskPct) * 100;
+  const limits = resolveRiskLimits(d.riskLimits);
+  // The API sends exposure in percent units; limits and fmtPct work in fractions.
+  const exposure = exposureFraction(d.totalExposurePct);
+  const groupCapOverrides = describeGroupCapOverrides(limits);
+  const exposurePctOfCeiling = (exposure / limits.maxPortfolioRiskPct) * 100;
   const exposureTone = exposurePctOfCeiling > 80 ? "short" : exposurePctOfCeiling > 50 ? "paused" : "default";
 
   return (
@@ -64,8 +68,8 @@ export function PositionsView({ env }: ViewProps) {
             value={exposurePctOfCeiling}
             min={0}
             max={100}
-            valueLabel={fmtPct(d.totalExposurePct, 1)}
-            label={`of ${fmtPct(RISK_CEILINGS.maxPortfolioRiskPct, 0)} ceiling`}
+            valueLabel={fmtPct(exposure, 1)}
+            label={`of ${fmtPct(limits.maxPortfolioRiskPct, 0)} ceiling`}
             accent={
               exposureTone === "short"
                 ? "var(--short)"
@@ -76,13 +80,17 @@ export function PositionsView({ env }: ViewProps) {
           />
           <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-4">
             <MiniStat value={open.length} label="Open positions" sub={`${longCount} long · ${shortCount} short`} />
-            <MiniStat value={fmtPct(d.totalExposurePct, 1)} label="Gross exposure" sub="sum of position sizes" />
+            <MiniStat value={fmtPct(exposure, 1)} label="Gross exposure" sub="sum of position sizes" />
             <MiniStat
-              value={fmtPct(RISK_CEILINGS.maxPortfolioStopRiskPct, 2)}
+              value={fmtPct(limits.maxPortfolioStopRiskPct, 2)}
               label="Loss-at-stop ceiling"
               sub="max portfolio stop risk"
             />
-            <MiniStat value={fmtPct(RISK_CEILINGS.maxGroupExposurePct, 0)} label="Group cap" sub="same-direction per group" />
+            <MiniStat
+              value={fmtPct(limits.maxGroupExposurePct, 0)}
+              label="Group cap"
+              sub={groupCapOverrides ? `default · ${groupCapOverrides}` : "same-direction per group"}
+            />
           </div>
         </div>
       </section>

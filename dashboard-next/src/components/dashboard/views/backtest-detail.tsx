@@ -1,7 +1,20 @@
 "use client";
 
-import { ChevronLeft, ArrowUpRight, ArrowDownRight, TrendingUp, Loader2 } from "lucide-react";
-import { useBacktestRunDetail } from "@/lib/api";
+import { ChevronLeft, Play, Pause, Square, TrendingUp, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { useBacktestRunDetail, usePostBacktestAction } from "@/lib/api";
+import { JobProgressCard } from "../job-progress";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { SectionHeading, StatusBadge, Pill, MiniStat, EmptyState, ErrorState } from "../primitives";
 import { EquityCurve } from "../charts";
 import { OpenPositionCard } from "../position-cards";
@@ -14,6 +27,7 @@ export function BacktestDetailView({
   onClose,
 }: ViewProps & { backtestId: string | null; onClose: () => void }) {
   const run = useBacktestRunDetail(backtestId);
+  const actionMutation = usePostBacktestAction();
 
   if (!backtestId) {
     return (
@@ -87,6 +101,16 @@ export function BacktestDetailView({
     r.status === "paused" ? "paused" :
     r.status === "running" ? "info" : "neutral";
 
+  const act = (action: "cancel" | "pause" | "resume") =>
+    actionMutation.mutate(
+      { id: r.id, action },
+      {
+        onSuccess: () => run.refetch(),
+        onError: (e) => toast.error(`Failed: ${e.message}`),
+      },
+    );
+  const activeJob = run.data.activeJob ?? null;
+
   return (
     <div className="space-y-5">
       <Button variant="ghost" size="sm" onClick={onClose} className="-ml-2 gap-1">
@@ -106,6 +130,18 @@ export function BacktestDetailView({
           {fmtDate(r.testStart)} → {fmtDate(r.testEnd)} · <span className="font-mono">{r.id}</span>
         </p>
       </section>
+
+      {activeJob && (activeJob.status === "running" || activeJob.status === "queued") && (
+        <JobProgressCard job={activeJob} label="Backtest">
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => act("pause")} disabled={actionMutation.isPending}>
+              <Pause className="mr-1 h-3 w-3" />
+              Pause
+            </Button>
+            <TerminateButton onConfirm={() => act("cancel")} disabled={actionMutation.isPending} />
+          </div>
+        </JobProgressCard>
+      )}
 
       {result && (
         <section>
@@ -184,14 +220,11 @@ export function BacktestDetailView({
             </p>
           )}
           <div className="mt-3 flex gap-2">
-            <Button size="sm" variant="outline">
-              <ArrowUpRight className="mr-1 h-3 w-3" />
+            <Button size="sm" variant="outline" onClick={() => act("resume")} disabled={actionMutation.isPending}>
+              <Play className="mr-1 h-3 w-3" />
               Resume
             </Button>
-            <Button size="sm" variant="outline" className="border-[color:var(--short)]/40 text-[color:var(--short)]">
-              <ArrowDownRight className="mr-1 h-3 w-3" />
-              Terminate
-            </Button>
+            <TerminateButton onConfirm={() => act("cancel")} disabled={actionMutation.isPending} />
           </div>
         </section>
       )}
@@ -212,5 +245,40 @@ export function BacktestDetailView({
         </div>
       </section>
     </div>
+  );
+}
+
+function TerminateButton({ onConfirm, disabled }: { onConfirm: () => void; disabled?: boolean }) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          className="border-[color:var(--short)]/40 text-[color:var(--short)]"
+        >
+          <Square className="mr-1 h-3 w-3" />
+          Terminate
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Terminate this run?</AlertDialogTitle>
+          <AlertDialogDescription>
+            All partial data for this backtest will be deleted. The run cannot be resumed.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={onConfirm}
+          >
+            Terminate
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

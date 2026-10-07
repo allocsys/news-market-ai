@@ -7,6 +7,7 @@ import {
   CLOSED_POSITIONS,
   DECISION_STATS,
   TOTAL_EXPOSURE_PCT,
+  RISK_CEILINGS,
   TRADE_DECISIONS,
   PIPELINE_CHECKPOINTS,
   TICKER_STAGES,
@@ -35,6 +36,13 @@ import type {
 } from "./types";
 
 // Helpers local to mock mode
+// Real API: exposure in PERCENT units (12.3 = 12.3%), limits as fractions.
+const MOCK_EXPOSURE_PERCENT = TOTAL_EXPOSURE_PCT * 100;
+const MOCK_RISK_LIMITS = {
+  ...RISK_CEILINGS,
+  groupCaps: { gold: 0.15 } as Record<string, number>,
+  tickerGroups: { XAUUSD: "gold", USO: "energy" } as Record<string, string>,
+};
 const STATUSES = ["opened", "rejected", "superseded", "held", "skipped_irrelevant"] as const;
 
 function filterDecisions(params: URLSearchParams): TradeDecision[] {
@@ -86,7 +94,8 @@ export function mockResolve(
           openPositions: OPEN_POSITIONS,
           closedPositions: CLOSED_POSITIONS.slice(0, 20),
           decisionStats: DECISION_STATS,
-          totalExposurePct: TOTAL_EXPOSURE_PCT,
+          totalExposurePct: MOCK_EXPOSURE_PERCENT,
+          riskLimits: MOCK_RISK_LIMITS,
           snapshotError: null,
           health: INGESTION_HEALTH,
           healthError: null,
@@ -106,7 +115,8 @@ export function mockResolve(
           openPositions: OPEN_POSITIONS,
           closedPositions: CLOSED_POSITIONS.slice(0, 20),
           decisionStats: DECISION_STATS,
-          totalExposurePct: TOTAL_EXPOSURE_PCT,
+          totalExposurePct: MOCK_EXPOSURE_PERCENT,
+          riskLimits: MOCK_RISK_LIMITS,
           error: null,
           resolvedEnv: "live",
           envError: null,
@@ -148,7 +158,8 @@ export function mockResolve(
           openPositionsError: null,
           closedPositions: CLOSED_POSITIONS.slice(0, 20),
           closedPositionsError: null,
-          totalExposurePct: TOTAL_EXPOSURE_PCT,
+          totalExposurePct: MOCK_EXPOSURE_PERCENT,
+          riskLimits: MOCK_RISK_LIMITS,
           resolvedEnv: "live",
           envError: null,
         },

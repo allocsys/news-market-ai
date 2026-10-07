@@ -49,6 +49,15 @@ export function ControlsView({}: ViewProps) {
   const flags = controls.data.flags;
   const meta = controls.data.meta;
   const pausedCount = Object.values(flags).filter(Boolean).length;
+  const anyPaused = pausedCount > 0;
+  const allPaused = pausedCount === PAUSE_META.length;
+
+  const setAll = (paused: boolean) => {
+    setFlag.mutate(
+      { key: "all", paused },
+      { onError: (e) => toast.error(`Failed: ${e.message}`) },
+    );
+  };
 
   const toggleFlag = (key: keyof typeof flags) => {
     setFlag.mutate(
@@ -166,6 +175,47 @@ export function ControlsView({}: ViewProps) {
           );
         })}
       </ul>
+
+      {/* Master switches. Pausing everything stays one tap (kill switch); resuming asks first. */}
+      <div className="flex flex-wrap gap-2">
+        {!allPaused && (
+          <Button
+            variant="outline"
+            className="min-w-[9rem] flex-1 border-[color:var(--paused)]/40 text-[color:var(--paused)]"
+            onClick={() => setAll(true)}
+            disabled={setFlag.isPending}
+          >
+            <Pause className="mr-1 h-3 w-3" />
+            Pause all
+          </Button>
+        )}
+        {anyPaused && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                className="min-w-[9rem] flex-1 border-[color:var(--long)]/40 text-[color:var(--long)]"
+                disabled={setFlag.isPending}
+              >
+                <Play className="mr-1 h-3 w-3" />
+                Resume all
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Resume everything?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Ingestion, trading, LLM calls and backtests all start again. This may spend model quota and place trades.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => setAll(false)}>Resume all</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
+      </div>
 
       <LiveTickers />
     </div>
