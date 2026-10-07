@@ -42,9 +42,8 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { daysAgo, RANGE_PRESETS, presetRange } from "@/lib/date-range";
 import type { ViewProps } from "./types";
-
-const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 // Toast for the bulk-maintenance routes. Both are bounded per call and answer
 // with counts ({ scanned, totalDeleted, processed } / { scanned, purged, ... });
@@ -74,13 +73,6 @@ function reportMaintenance(what: string, r: MaintenanceResult | null) {
   const more = processed.some((p) => p.complete === false);
   toast.success(`${what}: ${parts.join(", ") || "done"}${more ? ". Some runs were cut short; run it again to finish." : ""}`);
 }
-
-const RANGE_PRESETS = [
-  { label: "7d", days: 7 },
-  { label: "14d", days: 14 },
-  { label: "30d", days: 30 },
-  { label: "90d", days: 90 },
-];
 
 export function BacktestView({ onNavigate }: ViewProps) {
   const [showNewRun, setShowNewRun] = useState(true);
@@ -482,11 +474,9 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
               key={p.label}
               type="button"
               onClick={() => {
-                const end = new Date();
-                const start = new Date(end.getTime() - p.days * 24 * 60 * 60 * 1000);
-                const fmt = (d: Date) => d.toISOString().slice(0, 10);
-                setTestStart(fmt(start));
-                setTestEnd(fmt(end));
+                const r = presetRange(p.days);
+                setTestStart(r.from);
+                setTestEnd(r.to);
               }}
               className="rounded-md border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
             >
