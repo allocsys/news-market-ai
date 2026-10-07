@@ -113,3 +113,36 @@ test("getOverviewData: a broken LIVE_DB surfaces as snapshotError/pipelineError/
   assert.deepEqual(data.checkpoints, []);
   assert.equal(data.latestDecision, null);
 });
+
+async function seedMacro(db, { series = "DFII10", obsDate = "2026-01-02", availableAt = "2026-01-03T00:00:00.000Z", val = 1.9, ingestedAt }) {
+  await db
+    .prepare(`INSERT INTO macro_observations (series, obs_date, available_at, val, source, ingested_at) VALUES (?, ?, ?, ?, 'fred', ?)`)
+    .bind(series, obsDate, availableAt, val, ingestedAt)
+    .run();
+}
+
+test("getOverviewData: health.macro rides along with a computed fresh flag -- empty table is not fresh and never crashes", async () => {
+  const env = baseEnv();
+  const data = await getOverviewData(env, BASE_PARAMS);
+  assert.equal(data.healthError, null);
+  assert.ok(data.health.macro, "macro is reported even with no rows");
+  assert.equal(data.health.macro.count, 0);
+  assert.equal(data.health.macro.lastIngestedAt, null);
+  assert.equal(data.health.macro.fresh, false);
+});
+
+test("getOverviewData: health.macro.fresh follows the same STALE_INGESTION_HOURS window, independently of the other sources", async () => {
+  const now = Date.now();
+
+  const freshEnv = baseEnv();
+  await seedMacro(freshEnv.INPUTS_DB, { ingestedAt: new Date(now - 1 * 3600_000).toISOString() });
+  const fresh = await getOverviewData(freshEnv, BASE_PARAMS);
+  assert.equal(fresh.health.macro.count, 1);
+  assert.equal(fresh.health.macro.fresh, true, "ingested 1h ago is inside the 26h window");
+  assert.equal(fresh.health.fundamentals.fresh, false, "macro rows must not make fundamentals look fresh");
+
+  const staleEnv = baseEnv();
+  await seedMacro(staleEnv.INPUTS_DB, { ingestedAt: new Date(now - 30 * 3600_000).toISOString() });
+  const stale = await getOverviewData(staleEnv, BASE_PARAMS);
+  assert.equal(stale.health.macro.fresh, false, "ingested 30h ago is past the 26h window");
+});
