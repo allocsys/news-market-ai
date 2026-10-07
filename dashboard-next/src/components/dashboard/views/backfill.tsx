@@ -31,16 +31,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { fmtTime, fmtRelative, fmtCompact } from "@/lib/format";
 import { toast } from "sonner";
+import { daysAgo, RANGE_PRESETS, presetRange } from "@/lib/date-range";
 import type { ViewProps } from "./types";
-
-const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
-const RANGE_PRESETS = [
-  { label: "7d", days: 7 },
-  { label: "14d", days: 14 },
-  { label: "30d", days: 30 },
-  { label: "90d", days: 90 },
-];
 
 export function BackfillView({}: ViewProps) {
   const [newsFrom, setNewsFrom] = useState(() => daysAgo(30));
@@ -141,11 +133,9 @@ export function BackfillView({}: ViewProps) {
                   key={p.label}
                   type="button"
                   onClick={() => {
-                    const end = new Date();
-                    const start = new Date(end.getTime() - p.days * 24 * 60 * 60 * 1000);
-                    const fmt = (d: Date) => d.toISOString().slice(0, 10);
-                    setNewsFrom(fmt(start));
-                    setNewsTo(fmt(end));
+                    const r = presetRange(p.days);
+                    setNewsFrom(r.from);
+                    setNewsTo(r.to);
                   }}
                   className="rounded-md border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
                 >
