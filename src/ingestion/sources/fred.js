@@ -34,6 +34,33 @@ export function fredAvailableAt(realtimeStart) {
   return Number.isNaN(t) ? null : new Date(t + DAY_MS).toISOString();
 }
 
+const ERROR_DETAIL_MAX = 200;
+
+/**
+ * Short, key-free snippet of a non-OK FRED response body (FRED answers errors with
+ * `{"error_code":400,"error_message":"..."}`), so a 400 says WHY in the logs. Any
+ * `api_key=` value and the configured key itself are scrubbed. "" when the body
+ * cannot be read.
+ */
+async function fredErrorDetail(response, apiKey) {
+  let text;
+  try {
+    text = typeof response.text === "function" ? await response.text() : "";
+  } catch {
+    return "";
+  }
+  let detail = String(text ?? "");
+  try {
+    const parsed = JSON.parse(detail);
+    if (typeof parsed?.error_message === "string") detail = parsed.error_message;
+  } catch {
+    // not JSON: use the raw text
+  }
+  detail = detail.replace(/api_key=[^&\s"']*/gi, "api_key=***");
+  if (apiKey) detail = detail.split(apiKey).join("***");
+  return detail.replace(/\s+/g, " ").trim().slice(0, ERROR_DETAIL_MAX);
+}
+
 /**
  * One series, every vintage from `observationStart` (YYYY-MM-DD) on, as
  * `[{ series, obsDate, availableAt, val, source: "fred" }]`. Rows with a missing
@@ -65,7 +92,8 @@ export async function fetchSeries(config, { series, observationStart }) {
     throw new VendorError("fred", `network failure fetching FRED series ${series} (${err?.name ?? "error"})`, { transient: true });
   }
   if (!response.ok) {
-    throw new VendorError("fred", `FRED returned ${response.status} for series ${series}`, {
+    const detail = await fredErrorDetail(response, config.fredApiKey);
+    throw new VendorError("fred", `FRED returned ${response.status} for series ${series}${detail ? `: ${detail}` : ""}`, {
       status: response.status,
       transient: response.status === 429 || response.status >= 500,
     });
