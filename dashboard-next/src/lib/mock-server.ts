@@ -203,7 +203,7 @@ export function mockResolve(
       };
     }
     if (p.startsWith("/llm-calls/")) {
-      const idStr = p.slice("/api/llm-calls/".length);
+      const idStr = p.slice("/llm-calls/".length);
       const id = Number(idStr);
       if (!Number.isFinite(id)) return { status: 400, body: { error: "llm call id must be a number" } };
       if (LLM_CALL_DETAIL.id !== id) {
@@ -219,7 +219,7 @@ export function mockResolve(
       };
     }
     if (p.startsWith("/backtest-runs/")) {
-      const id = p.slice("/api/backtest-runs/".length);
+      const id = p.slice("/backtest-runs/".length);
       const run = BACKTEST_RUNS.find((r) => r.id === id);
       if (!run) return { status: 404, body: { error: "backtest run not found" } };
       const positions = buildBacktestPositions(id);
