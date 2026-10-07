@@ -90,6 +90,7 @@ export function VerdictCard({
   defaultOpen?: boolean;
 }) {
   const d = decision.debate;
+  const priceImpact = decision.opinions.find((o) => o.agent === "price_impact");
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card card-hairline">
       {/* Analyst opinions — top strip */}
@@ -104,7 +105,18 @@ export function VerdictCard({
         </div>
       </div>
 
-      {/* Bull / Bear split */}
+      {!d ? (
+        <div className="p-4">
+          <div className="rounded-lg border-l-[3px] bg-muted/40 px-3 py-2.5" style={{ borderLeftColor: "var(--muted-foreground)" }}>
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Skipped before debate
+            </span>
+            <p className="mt-1.5 text-xs leading-relaxed text-foreground/90">
+              {priceImpact?.justification || priceImpact?.summary || decision.portfolioDecision?.reason || "Filtered out by the price-impact gate; no Bull/Bear debate was run."}
+            </p>
+          </div>
+        </div>
+      ) : (
       <div className="p-4">
         <div className="mb-3 flex items-center gap-1.5">
           <Scale className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
@@ -146,6 +158,7 @@ export function VerdictCard({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -153,6 +166,9 @@ export function VerdictCard({
 /** Compact verdict summary — used in lists / detail rows */
 export function VerdictSummary({ decision }: { decision: TradeDecision }) {
   const d = decision.debate;
+  if (!d) {
+    return <span className="text-xs text-muted-foreground">No debate</span>;
+  }
   return (
     <div className="flex items-center gap-2">
       <DirectionPill direction={d.direction} size="sm" />
