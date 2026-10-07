@@ -354,6 +354,8 @@ export async function handleGateway(request, env) {
         if (isChecked(searchParams.get("enableLlmLog")) || isChecked(fromBody("enableLlmLog"))) params.enableLlmLog = "1";
         // "Disable price-impact gate": this run only goes out with the gate off (backend's skipNoPriceImpact=0 knob override). Absent sends nothing, so the Worker default (gate on) applies.
         if (isChecked(searchParams.get("disableGate")) || isChecked(fromBody("disableGate"))) params.skipNoPriceImpact = "0";
+        // "Macro context (XAUUSD)": this run only goes out with FRED/COT context on (backend's macroEnabled=1 knob override). Absent sends nothing, so the default (off) applies. Independent of the live macro switch.
+        if (isChecked(searchParams.get("enableMacro")) || isChecked(fromBody("enableMacro"))) params.macroEnabled = "1";
         return { params };
       },
     });
