@@ -20,6 +20,7 @@ import {
   ACTIVE_JOB,
   LAST_BACKFILL_JOB,
   LAST_PRICE_BACKFILL_JOB,
+  LAST_MACRO_BACKFILL_JOB,
   ENVIRONMENTS,
   WATCHLIST,
   buildBacktestPositions,
@@ -241,7 +242,7 @@ export function mockResolve(
       const type = params.get("type");
       if (type === "backfill") return { status: 200, body: { job: LAST_BACKFILL_JOB } };
       if (type === "backfill_prices") return { status: 200, body: { job: LAST_PRICE_BACKFILL_JOB } };
-      if (type === "backfill_macro") return { status: 200, body: { job: null } };
+      if (type === "backfill_macro") return { status: 200, body: { job: LAST_MACRO_BACKFILL_JOB } };
       return { status: 400, body: { error: "type must be: backfill, backfill_prices or backfill_macro" } };
     }
     if (p.startsWith("/jobs/")) {
