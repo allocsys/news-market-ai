@@ -469,6 +469,25 @@ export function useActiveTickers() {
   });
 }
 
+// --- Live macro context switch (FRED + CFTC COT for XAUUSD; default OFF) ---
+export interface MacroResponse {
+  enabled: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  /** Set when the flag could not be read; the backend then reports OFF. */
+  error: string | null;
+  /** False when FRED_API_KEY is not configured: turning macro on would only run the COT half. */
+  hasFredKey: boolean;
+}
+export function useMacro() {
+  return useQuery({
+    queryKey: ["macro"],
+    queryFn: () => apiFetch<MacroResponse>(`/api/macro`),
+    refetchInterval: REFRESH_MS,
+    retry: 1,
+  });
+}
+
 // --- News replay: ingested news items for one ticker on one UTC day ---
 export interface ReplayNewsItem {
   id: string;
@@ -614,6 +633,23 @@ export function usePostActiveTickers() {
       });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["active-tickers"] }),
+  });
+}
+
+export function usePostMacro() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { enabled: boolean }) => {
+      return apiFetch<MacroResponse>("/api/controls/macro", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["macro"] });
+      // Health reports macro as disabled vs stale, so it depends on this flag.
+      qc.invalidateQueries({ queryKey: ["health"] });
+    },
   });
 }
 
