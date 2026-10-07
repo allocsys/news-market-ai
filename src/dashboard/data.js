@@ -319,7 +319,13 @@ export async function getOverviewData(env, params) {
     fresh: Boolean(stat?.lastIngestedAt) && now - new Date(stat.lastIngestedAt).getTime() <= STALE_INGESTION_HOURS * 3600 * 1000,
   });
   const healthWithFresh = health.health
-    ? { news: withFresh(health.health.news), priceBars: withFresh(health.health.priceBars), fundamentals: withFresh(health.health.fundamentals) }
+    ? {
+        news: withFresh(health.health.news),
+        priceBars: withFresh(health.health.priceBars),
+        fundamentals: withFresh(health.health.fundamentals),
+        // Macro is a later addition: keep it absent (not stale) when the inputs view does not report it.
+        ...(health.health.macro !== undefined ? { macro: withFresh(health.health.macro) } : {}),
+      }
     : null;
 
   const humanizeStage = (stage) => (stage ? String(stage).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Unknown");
