@@ -404,7 +404,7 @@ export function useActiveJob(type: QueryOpts["jobType"], env?: string) {
 }
 
 // --- Latest finished job (backfill page) ---
-export function useLatestJob(type: "backfill" | "backfill_prices") {
+export function useLatestJob(type: "backfill" | "backfill_prices" | "backfill_macro") {
   return useQuery({
     queryKey: ["job-latest", type],
     queryFn: () => apiFetch<JobResponse>(`/api/jobs/latest?type=${type}`),
