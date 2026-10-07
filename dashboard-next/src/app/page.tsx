@@ -19,7 +19,7 @@ import { ViewErrorBoundary } from "@/components/dashboard/error-boundary";
 import { MoreSheet } from "@/components/dashboard/more-sheet";
 import { useAuth } from "@/components/auth-provider";
 import { useLogout } from "@/lib/api";
-import { getSection } from "@/lib/nav";
+import { getSection, getSiblingSections } from "@/lib/nav";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -157,9 +157,11 @@ export default function Home() {
         />
 
         {/* Mobile section tabs (segmented control) */}
-        <div className="border-b border-border bg-background/85 px-3 py-2 backdrop-blur lg:hidden">
-          <SectionTabs activeSection={section} onNavigate={handleNavigate} />
-        </div>
+        {getSiblingSections(section).length > 1 && (
+          <div className="border-b border-border bg-background/85 px-3 py-2 backdrop-blur lg:hidden">
+            <SectionTabs activeSection={section} onNavigate={handleNavigate} />
+          </div>
+        )}
 
         <main className="flex-1 px-3 pb-24 pt-4 md:px-6 lg:pb-12">
           {/* Env warning when viewing a backtest */}
