@@ -157,3 +157,8 @@ EDGAR_CIK_MAP = "AAPL|0000320193,MSFT|0000789019,TSLA|0001318605"
 #   "tiingo"; without it both still ask Yahoo, which answers 429 from
 #   Workers for the live path (see yfinance.js's header). Only this Worker
 #   holds it.
+#   FRED_API_KEY -- the XAUUSD macro context's FRED half
+#   (src/ingestion/sources/fred.js). Optional: pushed by the deploy-ingest job
+#   when the FRED_API_KEY repo secret exists. Without it, macro ingestion (off
+#   by default; operator switch in Controls) only fetches CFTC positioning.
+#   Only this Worker holds it.
