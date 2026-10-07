@@ -528,6 +528,20 @@ export function loadConfig(env) {
     // wiring), but this has NOT yet been validated against a live SEC
     // fetch + real headline traffic, which is why it stays opt-in.
     entityResolutionUseNameIndex: env.ENTITY_RESOLUTION_USE_NAME_INDEX === "true",
+    // XAUUSD macro context (ingestion/sources/fred.js, cftc_cot.js; live on/off
+    // switch in storage/macro_flag.js). FRED needs a free API key -- unset means
+    // the FRED half fails with a non-transient VendorError (logged, COT still
+    // runs). The CFTC dataset needs no key; the app token only raises rate limits.
+    fredApiKey: env.FRED_API_KEY || "",
+    fredApiBase: env.FRED_API_BASE || "https://api.stlouisfed.org/fred/series/observations",
+    // Comma-separated FRED series ids; empty = fred.js DEFAULT_FRED_SERIES.
+    fredSeries: (env.FRED_SERIES || "").split(",").map((s) => s.trim()).filter(Boolean),
+    fredMinRequestIntervalMs: Number(env.FRED_MIN_REQUEST_INTERVAL_MS) || 250,
+    cotApiBase: env.COT_API_BASE || "https://publicreporting.cftc.gov/resource/72hh-3qpy.json",
+    cotAppToken: env.COT_APP_TOKEN || "",
+    // How far back a live macro tick fetches. Daily/weekly series change slowly and
+    // FRED returns every vintage, so a modest window keeps each tick's D1 writes small.
+    macroLookbackDays: Number(env.MACRO_LOOKBACK_DAYS) || 120,
     // Dashboard login (dashboard-next/src/server/gateway.mjs#login,
     // src/auth/session.js) -- a one-time login that then authorizes the
     // dashboard's /api/* reads and POST trigger routes via a session
