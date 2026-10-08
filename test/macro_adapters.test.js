@@ -12,7 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../src/config.js";
 import { VendorError } from "../src/shared/errors.js";
-import { fetchSeries, fetchLatest as fredFetchLatest, fredAvailableAt, DEFAULT_FRED_SERIES } from "../src/ingestion/sources/fred.js";
+import { fetchSeries, fetchLatest as fredFetchLatest, fredAvailableAt, realtimeWindows, DEFAULT_FRED_SERIES } from "../src/ingestion/sources/fred.js";
 import { fetchLatest as cotFetchLatest, cotAvailableAt, COT_SERIES, GOLD_COT_CODE } from "../src/ingestion/sources/cftc_cot.js";
 
 const KEY = "test-fred-key-abc123";
@@ -53,7 +53,7 @@ test("fredAvailableAt: start of the UTC day AFTER realtime_start; null when malf
   assert.equal(fredAvailableAt("2026-13-45"), null);
 });
 
-test("fred.fetchSeries: asks for every vintage and maps rows to point-in-time observations", async (t) => {
+test("fred.fetchSeries: asks for every vintage from observationStart on and maps rows to point-in-time observations", async (t) => {
   const calls = mockFetch(t, [
     {
       body: {
@@ -73,7 +73,7 @@ test("fred.fetchSeries: asks for every vintage and maps rows to point-in-time ob
   assert.equal(p.get("api_key"), KEY);
   assert.equal(p.get("file_type"), "json");
   assert.equal(p.get("observation_start"), "2026-06-01");
-  assert.equal(p.get("realtime_start"), "1776-07-04");
+  assert.equal(p.get("realtime_start"), "2026-06-01", "not 1776: FRED 400s above 2000 vintage dates, which a daily series exceeds");
   assert.equal(p.get("realtime_end"), "9999-12-31");
 
   assert.deepEqual(rows, [
@@ -98,6 +98,62 @@ test("fred.fetchSeries: a revised observation comes back as a second row with a 
   assert.equal(rows[0].obsDate, rows[1].obsDate);
   assert.ok(rows[1].availableAt > rows[0].availableAt);
   assert.deepEqual(rows.map((r) => r.val), [320.5, 320.9]);
+});
+
+const NEXT_DAY = (d) => new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+
+test("fred.realtimeWindows: one open-ended window for a recent start; contiguous 5-year windows, last open-ended, for a long one", () => {
+  const now = new Date("2026-10-08T12:00:00Z");
+  assert.deepEqual(realtimeWindows("2026-06-01", now), [{ start: "2026-06-01", end: "9999-12-31" }]);
+  assert.deepEqual(realtimeWindows("2021-01-01", now), [{ start: "2021-01-01", end: "9999-12-31" }], "under 6 years is still one request");
+
+  const w = realtimeWindows("2010-01-01", now);
+  assert.ok(w.length >= 3);
+  assert.equal(w[0].start, "2010-01-01");
+  assert.equal(w.at(-1).end, "9999-12-31");
+  for (let i = 1; i < w.length; i++) assert.equal(w[i].start, NEXT_DAY(w[i - 1].end), "windows are contiguous");
+  for (const x of w.slice(0, -1)) assert.equal((Date.parse(x.end) - Date.parse(x.start)) / 86400000, 5 * 365 - 1);
+
+  assert.deepEqual(realtimeWindows("2026-13-45", now), [{ start: "2026-13-45", end: "9999-12-31" }], "an unparseable date falls back to one window");
+});
+
+test("fred.fetchSeries: a long range is fetched in real-time windows; a clamped continuation row is dropped, a real revision is kept", async (t) => {
+  const now = new Date("2016-03-01T00:00:00Z"); // > 6 years after 2010-01-01: two windows
+  const calls = mockFetch(t, (n, u) => {
+    if (n === 1) {
+      return {
+        body: {
+          observations: [
+            { realtime_start: "2012-05-02", date: "2012-05-01", value: "1.0" },
+            { realtime_start: "2014-12-16", date: "2014-12-15", value: "2.0" },
+          ],
+        },
+      };
+    }
+    const windowStart = u.searchParams.get("realtime_start");
+    return {
+      body: {
+        observations: [
+          { realtime_start: windowStart, date: "2014-12-15", value: "2.0" }, // still current at the boundary: clamped, same vintage
+          { realtime_start: "2015-02-01", date: "2014-12-15", value: "2.5" }, // a genuine revision
+          { realtime_start: "2015-03-02", date: "2015-03-01", value: "3" },
+        ],
+      },
+    };
+  });
+  const rows = await fetchSeries(config, { series: "DFF", observationStart: "2010-01-01", now });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url.searchParams.get("realtime_start"), "2010-01-01");
+  assert.equal(calls[1].url.searchParams.get("realtime_start"), NEXT_DAY(calls[0].url.searchParams.get("realtime_end")));
+  assert.equal(calls[1].url.searchParams.get("realtime_end"), "9999-12-31");
+  assert.equal(calls[0].url.searchParams.get("observation_start"), "2010-01-01");
+  assert.deepEqual(rows.map((r) => [r.obsDate, r.val, r.availableAt]), [
+    ["2012-05-01", 1, "2012-05-03T00:00:00.000Z"],
+    ["2014-12-15", 2, "2014-12-17T00:00:00.000Z"],
+    ["2014-12-15", 2.5, "2015-02-02T00:00:00.000Z"],
+    ["2015-03-01", 3, "2015-03-03T00:00:00.000Z"],
+  ]);
 });
 
 test("fred.fetchSeries: skips '.', null, empty, non-numeric values and malformed dates (never zero-fills)", async (t) => {

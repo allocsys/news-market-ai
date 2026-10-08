@@ -1,7 +1,7 @@
 // FRED / ALFRED adapter for XAUUSD macro context (ingestion/ingest.js#ingestMacro).
 //
-// POINT-IN-TIME: every request asks for ALL vintages (realtime_start=1776-07-04,
-// realtime_end=9999-12-31 -- ALFRED's documented "every vintage" idiom), so each
+// POINT-IN-TIME: every request asks for ALL vintages from observationStart on
+// (realtime_start=observationStart, realtime_end=9999-12-31), so each
 // returned row carries the `realtime_start` date on which that value first became
 // known. A later revision of the same observation date comes back as another row
 // with a later realtime_start. available_at is the start of the UTC day AFTER
@@ -26,6 +26,36 @@ export const DEFAULT_FRED_SERIES = Object.freeze(["DFII10", "DTWEXBGS", "DFF", "
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// FRED rejects a request (400) whose real-time period holds more than 2000 vintage dates, and a daily
+// series (DFF, DFII10, T10YIE) has ~250 a year -- the old realtime_start=1776-07-04 made every one of
+// them fail. An observation is first known on or after its own date, so starting the real-time period at
+// observationStart loses no vintage. One request covers up to ~6 years of daily vintages (~1500); a longer
+// backfill range is split into consecutive 5-year real-time windows.
+const SINGLE_REQUEST_MAX_DAYS = 6 * 365;
+const WINDOW_SPAN_DAYS = 5 * 365;
+
+function addDays(date, days) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+/** Real-time windows (`[{ start, end }]`, YYYY-MM-DD, contiguous, the last open-ended) that together cover observationStart..now. */
+export function realtimeWindows(observationStart, now = new Date()) {
+  const today = now.toISOString().slice(0, 10);
+  const spanDays = (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${observationStart}T00:00:00Z`)) / DAY_MS;
+  if (!(spanDays > SINGLE_REQUEST_MAX_DAYS)) return [{ start: observationStart, end: "9999-12-31" }];
+  const windows = [];
+  for (let start = observationStart; start <= today; ) {
+    const end = addDays(start, WINDOW_SPAN_DAYS - 1);
+    if (end >= today) {
+      windows.push({ start, end: "9999-12-31" });
+      break;
+    }
+    windows.push({ start, end });
+    start = addDays(end, 1);
+  }
+  return windows;
+}
 
 /** Start of the UTC day after `realtimeStart` (YYYY-MM-DD) as an ISO string, or null when malformed. */
 export function fredAvailableAt(realtimeStart) {
@@ -69,7 +99,26 @@ async function fredErrorDetail(response, apiKey) {
  * Throws a VendorError (transient on network failure, 429, 5xx) -- a missing key is
  * a non-transient VendorError thrown before any request.
  */
-export async function fetchSeries(config, { series, observationStart }) {
+export async function fetchSeries(config, { series, observationStart, now }) {
+  if (!DATE_RE.test(String(observationStart ?? ""))) {
+    throw new Error(`fred.fetchSeries requires observationStart as YYYY-MM-DD (got "${observationStart}")`);
+  }
+  const windows = realtimeWindows(observationStart, now);
+  const out = [];
+  // obsDate -> last value seen in earlier windows. A value still current at a window boundary comes back from
+  // the next window with realtime_start CLAMPED to that window's start; it is the same vintage, not a new one,
+  // so it is dropped (a real revision has a different value and its own realtime_start).
+  const lastVal = new Map();
+  for (const w of windows) {
+    const rows = await fetchWindow(config, { series, observationStart, realtimeStart: w.start, realtimeEnd: w.end });
+    const clampedAvailableAt = fredAvailableAt(w.start);
+    out.push(...(windows.length > 1 ? rows.filter((r) => !(r.availableAt === clampedAvailableAt && lastVal.get(r.obsDate) === r.val)) : rows));
+    for (const r of [...rows].sort((a, b) => (a.availableAt < b.availableAt ? -1 : a.availableAt > b.availableAt ? 1 : 0))) lastVal.set(r.obsDate, r.val);
+  }
+  return out;
+}
+
+async function fetchWindow(config, { series, observationStart, realtimeStart, realtimeEnd }) {
   if (!config.fredApiKey) {
     throw new VendorError("fred", "config.fredApiKey is not set (FRED_API_KEY secret) -- see fred.js header");
   }
@@ -82,8 +131,8 @@ export async function fetchSeries(config, { series, observationStart }) {
     api_key: config.fredApiKey,
     file_type: "json",
     observation_start: observationStart,
-    realtime_start: "1776-07-04",
-    realtime_end: "9999-12-31",
+    realtime_start: realtimeStart,
+    realtime_end: realtimeEnd,
   });
 
   let response;
