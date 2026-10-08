@@ -120,7 +120,7 @@ test("filling a confident opposite thesis FLIPS the open position at the fill pr
 });
 
 // Exposure opened AFTER the signal (between its asOf and the fill bar's open) was invisible to the pipeline's
-// risk check, so the fill must re-check the ceiling (MAX_PORTFOLIO_RISK_PCT = 0.2, summed position_size_pct).
+// risk check, so the fill must re-check the ceiling (MAX_PORTFOLIO_RISK_PCT = 0.5, summed position_size_pct).
 // GOOG is outside TICKER_GROUPS, so the 10% group cap never applies to these fixtures; only the ceiling is under test.
 const otherTickerPosition = (sizePct) => ({
   id: "GOOG|new", ticker: "GOOG", tradeThesisId: "GOOG|new", positionSizePct: sizePct,
@@ -129,7 +129,7 @@ const otherTickerPosition = (sizePct) => ({
 
 test("a fill that would breach the portfolio risk ceiling against exposure opened after the signal is REJECTED, no position", async () => {
   const ctx = await pendingCtx();
-  await ctx.store.openPosition(otherTickerPosition(0.19)); // 0.19 + the pending ~0.04 > 0.2
+  await ctx.store.openPosition(otherTickerPosition(0.49)); // 0.49 + the pending ~0.04 > 0.5
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-16", close: 170 });
 
   const { filled } = await fillPendingEntries({}, config(), ctx, { asOf: "2026-01-17T00:00:00Z" });

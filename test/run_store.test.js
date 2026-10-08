@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { RunStore, readOnly } from "../src/storage/run_store.js";
 import { LookaheadViolationError } from "../src/shared/errors.js";
+import { MAX_PORTFOLIO_RISK_PCT } from "../src/shared/constants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = path.join(__dirname, "..", "migrations", "state");
@@ -106,13 +107,13 @@ test("commitThesis with an out-of-order (late-arriving, older) asOf is supersede
 
 test("commitThesis rejects a thesis that would breach the portfolio risk ceiling (other tickers' exposure)", async () => {
   const store = new RunStore(liveDb(), "live");
-  // Fill most of the 0.20 ceiling with two other tickers.
+  // Fill most of the MAX_PORTFOLIO_RISK_PCT ceiling with two other tickers.
   // AMZN is outside TICKER_GROUPS, so the 10% group cap never applies to these fixtures (a 9% or 19% lone
-  // position would otherwise trip it); only the 20% gross ceiling is under test.
-  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.09 }));
-  await store.commitThesis(thesisArgs({ id: "GOOG|t1", ticker: "GOOG", asOf: "t1", positionSizePct: 0.09 }));
+  // position would otherwise trip it); only the gross ceiling is under test.
+  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.24 }));
+  await store.commitThesis(thesisArgs({ id: "GOOG|t1", ticker: "GOOG", asOf: "t1", positionSizePct: 0.24 }));
 
-  // 0.09 + 0.09 + 0.05 = 0.23 > 0.20 -- should be rejected.
+  // 0.24 + 0.24 + 0.05 = 0.53 > MAX_PORTFOLIO_RISK_PCT (0.50) -- should be rejected.
   await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1", positionSizePct: 0.05 }));
 
   const aapl = await store.db.prepare(`SELECT * FROM positions WHERE run_id='live' AND id='AAPL|t1'`).first();
@@ -139,10 +140,10 @@ test("commitThesis's portfolio risk ceiling check is AS-OF asOf, not a live/curr
   // tickers processed the same day. The FIXED query bounds the sum to
   // `opened_at <= asOf`, so AMZN's t5 position must be excluded from a
   // decision dated t1.
-  // (AMZN is outside TICKER_GROUPS: a 19% lone position would trip the 10% group cap otherwise.)
-  await store.commitThesis(thesisArgs({ id: "AMZN|t5", ticker: "AMZN", asOf: "t5", positionSizePct: 0.19 }));
+  // (AMZN is outside TICKER_GROUPS: a 45% lone position would trip the 10% group cap otherwise.)
+  await store.commitThesis(thesisArgs({ id: "AMZN|t5", ticker: "AMZN", asOf: "t5", positionSizePct: 0.45 }));
 
-  // 0.19 (AMZN, but NOT as-of t1) + 0.05 (AAPL) would be 0.24 > 0.20 if
+  // 0.45 (AMZN, but NOT as-of t1) + 0.05 (AAPL) would be 0.50 > MAX_PORTFOLIO_RISK_PCT if
   // AMZN wrongly counted -- but as-of t1, AMZN's exposure is 0, so this
   // must open fine.
   await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "t1", positionSizePct: 0.05 }));
@@ -158,10 +159,10 @@ test("commitThesis's portfolio risk ceiling check still excludes a position that
   const store = new RunStore(liveDb(), "live");
   // AMZN opens at "t1" -- same time as (chronologically at-or-before) the
   // AAPL decision below, so it IS within scope as-of "t2".
-  // (AMZN is outside TICKER_GROUPS: a 19% lone position would trip the 10% group cap otherwise.)
-  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.19 }));
+  // (AMZN is outside TICKER_GROUPS: a 48% lone position would trip the 10% group cap otherwise.)
+  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.48 }));
 
-  // 0.19 (AMZN, correctly counted as-of t2) + 0.05 (AAPL) = 0.24 > 0.20 -- must be rejected.
+  // 0.48 (AMZN, correctly counted as-of t2) + 0.05 (AAPL) = 0.53 > MAX_PORTFOLIO_RISK_PCT (0.50) -- must be rejected.
   await store.commitThesis(thesisArgs({ id: "AAPL|t2", ticker: "AAPL", asOf: "t2", positionSizePct: 0.05 }));
 
   const aaplPosition = await store.db.prepare(`SELECT * FROM positions WHERE run_id='live' AND id='AAPL|t2'`).first();
@@ -171,13 +172,13 @@ test("commitThesis's portfolio risk ceiling check still excludes a position that
   assert.equal(aaplDecision.status, "rejected");
 });
 
-test("a ticker's own replaced position is not double-counted against the ceiling (2026-09-19 decision)", async () => {
+test("a ticker's own replaced position is not double-counted against the ceiling", async () => {
   const store = new RunStore(liveDb(), "live");
   // AMZN (outside TICKER_GROUPS, so the 10% group cap does not apply) alone occupies almost the whole ceiling.
-  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.19 }));
+  await store.commitThesis(thesisArgs({ id: "AMZN|t1", ticker: "AMZN", asOf: "t1", positionSizePct: 0.45 }));
   // Re-evaluating AMZN again (replacing its own position) at the same size must NOT be
   // rejected for "double counting" its own existing exposure.
-  await store.commitThesis(thesisArgs({ id: "AMZN|t2", ticker: "AMZN", asOf: "t2", positionSizePct: 0.19, direction: "short", confidence: 0.9 }));
+  await store.commitThesis(thesisArgs({ id: "AMZN|t2", ticker: "AMZN", asOf: "t2", positionSizePct: 0.45, direction: "short", confidence: 0.9 }));
 
   const decision = await store.db.prepare(`SELECT status FROM trade_decisions WHERE run_id='live' AND id='AMZN|t2'`).first();
   assert.equal(decision.status, "opened");

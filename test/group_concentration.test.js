@@ -79,7 +79,7 @@ test("a smaller thesis still fits when the group has headroom", () => {
 });
 
 test("the existing ceilings still reject first and keep their own reason", () => {
-  const d = evaluatePortfolio(risk(), { openPositionsRiskPct: 0.17, ticker: "TSLA", direction: "long", openPositions: [pos("AAPL", "long"), pos("MSFT", "long")] });
+  const d = evaluatePortfolio(risk(), { openPositionsRiskPct: 0.47, ticker: "TSLA", direction: "long", openPositions: [pos("AAPL", "long"), pos("MSFT", "long")] });
   assert.equal(d.approvedForExecution, false);
   assert.match(d.reason, /combined portfolio risk/);
 });

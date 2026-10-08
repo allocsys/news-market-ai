@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { RunStore } from "../src/storage/run_store.js";
 import { evaluatePortfolio } from "../src/agents/managers/portfolio_manager.js";
-import { FALLBACK_STOP_LOSS_PCT, MAX_PORTFOLIO_STOP_RISK_PCT } from "../src/shared/constants.js";
+import { FALLBACK_STOP_LOSS_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, MAX_PORTFOLIO_RISK_PCT } from "../src/shared/constants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = path.join(__dirname, "..", "migrations", "state");
@@ -46,8 +46,8 @@ async function statusOf(store, id) {
 }
 
 test("evaluatePortfolio rejects when loss-at-stop would exceed the ceiling even though exposure is fine", () => {
-  // 5% at an 8% stop = 0.4% of the book; another 0.4% already open -> 0.8% > 0.75%. Exposure 0.10 <= 0.20.
-  const d = evaluatePortfolio(risk({ positionSizePct: 0.05, stopLossPct: 0.08 }), { openPositionsRiskPct: 0.05, openPositionsStopRiskPct: 0.004 });
+  // 10% at a 22% stop = 2.2% of the book; another 0.01% already open -> 2.21% > 2.0% (MAX_PORTFOLIO_STOP_RISK_PCT). Exposure 0.10 <= MAX_PORTFOLIO_RISK_PCT.
+  const d = evaluatePortfolio(risk({ positionSizePct: 0.10, stopLossPct: 0.22 }), { openPositionsRiskPct: 0.10, openPositionsStopRiskPct: 0.0001 });
   assert.equal(d.approvedForExecution, false);
   assert.equal(d.finalPositionSizePct, 0);
   assert.match(d.reason, /loss-at-stop/);
@@ -67,9 +67,9 @@ test("evaluatePortfolio charges the fallback stop when the risk decision has non
 });
 
 test("evaluatePortfolio without openPositionsStopRiskPct keeps the exposure-only behavior", () => {
-  const d = evaluatePortfolio(risk({ positionSizePct: 0.05, stopLossPct: 0.03 }), { openPositionsRiskPct: 0.15 });
+  const d = evaluatePortfolio(risk({ positionSizePct: 0.05, stopLossPct: 0.03 }), { openPositionsRiskPct: MAX_PORTFOLIO_RISK_PCT - 0.05 });
   assert.equal(d.approvedForExecution, true);
-  const over = evaluatePortfolio(risk({ positionSizePct: 0.05, stopLossPct: 0.03 }), { openPositionsRiskPct: 0.16 });
+  const over = evaluatePortfolio(risk({ positionSizePct: 0.05, stopLossPct: 0.03 }), { openPositionsRiskPct: MAX_PORTFOLIO_RISK_PCT + 0.01 });
   assert.equal(over.approvedForExecution, false);
   assert.match(over.reason, /combined portfolio risk/);
 });
@@ -92,12 +92,13 @@ test("getOpenPositionsRiskAsOf returns exposure and loss-at-stop from one read, 
 
 test("commitThesis rejects in SQL when loss-at-stop would breach the ceiling (exposure alone would pass)", async () => {
   const store = newStore();
-  await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "2026-01-05T00:00:00Z", stopLossPct: 0.08 }));
+  await store.commitThesis(thesisArgs({ id: "AAPL|t1", ticker: "AAPL", asOf: "2026-01-05T00:00:00Z", positionSizePct: 0.08, stopLossPct: 0.15 })); // 0.012 loss-at-stop
   assert.equal(await statusOf(store, "AAPL|t1"), "opened");
 
-  await store.commitThesis(thesisArgs({ id: "MSFT|t1", ticker: "MSFT", asOf: "2026-01-06T00:00:00Z", stopLossPct: 0.08 }));
-  assert.equal(await statusOf(store, "MSFT|t1"), "rejected");
-  assert.equal(await store.getOpenPositionForTickerAsOf({ ticker: "MSFT", asOf: "2026-01-07T00:00:00Z" }), null);
+  // USO is in a different group, so only the loss-at-stop ceiling can reject: 0.012 + 0.08 * 0.12 = 0.0216 > 0.02, exposure 0.16 << 0.5.
+  await store.commitThesis(thesisArgs({ id: "USO|t1", ticker: "USO", asOf: "2026-01-06T00:00:00Z", positionSizePct: 0.08, stopLossPct: 0.12 }));
+  assert.equal(await statusOf(store, "USO|t1"), "rejected");
+  assert.equal(await store.getOpenPositionForTickerAsOf({ ticker: "USO", asOf: "2026-01-07T00:00:00Z" }), null);
 });
 
 test("commitThesis opens when the second position's stop keeps loss-at-stop under the ceiling", async () => {

@@ -21,16 +21,16 @@ function verdict(ticker, confidence) {
 }
 
 test("overrides: XAUUSD has a larger size cap and the gold group a larger group cap; everything else keeps the defaults", () => {
-  assert.equal(MAX_POSITION_PCT_BY_TICKER.XAUUSD, 0.15);
-  assert.equal(GROUP_EXPOSURE_CAP_BY_GROUP.gold, 0.15);
-  assert.equal(groupCapOf("gold"), 0.15);
+  assert.equal(MAX_POSITION_PCT_BY_TICKER.XAUUSD, 0.3);
+  assert.equal(GROUP_EXPOSURE_CAP_BY_GROUP.gold, 0.3);
+  assert.equal(groupCapOf("gold"), 0.3);
   assert.equal(groupCapOf("equity"), MAX_GROUP_EXPOSURE_PCT);
   assert.equal(groupCapOf("NVDA"), MAX_GROUP_EXPOSURE_PCT);
 });
 
-test("evaluateRisk: XAUUSD is sized confidence * 15%, other tickers stay confidence * 5%", () => {
+test("evaluateRisk: XAUUSD is sized confidence * 30%, other tickers stay confidence * 5%", () => {
   const xau = evaluateRisk(thesis("XAUUSD"), verdict("XAUUSD", 0.8), null);
-  assert.ok(Math.abs(xau.positionSizePct - 0.12) < 1e-12);
+  assert.ok(Math.abs(xau.positionSizePct - 0.24) < 1e-12);
   const aapl = evaluateRisk(thesis("AAPL"), verdict("AAPL", 0.8), null);
   assert.ok(Math.abs(aapl.positionSizePct - 0.04) < 1e-12);
 });
@@ -41,19 +41,19 @@ test("evaluateRisk: the confidence threshold is unchanged for XAUUSD (0.55 is st
   assert.equal(xau.positionSizePct, 0);
 });
 
-test("evaluatePortfolio: a 12% XAUUSD thesis passes the gold group cap, the same size in the equity group is rejected", () => {
-  const risk = { tradeThesisId: "X|t", approved: true, positionSizePct: 0.12, stopLossPct: 0.03, takeProfitPct: 0.06, reason: "test" };
+test("evaluatePortfolio: a 24% XAUUSD thesis passes the gold group cap, the same size in the equity group is rejected", () => {
+  const risk = { tradeThesisId: "X|t", approved: true, positionSizePct: 0.24, stopLossPct: 0.03, takeProfitPct: 0.06, reason: "test" };
   const xau = evaluatePortfolio(risk, { ticker: "XAUUSD", direction: "long", openPositions: [] });
   assert.equal(xau.approvedForExecution, true);
-  assert.equal(xau.finalPositionSizePct, 0.12);
+  assert.equal(xau.finalPositionSizePct, 0.24);
   const aapl = evaluatePortfolio(risk, { ticker: "AAPL", direction: "long", openPositions: [] });
   assert.equal(aapl.approvedForExecution, false);
   assert.match(aapl.reason, /group cap 0.1\b/);
 });
 
-test("evaluatePortfolio: above the raised 15% gold cap is still rejected", () => {
-  const risk = { tradeThesisId: "X|t", approved: true, positionSizePct: 0.16, stopLossPct: 0.03, takeProfitPct: 0.06, reason: "test" };
+test("evaluatePortfolio: above the raised 30% gold cap is still rejected", () => {
+  const risk = { tradeThesisId: "X|t", approved: true, positionSizePct: 0.31, stopLossPct: 0.03, takeProfitPct: 0.06, reason: "test" };
   const xau = evaluatePortfolio(risk, { ticker: "XAUUSD", direction: "long", openPositions: [] });
   assert.equal(xau.approvedForExecution, false);
-  assert.match(xau.reason, /group cap 0.15/);
+  assert.match(xau.reason, /group cap 0.3/);
 });
