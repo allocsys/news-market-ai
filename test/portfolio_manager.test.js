@@ -9,6 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluatePortfolio } from "../src/agents/managers/portfolio_manager.js";
+import { MAX_PORTFOLIO_RISK_PCT } from "../src/shared/constants.js";
 
 function approvedRiskDecision(overrides = {}) {
   return {
@@ -41,8 +42,8 @@ test("approves when combined risk is under the ceiling", () => {
 });
 
 test("rejects when combined risk would exceed the ceiling", () => {
-  const riskDecision = approvedRiskDecision({ positionSizePct: 0.03 });
-  const decision = evaluatePortfolio(riskDecision, { openPositionsRiskPct: 0.19 });
+  const riskDecision = approvedRiskDecision({ positionSizePct: 0.10 });
+  const decision = evaluatePortfolio(riskDecision, { openPositionsRiskPct: MAX_PORTFOLIO_RISK_PCT });
 
   assert.equal(decision.approvedForExecution, false);
   assert.equal(decision.finalPositionSizePct, 0);
@@ -77,8 +78,8 @@ test("isReplacingPosition does not change the approval math, only the reason tex
 });
 
 test("isReplacingPosition reason note also appears on a rejection, not just an approval", () => {
-  const riskDecision = approvedRiskDecision({ positionSizePct: 0.03 });
-  const decision = evaluatePortfolio(riskDecision, { openPositionsRiskPct: 0.19, isReplacingPosition: true });
+  const riskDecision = approvedRiskDecision({ positionSizePct: 0.10 });
+  const decision = evaluatePortfolio(riskDecision, { openPositionsRiskPct: MAX_PORTFOLIO_RISK_PCT, isReplacingPosition: true });
 
   assert.equal(decision.approvedForExecution, false);
   assert.match(decision.reason, /would exceed ceiling/);
@@ -97,6 +98,6 @@ test("a ticker at exactly its old position size, replaced, nets to just the new 
   const riskDecision = approvedRiskDecision({ positionSizePct: 0.04 });
   const decision = evaluatePortfolio(riskDecision, { openPositionsRiskPct: 0.10, isReplacingPosition: true });
 
-  assert.equal(decision.approvedForExecution, true); // 0.10 + 0.04 = 0.14 <= 0.20 ceiling
+  assert.equal(decision.approvedForExecution, true); // 0.10 + 0.04 = 0.14 <= MAX_PORTFOLIO_RISK_PCT ceiling
   assert.equal(decision.finalPositionSizePct, 0.04);
 });
