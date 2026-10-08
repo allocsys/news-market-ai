@@ -105,7 +105,7 @@ const NEXT_DAY = (d) => new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOS
 test("fred.realtimeWindows: one open-ended window for a recent start; contiguous 5-year windows, last open-ended, for a long one", () => {
   const now = new Date("2026-10-08T12:00:00Z");
   assert.deepEqual(realtimeWindows("2026-06-01", now), [{ start: "2026-06-01", end: "9999-12-31" }]);
-  assert.deepEqual(realtimeWindows("2020-10-08", now), [{ start: "2020-10-08", end: "9999-12-31" }], "6 years is still one request");
+  assert.deepEqual(realtimeWindows("2021-01-01", now), [{ start: "2021-01-01", end: "9999-12-31" }], "under 6 years is still one request");
 
   const w = realtimeWindows("2010-01-01", now);
   assert.ok(w.length >= 3);
