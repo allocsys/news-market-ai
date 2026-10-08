@@ -7,7 +7,7 @@
 // in JS before a thesis is sent to commit, and RunStore#commitThesis re-checks
 // it inside the atomic batch's SQL. If the two ever disagreed the SQL wins,
 // so they must read the same number.
-export const MAX_PORTFOLIO_RISK_PCT = 0.2;
+export const MAX_PORTFOLIO_RISK_PCT = 0.5;
 
 // Loss-at-stop ceiling (fraction of the book): the sum over open positions of
 // position_size_pct * stop_loss_pct, i.e. what the book loses if every open
@@ -19,7 +19,7 @@ export const MAX_PORTFOLIO_RISK_PCT = 0.2;
 // Untuned placeholder: 0.75% of the book, above the ~0.6% that 20% exposure at
 // the 3% fallback stop implies, so with typical stops the exposure cap binds
 // first and this one only bites on wide-stop (volatile) books.
-export const MAX_PORTFOLIO_STOP_RISK_PCT = 0.0075;
+export const MAX_PORTFOLIO_STOP_RISK_PCT = 0.02;
 
 // Stop distance used when a position has no stop_loss_pct, or risk.js has too
 // few bars for an ATR (it is risk.js's flat fallback, and its take-profit
@@ -53,7 +53,7 @@ export function groupOfTicker(ticker) {
 // (hold/flip), so the 10% default acted as a hard per-position cap that kept it at ~3-4% of the book. Untuned
 // placeholder, raised together with MAX_POSITION_PCT_BY_TICKER below: the group cap REJECTS (it does not clamp),
 // so a size above it would never trade. A group not listed uses MAX_GROUP_EXPOSURE_PCT.
-export const GROUP_EXPOSURE_CAP_BY_GROUP = { gold: 0.15 };
+export const GROUP_EXPOSURE_CAP_BY_GROUP = { gold: 0.3 };
 
 export function groupCapOf(groupId) {
   return GROUP_EXPOSURE_CAP_BY_GROUP[groupId] ?? MAX_GROUP_EXPOSURE_PCT;
@@ -63,7 +63,7 @@ export function groupCapOf(groupId) {
 // cap). A ticker not listed uses risk.js's default (5%). Untuned placeholder: XAU moves slowly, sits in one
 // position at a time, and its stop is ~2.5-3.5%, so a full stop-out at 15% is ~0.5% of the book, inside
 // MAX_PORTFOLIO_STOP_RISK_PCT (0.75%).
-export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.15 };
+export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.3 };
 
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
 // already has an open position only REPLACES it if it points the OTHER way
