@@ -54,7 +54,7 @@ import { getActiveTickers, getDisabledTickers, setActiveTickers, checkTickerSele
 import { getMacroFlag, setMacroEnabled } from "./storage/macro_flag.js";
 import { SimClock } from "./backtest/simClock.js";
 import { parseKnobOverrides } from "./backtest/knobOverrides.js";
-import { cancelBacktestRun, getBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
+import { cancelBacktestRun, failBacktestRun, getBacktestRun, insertBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
 import { cleanupCancelledRun, cleanupOldRuns, purgeFailedAndCancelledRuns } from "./backtest/cleanup.js";
 import { BACKTEST_ID_RE } from "./dashboard/helpers.js";
 import {
@@ -444,11 +444,36 @@ export default {
       // progress-write hiccup here can never block the real enqueue below.
       // env_run_id/run_id = this backtest's own id, in SIM_DB.
       await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}) } }).queued();
+      // Registry row ('running') written HERE, before the id is returned, so the
+      // dashboard's GET /api/backtest-runs/:id never 404s in the gap between this
+      // ack and the queue consumer's own insert (runBacktest.js, which is
+      // ON CONFLICT DO NOTHING and so leaves this row standing). Best-effort like
+      // the 'queued' row above: if D1 hiccups, the consumer still inserts it.
+      let registered = false;
+      try {
+        await insertBacktestRun(env.SIM_DB, {
+          id,
+          tickers,
+          testStart: testStartIso,
+          testEnd: testEndIso,
+          trainDays: 0,
+          testDays: Math.ceil((Date.parse(testEndIso) - Date.parse(testStartIso)) / 86400000),
+          graceDays: graceDays ?? null,
+          startedAt: new Date().toISOString(),
+        });
+        registered = true;
+      } catch (err) {
+        console.warn("backtest registry insert failed (the queue consumer will retry it)", { id, message: err.message });
+      }
       try {
         await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}) });
         return jsonResponse({ accepted: true, id, tickers, testStart, testEnd, ...(hasKnobOverrides ? { knobOverrides } : {}) });
       } catch (err) {
         console.error("backtest enqueue failed", { id, tickers, message: err.message });
+        // Nothing will ever run this id: don't leave a 'running' row behind.
+        if (registered) {
+          await failBacktestRun(env.SIM_DB, { id, error: `enqueue failed: ${err.message}`, finishedAt: new Date().toISOString() }).catch(() => {});
+        }
         return jsonResponse({ error: "backtest enqueue failed", message: err.message }, { status: 500 });
       }
     }

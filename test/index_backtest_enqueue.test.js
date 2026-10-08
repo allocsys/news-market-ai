@@ -141,6 +141,37 @@ test("POST /backtest/run with a valid request enqueues onto BACKTEST and returns
   assert.deepEqual(job.params, { tickers: ["AAPL", "MSFT"], testStart: "2024-01-01", testEnd: "2024-01-31", graceDays: 5, enableLlmLog: false });
 });
 
+test("POST /backtest/run writes the 'running' registry row before acking, so GET /api/backtest-runs/:id cannot 404 in the gap", async () => {
+  const env = baseEnv();
+  const response = await worker.fetch(
+    new Request("https://worker.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31&tickers=AAPL&graceDays=5", { method: "POST" }),
+    env
+  );
+  const body = await response.json();
+  const row = await env.SIM_DB.prepare("SELECT status, tickers, test_start, test_end, train_days, test_days, grace_days FROM backtest_runs WHERE id = ?").bind(body.id).first();
+  assert.equal(row.status, "running");
+  assert.deepEqual(JSON.parse(row.tickers), ["AAPL"]);
+  assert.equal(row.test_start, "2024-01-01T00:00:00.000Z");
+  assert.equal(row.test_end, "2024-01-31T00:00:00.000Z");
+  assert.equal(row.train_days, 0);
+  assert.equal(row.test_days, 30);
+  assert.equal(row.grace_days, 5);
+});
+
+test("POST /backtest/run marks the pre-written registry row failed if the enqueue itself fails", async (t) => {
+  const env = baseEnv({ BACKTEST: new ThrowingBacktestQueue() });
+  t.mock.method(console, "error", () => {});
+  const response = await worker.fetch(
+    new Request("https://worker.example/backtest/run?testStart=2024-01-01&testEnd=2024-01-31", { method: "POST" }),
+    env
+  );
+  assert.equal(response.status, 500);
+  const rows = (await env.SIM_DB.prepare("SELECT status, error FROM backtest_runs").all()).results;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "failed");
+  assert.match(rows[0].error, /enqueue failed/);
+});
+
 test("POST /backtest/run with no tickers param falls back to config.watchlist", async () => {
   const env = baseEnv({ WATCHLIST_TICKERS: "AAPL,TSLA" });
 
