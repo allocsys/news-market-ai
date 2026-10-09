@@ -185,6 +185,7 @@ test("getIngestionHealth: row count + last ingested_at per inputs table; zeros/n
     priceBars: { count: 0, lastIngestedAt: null },
     fundamentals: { count: 0, lastIngestedAt: null },
     macro: { count: 0, lastIngestedAt: null },
+    intradayBackfill: { tickers: [], lastAttemptAt: null, active: false },
   });
 
   const db = createTestD1([INPUTS_DIR]);
