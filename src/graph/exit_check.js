@@ -171,7 +171,7 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
     // Once the time exit is due, the price walk stops at that instant: bars after it must not be
     // able to stop/target out a position that the hold rule has already ended (and in the daily
     // backtest walk the due day's own bars are visible by the time the exit is priced).
-    const dueAt = config.maxPositionHoldDays != null ? timeExitDueAt(position.openedAt, config.maxPositionHoldDays) : null;
+    const dueAt = config.maxPositionHoldDays != null ? timeExitDueAt(position.openedAt, config.maxPositionHoldDays, { ticker: position.ticker }) : null;
     const timeDue = dueAt != null && Date.parse(dueAt) <= Date.parse(asOf);
     const walk = await walkPositionBars(inputs, position, {
       asOf: timeDue ? dueAt : asOf,
