@@ -40,7 +40,7 @@ export const FALLBACK_STOP_LOSS_PCT = 0.03;
 // A ticker missing from the map is its own group, so it is never capped against
 // other tickers. Both numbers are untuned placeholders: 10% allows two full 5%
 // positions in one group, not a third.
-export const TICKER_GROUPS = { AAPL: "equity", MSFT: "equity", TSLA: "equity", USO: "energy", XAUUSD: "gold" };
+export const TICKER_GROUPS = { AAPL: "equity", MSFT: "equity", TSLA: "equity", USO: "energy", XAUUSD: "gold", BTCUSD: "crypto" };
 export const MAX_GROUP_EXPOSURE_PCT = 0.1;
 // Float slack so a sum that is exactly the cap on paper (0.05 + 0.05) is never rejected by rounding. Used by
 // portfolio_manager.js and by RunStore#commitThesis's SQL, so both sides apply the identical tolerance.
@@ -54,7 +54,8 @@ export function groupOfTicker(ticker) {
 // (hold/flip), so the 10% default acted as a hard per-position cap that kept it at ~3-4% of the book. Untuned
 // placeholder, raised together with MAX_POSITION_PCT_BY_TICKER below: the group cap REJECTS (it does not clamp),
 // so a size above it would never trade. A group not listed uses MAX_GROUP_EXPOSURE_PCT.
-export const GROUP_EXPOSURE_CAP_BY_GROUP = { gold: 0.3 };
+// BTCUSD is alone in "crypto" and gets the same 30% as gold (BTC-only experiment, same reasoning: one position at a time).
+export const GROUP_EXPOSURE_CAP_BY_GROUP = { gold: 0.3, crypto: 0.3 };
 
 export function groupCapOf(groupId) {
   return GROUP_EXPOSURE_CAP_BY_GROUP[groupId] ?? MAX_GROUP_EXPOSURE_PCT;
@@ -64,7 +65,9 @@ export function groupCapOf(groupId) {
 // cap). A ticker not listed uses risk.js's default (5%). Untuned placeholder: XAU moves slowly, sits in one
 // position at a time, and its stop is ~2.5-3.5%, so a full stop-out at 30% is ~1% of the book, inside
 // MAX_PORTFOLIO_STOP_RISK_PCT (2%).
-export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.3 };
+// BTCUSD 0.30 matches XAUUSD (experiment). BTC is far more volatile than gold, so its ATR stop is wider: a full
+// stop-out at 30% is above 1% of the book and approaches MAX_PORTFOLIO_STOP_RISK_PCT (2%) once the stop passes ~6.7%.
+export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.3, BTCUSD: 0.3 };
 
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
 // already has an open position only REPLACES it if it points the OTHER way
