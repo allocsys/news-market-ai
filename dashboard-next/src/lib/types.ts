@@ -224,7 +224,7 @@ export interface IntradayBackfillTicker {
 
 export interface IntradayBackfillStatus {
   tickers: IntradayBackfillTicker[];
-  /** Newest last_attempt across all rows: when the */15 tick last touched a day. */
+  /** Newest last_attempt across all rows: when the 15-minute tick last touched a day. */
   lastAttemptAt: string | null;
   /** True while any ticker still has pending days. */
   active: boolean;
