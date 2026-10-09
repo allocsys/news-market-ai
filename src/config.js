@@ -52,10 +52,11 @@ function parseSymbolMap(value) {
  * with no such symbol (spot gold, an FX pair) returns an empty list. This maps
  * the watchlist ticker to the symbol to REQUEST; articles are still tagged with
  * the watchlist ticker. XAUUSD -> GLD (SPDR Gold Shares), same proxy idea as
- * USO for oil. Override with FINNHUB_SYMBOL_MAP ("XAUUSD:GLD,..."; set it to an
+ * USO for oil. BTCUSD -> IBIT (iShares Bitcoin Trust, spot-BTC ETF; news volume per day is unverified,
+ * fallback GBTC/BITO/COIN). Override with FINNHUB_SYMBOL_MAP ("XAUUSD:GLD,..."; set it to an
  * empty string for no mapping).
  */
-const DEFAULT_FINNHUB_SYMBOL_MAP = { XAUUSD: "GLD" };
+const DEFAULT_FINNHUB_SYMBOL_MAP = { XAUUSD: "GLD", BTCUSD: "IBIT" };
 
 /**
  * Parses "TICKER|url,TICKER|url,..." into `[{ ticker, url }]`, same shape
