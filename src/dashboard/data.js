@@ -370,6 +370,8 @@ export async function getOverviewData(rawEnv, params) {
         fundamentals: withFresh(health.health.fundamentals),
         // Macro is a later addition: keep it absent (not stale) when the inputs view does not report it.
         ...(health.health.macro !== undefined ? { macro: withFresh(health.health.macro) } : {}),
+        // Rides the same batched inputs read as the counts above (inputs_view.js#getIngestionHealth): no extra query.
+        ...(health.health.intradayBackfill !== undefined ? { intradayBackfill: health.health.intradayBackfill } : {}),
       }
     : null;
 
