@@ -77,7 +77,8 @@ export function groupCapOf(groupId) {
 // position at a time, and its stop is ~2.5-3.5%, so a full stop-out at 30% is ~1% of the book, inside
 // MAX_PORTFOLIO_STOP_RISK_PCT (2%).
 // BTCUSD 0.30 matches XAUUSD (experiment). BTC is far more volatile than gold, so its ATR stop is wider: a full
-// stop-out at 30% is above 1% of the book and approaches MAX_PORTFOLIO_STOP_RISK_PCT (2%) once the stop passes ~6.7%.
+// stop-out at 30% is above 1% of the book and reaches MAX_PORTFOLIO_STOP_RISK_PCT (2%) once the stop passes ~6.7%; from there
+// portfolio_manager.js scales the size down to fit (STOP_RISK_SCALE_MARGIN above) instead of rejecting the trade.
 export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.3, BTCUSD: 0.3 };
 
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
