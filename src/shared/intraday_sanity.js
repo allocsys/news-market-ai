@@ -59,8 +59,18 @@ export const MAX_SPIKE_PCT = 0.15;
 export const FX_24X5_TICKERS = new Set(["XAUUSD"]);
 
 /**
+ * Instruments that trade 24/7 (crypto spot): no closed window at all, weekends
+ * and holidays included. MUST match
+ * ingestion/sources/tiingo_crypto_intraday.js#TIINGO_CRYPTO_INTRADAY_TICKERS --
+ * kept here (shared/ cannot import from ingestion/) and pinned equal by
+ * test/btc_support.test.js so the two can't drift silently.
+ */
+export const CRYPTO_24X7_TICKERS = new Set(["BTCUSD"]);
+
+/**
  * Is `ts` inside a window where `ticker`'s market is closed regardless of
  * DST? (UTC throughout.)
+ *   - 24/7 crypto (BTCUSD): never closed.
  *   - 24x5 spot (XAUUSD): closed Fri 22:00Z <= ts < Sun 22:00Z. Real close is
  *     Fri 21:00Z (US summer) / 22:00Z (winter); real open Sun 22:00Z / 23:00Z.
  *   - everything else (US equities/ETFs): closed Sat 01:00Z <= ts < Mon 08:00Z,
@@ -75,6 +85,8 @@ export function isInClosedWindow(ticker, ts) {
   const d = new Date(ms);
   const dow = d.getUTCDay(); // 0 = Sunday ... 6 = Saturday
   const minutes = d.getUTCHours() * 60 + d.getUTCMinutes();
+
+  if (CRYPTO_24X7_TICKERS.has(String(ticker).toUpperCase())) return false;
 
   if (FX_24X5_TICKERS.has(String(ticker).toUpperCase())) {
     if (dow === 5) return minutes >= 22 * 60;
