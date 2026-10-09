@@ -16,8 +16,9 @@ import {
   usePostBackfillMacro,
   useMacro,
   useWatchlist,
+  useOverview,
 } from "@/lib/api";
-import type { JobProgress } from "@/lib/types";
+import type { JobProgress, IntradayBackfillStatus } from "@/lib/types";
 import { SectionHeading, StatusBadge } from "../primitives";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -63,6 +64,10 @@ export function BackfillView({}: ViewProps) {
   const macroQuery = useMacro();
   const watchlistQuery = useWatchlist();
   const watchlist = (watchlistQuery.data?.tickers ?? []).map((ticker) => ({ ticker }));
+  // Intraday backfill progress rides the /api/overview response (same batched inputs read as ingestion health), so this
+  // adds no request of its own: the query key is shared with the Overview view.
+  const overviewQuery = useOverview();
+  const intraday = overviewQuery.data?.health?.intradayBackfill ?? null;
 
   const toggleTicker = (t: string) => {
     setPriceTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -131,6 +136,9 @@ export function BackfillView({}: ViewProps) {
 
   return (
     <div className="space-y-5">
+      {/* Intraday backfill (cron-driven; no job row, so progress comes from intraday_backfill_status) */}
+      {intraday && intraday.tickers.length > 0 && <IntradayBackfillCard status={intraday} />}
+
       {/* News backfill */}
       <section>
         <SectionHeading
@@ -371,9 +379,66 @@ export function BackfillView({}: ViewProps) {
   );
 }
 
+function IntradayBackfillCard({ status }: { status: IntradayBackfillStatus }) {
+  const failed = status.tickers.reduce((n, t) => n + t.failed, 0);
+  const pending = status.tickers.reduce((n, t) => n + t.pending, 0);
+  return (
+    <section>
+      <SectionHeading
+        title="Intraday backfill"
+        description="5-minute bars, filled by the 15-minute cron tick"
+      />
+      <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="flex items-center gap-2">
+          {status.active ? (
+            <span className="inline-flex animate-pulse items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              Running
+            </span>
+          ) : (
+            <StatusBadge variant={failed > 0 ? "rejected" : "approved"} label={failed > 0 ? "Done, with failures" : "Complete"} />
+          )}
+          <span className="text-[10px] text-muted-foreground">
+            {status.active ? `${pending} day${pending === 1 ? "" : "s"} left` : "nothing pending"}
+            {failed > 0 ? ` · ${failed} failed` : ""}
+          </span>
+          {status.lastAttemptAt && (
+            <span className="ml-auto text-[10px] text-muted-foreground">last tick {fmtRelative(status.lastAttemptAt)}</span>
+          )}
+        </div>
+        <div className="space-y-2">
+          {status.tickers.map((t) => {
+            const pct = t.total > 0 ? Math.round((t.done / t.total) * 100) : 0;
+            return (
+              <div key={t.ticker}>
+                <div className="mb-1 flex items-center justify-between text-[10px]">
+                  <span className="font-mono font-medium text-foreground">{t.ticker}</span>
+                  <span className="font-mono nums text-muted-foreground">
+                    {t.done}/{t.total}
+                    {t.failed > 0 ? ` · ${t.failed} failed` : ""}
+                    {t.latestDate ? ` · to ${t.latestDate}` : ""}
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${t.ticker} intraday backfill`}>
+                  <div
+                    className={cn("h-full rounded-full transition-all", t.failed > 0 ? "bg-[color:var(--short)]" : t.pending > 0 ? "bg-primary" : "bg-[color:var(--long)]")}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function JobSummary({ job, label }: { job: JobProgress; label: string }) {
   const isComplete = job.status === "complete";
   const isError = job.status === "failed";
+  const isRunning = job.status === "running" || job.status === "queued";
+  const pct = Math.max(0, Math.min(100, Math.round(job.percent ?? 0)));
   return (
     <div className="rounded-lg border border-border bg-muted/30 p-3">
       <div className="flex items-center gap-2">
@@ -381,6 +446,8 @@ function JobSummary({ job, label }: { job: JobProgress; label: string }) {
           <CheckCircle2 className="h-3.5 w-3.5 text-[color:var(--long)]" />
         ) : isError ? (
           <XCircle className="h-3.5 w-3.5 text-[color:var(--short)]" />
+        ) : isRunning ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden />
         ) : null}
         <span className="text-xs font-medium">{label}</span>
         <StatusBadge
@@ -392,6 +459,11 @@ function JobSummary({ job, label }: { job: JobProgress; label: string }) {
         </span>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">{job.detail}</p>
+      {isRunning && (
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${label} progress`}>
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
         <span>Range: <span className="font-mono nums">{(job.params as Record<string, string>)?.from ?? "—"} → {job.type === "backfill_macro" ? "now" : ((job.params as Record<string, string>)?.to ?? "—")}</span></span>
         {job.done != null && job.total != null && (

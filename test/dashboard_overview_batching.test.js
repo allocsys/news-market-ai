@@ -102,11 +102,11 @@ test("getOverviewData: reads reach D1 as fewer round trips, with identical page 
 
   // With no sequential awaits left in the composed reads, every read starts in the same tick and leaves as ONE batch per
   // database. LIVE_DB: open positions, closed positions, decision totals + daily, exposure, checkpoints + stage counts,
-  // latest decision, realized P&L = 9. INPUTS_DB: news, price bars, fundamentals, macro health = 4. SIM_DB: untouched
+  // latest decision, realized P&L = 9. INPUTS_DB: news, price bars, fundamentals, macro health, intraday backfill status = 5. SIM_DB: untouched
   // for env=live. Exact sizes on purpose: a new `await` between two reads shows up here as an extra round trip.
   assert.deepEqual(batched.stats.LIVE_DB.sizes, [9], `LIVE_DB should be a single batch of 9 (sizes: ${JSON.stringify(batched.stats.LIVE_DB.sizes)})`);
   assert.equal(batched.stats.LIVE_DB.direct, 0, "no LIVE_DB read bypasses the batch");
-  assert.deepEqual(batched.stats.INPUTS_DB.sizes, [4], `INPUTS_DB should be a single batch of 4 (sizes: ${JSON.stringify(batched.stats.INPUTS_DB.sizes)})`);
+  assert.deepEqual(batched.stats.INPUTS_DB.sizes, [5], `INPUTS_DB should be a single batch of 5 (sizes: ${JSON.stringify(batched.stats.INPUTS_DB.sizes)})`);
   assert.equal(batched.stats.INPUTS_DB.direct, 0, "no INPUTS_DB read bypasses the batch");
   assert.equal(roundTrips(batched.stats.SIM_DB), 0, "env=live never touches SIM_DB");
   assert.equal(roundTrips(batched.stats.LIVE_DB), 1);
