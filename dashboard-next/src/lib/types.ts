@@ -117,7 +117,8 @@ export interface LlmCascadeAttempt {
   keyIndex: number | null;
   outcome: "ok" | "skipped" | "error";
   status: string | null;
-  detail: string;
+  /** Absent on an "ok" attempt (the backend only records a detail for errors/skips). */
+  detail?: string | null;
 }
 
 export interface LlmCallDetail extends LlmCallPreview {
