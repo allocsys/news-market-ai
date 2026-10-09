@@ -16,9 +16,10 @@ export const MAX_PORTFOLIO_RISK_PCT = 0.5;
 // with an 8% stop as equally risky. Both ceilings apply; this one is checked
 // in portfolio_manager.js and, with the same number, in RunStore#commitThesis's
 // SQL. A position with no stored stop is charged FALLBACK_STOP_LOSS_PCT.
-// Untuned placeholder: 0.75% of the book, above the ~0.6% that 20% exposure at
-// the 3% fallback stop implies, so with typical stops the exposure cap binds
-// first and this one only bites on wide-stop (volatile) books.
+// Untuned placeholder: 2% of the book (raised from 0.75% in #246 together with
+// MAX_PORTFOLIO_RISK_PCT 0.5 and the XAUUSD 30% caps). 50% exposure at the 3%
+// fallback stop implies ~1.5%, so with typical stops the exposure cap still
+// binds first and this one only bites on wide-stop (volatile) books.
 export const MAX_PORTFOLIO_STOP_RISK_PCT = 0.02;
 
 // Stop distance used when a position has no stop_loss_pct, or risk.js has too
@@ -61,8 +62,8 @@ export function groupCapOf(groupId) {
 
 // Per-ticker override of the position-size multiplier in risk_mgmt/risk.js (size = confidence * cap, capped at
 // cap). A ticker not listed uses risk.js's default (5%). Untuned placeholder: XAU moves slowly, sits in one
-// position at a time, and its stop is ~2.5-3.5%, so a full stop-out at 15% is ~0.5% of the book, inside
-// MAX_PORTFOLIO_STOP_RISK_PCT (0.75%).
+// position at a time, and its stop is ~2.5-3.5%, so a full stop-out at 30% is ~1% of the book, inside
+// MAX_PORTFOLIO_STOP_RISK_PCT (2%).
 export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.3 };
 
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
