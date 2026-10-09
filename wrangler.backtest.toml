@@ -149,7 +149,7 @@ BACKTEST_MAX_PARTS = "1500"
 # config.js's loadConfig reads it, and a backtest with no explicit
 # `tickers` in its request falls back to config.watchlist (see src/index.js's
 # POST /backtest/run route). Keep in sync with the other configs.
-WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO"
+WATCHLIST_TICKERS = "AAPL,MSFT,TSLA,XAUUSD,USO,BTCUSD"
 
 # DAILY QUOTA GUARD + PAUSE/RESUME (src/backtest-worker.js, storage/quota_usage.js).
 # Not set here: the defaults in config.js apply. Each part adds its D1 rows
