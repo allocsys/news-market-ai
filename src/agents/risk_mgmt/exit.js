@@ -13,6 +13,8 @@
 // enforce the required-asOf convention) and calls closePosition when this
 // returns non-null.
 
+import { CRYPTO_24X7_TICKERS } from "../../shared/intraday_sanity.js";
+
 export const CLOSE_REASON = {
   STOP_LOSS: "stop_loss",
   TAKE_PROFIT: "take_profit",
@@ -25,6 +27,21 @@ export const CLOSE_REASON = {
 };
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+/**
+ * Does `ticker` trade every calendar day (crypto spot)? Its hold days count Mon-Sun instead of
+ * Mon-Fri. A missing/unknown ticker keeps the weekday rule, so every pre-BTC caller is unchanged.
+ */
+export function isSevenDayTicker(ticker) {
+  return CRYPTO_24X7_TICKERS.has(String(ticker ?? "").toUpperCase());
+}
+
+/** Does the UTC day starting at `dayStartMs` count as a hold day for this calendar? */
+function countsAsHoldDay(dayStartMs, sevenDay) {
+  if (sevenDay) return true;
+  const weekday = new Date(dayStartMs).getUTCDay(); // 0 = Sunday, 6 = Saturday
+  return weekday !== 0 && weekday !== 6;
+}
 
 function utcDayStartMs(iso) {
   const t = new Date(iso).getTime();
@@ -40,18 +57,19 @@ function utcDayStartMs(iso) {
  * market holiday still counts as a trading day and the time exit can fire up
  * to a few days early around holidays. Good enough for a 10-day placeholder
  * knob; add a calendar if maxHoldDays is ever tuned tightly. XAUUSD (FX)
- * also trades Mon-Fri, so the same rule fits every instrument on the
- * watchlist. Returns NaN for an unparseable date (NaN >= n is false, so the
+ * also trades Mon-Fri, so the same rule fits it. 24/7 tickers (BTCUSD, see
+ * isSevenDayTicker) pass `{ ticker }` and count every day, so a 10-day hold is
+ * 10 calendar days, not ~14. Returns NaN for an unparseable date (NaN >= n is false, so the
  * time exit simply never fires -- same as the previous calendar-day math).
  */
-export function tradingDaysBetween(fromIso, toIso) {
+export function tradingDaysBetween(fromIso, toIso, { ticker } = {}) {
   const from = utcDayStartMs(fromIso);
   const to = utcDayStartMs(toIso);
   if (Number.isNaN(from) || Number.isNaN(to)) return NaN;
+  const sevenDay = isSevenDayTicker(ticker);
   let count = 0;
   for (let t = from + MS_PER_DAY; t <= to; t += MS_PER_DAY) {
-    const weekday = new Date(t).getUTCDay(); // 0 = Sunday, 6 = Saturday
-    if (weekday !== 0 && weekday !== 6) count += 1;
+    if (countsAsHoldDay(t, sevenDay)) count += 1;
   }
   return count;
 }
@@ -60,7 +78,8 @@ export function tradingDaysBetween(fromIso, toIso) {
  * Calendar days that always cover `tradingDays` trading days from any start
  * day: whole weeks, ceil(n / 5) * 7. Used to size windows that must reach a
  * time exit (backtest grace period, replay bar horizon) now that maxHoldDays
- * is in trading days. Non-positive / non-finite input -> 0.
+ * is in trading days. Non-positive / non-finite input -> 0. Deliberately NOT per-ticker: the
+ * weekday figure is the longer one, so it also covers a 24/7 ticker's shorter hold.
  */
 export function calendarDaysCoveringTradingDays(tradingDays) {
   if (!Number.isFinite(tradingDays) || tradingDays <= 0) return 0;
@@ -75,14 +94,14 @@ export function calendarDaysCoveringTradingDays(tradingDays) {
  * null when it cannot be computed (unparseable openedAt, maxHoldDays <= 0 or absurdly large); the
  * caller then keeps the legacy 'close at asOf' behavior.
  */
-export function timeExitDueAt(openedAt, maxHoldDays) {
+export function timeExitDueAt(openedAt, maxHoldDays, { ticker } = {}) {
   if (!Number.isFinite(maxHoldDays) || maxHoldDays <= 0 || maxHoldDays > 1000) return null;
   const from = utcDayStartMs(openedAt);
   if (Number.isNaN(from)) return null;
+  const sevenDay = isSevenDayTicker(ticker);
   let count = 0;
   for (let t = from + MS_PER_DAY; ; t += MS_PER_DAY) {
-    const weekday = new Date(t).getUTCDay();
-    if (weekday !== 0 && weekday !== 6) count += 1;
+    if (countsAsHoldDay(t, sevenDay)) count += 1;
     if (count >= maxHoldDays) return new Date(t).toISOString();
   }
 }
@@ -125,7 +144,7 @@ export function evaluateExit(position, { currentPrice, asOf, maxHoldDays, skipPr
     }
   }
 
-  if (maxHoldDays != null && openedAt && asOf && tradingDaysBetween(openedAt, asOf) >= maxHoldDays) {
+  if (maxHoldDays != null && openedAt && asOf && tradingDaysBetween(openedAt, asOf, { ticker: position.ticker }) >= maxHoldDays) {
     return { reason: CLOSE_REASON.TIME_BASED };
   }
 

@@ -3,8 +3,8 @@
 // shown as "not applicable" (or "disabled") instead of "stale".
 
 // Tickers EDGAR has no filer (CIK) for, so no fundamentals are ever ingested
-// for them: spot gold. Keep in step with the backend's EDGAR lookup.
-const NO_EDGAR_TICKERS = new Set(["XAUUSD"]);
+// for them: spot gold and spot bitcoin. Keep in step with the backend's EDGAR lookup.
+const NO_EDGAR_TICKERS = new Set(["XAUUSD", "BTCUSD"]);
 
 // The only ticker the macro context (FRED + COT) is ingested for. Keep in step
 // with MACRO_TICKER in the backend's ingest.js.

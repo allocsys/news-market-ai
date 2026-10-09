@@ -3,7 +3,7 @@
 // run got a 429 on every ticker: see plan.md, "Live incident: first price
 // backfill failed").
 //
-// TWO Tiingo APIs behind one function, chosen per ticker:
+// THREE Tiingo APIs behind one function, chosen per ticker:
 //   * Stocks and ETFs -> End-of-Day API
 //       GET {base}/tiingo/daily/<ticker>/prices?startDate=&endDate=
 //     Rows carry raw open/high/low/close/volume plus adjOpen/adjHigh/adjLow/
@@ -17,6 +17,14 @@
 //     Rows carry open/high/low/close only, NO volume: stored as 0, because
 //     price_bars.volume is NOT NULL and PriceBar requires a number. Anything
 //     that reads volume for these tickers must treat 0 as "no volume data".
+//   * Crypto (TIINGO_CRYPTO_TICKERS: BTCUSD) -> Crypto API
+//       GET {base}/tiingo/crypto/prices?tickers=<t>&startDate=&endDate=&resampleFreq=1day
+//     The response is NOT a flat array of bars: it is an array of per-ticker
+//     objects, with the bars nested in each object's `priceData`. Rows carry
+//     volume (base currency), stored as-is; source tag "tiingo_crypto". Prices
+//     stay raw. UNVERIFIED (no real call yet): free-plan access to this endpoint,
+//     its rate limit, and the daily bar's cut-off (assumed 00:00 UTC, the
+//     `date` field is read as a UTC date).
 //
 // Both endpoints and the `Authorization: Token <key>` header are from Tiingo's
 // own documentation (documentation/end-of-day, /forex, /general/connecting,
@@ -67,6 +75,30 @@ export function isTiingoFxTicker(ticker) {
   return TIINGO_FX_TICKERS.has(String(ticker).toUpperCase());
 }
 
+/**
+ * Tickers served by Tiingo's Crypto API. Add a ticker here only after checking
+ * Tiingo quotes it under that symbol (lower-cased in the request). Keep in step
+ * with the intraday set in tiingo_crypto_intraday.js (test/btc_support.test.js pins them equal).
+ */
+export const TIINGO_CRYPTO_TICKERS = new Set(["BTCUSD"]);
+
+export function isTiingoCryptoTicker(ticker) {
+  return TIINGO_CRYPTO_TICKERS.has(String(ticker).toUpperCase());
+}
+
+/**
+ * Crypto API payload -> this ticker's bar rows. The payload is an array of
+ * `{ ticker, baseCurrency, quoteCurrency, priceData: [...] }`; no entry for the
+ * ticker means no bars in range ([]). Anything that is not an array is returned
+ * unchanged so the caller's shape check reports it; an entry without a
+ * `priceData` array comes back undefined for the same reason.
+ */
+function cryptoPriceData(payload, ticker) {
+  if (!Array.isArray(payload)) return payload;
+  const entry = payload.find((e) => String(e?.ticker ?? "").toUpperCase() === ticker.toUpperCase());
+  return entry ? entry.priceData : [];
+}
+
 /** The calendar day after `day` (YYYY-MM-DD), in UTC. */
 function nextDay(day) {
   return new Date(Date.parse(`${day}T00:00:00.000Z`) + 86400000).toISOString().slice(0, 10);
@@ -89,12 +121,15 @@ async function readErrorDetail(res) {
 /** Fetches and parses ONE ticker's bars for [from, to]. Throws a VendorError on any failure. */
 async function fetchTickerBars(config, ticker, { from, to }, { throttle } = {}) {
   const fx = isTiingoFxTicker(ticker);
+  const crypto = isTiingoCryptoTicker(ticker);
   const base = String(config.tiingoApiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
   // One day past `to`, then filtered back to `to` below, so the result never depends on whether the vendor treats endDate as inclusive.
   const endDate = nextDay(to);
-  const url = fx
-    ? `${base}/tiingo/fx/${encodeURIComponent(ticker.toLowerCase())}/prices?${new URLSearchParams({ startDate: from, endDate, resampleFreq: "1day" })}`
-    : `${base}/tiingo/daily/${encodeURIComponent(ticker)}/prices?${new URLSearchParams({ startDate: from, endDate })}`;
+  const url = crypto
+    ? `${base}/tiingo/crypto/prices?${new URLSearchParams({ tickers: ticker.toLowerCase(), startDate: from, endDate, resampleFreq: "1day" })}`
+    : fx
+      ? `${base}/tiingo/fx/${encodeURIComponent(ticker.toLowerCase())}/prices?${new URLSearchParams({ startDate: from, endDate, resampleFreq: "1day" })}`
+      : `${base}/tiingo/daily/${encodeURIComponent(ticker)}/prices?${new URLSearchParams({ startDate: from, endDate })}`;
 
   await throttle?.wait();
 
@@ -121,17 +156,18 @@ async function fetchTickerBars(config, ticker, { from, to }, { throttle } = {}) 
     { maxAttempts: config.retryMaxAttempts, baseDelayMs: config.retryBaseDelayMs },
   );
 
-  let rows;
+  let payload;
   try {
-    rows = await response.json();
+    payload = await response.json();
   } catch (err) {
     throw new VendorError(VENDOR, `tiingo returned unparseable JSON for ${ticker}: ${err.message}`);
   }
+  const rows = crypto ? cryptoPriceData(payload, ticker) : payload;
   if (!Array.isArray(rows)) {
-    throw new VendorError(VENDOR, `tiingo returned an unexpected response shape for ${ticker} (expected an array of bars): ${JSON.stringify(rows).slice(0, 200)}`);
+    throw new VendorError(VENDOR, `tiingo returned an unexpected response shape for ${ticker} (expected an array of bars${crypto ? ", nested in priceData" : ""}): ${JSON.stringify(payload).slice(0, 200)}`);
   }
 
-  const source = fx ? "tiingo_fx" : "tiingo";
+  const source = crypto ? "tiingo_crypto" : fx ? "tiingo_fx" : "tiingo";
   const bars = [];
   for (const row of rows) {
     const date = String(row?.date ?? "").slice(0, 10);
