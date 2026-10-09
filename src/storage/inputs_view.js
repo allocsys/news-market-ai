@@ -769,11 +769,31 @@ export async function getIngestionHealth(db) {
     }
   };
 
-  const [news, bars, facts, macro] = await Promise.all([
+  // Intraday backfill progress (intraday_backfill_status, migration 0002) is one more read in the SAME tick, so it
+  // leaves in the same autoBatch db.batch() as the four above -- no extra round trip. A failed read (table missing on
+  // an older inputs DB) reports null rather than failing the other four, same as macro.
+  const readIntradayBackfill = async () => {
+    try {
+      const { results } = await db
+        .prepare(
+          `SELECT ticker, status, COUNT(*) AS count, MAX(date) AS latest_date, MAX(last_attempt) AS last_attempt
+           FROM intraday_backfill_status
+           GROUP BY ticker, status`
+        )
+        .all();
+      return results;
+    } catch (err) {
+      console.warn("intraday backfill status read failed -- reporting none", { message: err.message });
+      return null;
+    }
+  };
+
+  const [news, bars, facts, macro, backfillRows] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM news_items`).first(),
     db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM price_bars`).first(),
     db.prepare(`SELECT COUNT(*) AS count, MAX(ingested_at) AS last FROM fundamental_facts`).first(),
     readMacro(),
+    readIntradayBackfill(),
   ]);
 
   return {
@@ -781,7 +801,33 @@ export async function getIngestionHealth(db) {
     priceBars: { count: bars?.count ?? 0, lastIngestedAt: bars?.last ?? null },
     fundamentals: { count: facts?.count ?? 0, lastIngestedAt: facts?.last ?? null },
     macro: { count: macro?.count ?? 0, lastIngestedAt: macro?.last ?? null },
+    intradayBackfill: summarizeIntradayBackfill(backfillRows),
   };
+}
+
+/**
+ * Folds the (ticker, status) GROUP BY rows into per-ticker progress: `{ tickers: [{ ticker, done, pending, failed,
+ * total, latestDate }], lastAttemptAt, active }`. `pending` counts 'pending' + 'in_progress' (both mean work left);
+ * `active` is true while any ticker has work left. null when the read failed, so the UI can tell "unknown" from
+ * "nothing queued" (an empty `tickers` list).
+ */
+export function summarizeIntradayBackfill(rows) {
+  if (!rows) return null;
+  const byTicker = new Map();
+  let lastAttemptAt = null;
+  for (const row of rows) {
+    const entry = byTicker.get(row.ticker) ?? { ticker: row.ticker, done: 0, pending: 0, failed: 0, total: 0, latestDate: null };
+    const count = row.count ?? 0;
+    if (row.status === "done") entry.done += count;
+    else if (row.status === "failed") entry.failed += count;
+    else entry.pending += count;
+    entry.total += count;
+    if (row.latest_date && (!entry.latestDate || row.latest_date > entry.latestDate)) entry.latestDate = row.latest_date;
+    if (row.last_attempt && (!lastAttemptAt || row.last_attempt > lastAttemptAt)) lastAttemptAt = row.last_attempt;
+    byTicker.set(row.ticker, entry);
+  }
+  const tickers = [...byTicker.values()].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  return { tickers, lastAttemptAt, active: tickers.some((t) => t.pending > 0) };
 }
 
 // D1 batch size for macro rows (one subrequest per db.batch(), same reasoning as
