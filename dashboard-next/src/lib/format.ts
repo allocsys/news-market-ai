@@ -190,7 +190,8 @@ export function runLabel(run: {
 }
 
 /** Truncate with ellipsis (length-aware). */
-export function truncate(s: string, max: number): string {
+export function truncate(s: string | null | undefined, max: number): string {
+  if (s == null || s === "") return "—";
   if (s.length <= max) return s;
   return `${s.slice(0, max - 1)}…`;
 }
