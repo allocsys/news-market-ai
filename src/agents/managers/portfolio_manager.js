@@ -52,8 +52,16 @@
 // when the committer passes drawdownBreakerPct + drawdownBreakerWindowDays (entry_fill.js does not: its
 // breaker was decided at signal time).
 
+// STOP-RISK SCALING: a thesis whose full size would breach MAX_PORTFOLIO_STOP_RISK_PCT (open loss-at-stop of the other
+// tickers + size * stop) is no longer rejected outright. Its size is cut to what the remaining stop budget allows
+// (budget / stop, rounded down to 4 decimals, minus STOP_RISK_SCALE_MARGIN so float rounding cannot tip it over) and
+// that scaled size is what the exposure and group checks below see and what finalPositionSizePct returns, so
+// RunStore#commitThesis (which receives finalPositionSizePct) re-checks the same number in SQL. A scaled size under
+// MIN_SCALED_POSITION_PCT is still rejected (no dust positions). Motivation: a wide ATR stop on a 30%-size ticker
+// (BTCUSD past ~6.7%) used to lose the whole trade. The ceiling itself is unchanged. The exposure ceiling and the
+// group cap still reject rather than scale.
 import { PortfolioDecision } from "../../schemas/index.js";
-import { FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, groupCapOf, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
+import { FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, MIN_SCALED_POSITION_PCT, STOP_RISK_SCALE_MARGIN, groupCapOf, groupOfTicker } from "../../shared/constants.js"; // placeholder values: no real cross-position exposure data yet
 
 export function evaluatePortfolio(
   riskDecision,
@@ -87,11 +95,26 @@ export function evaluatePortfolio(
     });
   }
 
-  const wouldBeTotalRiskPct = openPositionsRiskPct + riskDecision.positionSizePct;
+  // Loss-at-stop scaling (see the STOP-RISK SCALING note at the top): when the full size would breach the ceiling,
+  // shrink it to the size that fits the remaining budget, provided that is still at least MIN_SCALED_POSITION_PCT.
+  // `openPositionsStopRiskPct` defaults to 0, so a caller that does not pass it only scales against this thesis's own stop.
+  const stopLossPct = riskDecision.stopLossPct ?? FALLBACK_STOP_LOSS_PCT;
+  let positionSizePct = riskDecision.positionSizePct;
+  let scaledNote = "";
+  if (stopLossPct > 0 && openPositionsStopRiskPct + positionSizePct * stopLossPct > MAX_PORTFOLIO_STOP_RISK_PCT) {
+    const budget = MAX_PORTFOLIO_STOP_RISK_PCT - openPositionsStopRiskPct - STOP_RISK_SCALE_MARGIN;
+    const scaledSizePct = budget > 0 ? Math.floor((budget / stopLossPct) * 10000) / 10000 : 0;
+    if (scaledSizePct >= MIN_SCALED_POSITION_PCT && scaledSizePct < positionSizePct) {
+      scaledNote = ` (size scaled down from ${positionSizePct} to ${scaledSizePct} so loss-at-stop fits ${MAX_PORTFOLIO_STOP_RISK_PCT} at a ${stopLossPct} stop)`;
+      positionSizePct = scaledSizePct;
+    }
+  }
+
+  const wouldBeTotalRiskPct = openPositionsRiskPct + positionSizePct;
   const exposureOk = wouldBeTotalRiskPct <= MAX_PORTFOLIO_RISK_PCT;
   // Loss-at-stop: what the book loses if every open position (other tickers) plus this one hit their stops.
   // `openPositionsStopRiskPct` defaults to 0, so a caller that does not pass it keeps the exposure-only check.
-  const newStopRiskPct = riskDecision.positionSizePct * (riskDecision.stopLossPct ?? FALLBACK_STOP_LOSS_PCT);
+  const newStopRiskPct = positionSizePct * stopLossPct;
   const wouldBeStopRiskPct = openPositionsStopRiskPct + newStopRiskPct;
   const stopRiskOk = wouldBeStopRiskPct <= MAX_PORTFOLIO_STOP_RISK_PCT;
   // Concentration: same-direction exposure already open in this ticker's group (callers exclude this ticker's own position).
@@ -105,7 +128,7 @@ export function evaluatePortfolio(
       if (p.direction && p.direction !== direction) continue;
       groupExposurePct += p.positionSizePct;
     }
-    groupOk = groupExposurePct + riskDecision.positionSizePct <= groupCapOf(groupId) + GROUP_CAP_EPSILON;
+    groupOk = groupExposurePct + positionSizePct <= groupCapOf(groupId) + GROUP_CAP_EPSILON;
   }
   const approvedForExecution = exposureOk && stopRiskOk && groupOk;
   const netNote = isReplacingPosition
@@ -114,19 +137,19 @@ export function evaluatePortfolio(
 
   let reason;
   if (approvedForExecution) {
-    reason = `combined portfolio risk ${wouldBeTotalRiskPct} <= ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote}`;
+    reason = `combined portfolio risk ${wouldBeTotalRiskPct} <= ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote}${scaledNote}`;
   } else if (!exposureOk) {
     reason = `combined portfolio risk ${wouldBeTotalRiskPct} would exceed ceiling ${MAX_PORTFOLIO_RISK_PCT}${netNote} -- rejected`;
   } else if (!stopRiskOk) {
-    reason = `combined loss-at-stop ${wouldBeStopRiskPct} would exceed ceiling ${MAX_PORTFOLIO_STOP_RISK_PCT}${netNote} -- rejected`;
+    reason = `combined loss-at-stop ${wouldBeStopRiskPct} would exceed ceiling ${MAX_PORTFOLIO_STOP_RISK_PCT}${netNote}, and scaling the size down to fit would leave less than the ${MIN_SCALED_POSITION_PCT} minimum -- rejected`;
   } else {
-    reason = `concentration: open ${direction} exposure in group "${groupId}" ${groupExposurePct} + this thesis ${riskDecision.positionSizePct} would exceed the group cap ${groupCapOf(groupId)} -- rejected`;
+    reason = `concentration: open ${direction} exposure in group "${groupId}" ${groupExposurePct} + this thesis ${positionSizePct} would exceed the group cap ${groupCapOf(groupId)} -- rejected`;
   }
 
   return PortfolioDecision.parse({
     tradeThesisId: riskDecision.tradeThesisId,
     approvedForExecution,
-    finalPositionSizePct: approvedForExecution ? riskDecision.positionSizePct : 0,
+    finalPositionSizePct: approvedForExecution ? positionSizePct : 0,
     reason,
   });
 }
