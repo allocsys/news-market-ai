@@ -212,12 +212,32 @@ export interface IngestionHealthSource {
   fresh?: boolean;
 }
 
+export interface IntradayBackfillTicker {
+  ticker: string;
+  done: number;
+  /** 'pending' + 'in_progress' -- days still to fetch. */
+  pending: number;
+  failed: number;
+  total: number;
+  latestDate: string | null;
+}
+
+export interface IntradayBackfillStatus {
+  tickers: IntradayBackfillTicker[];
+  /** Newest last_attempt across all rows: when the */15 tick last touched a day. */
+  lastAttemptAt: string | null;
+  /** True while any ticker still has pending days. */
+  active: boolean;
+}
+
 export interface IngestionHealth {
   news: IngestionHealthSource | null;
   priceBars: IngestionHealthSource | null;
   fundamentals: IngestionHealthSource | null;
   /** XAUUSD macro observations (FRED + COT). Absent on a backend that predates the macro feature. */
   macro?: IngestionHealthSource | null;
+  /** Intraday backfill progress. Absent on an older backend; null when the status read failed. */
+  intradayBackfill?: IntradayBackfillStatus | null;
 }
 
 export interface PriceBar {
