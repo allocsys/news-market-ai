@@ -142,7 +142,7 @@ export async function simulateForward(inputs, config, { ticker, asOf, decision }
     }
 
     const exitEval = evaluateExit(
-      { direction, entryPrice, stopLossPct, takeProfitPct, openedAt: entryAsOf },
+      { ticker, direction, entryPrice, stopLossPct, takeProfitPct, openedAt: entryAsOf },
       { currentPrice: bar.close, asOf: bar.date, maxHoldDays }
     );
 
