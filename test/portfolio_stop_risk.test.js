@@ -45,9 +45,10 @@ async function statusOf(store, id) {
   return row?.status ?? null;
 }
 
-test("evaluatePortfolio rejects when loss-at-stop would exceed the ceiling even though exposure is fine", () => {
-  // 10% at a 22% stop = 2.2% of the book; another 0.01% already open -> 2.21% > 2.0% (MAX_PORTFOLIO_STOP_RISK_PCT). Exposure 0.10 <= MAX_PORTFOLIO_RISK_PCT.
-  const d = evaluatePortfolio(risk({ positionSizePct: 0.10, stopLossPct: 0.22 }), { openPositionsRiskPct: 0.10, openPositionsStopRiskPct: 0.0001 });
+test("evaluatePortfolio rejects when the loss-at-stop budget is nearly used up, even though exposure is fine", () => {
+  // 1.99% of the 2.0% (MAX_PORTFOLIO_STOP_RISK_PCT) is already at risk, so only 0.01% of budget is left: at a 22% stop that
+  // scales to ~0.045% of the book, under the 1% minimum scaled size, so it is still rejected. Exposure 0.10 <= MAX_PORTFOLIO_RISK_PCT.
+  const d = evaluatePortfolio(risk({ positionSizePct: 0.10, stopLossPct: 0.22 }), { openPositionsRiskPct: 0.10, openPositionsStopRiskPct: 0.0199 });
   assert.equal(d.approvedForExecution, false);
   assert.equal(d.finalPositionSizePct, 0);
   assert.match(d.reason, /loss-at-stop/);
@@ -62,8 +63,14 @@ test("evaluatePortfolio approves when loss-at-stop is under the ceiling", () => 
 test("evaluatePortfolio charges the fallback stop when the risk decision has none", () => {
   const d = evaluatePortfolio(risk({ positionSizePct: 0.05 }), { openPositionsStopRiskPct: MAX_PORTFOLIO_STOP_RISK_PCT - 0.05 * FALLBACK_STOP_LOSS_PCT - 0.0001 });
   assert.equal(d.approvedForExecution, true);
+  assert.equal(d.finalPositionSizePct, 0.05);
+  // 0.0014 of budget left at the 3% fallback stop -> 0.0466 of the book (not the full 0.05): the fallback is what scaling divides by.
   const over = evaluatePortfolio(risk({ positionSizePct: 0.05 }), { openPositionsStopRiskPct: MAX_PORTFOLIO_STOP_RISK_PCT - 0.05 * FALLBACK_STOP_LOSS_PCT + 0.0001 });
-  assert.equal(over.approvedForExecution, false);
+  assert.equal(over.approvedForExecution, true);
+  assert.equal(over.finalPositionSizePct, 0.0466);
+  // With almost nothing left it is rejected.
+  const none = evaluatePortfolio(risk({ positionSizePct: 0.05 }), { openPositionsStopRiskPct: MAX_PORTFOLIO_STOP_RISK_PCT - 0.0001 });
+  assert.equal(none.approvedForExecution, false);
 });
 
 test("evaluatePortfolio without openPositionsStopRiskPct keeps the exposure-only behavior", () => {

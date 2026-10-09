@@ -22,6 +22,17 @@ export const MAX_PORTFOLIO_RISK_PCT = 0.5;
 // binds first and this one only bites on wide-stop (volatile) books.
 export const MAX_PORTFOLIO_STOP_RISK_PCT = 0.02;
 
+// Stop-risk SCALING (portfolio_manager.js): when a thesis at its full size would breach the loss-at-stop ceiling above,
+// the portfolio manager shrinks it to the size that fits the remaining budget instead of rejecting it (a wide ATR stop,
+// e.g. BTCUSD at 30% size past ~6.7%, used to be rejected outright). STOP_RISK_SCALE_MARGIN is subtracted from the
+// remaining budget before dividing by the stop, so the scaled size * stop stays strictly under the ceiling even after
+// float rounding: RunStore#commitThesis re-checks `sum + size * stop <= MAX_PORTFOLIO_STOP_RISK_PCT` in SQL with no
+// tolerance, and 0.2 * 0.1 is 0.020000000000000004 in JS. MIN_SCALED_POSITION_PCT is the smallest scaled size worth
+// opening (1% of the book); below it the thesis is still rejected, so a nearly-full stop budget cannot produce dust
+// positions. Untuned placeholders. Scaled sizes are rounded DOWN to 4 decimals (0.01% of the book).
+export const STOP_RISK_SCALE_MARGIN = 1e-9;
+export const MIN_SCALED_POSITION_PCT = 0.01;
+
 // Stop distance used when a position has no stop_loss_pct, or risk.js has too
 // few bars for an ATR (it is risk.js's flat fallback, and its take-profit
 // fallback is twice this). One copy so risk.js, the portfolio manager and the
@@ -66,7 +77,8 @@ export function groupCapOf(groupId) {
 // position at a time, and its stop is ~2.5-3.5%, so a full stop-out at 30% is ~1% of the book, inside
 // MAX_PORTFOLIO_STOP_RISK_PCT (2%).
 // BTCUSD 0.30 matches XAUUSD (experiment). BTC is far more volatile than gold, so its ATR stop is wider: a full
-// stop-out at 30% is above 1% of the book and approaches MAX_PORTFOLIO_STOP_RISK_PCT (2%) once the stop passes ~6.7%.
+// stop-out at 30% is above 1% of the book and reaches MAX_PORTFOLIO_STOP_RISK_PCT (2%) once the stop passes ~6.7%; from there
+// portfolio_manager.js scales the size down to fit (STOP_RISK_SCALE_MARGIN above) instead of rejecting the trade.
 export const MAX_POSITION_PCT_BY_TICKER = { XAUUSD: 0.3, BTCUSD: 0.3 };
 
 // Hold/flip rule (RunStore#commitThesis, P3): a new thesis for a ticker that
