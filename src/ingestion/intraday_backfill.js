@@ -37,6 +37,7 @@
 
 import { fetchIntradayBars as fetchAlpacaIntradayBars } from "./sources/alpaca.js";
 import { fetchIntradayBars as fetchTiingoFxIntradayBars, TIINGO_FX_INTRADAY_TICKERS } from "./sources/tiingo_fx_intraday.js";
+import { fetchIntradayBars as fetchTiingoCryptoIntradayBars, TIINGO_CRYPTO_INTRADAY_TICKERS } from "./sources/tiingo_crypto_intraday.js";
 import { insertPriceBarsIntraday } from "../storage/inputs_view.js";
 import { summarizeIntradayRejections } from "../shared/intraday_sanity.js";
 import { VendorError } from "../shared/errors.js";
@@ -50,7 +51,8 @@ import { toDayString, addDays } from "./date_windows.js";
 const BACKFILL_STATUS_INSERT_CHUNK_SIZE = 200;
 
 /**
- * Which vendor owns `ticker`'s intraday bars: 'tiingo_fx_intraday' if it's
+ * Which vendor owns `ticker`'s intraday bars: 'tiingo_crypto_intraday' if it's
+ * in TIINGO_CRYPTO_INTRADAY_TICKERS (BTCUSD), 'tiingo_fx_intraday' if it's
  * in TIINGO_FX_INTRADAY_TICKERS (today: XAUUSD only -- the plan.md finding G
  * follow-up vendor switch, 2026-09-24, replacing the untrustworthy Twelve
  * Data XAUUSD feed), 'alpaca' otherwise (every other watchlist entry --
@@ -58,7 +60,9 @@ const BACKFILL_STATUS_INSERT_CHUNK_SIZE = 200;
  * can resolve to anymore -- see the import comment above.
  */
 export function resolveIntradayVendor(ticker) {
-  return TIINGO_FX_INTRADAY_TICKERS.has(String(ticker).toUpperCase()) ? "tiingo_fx_intraday" : "alpaca";
+  const t = String(ticker).toUpperCase();
+  if (TIINGO_CRYPTO_INTRADAY_TICKERS.has(t)) return "tiingo_crypto_intraday";
+  return TIINGO_FX_INTRADAY_TICKERS.has(t) ? "tiingo_fx_intraday" : "alpaca";
 }
 
 /** config.watchlist's tickers, in order -- the fixed set this job backfills/keeps current. */
@@ -299,7 +303,8 @@ async function markBackfillFailed(db, { ticker, date, error, now = new Date().to
 async function fetchIntradayRange(config, { ticker, vendor, fromDate, toDate }) {
   const from = `${fromDate}T00:00:00Z`;
   const to = `${addDays(toDate, 1)}T00:00:00Z`;
-  const fetchBars = vendor === "tiingo_fx_intraday" ? fetchTiingoFxIntradayBars : fetchAlpacaIntradayBars;
+  const fetchBars =
+    vendor === "tiingo_crypto_intraday" ? fetchTiingoCryptoIntradayBars : vendor === "tiingo_fx_intraday" ? fetchTiingoFxIntradayBars : fetchAlpacaIntradayBars;
 
   const { bars, errors } = await fetchBars(config, { tickers: [ticker], from, to });
   if (errors.length > 0) {
