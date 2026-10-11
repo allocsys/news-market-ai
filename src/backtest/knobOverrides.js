@@ -36,6 +36,9 @@ export const KNOB_OVERRIDES = Object.freeze({
   // default is OFF and a backtest NEVER reads the live macro flag (storage/macro_flag.js): the run's own knob decides, so a
   // run is reproducible no matter what the live switch is set to.
   macroEnabled: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  // Merged verdict (graph/pipeline.js): ONE call replaces bull + bear + judge. Same 0/1 -> boolean handling; default OFF, so a
+  // run without it is the normal three-call debate. Lets two runs on the same ticker/window be compared.
+  mergedVerdict: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
 });
 
 /**
@@ -87,6 +90,8 @@ export function effectiveKnobs(config) {
   knobs.skipNoPriceImpact = config.skipNoPriceImpact !== false;
   // Opposite default to the gate: a missing key means macro context is OFF, so the record shows false, not null.
   knobs.macroEnabled = config.macroEnabled === true;
+  // Default OFF too: a missing key means the normal three-call debate, so the record shows false, not null.
+  knobs.mergedVerdict = config.mergedVerdict === true;
   knobs.flipMinConfidence = config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE;
   return knobs;
 }

@@ -173,6 +173,27 @@ export const DebateVerdict = z.object({
   justification: z.string(),
 });
 
+// MERGED VERDICT (backtest knob mergedVerdict): ONE call that argues both sides briefly and judges them, replacing the
+// bull + bear + judge trio. The transform normalises it to exactly a DebateVerdict (stance filled in by code), so the
+// trader, the stored decision.debate and the dashboard verdict card cannot tell the two modes apart.
+const MergedSide = z.object({ argument: z.string(), justification: z.string() });
+export const MergedVerdict = z
+  .object({
+    ticker: z.string(),
+    asOf: z.string(),
+    bull: MergedSide,
+    bear: MergedSide,
+    direction: z.enum(["long", "short", "flat"]),
+    confidence: z.number().min(0).max(1),
+    timeHorizon: z.enum(["intraday", "days", "weeks", "months"]),
+    justification: z.string(),
+  })
+  .transform((v) => ({
+    ...v,
+    bull: { stance: "bull", ...v.bull },
+    bear: { stance: "bear", ...v.bear },
+  }));
+
 export const TradeThesis = z.object({
   ticker: z.string(),
   asOf: z.string(),

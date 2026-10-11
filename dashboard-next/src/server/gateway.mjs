@@ -375,6 +375,8 @@ export async function handleGateway(request, env) {
         if (isChecked(searchParams.get("disableGate")) || isChecked(fromBody("disableGate"))) params.skipNoPriceImpact = "0";
         // "Macro context (XAUUSD)": this run only goes out with FRED/COT context on (backend's macroEnabled=1 knob override). Absent sends nothing, so the default (off) applies. Independent of the live macro switch.
         if (isChecked(searchParams.get("enableMacro")) || isChecked(fromBody("enableMacro"))) params.macroEnabled = "1";
+        // "Merged verdict": this run only uses ONE merged call instead of bull + bear + judge (backend's mergedVerdict=1 knob override). Absent sends nothing, so the normal three-call debate applies.
+        if (isChecked(searchParams.get("mergedVerdict")) || isChecked(fromBody("mergedVerdict"))) params.mergedVerdict = "1";
         return { params };
       },
     });

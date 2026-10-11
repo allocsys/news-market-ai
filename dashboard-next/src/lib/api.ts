@@ -631,6 +631,8 @@ export function usePostBacktestRun() {
       disableGate?: boolean;
       /** This run only: include FRED/COT macro context for XAUUSD (gateway maps it to macroEnabled=1). Independent of the live switch. */
       enableMacro?: boolean;
+      /** This run only: one merged judge call instead of bull + bear + judge (gateway maps it to mergedVerdict=1). */
+      mergedVerdict?: boolean;
     }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backtest/run", {
         method: "POST",

@@ -32,6 +32,7 @@ import { loadMacroContext } from "../agents/analysts/macroContext.js";
 import { runBullResearcher } from "../agents/researchers/bull.js";
 import { runBearResearcher } from "../agents/researchers/bear.js";
 import { runResearchManager } from "../agents/managers/research_manager.js";
+import { runMergedJudge } from "../agents/managers/merged_judge.js";
 import { runTrader } from "../agents/trader/trader.js";
 import { evaluateRisk } from "../agents/risk_mgmt/risk.js";
 import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
@@ -137,15 +138,20 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
   if (stage === "debated") {
     const priorLessons = await loadLessonsForDebate(store, { ticker, asOf });
     let verdict;
-    let rounds = 0;
-    do {
-      const [bull, bear] = await Promise.all([
-        runBullResearcher(env, config, { ticker, opinions: state.opinions }),
-        runBearResearcher(env, config, { ticker, opinions: state.opinions }),
-      ]);
-      verdict = await runResearchManager(env, config, { ticker, asOf, bull, bear, priorLessons });
-      rounds += 1;
-    } while (shouldContinueDebate(verdict, rounds, config));
+    if (config.mergedVerdict === true) {
+      // Backtest knob mergedVerdict: ONE call (bull + bear + judge merged), one round, same DebateVerdict shape out.
+      verdict = await runMergedJudge(env, config, { ticker, asOf, opinions: state.opinions, priorLessons });
+    } else {
+      let rounds = 0;
+      do {
+        const [bull, bear] = await Promise.all([
+          runBullResearcher(env, config, { ticker, opinions: state.opinions }),
+          runBearResearcher(env, config, { ticker, opinions: state.opinions }),
+        ]);
+        verdict = await runResearchManager(env, config, { ticker, asOf, bull, bear, priorLessons });
+        rounds += 1;
+      } while (shouldContinueDebate(verdict, rounds, config));
+    }
 
     state.verdict = verdict;
     await checkpoint(store, { pipelineRunId, ticker, stage: "debated", state });
