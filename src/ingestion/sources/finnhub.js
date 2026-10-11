@@ -86,12 +86,10 @@ async function loadNameIndex(config, kv) {
  * returning Finnhub's parsed JSON body. Throws VendorError on a network/status
  * failure (retried first when transient).
  *
- * The symbol REQUESTED is config.finnhubSymbolMap[ticker] when set (e.g.
- * XAUUSD -> GLD, since /company-news has no spot-gold symbol), else `ticker`.
- * Callers still tag articles with `ticker`, never the proxy symbol.
+ * `symbol` is the Finnhub symbol REQUESTED (see symbolsFor). Callers still
+ * tag articles with `ticker`, never the proxy symbol.
  */
-async function requestCompanyNews(config, ticker, fromStr, toStr) {
-  const symbol = config.finnhubSymbolMap?.[ticker] ?? ticker;
+async function requestSymbolNews(config, ticker, symbol, fromStr, toStr) {
   const url = `${config.finnhubApiBase}?symbol=${encodeURIComponent(symbol)}&from=${fromStr}&to=${toStr}`;
 
   // Same retry-only-the-fetch convention as gdelt.js/yfinance.js: only
@@ -123,6 +121,50 @@ async function requestCompanyNews(config, ticker, fromStr, toStr) {
   );
 
   return response.json();
+}
+
+/**
+ * The Finnhub symbols to REQUEST for a watchlist `ticker`: config.finnhubSymbolMap[ticker]
+ * when set (e.g. XAUUSD -> GLD, since /company-news has no spot-gold symbol), else
+ * `ticker`. A map value may list several proxies joined with "+" (BTCUSD ->
+ * "IBIT+GBTC"); each is requested and the results merged. Always at least one symbol.
+ */
+function symbolsFor(config, ticker) {
+  const mapped = config.finnhubSymbolMap?.[ticker] ?? ticker;
+  const symbols = [...new Set(String(mapped).split("+").map((s) => s.trim()).filter(Boolean))];
+  return symbols.length ? symbols : [ticker];
+}
+
+/**
+ * /company-news for `ticker` over [fromStr, toStr], across every proxy symbol
+ * (symbolsFor). Returns `{ data, maxRaw }`: the merged article list, de-duplicated
+ * by url (the same story often appears under several ETFs), and the LARGEST raw
+ * per-symbol response length -- the per-request article cap applies to each request
+ * separately, so the windowed fetcher's "was this capped?" check must look at one
+ * symbol's response, not the merged total. Extra symbols are paced with `throttle`
+ * (the caller already waited once, for the first). Any symbol's VendorError fails the
+ * whole ticker (reported in `errors`); the live cron's lookback window retries it.
+ */
+async function requestCompanyNews(config, ticker, fromStr, toStr, throttle) {
+  const data = [];
+  const seenUrls = new Set();
+  let maxRaw = 0;
+
+  for (const [i, symbol] of symbolsFor(config, ticker).entries()) {
+    if (i > 0) await throttle?.wait();
+    const body = await requestSymbolNews(config, ticker, symbol, fromStr, toStr);
+    const list = Array.isArray(body) ? body : [];
+    maxRaw = Math.max(maxRaw, list.length);
+    for (const article of list) {
+      if (article?.url) {
+        if (seenUrls.has(article.url)) continue;
+        seenUrls.add(article.url);
+      }
+      data.push(article);
+    }
+  }
+
+  return { data, maxRaw };
 }
 
 /**
@@ -207,7 +249,7 @@ export async function fetchLatest(config, { queries = config.watchlist, from, to
   for (const [tickerIndex, { ticker }] of queries.entries()) {
     await throttle.wait();
     try {
-      const data = await requestCompanyNews(config, ticker, fromStr, toStr);
+      const { data } = await requestCompanyNews(config, ticker, fromStr, toStr, throttle);
       await normalizeArticlesInto(items, data, ticker, nameIndex);
     } catch (err) {
       // A single ticker's query failure does NOT abort the rest of the
@@ -262,11 +304,12 @@ export async function createWindowedFetcher(config, { kv } = {}) {
 
   async function fetchSpan(ticker, from, to, acc) {
     await throttle.wait();
-    requests++;
+    requests += symbolsFor(config, ticker).length;
 
     let data;
+    let raw;
     try {
-      data = await requestCompanyNews(config, ticker, from, to);
+      ({ data, maxRaw: raw } = await requestCompanyNews(config, ticker, from, to, throttle));
     } catch (err) {
       if (err instanceof VendorError) {
         acc.errors.push({ ticker, error: err, window: { from, to } });
@@ -275,7 +318,6 @@ export async function createWindowedFetcher(config, { kv } = {}) {
       throw err;
     }
 
-    const raw = data?.length ?? 0;
     if (raw >= splitThreshold) {
       if (from < to) {
         const [first, second] = splitWindow(from, to);
