@@ -181,11 +181,9 @@ test("POST /backfill rejects a ticker that is not on the watchlist, queueing not
 
 test("gateway POST /backfill forwards tickers (JSON array body) to backend and on to the queue", async () => {
   const queue = new FakeQueue();
-  const backend = { fetch: (input, init) => backendWorker.fetch(new Request(input, init), { LIVE_DB: null, BACKFILL: queue, WATCHLIST_TICKERS: "AAPL,MSFT" }, { waitUntil() {} }) };
   const backendEnv = { LIVE_DB: (await jobStateDb()).db, BACKFILL: queue, WATCHLIST_TICKERS: "AAPL,MSFT" };
   const env = loginConfigured({ BACKEND: { fetch: (input, init) => backendWorker.fetch(new Request(input, init), backendEnv, { waitUntil() {} }) } });
   const cookie = await sessionCookieFor(env);
-  void backend;
 
   const response = await gatewayWorker.fetch(
     new Request("https://dashboard.example/backfill", {
