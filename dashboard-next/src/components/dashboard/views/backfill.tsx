@@ -4,7 +4,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Download, AlertTriangle, Loader2 } from "lucide-react";
 import {
-  useLatestJob,
+  useBackfillJobs,
   usePostBackfill,
   usePostBackfillPrices,
   usePostBackfillMacro,
@@ -43,9 +43,8 @@ export function BackfillView({}: ViewProps) {
   const [kinds, setKinds] = useState<Record<Kind, boolean>>({ news: true, prices: true, macro: false });
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const newsJob = useLatestJob("backfill");
-  const priceJob = useLatestJob("backfill_prices");
-  const macroJob = useLatestJob("backfill_macro");
+  // One batched query for all three jobs (running, else last finished); polls only while one is in flight.
+  const jobsQuery = useBackfillJobs();
   const newsMutation = usePostBackfill();
   const priceMutation = usePostBackfillPrices();
   const macroMutation = usePostBackfillMacro();
@@ -108,9 +107,9 @@ export function BackfillView({}: ViewProps) {
       {/* Job progress for the three on-demand backfills */}
       <BackfillProgressCard
         rows={[
-          { label: "News", job: newsJob.data?.job ?? null },
-          { label: "Prices", job: priceJob.data?.job ?? null },
-          { label: "Macro", job: macroJob.data?.job ?? null },
+          { label: "News", job: jobsQuery.data?.news ?? null },
+          { label: "Prices", job: jobsQuery.data?.prices ?? null },
+          { label: "Macro", job: jobsQuery.data?.macro ?? null },
         ]}
       />
 
