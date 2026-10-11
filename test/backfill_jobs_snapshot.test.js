@@ -7,7 +7,9 @@ import assert from "node:assert/strict";
 import { createTestD1 } from "./helpers/sqlite_d1.js";
 import { STATE_DIR } from "./helpers/engine_ctx.js";
 import { RunStore } from "../src/storage/run_store.js";
-import { handleApiBackfillJobsRoute } from "../src/dashboard/api.js";
+import worker from "../src/index.js";
+import { createSessionCookie } from "../src/auth/session.js";
+import { loadConfig } from "../src/config.js";
 
 const NOW = "2026-10-12T12:00:00.000Z";
 
@@ -94,12 +96,35 @@ test("snapshot costs exactly one query, however many jobs exist", async () => {
   assert.ok(snap.news, "still finds the last finished job within the bounded window");
 });
 
-test("GET /api/jobs/backfill is auth-gated and answers the snapshot shape", async () => {
-  const { db, store } = freshStore();
-  await store.insertQueuedJob({ id: "n-1", type: "backfill", now: new Date().toISOString() });
-  const env = { LIVE_DB: db };
+function loginConfiguredEnv(overrides = {}) {
+  return {
+    DASHBOARD_USERNAME: "admin",
+    DASHBOARD_PASSWORD: "correct-horse-battery-staple",
+    JWT_SECRET: "test-jwt-signing-key",
+    ...overrides,
+  };
+}
 
-  // No dashboard login configured and no session: same 401 as the other /api/jobs routes.
-  const denied = await handleApiBackfillJobsRoute(new Request("https://backend/api/jobs/backfill"), env, { dashboardAuthConfigured: true });
-  assert.ok([200, 401].includes(denied.status));
+test("GET /api/jobs/backfill returns 401 without a session cookie", async () => {
+  const env = loginConfiguredEnv({ LIVE_DB: createTestD1([STATE_DIR]) });
+  const response = await worker.fetch(new Request("https://worker.example/api/jobs/backfill"), env);
+  assert.equal(response.status, 401);
+});
+
+test("GET /api/jobs/backfill answers { news, prices, macro } in one 200, and is not mistaken for a job id", async () => {
+  const db = createTestD1([STATE_DIR]);
+  const store = new RunStore(db, "live");
+  await store.insertQueuedJob({ id: "backfill-1", type: "backfill", params: { from: "2026-10-01", to: "2026-10-10", tickers: ["BTCUSD"] }, now: new Date().toISOString() });
+  const env = loginConfiguredEnv({ LIVE_DB: db });
+  const cookie = (await createSessionCookie("admin", loadConfig(env))).split(";")[0];
+
+  const response = await worker.fetch(new Request("https://worker.example/api/jobs/backfill", { headers: { Cookie: cookie } }), env);
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body).sort(), ["macro", "news", "prices"]);
+  assert.equal(body.news.id, "backfill-1");
+  assert.deepEqual(body.news.params.tickers, ["BTCUSD"]);
+  assert.equal(body.prices, null);
+  assert.equal(body.macro, null);
 });
