@@ -75,6 +75,7 @@ import {
   handleApiJobRoute,
   handleApiActiveJobRoute,
   handleApiLatestJobRoute,
+  handleApiBackfillJobsRoute,
 } from "./dashboard/api.js";
 
 /**
