@@ -405,6 +405,30 @@ export function useActiveJob(type: QueryOpts["jobType"], env?: string) {
   });
 }
 
+// --- Backfill jobs (backfill page progress card) ---
+// News, prices and macro jobs in ONE request/one D1 read: the running job of each type, else its last finished one.
+export interface BackfillJobsResponse {
+  news: JobProgress | null;
+  prices: JobProgress | null;
+  macro: JobProgress | null;
+}
+const BACKFILL_JOBS_POLL_MS = 5_000;
+export function useBackfillJobs() {
+  return useQuery({
+    queryKey: ["backfill-jobs"],
+    queryFn: () => apiFetch<BackfillJobsResponse>(`/api/jobs/backfill`),
+    // Poll only while something is queued/running; an idle page makes no repeat requests. Starting a backfill
+    // invalidates this key, which kicks the polling off again.
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      const live = [d?.news, d?.prices, d?.macro].some((j) => j && (j.status === "queued" || j.status === "running"));
+      return live ? BACKFILL_JOBS_POLL_MS : false;
+    },
+    refetchIntervalInBackground: false,
+    retry: 1,
+  });
+}
+
 // --- Latest finished job (backfill page) ---
 export function useLatestJob(type: "backfill" | "backfill_prices" | "backfill_macro") {
   return useQuery({
