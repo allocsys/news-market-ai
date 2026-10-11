@@ -137,6 +137,7 @@ test("effective: reports every knob from the config", () => {
     dailyBothTouchedNearestOpen: 0,
     skipNoPriceImpact: false,
     macroEnabled: false,
+    mergedVerdict: false,
   });
 });
 
