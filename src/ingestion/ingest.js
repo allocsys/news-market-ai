@@ -395,7 +395,9 @@ export async function backfillHistoricalNews(config, db, { from, to, tickers: on
   // Optional operator selection (POST /backfill?tickers=...): keep only those watchlist entries.
   // Omitted or empty means the whole watchlist, as before.
   const selected = Array.isArray(onlyTickers) && onlyTickers.length > 0 ? new Set(onlyTickers) : null;
-  const tickers = (config.watchlist ?? []).filter((w) => !selected || selected.has(w.ticker)); = Math.max(0, daysBetween(rangeStart, toDay) + 1);
+  const tickers = (config.watchlist ?? []).filter((w) => !selected || selected.has(w.ticker));
+
+  const totalDays = Math.max(0, daysBetween(rangeStart, toDay) + 1);
   const clampDays = (days) => Math.min(totalDays, Math.max(0, days));
   const percentFor = (days) => (totalDays > 0 ? 5 + Math.round((95 * days) / totalDays) : 100);
   let daysDone = clampDays(daysBetween(rangeStart, fromDay));
