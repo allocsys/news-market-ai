@@ -221,6 +221,8 @@ export default {
     // Most recent FINISHED job of a type, for pages that show how the last run
     // ended. Same rule: above the prefix match, or "latest" would be a job id.
     if (pathname === "/api/jobs/latest") return handleApiLatestJobRoute(request, env, config);
+    // News/prices/macro backfill jobs (running, else last finished) in one read, for the Backfill progress card.
+    if (pathname === "/api/jobs/backfill") return handleApiBackfillJobsRoute(request, env, config);
 
     // Live progress for one job (src/storage/jobs.js's job_progress table),
     // read by the dashboard (dashboard-next/, which polls this on the
