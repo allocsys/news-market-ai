@@ -206,6 +206,19 @@ export async function handleApiLatestJobRoute(request, env, config) {
   return jsonResponse({ job: await store.getLatestFinishedJob(type) });
 }
 
+/**
+ * GET /api/jobs/backfill -- `{ news, prices, macro }`: for each on-demand backfill type, the in-flight job if
+ * there is one, else the most recently finished one, else null (RunStore#getBackfillJobsSnapshot). ONE D1 read
+ * per request, so the Backfill page's progress card polls a single route instead of six (active + latest per
+ * type). Always 200; "nothing has run yet" is an ordinary answer.
+ */
+export async function handleApiBackfillJobsRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const { store } = await resolveEnv(env, parseEnvParam(new URL(request.url).searchParams));
+  return jsonResponse(await store.getBackfillJobsSnapshot());
+}
+
 /** GET /api/jobs/:id?env=... -- one job_progress row (RunStore#getJob) for the resolved environment, for the dashboard's live progress bar. 404 (not 200 + null) when the id doesn't exist in that environment, so a typo'd/expired id -- or an id that belongs to a different environment -- is visibly distinct from "job exists, no progress yet". */
 export async function handleApiJobRoute(request, env, config, id) {
   const auth = await checkAuth(request, config);
