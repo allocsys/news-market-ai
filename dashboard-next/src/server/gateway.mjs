@@ -264,10 +264,14 @@ export async function handleGateway(request, env) {
       buildQuery: (searchParams, fromBody) => {
         const from = searchParams.get("from") ?? fromBody("from");
         const to = searchParams.get("to") ?? fromBody("to");
+        const tickers = searchParams.get("tickers") ?? fromBody("tickers");
         if (!isPlausibleDateString(from) || !isPlausibleDateString(to)) {
           return { error: "from/to are required, as YYYY-MM-DD" };
         }
-        return { params: { from, to } };
+        // Optional ticker list (empty = whole watchlist); the backend validates it against the watchlist.
+        const params = { from, to };
+        if (tickers) params.tickers = tickers;
+        return { params };
       },
     });
   }

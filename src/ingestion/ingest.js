@@ -381,7 +381,7 @@ export async function ingestFundamentals(config, db, kv, { tickers } = {}) {
 // complete() only sets percent/phase, it never touches done/total.
 // `onProgress` must never affect the backfill's own outcome, so it is only
 // ever awaited, never inspected.
-export async function backfillHistoricalNews(config, db, { from, to, originalFrom, kv, onProgress, maxInserts = Infinity, maxRequests = Infinity } = {}) {
+export async function backfillHistoricalNews(config, db, { from, to, tickers: onlyTickers, originalFrom, kv, onProgress, maxInserts = Infinity, maxRequests = Infinity } = {}) {
   if (!from || !to) {
     throw new Error("backfillHistoricalNews requires an explicit {from, to} range -- use collectNewsItems for the live trailing-window path instead");
   }
@@ -392,7 +392,10 @@ export async function backfillHistoricalNews(config, db, { from, to, originalFro
   const configuredWindowDays = Number(config.finnhubBackfillWindowDays);
   const windowDays = Number.isFinite(configuredWindowDays) && configuredWindowDays >= 1 ? Math.floor(configuredWindowDays) : DEFAULT_BACKFILL_WINDOW_DAYS;
   const windows = buildWindows(fromDay, toDay, windowDays);
-  const tickers = config.watchlist ?? [];
+  // Optional operator selection (POST /backfill?tickers=...): keep only those watchlist entries.
+  // Omitted or empty means the whole watchlist, as before.
+  const selected = Array.isArray(onlyTickers) && onlyTickers.length > 0 ? new Set(onlyTickers) : null;
+  const tickers = (config.watchlist ?? []).filter((w) => !selected || selected.has(w.ticker));
 
   const totalDays = Math.max(0, daysBetween(rangeStart, toDay) + 1);
   const clampDays = (days) => Math.min(totalDays, Math.max(0, days));
