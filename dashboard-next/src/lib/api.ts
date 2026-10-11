@@ -550,7 +550,7 @@ export function useLogout() {
 export function usePostBackfill() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (vars: { from: string; to: string }) => {
+    mutationFn: async (vars: { from: string; to: string; tickers?: string[] }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backfill", {
         method: "POST",
         body: JSON.stringify(vars),
