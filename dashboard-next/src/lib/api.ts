@@ -580,7 +580,10 @@ export function usePostBackfill() {
         body: JSON.stringify(vars),
       });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["job-active"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["job-active"] });
+      qc.invalidateQueries({ queryKey: ["backfill-jobs"] });
+    },
   });
 }
 
@@ -593,7 +596,10 @@ export function usePostBackfillPrices() {
         body: JSON.stringify(vars),
       });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["job-active"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["job-active"] });
+      qc.invalidateQueries({ queryKey: ["backfill-jobs"] });
+    },
   });
 }
 
@@ -606,7 +612,10 @@ export function usePostBackfillMacro() {
         body: JSON.stringify(vars),
       });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["job-active"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["job-active"] });
+      qc.invalidateQueries({ queryKey: ["backfill-jobs"] });
+    },
   });
 }
 
