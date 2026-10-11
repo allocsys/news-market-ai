@@ -253,14 +253,30 @@ export default {
         return jsonResponse({ error: "from/to query params are required, as YYYY-MM-DD" }, { status: 400 });
       }
 
+      // Optional `tickers` (comma-separated, same rules as POST /backfill-prices); omitted or empty means
+      // the whole watchlist. Must be watchlist tickers, since the job only loops the watchlist.
+      const newsTickersParam = url.searchParams.get("tickers");
+      let newsTickers;
+      if (newsTickersParam) {
+        newsTickers = [...new Set(newsTickersParam.split(",").map((t) => t.trim().toUpperCase()).filter(Boolean))];
+        const watchlistTickers = config.watchlist.map((w) => w.ticker);
+        if (newsTickers.length === 0 || newsTickers.length > MAX_PRICE_BACKFILL_TICKERS || newsTickers.some((t) => !PRICE_TICKER_PATTERN.test(t))) {
+          return jsonResponse({ error: `tickers must be 1-${MAX_PRICE_BACKFILL_TICKERS} comma-separated symbols (letters, digits, . - ^ =)` }, { status: 400 });
+        }
+        const unknown = newsTickers.filter((t) => !watchlistTickers.includes(t));
+        if (unknown.length > 0) {
+          return jsonResponse({ error: `tickers not in the watchlist: ${unknown.join(", ")}` }, { status: 400 });
+        }
+      }
+
       const id = newJobId("backfill");
       // 'queued' row written before the message is even sent -- best-effort
       // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
       // progress-write hiccup here can never block the real enqueue below.
-      await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to } }).queued();
+      await createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from, to, ...(newsTickers ? { tickers: newsTickers } : {}) } }).queued();
       try {
-        await env.BACKFILL.send({ type: "backfill", id, from, to });
-        return jsonResponse({ accepted: true, id, from, to });
+        await env.BACKFILL.send({ type: "backfill", id, from, to, ...(newsTickers ? { tickers: newsTickers } : {}) });
+        return jsonResponse({ accepted: true, id, from, to, ...(newsTickers ? { tickers: newsTickers } : {}) });
       } catch (err) {
         console.error("backfill enqueue failed", { id, from, to, message: err.message });
         return jsonResponse({ error: "backfill enqueue failed", message: err.message }, { status: 500 });
