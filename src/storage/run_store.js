@@ -34,6 +34,9 @@ const LLM_LIST_COLUMNS = `id, created_at, source, job_id, run_id, ticker, label,
   substr(prompt, 1, ${PREVIEW_CHARS}) AS prompt_preview, substr(response, 1, ${PREVIEW_CHARS}) AS response_preview`;
 
 const JOB_COLUMNS = "id, type, status, phase, percent, done, total, detail, params, result, error, created_at, started_at, updated_at, finished_at";
+// getBackfillJobsSnapshot: job_progress.type -> response key, and how many of the newest rows it reads (bounds the cost per poll).
+const BACKFILL_SNAPSHOT_KEYS = { backfill: "news", backfill_prices: "prices", backfill_macro: "macro" };
+const BACKFILL_SNAPSHOT_ROW_LIMIT = 30;
 
 function requireAsOf(fnName, asOf) {
   if (!asOf) {
