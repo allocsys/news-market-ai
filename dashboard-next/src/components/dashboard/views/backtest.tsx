@@ -379,6 +379,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [enableLlmLog, setEnableLlmLog] = useState(false);
   const [disableGate, setDisableGate] = useState(false);
   const [enableMacro, setEnableMacro] = useState(false);
+  const [mergedVerdict, setMergedVerdict] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const toggleTicker = (t: string) => {
@@ -392,6 +393,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
     setEnableLlmLog(false);
     setDisableGate(false);
     setEnableMacro(false);
+    setMergedVerdict(false);
   };
 
   // ISO dates (YYYY-MM-DD) compare correctly as strings.
@@ -409,7 +411,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
 
   const submit = () => {
     mutation.mutate(
-      { testStart, testEnd, tickers, enableLlmLog, disableGate, enableMacro },
+      { testStart, testEnd, tickers, enableLlmLog, disableGate, enableMacro, mergedVerdict },
       {
         onSuccess: (data) => onSubmitted(data.id),
         onError: (e) => toast.error(`Failed: ${e.message}`),
@@ -502,6 +504,12 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         <Checkbox checked={enableMacro} onCheckedChange={(v) => v !== "indeterminate" && setEnableMacro(!!v)} className="h-3.5 w-3.5" />
         <span className="text-xs">Include macro context (XAUUSD)</span>
         <span className="text-[10px] text-muted-foreground">(FRED + COT; this run only, unchecked = off; ignores the live switch)</span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={mergedVerdict} onCheckedChange={(v) => v !== "indeterminate" && setMergedVerdict(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Merged verdict (1 call instead of 3)</span>
+        <span className="text-[10px] text-muted-foreground">(this run only; one judge call replaces bull + bear + judge; run twice to compare)</span>
       </label>
 
       <div className="flex items-start gap-2 rounded-lg border border-[color:var(--paused)]/25 bg-[color:var(--paused)]/8 px-3 py-2 text-xs">
