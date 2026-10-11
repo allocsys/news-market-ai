@@ -71,3 +71,59 @@ test("a config with no finnhubSymbolMap (raw test config) requests the ticker as
   await fetchLatest(config, { queries: [{ ticker: "XAUUSD", query: "XAUUSD" }] }, {});
   assert.deepEqual(symbols, ["XAUUSD"]);
 });
+
+/** Like mockFinnhub, but every symbol answers with `perSymbol` articles; `sharedUrl` makes symbols return the SAME urls. */
+function mockFinnhubMulti(t, { perSymbol = 1, sharedUrl = false } = {}) {
+  const symbols = [];
+  t.mock.method(global, "fetch", async (url) => {
+    const symbol = new URL(String(url)).searchParams.get("symbol");
+    symbols.push(symbol);
+    const body = Array.from({ length: perSymbol }, (_, n) => ({
+      url: `https://finnhub.example.com/${sharedUrl ? "shared" : symbol}/${n}`,
+      datetime: Date.parse("2025-09-02T12:00:00Z") / 1000,
+      headline: `Story ${n} for ${sharedUrl ? "btc" : symbol.toLowerCase()}`,
+      summary: "",
+    }));
+    return { ok: true, status: 200, json: async () => body };
+  });
+  return symbols;
+}
+
+const btcQueries = { queries: [{ ticker: "BTCUSD", query: "BTCUSD" }] };
+
+test("default map: BTCUSD is requested as IBIT then GBTC, all tagged BTCUSD", async (t) => {
+  const symbols = mockFinnhubMulti(t);
+  const { items, errors } = await fetchLatest(makeConfig({ WATCHLIST_TICKERS: "BTCUSD" }), btcQueries, {});
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(symbols, ["IBIT", "GBTC"]);
+  assert.equal(items.length, 2, "one article from each proxy");
+  for (const item of items) {
+    assert.ok(item.tickers.includes("BTCUSD"), "tagged with the watchlist ticker");
+    assert.ok(!item.tickers.includes("IBIT") && !item.tickers.includes("GBTC"), "proxy symbols are never tags");
+  }
+});
+
+test("a '+' map value requests every symbol and de-duplicates the same url", async (t) => {
+  const symbols = mockFinnhubMulti(t, { sharedUrl: true });
+  const config = makeConfig({ WATCHLIST_TICKERS: "BTCUSD", FINNHUB_SYMBOL_MAP: "BTCUSD:IBIT+GBTC+COIN+IBIT" });
+  const { items, errors } = await fetchLatest(config, btcQueries, {});
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(symbols, ["IBIT", "GBTC", "COIN"], "repeated symbols are requested once");
+  assert.equal(items.length, 1, "the same story from three ETFs is one item");
+});
+
+test("windowed fetcher: counts every symbol request and judges the article cap per symbol", async (t) => {
+  const symbols = mockFinnhubMulti(t, { perSymbol: 2 });
+  // Each symbol returns 2 articles (< threshold 3) though the merged total is 4 (>= 3): no split.
+  const config = { ...makeConfig({ WATCHLIST_TICKERS: "BTCUSD" }), finnhubWindowSplitThreshold: 3 };
+  const fetcher = await createWindowedFetcher(config);
+  const { items, errors, truncated } = await fetcher.fetchWindow("BTCUSD", { from: "2025-09-01", to: "2025-09-03" });
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(truncated, []);
+  assert.deepEqual(symbols, ["IBIT", "GBTC"], "one window, one request per symbol, no split");
+  assert.equal(fetcher.requestCount(), 2);
+  assert.equal(items.length, 4);
+});
