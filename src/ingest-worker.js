@@ -226,13 +226,16 @@ export default {
           // `truncatedSoFar` counts ticker-days Finnhub capped even at one
           // day (see finnhub.js#createWindowedFetcher); optional, so a
           // message without it just starts from 0.
-          const { id, from, to, originalFrom = from, part = 1, insertedSoFar = 0, errorCountSoFar = 0, truncatedSoFar = 0 } = job;
-          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from: originalFrom, to } });
+          // `tickers` (optional, from POST /backfill) narrows the fetch to those watchlist tickers; it is
+          // carried on every continuation message below so later parts keep the same selection.
+          const { id, from, to, tickers, originalFrom = from, part = 1, insertedSoFar = 0, errorCountSoFar = 0, truncatedSoFar = 0 } = job;
+          const reporter = createJobReporter(new RunStore(env.LIVE_DB, "live"), { id, type: "backfill", params: { from: originalFrom, to, ...(tickers ? { tickers } : {}) } });
           await reporter.start();
           try {
             const result = await backfillHistoricalNews(config, env.INPUTS_DB, {
               from,
               to,
+              tickers,
               kv: env.CACHE_KV,
               originalFrom,
               maxInserts: MAX_ITEMS_PER_BACKFILL_INVOCATION,
@@ -256,7 +259,7 @@ export default {
               if (part >= MAX_BACKFILL_PARTS) {
                 throw new Error(`backfill needed more than ${MAX_BACKFILL_PARTS} parts -- stopped after ${inserted} articles saved; narrow the range and re-run`);
               }
-              await env.BACKFILL.send({ type: "backfill", id, from: result.nextFrom, to, originalFrom, part: part + 1, insertedSoFar: inserted, errorCountSoFar: errorCount, truncatedSoFar: truncated });
+              await env.BACKFILL.send({ type: "backfill", id, from: result.nextFrom, to, ...(tickers ? { tickers } : {}), originalFrom, part: part + 1, insertedSoFar: inserted, errorCountSoFar: errorCount, truncatedSoFar: truncated });
               console.log("backfill part completed, continuation enqueued", { id, part, nextFrom: result.nextFrom, inserted, errorCount, truncated });
             } else {
               console.log("backfill job completed", { id, from: originalFrom, to, parts: part, inserted, errorCount, truncated });
