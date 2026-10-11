@@ -34,6 +34,9 @@ const LLM_LIST_COLUMNS = `id, created_at, source, job_id, run_id, ticker, label,
   substr(prompt, 1, ${PREVIEW_CHARS}) AS prompt_preview, substr(response, 1, ${PREVIEW_CHARS}) AS response_preview`;
 
 const JOB_COLUMNS = "id, type, status, phase, percent, done, total, detail, params, result, error, created_at, started_at, updated_at, finished_at";
+// getBackfillJobsSnapshot: job_progress.type -> response key, and how many of the newest rows it reads (bounds the cost per poll).
+const BACKFILL_SNAPSHOT_KEYS = { backfill: "news", backfill_prices: "prices", backfill_macro: "macro" };
+const BACKFILL_SNAPSHOT_ROW_LIMIT = 30;
 
 function requireAsOf(fnName, asOf) {
   if (!asOf) {
@@ -1400,6 +1403,47 @@ export class RunStore {
       .bind(this.runId, type)
       .first();
     return row ? jobFromRow(row) : null;
+  }
+
+  /**
+   * The Backfill page's progress card in ONE read: for each on-demand backfill type the in-flight job if there
+   * is one (queued/running and not idle past `maxIdleMs`, same cutoff as getActiveJob), otherwise the most
+   * recently finished one, else null. Replaces three getActiveJob + three getLatestFinishedJob calls (six
+   * reads per poll) with a single SELECT over the newest BACKFILL_SNAPSHOT_ROW_LIMIT rows, served by
+   * idx_job_progress_created_at (run_id, created_at DESC), so its cost never grows with job history. The
+   * pick per type happens in JS. Same camelCased shape as getJob.
+   */
+  async getBackfillJobsSnapshot({ maxIdleMs = ACTIVE_JOB_MAX_IDLE_MS, now = nowIso() } = {}) {
+    const cutoff = new Date(Date.parse(now) - maxIdleMs).toISOString();
+    const types = Object.keys(BACKFILL_SNAPSHOT_KEYS);
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${JOB_COLUMNS} FROM job_progress
+         WHERE run_id = ? AND type IN (${types.map(() => "?").join(", ")})
+         ORDER BY created_at DESC LIMIT ?`
+      )
+      .bind(this.runId, ...types, BACKFILL_SNAPSHOT_ROW_LIMIT)
+      .all();
+    const snapshot = { news: null, prices: null, macro: null };
+    const finished = {};
+    const active = {};
+    for (const row of results ?? []) {
+      const key = BACKFILL_SNAPSHOT_KEYS[row.type];
+      if (!key) continue;
+      if ((row.status === "queued" || row.status === "running") && row.updated_at >= cutoff) {
+        // Rows arrive newest-created first, so the first live one is the newest.
+        active[key] ??= row;
+      } else if (row.status === "complete" || row.status === "failed") {
+        const best = finished[key];
+        const rank = `${row.finished_at ?? ""}|${row.created_at}`;
+        if (!best || rank > `${best.finished_at ?? ""}|${best.created_at}`) finished[key] = row;
+      }
+    }
+    for (const key of Object.keys(snapshot)) {
+      const row = active[key] ?? finished[key];
+      snapshot[key] = row ? jobFromRow(row) : null;
+    }
+    return snapshot;
   }
 
   // -------------------------------------------------------------------
