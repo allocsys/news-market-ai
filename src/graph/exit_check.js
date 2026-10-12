@@ -115,11 +115,24 @@ async function walkPositionBars(inputs, position, { asOf, splitGuardTolerance, t
  * moves the cursor, so it cannot change any exit outcome. Call it BEFORE the closing write
  * (recordPositionExcursionRange only touches an open row). Idempotent (MIN/MAX), so a
  * checkpoint-resumed re-run is harmless. Returns true when an excursion was written.
+ *
+ * `exitPrice` (optional) is the price the closing write will fill at. The walked bars only cover bars that had CLOSED
+ * by `asOf`, so a flip filled at the latest price used to leave MAE smaller than the loss actually realized (e.g. MAE
+ * -5% on a -6.8% flip). The fill itself is a point the position really visited, so it is folded into MAE/MFE (skipped
+ * when it looks like a stock split, same guard as the exits).
  */
-export async function recordExcursionBeforeClose(config, { inputs, store }, position, { asOf }) {
+export async function recordExcursionBeforeClose(config, { inputs, store }, position, { asOf, exitPrice = null }) {
   const walk = await walkPositionBars(inputs, position, { asOf, splitGuardTolerance: config.splitGuardTolerance });
-  if (!walk || (walk.maePct == null && walk.mfePct == null)) return false;
-  await store.recordPositionExcursionRange({ id: position.id, maePct: walk.maePct, mfePct: walk.mfePct });
+  let maePct = walk?.maePct ?? null;
+  let mfePct = walk?.mfePct ?? null;
+  const entry = position.entryPrice;
+  if (Number.isFinite(exitPrice) && Number.isFinite(entry) && entry > 0 && (position.direction === "long" || position.direction === "short") && !detectSplitJump(entry, exitPrice, config.splitGuardTolerance)) {
+    const atFill = position.direction === "long" ? (exitPrice - entry) / entry : (entry - exitPrice) / entry;
+    if (atFill < 0) maePct = Math.min(maePct ?? 0, atFill);
+    else if (atFill > 0) mfePct = Math.max(mfePct ?? 0, atFill);
+  }
+  if (maePct == null && mfePct == null) return false;
+  await store.recordPositionExcursionRange({ id: position.id, maePct, mfePct });
   return true;
 }
 
