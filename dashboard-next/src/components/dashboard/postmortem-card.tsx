@@ -66,6 +66,28 @@ export function PostmortemTagPill({ tag, stage }: { tag: PostmortemTag; stage?: 
   );
 }
 
+const MISSED_PILL: Record<string, { label: string; tone: Tone; hint: string }> = {
+  missed_winner: { label: "Missed winner", tone: "rejected", hint: "The price reached this decision's target before its stop." },
+  good_skip: { label: "Good skip", tone: "approved", hint: "The price hit this decision's stop first." },
+  inconclusive: { label: "Inconclusive", tone: "muted", hint: "Neither level was reached inside the look-ahead window." },
+};
+
+/** Pill for a held/rejected decision's look-ahead outcome (post-hoc audit only). `no_data` renders nothing. */
+export function MissedOutcomePill({ outcome, forwardMovePct, hoursToHit }: { outcome: string; forwardMovePct?: number | null; hoursToHit?: number | null }) {
+  const m = MISSED_PILL[outcome];
+  if (!m) return null;
+  const detail = outcome === "missed_winner" && hoursToHit != null ? ` · ${hoursToHit.toFixed(0)}h` : "";
+  const hint = forwardMovePct != null ? `${m.hint} Best favourable move: ${signedPct(forwardMovePct, 1)}.` : m.hint;
+  return (
+    <span title={hint}>
+      <Pill tone={m.tone} size="sm">
+        {m.label}
+        {detail}
+      </Pill>
+    </span>
+  );
+}
+
 function retClass(x: number) {
   return x > 0 ? "text-[color:var(--long)]" : x < 0 ? "text-[color:var(--short)]" : "text-muted-foreground";
 }
