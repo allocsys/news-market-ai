@@ -16,6 +16,7 @@
 import { LookaheadViolationError } from "../shared/errors.js";
 import { computeRealizedReturn, roundTripCostFraction } from "../shared/returns.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE, FALLBACK_STOP_LOSS_PCT, GROUP_CAP_EPSILON, MAX_PORTFOLIO_RISK_PCT, MAX_PORTFOLIO_STOP_RISK_PCT, TICKER_GROUPS, TRADE_DECISION_STATUS, groupCapOf, groupOfTicker } from "../shared/constants.js";
+import { parseTrailKnobs } from "./live_knobs.js";
 import { DEFAULT_MAX_CHARS, PREVIEW_CHARS, buildLlmCallRow, llmCallSummaryFromRow, llmCallFromRow } from "./llm_calls.js";
 import {
   ACTIVE_JOB_MAX_IDLE_MS,
@@ -93,14 +94,14 @@ export class RunStore {
    * wired in M2; this stays exposed for tests and for any caller that has
    * already done its own risk check.
    */
-  async openPosition({ id, ticker, tradeThesisId, positionSizePct, direction = null, entryPrice = null, stopLossPct = null, takeProfitPct = null, openedAt }) {
+  async openPosition({ id, ticker, tradeThesisId, positionSizePct, direction = null, entryPrice = null, stopLossPct = null, takeProfitPct = null, openedAt, trailKnobs = null }) {
     await this.db
       .prepare(
-        `INSERT INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+        `INSERT INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason, trail_knobs)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
          ON CONFLICT(run_id, id) DO NOTHING`
       )
-      .bind(this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, openedAt)
+      .bind(this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, openedAt, trailKnobs)
       .run();
   }
 
@@ -203,7 +204,7 @@ export class RunStore {
 
     const { results } = await this.db
       .prepare(
-        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at, mae_pct, mfe_pct, peak_price
+        `SELECT id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, last_checked_at, mae_pct, mfe_pct, peak_price, trail_knobs
          FROM positions
          WHERE run_id = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ?)`
       )
@@ -227,6 +228,9 @@ export class RunStore {
       mfePct: r.mfe_pct ?? null,
       // Break-even/trailing high-water mark (advancePositionCheck, migration 0010); null = none recorded, entry is the baseline.
       peakPrice: r.peak_price ?? null,
+      // Break-even/trailing knobs SNAPSHOT taken when the position opened (storage/live_knobs.js, migration 0011);
+      // null = opened before the migration, the exit walk then uses the config.
+      trailKnobs: parseTrailKnobs(r.trail_knobs),
     }));
   }
 
@@ -457,6 +461,7 @@ export class RunStore {
     entryPriceBarTs = null,
     stopLossPct = null,
     takeProfitPct = null,
+    trailKnobs = null,
     asOf,
     exitPrice = null,
     confidence = null,
@@ -602,8 +607,8 @@ export class RunStore {
 
     const openNew = this.db
       .prepare(
-        `INSERT OR IGNORE INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason, confidence, entry_price_source, entry_price_bar_ts)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?
+        `INSERT OR IGNORE INTO positions (run_id, id, ticker, trade_thesis_id, position_size_pct, direction, entry_price, stop_loss_pct, take_profit_pct, opened_at, closed_at, close_reason, confidence, entry_price_source, entry_price_bar_ts, trail_knobs)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM positions p2
            WHERE p2.run_id = ? AND p2.ticker = ? AND p2.closed_at IS NULL AND p2.opened_at > ?
@@ -616,7 +621,7 @@ export class RunStore {
          AND NOT ${holdExists}`
       )
       .bind(
-        this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf, confidence, entryPriceSource, entryPriceBarTs,
+        this.runId, id, ticker, tradeThesisId, positionSizePct, direction, entryPrice, stopLossPct, takeProfitPct, asOf, confidence, entryPriceSource, entryPriceBarTs, trailKnobs,
         this.runId, ticker, asOf,
         this.runId, ticker, asOf, asOf, positionSizePct, MAX_PORTFOLIO_RISK_PCT,
         ...stopRiskBinds, newStopRisk, MAX_PORTFOLIO_STOP_RISK_PCT,
