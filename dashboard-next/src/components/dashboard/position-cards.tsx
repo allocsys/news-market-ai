@@ -5,6 +5,8 @@ import { TrendingUp, TrendingDown } from "lucide-react";
 import type { Position } from "@/lib/types";
 import { DirectionPill, CloseReasonPill, Pill } from "./primitives";
 import { fmtUsd, signedPct, fmtRelative } from "@/lib/format";
+import type { PostmortemPosition } from "@/lib/api";
+import { PostmortemTagPill } from "./postmortem-card";
 
 function ExcursionCell({
   label,
@@ -29,7 +31,7 @@ function ExcursionCell({
   );
 }
 
-export function OpenPositionCard({ position, onClick }: { position: Position; onClick?: () => void }) {
+export function OpenPositionCard({ position, onClick, postmortem }: { position: Position; onClick?: () => void; postmortem?: PostmortemPosition | null }) {
   const longCount = position.direction === "long";
   const accentBar = longCount ? "bg-[color:var(--long)]" : position.direction === "short" ? "bg-[color:var(--short)]" : "bg-muted-foreground";
   return (
@@ -46,6 +48,7 @@ export function OpenPositionCard({ position, onClick }: { position: Position; on
               <div className="flex items-center gap-2">
                 <span className="font-mono text-base font-semibold tracking-tight">{position.ticker}</span>
                 <DirectionPill direction={position.direction} size="sm" />
+                {postmortem && <PostmortemTagPill tag={postmortem.tag} stage={postmortem.stage} />}
               </div>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
                 Opened {fmtRelative(position.openedAt)}
