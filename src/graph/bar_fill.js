@@ -9,6 +9,7 @@
 import { getDailyBarsWindowAsOf, getIntradayBarsWindowAsOf } from "../storage/inputs_view.js";
 import { buildBarSequence, exitWindowStart } from "../shared/bar_window.js";
 import { findFillBar } from "../shared/entry_timing.js";
+import { findConfirmationBar } from "../shared/entry_confirmation.js";
 
 /**
  * The first bar that OPENS at/after `from` and has closed by `asOf`, as
@@ -22,4 +23,23 @@ export async function findFirstBarOpenAtOrAfter(inputs, { ticker, from, asOf }) 
   const daily = await getDailyBarsWindowAsOf(inputs, { ticker, fromDate: start.dailyFromDate, asOf });
   const bars = buildBarSequence({ intraday: intraday.rows, daily: daily.rows, intradayTruncated: intraday.truncated });
   return findFillBar(bars, from);
+}
+
+/**
+ * Fill for an entry that needs CONFIRMATION (shared/entry_confirmation.js): the first bar after `from` that closes at least
+ * `movePct` in `direction` from `refPrice` before `expiresAt`, then the first bar that OPENS at/after that bar's close.
+ * Same window and visibility rule as findFirstBarOpenAtOrAfter (only bars closed by `asOf` are read). Returns the fill as
+ * findFillBar does ({ price, source, barTs, openedAt }) plus `confirmedAt` (the confirming bar's close instant) and
+ * `confirmMovePct` (the move that bar showed), or null when not confirmed yet / never (or the next bar has not closed yet).
+ */
+export async function findConfirmedEntryFill(inputs, { ticker, from, asOf, direction, refPrice, movePct, expiresAt }) {
+  const start = exitWindowStart({ openedAt: from, lastCheckedAt: null });
+  if (!start) return null;
+  const intraday = await getIntradayBarsWindowAsOf(inputs, { ticker, fromTs: start.intradayFromTs, asOf });
+  const daily = await getDailyBarsWindowAsOf(inputs, { ticker, fromDate: start.dailyFromDate, asOf });
+  const bars = buildBarSequence({ intraday: intraday.rows, daily: daily.rows, intradayTruncated: intraday.truncated });
+  const confirm = findConfirmationBar(bars, { from, direction, refPrice, movePct, expiresAt });
+  if (!confirm) return null;
+  const fill = findFillBar(bars, confirm.closedAt);
+  return fill ? { ...fill, confirmedAt: confirm.closedAt, confirmMovePct: confirm.movePct } : null;
 }
