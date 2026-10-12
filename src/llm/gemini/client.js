@@ -359,10 +359,20 @@ export async function geminiGenerateContent(env, config, body, opts = {}) {
   throw cascadeExhausted();
 }
 
-/** Single-turn text generation from a plain prompt string. */
+/**
+ * Single-turn text generation from a plain prompt string.
+ *
+ * `opts.json` asks Gemini for JSON output (generationConfig.responseMimeType = "application/json"), which
+ * makes the model emit syntactically valid JSON instead of free text that merely looks like it. The callers
+ * that parse the reply (agents/utils/structured.js) turn it on; without it a stray trailing comma or an
+ * unquoted key fails the parse and a backtest skips the whole news item.
+ */
 export async function geminiGenerateText(env, config, prompt, opts = {}) {
   const body = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
-  if (opts.maxOutputTokens) body.generationConfig = { maxOutputTokens: opts.maxOutputTokens };
+  const generationConfig = {};
+  if (opts.maxOutputTokens) generationConfig.maxOutputTokens = opts.maxOutputTokens;
+  if (opts.json) generationConfig.responseMimeType = "application/json";
+  if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
   const data = await geminiGenerateContent(env, config, body, opts);
   const candidate = data?.candidates?.[0];
@@ -378,4 +388,59 @@ export async function geminiGenerateText(env, config, prompt, opts = {}) {
 /** Strips a ```json ... ``` fence if the model wrapped its JSON output in one. */
 export function stripJsonFence(text) {
   return text.trim().replace(/^```json\n?/, "").replace(/```$/, "").trim();
+}
+
+/**
+ * Removes trailing commas (a comma whose next non-whitespace character is `}` or `]`) that sit OUTSIDE
+ * string literals. Models occasionally emit `{ "a": 1, }`; JSON.parse rejects it ("Expected property name
+ * or '}'"). Commas inside strings are left alone. Pure text scan, no other repair.
+ */
+export function stripTrailingCommas(text) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      if (text[j] === "}" || text[j] === "]") continue; // drop the trailing comma
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Fence-strip + JSON.parse of a model reply. Valid JSON is parsed exactly as before; only when that first
+ * parse throws is a trailing-comma repair tried once. If the repaired text still does not parse, the ORIGINAL
+ * error is thrown, so the message (and position) the caller logs describes what the model actually sent.
+ */
+export function parseModelJson(text) {
+  const stripped = stripJsonFence(text);
+  try {
+    return JSON.parse(stripped);
+  } catch (err) {
+    const repaired = stripTrailingCommas(stripped);
+    if (repaired !== stripped) {
+      try {
+        return JSON.parse(repaired);
+      } catch {
+        // fall through to the original error
+      }
+    }
+    throw err;
+  }
 }
