@@ -182,6 +182,16 @@ test("GET /api/postmortem validates ids, 404s an unknown run, and tags a real ru
   assert.equal(body.statusCounts.opened, 2);
 });
 
+test("GET /api/postmortem with the look-ahead on: no held/rejected long/short decisions -> an empty missed block with byDecision", async () => {
+  const env = await seededEnv();
+  const res = await backendWorker.fetch(new Request(`https://backend.example/api/postmortem?runId=${RUN_A}`), env);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.missedError, null);
+  assert.equal(body.missed.total, 0);
+  assert.deepEqual(body.missed.byDecision, {});
+});
+
 test("GET /api/postmortem?runId=A&compareTo=B compares two runs, and 404s when either is missing", async () => {
   const env = await seededEnv();
   const get = (qs) => backendWorker.fetch(new Request(`https://backend.example/api/postmortem${qs}`), env);
