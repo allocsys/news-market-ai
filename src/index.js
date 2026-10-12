@@ -52,7 +52,7 @@ import { getNewsItemsInRange } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { getActiveTickers, getDisabledTickers, setActiveTickers, checkTickerSelection } from "./storage/active_tickers.js";
 import { getMacroFlag, setMacroEnabled } from "./storage/macro_flag.js";
-import { LIVE_KNOB_NAMES, validateLiveKnob, setLiveKnobs, clearLiveKnobs, snapshotTrailKnobs } from "./storage/live_knobs.js";
+import { LIVE_KNOB_NAMES, LIVE_SWITCH_NAMES, validateLiveKnob, setLiveKnobs, clearLiveKnobs, snapshotTrailKnobs, snapshotSwitches, applyLiveSwitches } from "./storage/live_knobs.js";
 import { SimClock } from "./backtest/simClock.js";
 import { parseKnobOverrides } from "./backtest/knobOverrides.js";
 import { cancelBacktestRun, failBacktestRun, getBacktestRun, insertBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
@@ -237,6 +237,46 @@ export default {
       }
       console.log("live knobs updated", { set: toSet, cleared: toClear, by: url.searchParams.get("by") });
       return jsonResponse(await knobState());
+    }
+
+    // Live decision switches (storage/live_knobs.js#LIVE_SWITCH_NAMES): intradayTechnical / independenceNote, default OFF.
+    // GET /api/switches: `defaults` (env/config), `live` (overrides set here), `effective` (what the next decision uses).
+    // POST /controls/switches sets name=0|1 and/or clear=<name,name|all>[&by=]. Applies to NEW decisions at once (no
+    // position snapshot). Backtests never read these: their per-run override decides.
+    const switchState = async () => {
+      const { switches, error } = await getPauseFlags(env.LIVE_DB);
+      const live = switches?.values ?? {};
+      return { defaults: snapshotSwitches(config), live, meta: switches?.meta ?? {}, effective: snapshotSwitches(applyLiveSwitches(config, live)), error };
+    };
+    if (pathname === "/api/switches") return jsonResponse(await switchState());
+    if (pathname === "/controls/switches" && request.method === "POST") {
+      const toSet = {};
+      for (const name of LIVE_SWITCH_NAMES) {
+        const raw = url.searchParams.get(name);
+        if (raw === null) continue;
+        const checked = validateLiveKnob(name, raw);
+        if (checked.error) return jsonResponse({ error: checked.error }, { status: 400 });
+        toSet[name] = checked.value;
+      }
+      const clearParam = url.searchParams.get("clear");
+      const toClear = clearParam === null ? [] : clearParam.trim().toLowerCase() === "all" ? [...LIVE_SWITCH_NAMES] : clearParam.split(",").map((s) => s.trim()).filter(Boolean);
+      const badClear = toClear.find((n) => !LIVE_SWITCH_NAMES.includes(n));
+      if (badClear) return jsonResponse({ error: `unknown switch: ${badClear}` }, { status: 400 });
+      const overlap = toClear.find((n) => n in toSet);
+      if (overlap) return jsonResponse({ error: `${overlap} cannot be set and cleared in one call` }, { status: 400 });
+      if (Object.keys(toSet).length === 0 && toClear.length === 0) {
+        return jsonResponse({ error: `pass at least one of: ${LIVE_SWITCH_NAMES.join(", ")}, or clear=<name,name|all>` }, { status: 400 });
+      }
+      if (!env.LIVE_DB) return jsonResponse({ error: "LIVE_DB is not bound" }, { status: 500 });
+      try {
+        if (Object.keys(toSet).length > 0) await setLiveKnobs(env.LIVE_DB, toSet, { by: url.searchParams.get("by") });
+        if (toClear.length > 0) await clearLiveKnobs(env.LIVE_DB, toClear);
+      } catch (err) {
+        console.error("live switch update failed", { message: err.message });
+        return jsonResponse({ error: "live switch update failed", message: err.message }, { status: 500 });
+      }
+      console.log("live switches updated", { set: toSet, cleared: toClear, by: url.searchParams.get("by") });
+      return jsonResponse(await switchState());
     }
 
     // JSON API layer (plan.md Step 1), unauthenticated at this layer since

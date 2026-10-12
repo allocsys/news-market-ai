@@ -7,12 +7,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PAUSE_KEYS as GATEWAY_PAUSE_KEYS, BACKTEST_ID_RE as GATEWAY_BACKTEST_ID_RE } from "../dashboard-next/src/server/gateway.mjs";
+import { PAUSE_KEYS as GATEWAY_PAUSE_KEYS, BACKTEST_ID_RE as GATEWAY_BACKTEST_ID_RE, LIVE_KNOB_NAMES as GATEWAY_KNOB_NAMES, LIVE_SWITCH_NAMES as GATEWAY_SWITCH_NAMES } from "../dashboard-next/src/server/gateway.mjs";
 import * as gatewaySession from "../dashboard-next/src/server/session.mjs";
 import { signJwt as gatewaySignJwt, verifyJwt as gatewayVerifyJwt } from "../dashboard-next/src/server/jwt.mjs";
 import * as backendSession from "../src/auth/session.js";
 import { signJwt as backendSignJwt, verifyJwt as backendVerifyJwt } from "../src/auth/jwt.js";
 import { PAUSE_KEYS } from "../src/storage/pause_flags.js";
+import { LIVE_KNOB_NAMES, LIVE_SWITCH_NAMES } from "../src/storage/live_knobs.js";
 import { BACKTEST_ID_RE } from "../src/dashboard/helpers.js";
 
 const config = { jwtSecret: "parity-test-key", sessionTtlSeconds: 60 };
@@ -23,6 +24,11 @@ function requestWithCookie(setCookie) {
 
 test("PAUSE_KEYS in the gateway is the backend's list, in the same order", () => {
   assert.deepEqual([...GATEWAY_PAUSE_KEYS], [...PAUSE_KEYS]);
+});
+
+test("LIVE_KNOB_NAMES and LIVE_SWITCH_NAMES in the gateway are the backend's lists, in the same order", () => {
+  assert.deepEqual([...GATEWAY_KNOB_NAMES], [...LIVE_KNOB_NAMES]);
+  assert.deepEqual([...GATEWAY_SWITCH_NAMES], [...LIVE_SWITCH_NAMES]);
 });
 
 test("BACKTEST_ID_RE in the gateway is the backend's pattern", () => {

@@ -56,7 +56,7 @@ async function runWith({ seed, configOver = {} }) {
   await seed(ctx);
   let prompt = null;
   const config = {
-    geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10, ...configOver,
+    geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10, intradayTechnical: true, ...configOver,
     fakeModel: makeFakeLongModel({ onCall: (opts, p) => { if (opts.schema === AnalystTeamOpinion) prompt = p; } }),
   };
   await runPipelineForTicker({}, config, ctx, {
@@ -91,4 +91,13 @@ test("pipeline: config.intradayTechnical === false turns it off even when an int
     configOver: { intradayTechnical: false },
   });
   assert.ok(!prompt.includes("currentPrice"));
+});
+
+test("pipeline: OFF by default -- a config without the flag keeps the daily-close-only snapshot even when an intraday bar exists", async () => {
+  const prompt = await runWith({
+    seed: async (ctx) => { await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-07T09:25:00Z", close: 105 }); },
+    configOver: { intradayTechnical: undefined },
+  });
+  assert.ok(!prompt.includes("currentPrice"));
+  assert.match(prompt, /"latestClose": 100/);
 });

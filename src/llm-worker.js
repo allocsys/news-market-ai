@@ -50,7 +50,7 @@ import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { withLlmLogContext } from "./storage/llm_calls.js";
 import { getPauseFlags } from "./storage/pause_flags.js";
-import { applyLiveKnobs } from "./storage/live_knobs.js";
+import { applyLiveKnobs, applyLiveSwitches } from "./storage/live_knobs.js";
 import { getDisabledTickers } from "./storage/active_tickers.js";
 import { isMacroEnabled } from "./storage/macro_flag.js";
 import { MACRO_TICKERS } from "./agents/analysts/macroContext.js";
@@ -87,8 +87,9 @@ export default {
     // The SAME single system_flags read also carries the live break-even/trailing knobs (storage/live_knobs.js): they
     // are laid over the env/config defaults here, once per batch, and only affect positions OPENED from now on (the
     // knobs are snapshotted onto the row at open). Empty/failed read = the config defaults.
-    const { flags, knobs } = await getPauseFlags(env.LIVE_DB);
-    const config = applyLiveKnobs(baseConfig, knobs?.values);
+    const { flags, knobs, switches } = await getPauseFlags(env.LIVE_DB);
+    // Decision switches (intradayTechnical / independenceNote): same read, applied to this message's config only.
+    const config = applyLiveSwitches(applyLiveKnobs(baseConfig, knobs?.values), switches?.values);
     const llmBlocked = flags.trading || flags.llm;
     // Operator ticker selection (storage/active_tickers.js), read lazily (only analyze messages need it);
     // fails open. A dropped analyze message is not retried, same as under the pause switches.

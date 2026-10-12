@@ -10,8 +10,11 @@ import { RunStore } from "../src/storage/run_store.js";
 import { getPauseFlags, setPauseFlags } from "../src/storage/pause_flags.js";
 import {
   applyLiveKnobs,
+  applyLiveSwitches,
   clearLiveKnobs,
   parseLiveKnobRows,
+  parseLiveSwitchRows,
+  snapshotSwitches,
   parseTrailKnobs,
   positionTrailConfig,
   serializeTrailKnobs,
@@ -141,4 +144,58 @@ test("GET /api/knobs and POST /controls/knobs: set, validate, clear", async () =
   assert.deepEqual(res.body.live, { trailActivationR: 0.5, trailDistanceR: 0.25 });
   res = await call(env, "/controls/knobs?clear=all", "POST");
   assert.deepEqual(res.body.live, {});
+});
+
+test("live switches: validated 0/1, parsed apart from the trail knobs, applied as booleans", () => {
+  assert.deepEqual(validateLiveKnob("intradayTechnical", "1"), { value: 1 });
+  assert.match(validateLiveKnob("independenceNote", "2").error, /between/);
+  assert.match(validateLiveKnob("independenceNote", "0.5").error, /whole number/);
+  const rows = [
+    { key: "knob:intradayTechnical", paused: 0, value: 1, updated_at: "t", updated_by: "op" },
+    { key: "knob:independenceNote", paused: 0, value: 7 },
+    { key: "knob:trailDistanceR", paused: 0, value: 0.25 },
+  ];
+  assert.deepEqual(parseLiveSwitchRows(rows).values, { intradayTechnical: 1 }, "a trail knob row and a bad switch row are skipped");
+  assert.deepEqual(parseLiveKnobRows(rows).values, { trailDistanceR: 0.25 }, "switch rows never leak into the trail knobs");
+  const base = { intradayTechnical: false, independenceNote: true };
+  assert.equal(applyLiveSwitches(base, {}), base, "nothing to apply = the same object");
+  assert.deepEqual(applyLiveSwitches(base, { intradayTechnical: 1, independenceNote: 0 }), { intradayTechnical: true, independenceNote: false });
+  assert.deepEqual(snapshotSwitches({ intradayTechnical: true }), { intradayTechnical: 1, independenceNote: 0 });
+});
+
+test("getPauseFlags returns switches next to knobs; set/clear round-trip through the shared setters", async () => {
+  const db = createTestD1([STATE_DIR]);
+  await setLiveKnobs(db, { intradayTechnical: 1, trailDistanceR: 0.25 }, { by: "op" });
+  const res = await getPauseFlags(db);
+  assert.deepEqual(res.switches.values, { intradayTechnical: 1 });
+  assert.deepEqual(res.knobs.values, { trailDistanceR: 0.25 });
+  await clearLiveKnobs(db, ["intradayTechnical"]);
+  assert.deepEqual((await getPauseFlags(db)).switches.values, {});
+});
+
+test("GET /api/switches and POST /controls/switches: default off, set, validate, clear; /controls/knobs does not touch them", async () => {
+  const env = { WATCHLIST_TICKERS: "AAPL", LIVE_DB: createTestD1([STATE_DIR]) };
+  let res = await call(env, "/api/switches");
+  assert.deepEqual(res.body.defaults, { intradayTechnical: 0, independenceNote: 0 });
+  assert.deepEqual(res.body.live, {});
+  assert.deepEqual(res.body.effective, { intradayTechnical: 0, independenceNote: 0 });
+
+  res = await call(env, "/controls/switches?intradayTechnical=1&by=alice", "POST");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.live, { intradayTechnical: 1 });
+  assert.deepEqual(res.body.effective, { intradayTechnical: 1, independenceNote: 0 });
+  assert.equal(res.body.meta.intradayTechnical.updatedBy, "alice");
+
+  assert.equal((await call(env, "/controls/switches?independenceNote=2", "POST")).status, 400);
+  assert.equal((await call(env, "/controls/switches", "POST")).status, 400);
+  assert.equal((await call(env, "/controls/switches?clear=bogus", "POST")).status, 400);
+  assert.equal((await call(env, "/controls/switches?independenceNote=1&clear=independenceNote", "POST")).status, 400);
+  assert.equal((await call(env, "/controls/knobs?intradayTechnical=1", "POST")).status, 400, "the knobs route does not accept switch names");
+  assert.deepEqual((await call(env, "/api/knobs")).body.live, {}, "the Exit knobs card never sees a switch row");
+
+  res = await call(env, "/controls/switches?independenceNote=1", "POST");
+  assert.deepEqual(res.body.live, { intradayTechnical: 1, independenceNote: 1 });
+  res = await call(env, "/controls/switches?clear=all", "POST");
+  assert.deepEqual(res.body.live, {});
+  assert.deepEqual(res.body.effective, { intradayTechnical: 0, independenceNote: 0 });
 });

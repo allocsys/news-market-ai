@@ -138,6 +138,8 @@ test("effective: reports every knob from the config", () => {
     skipNoPriceImpact: false,
     macroEnabled: false,
     mergedVerdict: false,
+    intradayTechnical: false,
+    independenceNote: false,
     breakEvenTriggerR: null,
     trailActivationR: null,
     trailDistanceR: null,
@@ -250,4 +252,18 @@ test("trail: apply keeps the values as numbers (trailRemovesTarget is not a bool
   assert.equal(knobs.trailActivationR, 0.5);
   assert.equal(knobs.trailDistanceR, 0.25);
   assert.equal(knobs.tradeCostBps, 5);
+});
+
+test("decision switches: 0/1 overrides become booleans, default OFF, and the record shows false (not null)", () => {
+  const { overrides } = parseKnobOverrides(from({ intradayTechnical: "1", independenceNote: "0" }));
+  assert.deepEqual(overrides, { intradayTechnical: 1, independenceNote: 0 });
+  const cfg = applyKnobOverrides({ intradayTechnical: false, independenceNote: true }, overrides);
+  assert.equal(cfg.intradayTechnical, true);
+  assert.equal(cfg.independenceNote, false);
+  const rec = effectiveKnobs(cfg);
+  assert.equal(rec.intradayTechnical, true);
+  assert.equal(rec.independenceNote, false);
+  assert.equal(effectiveKnobs({}).intradayTechnical, false);
+  assert.equal(effectiveKnobs({}).independenceNote, false);
+  assert.match(parseKnobOverrides(from({ intradayTechnical: "2" })).error, /between/);
 });

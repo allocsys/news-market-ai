@@ -30,6 +30,8 @@ export const PAUSE_KEYS = Object.freeze(["ingestion", "trading", "llm", "backtes
 export const BACKTEST_ID_RE = /^backtest-\d+-[a-z0-9]+$/;
 // Copy of the backend's LIVE_KNOB_NAMES (src/storage/live_knobs.js). The backend validates the values and bounds.
 export const LIVE_KNOB_NAMES = Object.freeze(["breakEvenTriggerR", "trailActivationR", "trailDistanceR", "trailRemovesTarget"]);
+// Copy of the backend's LIVE_SWITCH_NAMES (src/storage/live_knobs.js): the on/off decision switches (0/1).
+export const LIVE_SWITCH_NAMES = Object.freeze(["intradayTechnical", "independenceNote"]);
 
 /** The auth-related settings, read from the Worker env (secrets) on every call. */
 export function loadAuthConfig(env) {
@@ -93,6 +95,7 @@ const NON_API_ROUTES = new Set([
   "/controls/tickers",
   "/controls/macro",
   "/controls/knobs",
+  "/controls/switches",
 ]);
 const BACKTEST_ACTION_RE = /^\/backtest\/[^/]+\/(cancel|pause|resume)$/;
 
@@ -380,6 +383,10 @@ export async function handleGateway(request, env) {
         if (isChecked(searchParams.get("enableMacro")) || isChecked(fromBody("enableMacro"))) params.macroEnabled = "1";
         // "Merged verdict": this run only uses ONE merged call instead of bull + bear + judge (backend's mergedVerdict=1 knob override). Absent sends nothing, so the normal three-call debate applies.
         if (isChecked(searchParams.get("mergedVerdict")) || isChecked(fromBody("mergedVerdict"))) params.mergedVerdict = "1";
+        // Decision switches (technical analyst sees the intraday price; judge EVIDENCE RULE): this run only, default OFF. Absent sends nothing (backend default off); a run never reads the live switches.
+        for (const name of LIVE_SWITCH_NAMES) {
+          if (isChecked(searchParams.get(name)) || isChecked(fromBody(name))) params[name] = "1";
+        }
         // Break-even / trailing knobs (R multiples; trailRemovesTarget 0/1): this run only, never the live knobs. Blank/absent sends nothing (default 0 = off); the backend validates values and bounds (src/backtest/knobOverrides.js) and records them in result.knobs.
         for (const name of LIVE_KNOB_NAMES) {
           const value = searchParams.get(name) ?? fromBody(name);
@@ -448,6 +455,27 @@ export async function handleGateway(request, env) {
         const enabled = searchParams.get("enabled") ?? fromBody("enabled");
         if (enabled !== "1" && enabled !== "0") return { error: "enabled must be 1 or 0 (or a boolean)" };
         const params = { enabled };
+        if (sessionUsername) params.by = sessionUsername;
+        return { params };
+      },
+    });
+  }
+
+  // POST /controls/switches -- set and/or clear the live decision switches. Any of the two switch names as 0/1, and/or `clear` (a comma list of names, or "all"). The backend validates; applies to NEW decisions at once.
+  if (pathname === "/controls/switches" && request.method === "POST") {
+    return handleTriggerRoute(request, env, {
+      backendPath: "/controls/switches",
+      buildQuery: (searchParams, fromBody, sessionUsername) => {
+        const params = {};
+        for (const name of LIVE_SWITCH_NAMES) {
+          const value = searchParams.get(name) ?? fromBody(name);
+          if (value !== null && value !== undefined && value !== "") params[name] = value;
+        }
+        const clear = searchParams.get("clear") ?? fromBody("clear");
+        if (clear) params.clear = clear;
+        if (Object.keys(params).length === 0) {
+          return { error: `pass at least one of: ${LIVE_SWITCH_NAMES.join(", ")}, or clear` };
+        }
         if (sessionUsername) params.by = sessionUsername;
         return { params };
       },

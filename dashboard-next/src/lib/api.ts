@@ -680,6 +680,29 @@ export function useKnobs() {
   });
 }
 
+// --- Live decision switches (0/1, default OFF): intraday price for the technical analyst; judge evidence rule ---
+export const SWITCH_NAMES = ["intradayTechnical", "independenceNote"] as const;
+export type SwitchName = (typeof SWITCH_NAMES)[number];
+export type SwitchValues = Record<SwitchName, 0 | 1>;
+export interface SwitchesResponse {
+  /** env/config values used when nothing is overridden (0 = off). */
+  defaults: SwitchValues;
+  /** Only the switches overridden live. */
+  live: Partial<SwitchValues>;
+  meta: Record<string, { updatedAt?: string | null; updatedBy?: string | null }>;
+  /** What the next decision uses. */
+  effective: SwitchValues;
+  error?: string | null;
+}
+export function useSwitches() {
+  return useQuery({
+    queryKey: ["switches"],
+    queryFn: () => apiFetch<SwitchesResponse>(`/api/switches`),
+    refetchInterval: REFRESH_MS,
+    retry: 1,
+  });
+}
+
 // --- News replay: ingested news items for one ticker on one UTC day ---
 export interface ReplayNewsItem {
   id: string;
@@ -799,6 +822,10 @@ export function usePostBacktestRun() {
       enableMacro?: boolean;
       /** This run only: one merged judge call instead of bull + bear + judge (gateway maps it to mergedVerdict=1). */
       mergedVerdict?: boolean;
+      /** This run only: the technical analyst sees the intraday price visible at the decision time (backend intradayTechnical=1). Default off. */
+      intradayTechnical?: boolean;
+      /** This run only: judge prompts carry the EVIDENCE RULE (backend independenceNote=1). Default off. */
+      independenceNote?: boolean;
       /** This run only: break-even / trailing knobs in R (0 or omitted = off). Never the live knobs; the backend records them in result.knobs. */
       breakEvenTriggerR?: number;
       trailActivationR?: number;
@@ -874,6 +901,19 @@ export function usePostMacro() {
       // Health reports macro as disabled vs stale, so it depends on this flag.
       qc.invalidateQueries({ queryKey: ["health"] });
     },
+  });
+}
+
+export function usePostSwitches() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { set?: Partial<SwitchValues>; clear?: string }) => {
+      return apiFetch<SwitchesResponse>("/api/controls/switches", {
+        method: "POST",
+        body: JSON.stringify({ ...(vars.set ?? {}), ...(vars.clear ? { clear: vars.clear } : {}) }),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["switches"] }),
   });
 }
 

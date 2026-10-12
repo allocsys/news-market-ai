@@ -21,6 +21,9 @@
 import { KNOB_OVERRIDES } from "../backtest/knobOverrides.js";
 
 export const LIVE_KNOB_NAMES = Object.freeze(["breakEvenTriggerR", "trailActivationR", "trailDistanceR", "trailRemovesTarget"]);
+// On/off decision switches (0/1), stored in the same `knob:<name>` rows but kept apart from the trail knobs: they are NOT
+// snapshotted onto positions and never show in the Exit knobs card. They apply to the next decision immediately.
+export const LIVE_SWITCH_NAMES = Object.freeze(["intradayTechnical", "independenceNote"]);
 export const LIVE_KNOB_KEY_PREFIX = "knob:";
 
 export function liveKnobKey(name) {
@@ -36,7 +39,7 @@ export function liveKnobNameOfKey(key) {
 
 /** `{ value }` or `{ error }`: same bounds / integer rule as KNOB_OVERRIDES. */
 export function validateLiveKnob(name, raw) {
-  const rule = LIVE_KNOB_NAMES.includes(name) ? KNOB_OVERRIDES[name] : null;
+  const rule = LIVE_KNOB_NAMES.includes(name) || LIVE_SWITCH_NAMES.includes(name) ? KNOB_OVERRIDES[name] : null;
   if (!rule) return { error: `unknown knob: ${name}` };
   if (raw === undefined || raw === null || String(raw).trim() === "") return { error: `${name} needs a value` };
   const n = Number(raw);
@@ -63,6 +66,43 @@ export function parseLiveKnobRows(rows) {
     meta[name] = { updatedAt: row.updated_at ?? null, updatedBy: row.updated_by ?? null };
   }
   return { values, meta };
+}
+
+/** The switch name behind a system_flags key, or null when the row is not a live switch. */
+export function liveSwitchNameOfKey(key) {
+  if (typeof key !== "string" || !key.startsWith(LIVE_KNOB_KEY_PREFIX)) return null;
+  const name = key.slice(LIVE_KNOB_KEY_PREFIX.length);
+  return LIVE_SWITCH_NAMES.includes(name) ? name : null;
+}
+
+/** Pure: switch rows -> `{ values: {name: 0|1}, meta }`. Same fail-safe as parseLiveKnobRows (bad/paused/valueless row = no override). */
+export function parseLiveSwitchRows(rows) {
+  const values = {};
+  const meta = {};
+  for (const row of rows ?? []) {
+    const name = liveSwitchNameOfKey(row?.key);
+    if (!name || Number(row.paused) === 1 || row.value == null) continue;
+    const checked = validateLiveKnob(name, row.value);
+    if (checked.error) continue;
+    values[name] = checked.value;
+    meta[name] = { updatedAt: row.updated_at ?? null, updatedBy: row.updated_by ?? null };
+  }
+  return { values, meta };
+}
+
+/** A NEW config with the live switches applied (0/1 -> boolean); the very same object when there is nothing to apply. */
+export function applyLiveSwitches(config, values) {
+  if (!values) return config;
+  const picked = {};
+  for (const name of LIVE_SWITCH_NAMES) {
+    if (Object.prototype.hasOwnProperty.call(values, name) && Number.isFinite(values[name])) picked[name] = values[name] !== 0;
+  }
+  return Object.keys(picked).length === 0 ? config : { ...config, ...picked };
+}
+
+/** The effective switches of `config` as 0/1 (missing = 0 = off). */
+export function snapshotSwitches(config) {
+  return Object.fromEntries(LIVE_SWITCH_NAMES.map((n) => [n, config?.[n] === true ? 1 : 0]));
 }
 
 /** A NEW config with the live values applied; the very same object when there is nothing to apply. */
@@ -129,7 +169,7 @@ export async function setLiveKnobs(db, values, { by = null, now = new Date().toI
 /** Deletes knob rows (back to the config default). Throws on an unknown name or a D1 error. */
 export async function clearLiveKnobs(db, names) {
   for (const name of names) {
-    if (!LIVE_KNOB_NAMES.includes(name)) throw new Error(`unknown knob: ${name}`);
+    if (!LIVE_KNOB_NAMES.includes(name) && !LIVE_SWITCH_NAMES.includes(name)) throw new Error(`unknown knob: ${name}`);
   }
   await db.batch(names.map((name) => db.prepare("DELETE FROM system_flags WHERE key = ?").bind(liveKnobKey(name))));
 }

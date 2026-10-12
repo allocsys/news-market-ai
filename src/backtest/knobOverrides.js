@@ -39,6 +39,10 @@ export const KNOB_OVERRIDES = Object.freeze({
   // Merged verdict (graph/pipeline.js): ONE call replaces bull + bear + judge. Same 0/1 -> boolean handling; default OFF, so a
   // run without it is the normal three-call debate. Lets two runs on the same ticker/window be compared.
   mergedVerdict: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  // Decision switches (graph/pipeline.js intraday price for the technical analyst; judge EVIDENCE RULE). 0/1 -> boolean like the
+  // knobs above; default OFF, and a backtest NEVER reads the live switch rows (storage/live_knobs.js): the run decides.
+  intradayTechnical: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  independenceNote: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
   // Break-even / trailing stop (agents/risk_mgmt/trailing.js), in R = the position's initial stop distance. 0 = off
   // (the default), so a run without them is the static stop/target walk. Bounds are sanity limits, not tuning advice.
   breakEvenTriggerR: Object.freeze({ min: 0, max: 10 }),
@@ -99,6 +103,9 @@ export function effectiveKnobs(config) {
   knobs.macroEnabled = config.macroEnabled === true;
   // Default OFF too: a missing key means the normal three-call debate, so the record shows false, not null.
   knobs.mergedVerdict = config.mergedVerdict === true;
+  // Default OFF: a missing key means the old behavior, so the record shows false, not null.
+  knobs.intradayTechnical = config.intradayTechnical === true;
+  knobs.independenceNote = config.independenceNote === true;
   knobs.flipMinConfidence = config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE;
   return knobs;
 }
