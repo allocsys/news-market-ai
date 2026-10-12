@@ -97,11 +97,12 @@ const newsItem = (id) => ({ id, title: "AAPL news", body: "body" });
 test("a pipeline retry after the replace-commit but before settling still settles the replaced position exactly once", async () => {
   const ctx = makeCtx();
   await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-09", close: 100 });
-  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 110 });
+  await seedBar(ctx.inputs, { ticker: "AAPL", date: "2026-01-14", close: 102 });
+  // The second price (102, +2%) stays inside the position's stop/target: a flip now honors a breached level first.
   // Fresh intraday bars closing exactly at each asOf are the entry/exit prices; a daily close alone is
   // stale and would wait as pending_entry instead of committing.
   await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-09T23:55:00Z", close: 100 });
-  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-14T23:55:00Z", close: 110 });
+  await seedIntradayBar(ctx.inputs, { ticker: "AAPL", ts: "2026-01-14T23:55:00Z", close: 102 });
 
   // First thesis opens a position at 100.
   await runPipelineForTicker({}, baseConfig(makeModel()), ctx, { pipelineRunId: "news-1", ticker: "AAPL", newsItem: newsItem("news-1"), asOf: "2026-01-10T00:00:00Z" });
@@ -136,7 +137,7 @@ test("a pipeline retry after the replace-commit but before settling still settle
   const memory = await stateRows(ctx.stateDb, "decision_memory");
   assert.equal(memory.length, 1);
   assert.equal(memory[0].decision_id, positions[0].trade_thesis_id);
-  assert.equal(memory[0].realized_return, (110 - 100) / 100);
+  assert.equal(memory[0].realized_return, (102 - 100) / 100);
   assert.equal(memory[0].reflection, "settled on retry");
 
   // Still exactly one open position, no double-open from the retry.

@@ -47,7 +47,9 @@ test("a confident opposite thesis flips the position AND records MAE/MFE from th
   assert.equal(next.direction, "short");
   assert.ok(Math.abs(old.mae_pct - (179.4 - 181.2) / 181.2) < 1e-9, `mae ${old.mae_pct}`);
   assert.ok(Math.abs(old.mfe_pct - (181.6 - 181.2) / 181.2) < 1e-9, `mfe ${old.mfe_pct}`);
-  assert.equal(old.last_checked_at, null, "sampling must not move the exit cursor");
+  // The ticker's exit walk (stops first) ran before the flip: it advances the cursor over the walked bars, and
+  // the excursion above is the same either way. The pure excursion sampler (below) still never moves it.
+  assert.equal(old.last_checked_at, "2026-01-15T15:50:00Z");
 });
 
 test("a same-direction thesis is held: no walk, no excursion written", async () => {
