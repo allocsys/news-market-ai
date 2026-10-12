@@ -50,6 +50,7 @@ import { resolveCurrentPrice } from "./price_resolution.js";
 import { evaluateExit, timeExitDueAt } from "../agents/risk_mgmt/exit.js";
 import { exitLevels, walkBarsForExit } from "../agents/risk_mgmt/exit_bars.js";
 import { resolveTrailingConfig } from "../agents/risk_mgmt/trailing.js";
+import { positionTrailConfig } from "../storage/live_knobs.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 import { getDailyBarsWindowAsOf, getIntradayBarsWindowAsOf } from "../storage/inputs_view.js";
@@ -183,9 +184,11 @@ export async function checkOpenPositionExits(env, config, { inputs, store }, { a
   // Break-even / trailing stop (config.breakEvenTriggerR / trailActivationR / trailDistanceR); null = off, and the
   // walk below is then exactly the static stop/target walk. recordExcursionBeforeClose deliberately walks WITHOUT it:
   // it only records excursions, which must not be cut short by a ratcheted stop.
-  const trailing = resolveTrailingConfig(config);
-
+  // PER POSITION: the knobs snapshotted when it opened (positions.trail_knobs) are laid over the config, so a live
+  // knob change never rewrites the stop of a position that is already open. NULL snapshot (opened before migration
+  // 0011) = the config itself.
   for (const position of openPositions) {
+    const trailing = resolveTrailingConfig(positionTrailConfig(config, position));
     // Once the time exit is due, the price walk stops at that instant: bars after it must not be
     // able to stop/target out a position that the hold rule has already ended (and in the daily
     // backtest walk the due day's own bars are visible by the time the exit is priced).

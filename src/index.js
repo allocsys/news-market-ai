@@ -52,6 +52,7 @@ import { getNewsItemsInRange } from "./storage/inputs_view.js";
 import { getPauseFlags, setPauseFlags, isPauseKey, PAUSE_KEYS } from "./storage/pause_flags.js";
 import { getActiveTickers, getDisabledTickers, setActiveTickers, checkTickerSelection } from "./storage/active_tickers.js";
 import { getMacroFlag, setMacroEnabled } from "./storage/macro_flag.js";
+import { LIVE_KNOB_NAMES, validateLiveKnob, setLiveKnobs, clearLiveKnobs, snapshotTrailKnobs } from "./storage/live_knobs.js";
 import { SimClock } from "./backtest/simClock.js";
 import { parseKnobOverrides } from "./backtest/knobOverrides.js";
 import { cancelBacktestRun, failBacktestRun, getBacktestRun, insertBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
@@ -194,6 +195,48 @@ export default {
       }
       console.log("macro flag updated", { enabled: enabledParam === "1", by: url.searchParams.get("by") });
       return jsonResponse(await macroState());
+    }
+
+    // Live break-even / trailing knobs (storage/live_knobs.js). GET /api/knobs: `defaults` (env/config), `live` (the
+    // overrides set here), `effective` (what a position opening NOW would snapshot). POST /controls/knobs sets any of
+    // breakEvenTriggerR / trailActivationR / trailDistanceR / trailRemovesTarget as query params (same bounds as the
+    // backtest per-run overrides) and/or clears with clear=<name,name|all>[&by=]. SNAPSHOT semantics: only positions
+    // opened AFTER the change use the new values; already-open positions keep the knobs they opened with. Backtests
+    // never read these.
+    const knobState = async () => {
+      const { knobs, error } = await getPauseFlags(env.LIVE_DB);
+      const live = knobs?.values ?? {};
+      return { defaults: snapshotTrailKnobs(config), live, meta: knobs?.meta ?? {}, effective: snapshotTrailKnobs({ ...config, ...live }), error };
+    };
+    if (pathname === "/api/knobs") return jsonResponse(await knobState());
+    if (pathname === "/controls/knobs" && request.method === "POST") {
+      const toSet = {};
+      for (const name of LIVE_KNOB_NAMES) {
+        const raw = url.searchParams.get(name);
+        if (raw === null) continue;
+        const checked = validateLiveKnob(name, raw);
+        if (checked.error) return jsonResponse({ error: checked.error }, { status: 400 });
+        toSet[name] = checked.value;
+      }
+      const clearParam = url.searchParams.get("clear");
+      const toClear = clearParam === null ? [] : clearParam.trim().toLowerCase() === "all" ? [...LIVE_KNOB_NAMES] : clearParam.split(",").map((s) => s.trim()).filter(Boolean);
+      const badClear = toClear.find((n) => !LIVE_KNOB_NAMES.includes(n));
+      if (badClear) return jsonResponse({ error: `unknown knob: ${badClear}` }, { status: 400 });
+      const overlap = toClear.find((n) => n in toSet);
+      if (overlap) return jsonResponse({ error: `${overlap} cannot be set and cleared in one call` }, { status: 400 });
+      if (Object.keys(toSet).length === 0 && toClear.length === 0) {
+        return jsonResponse({ error: `pass at least one of: ${LIVE_KNOB_NAMES.join(", ")}, or clear=<name,name|all>` }, { status: 400 });
+      }
+      if (!env.LIVE_DB) return jsonResponse({ error: "LIVE_DB is not bound" }, { status: 500 });
+      try {
+        if (Object.keys(toSet).length > 0) await setLiveKnobs(env.LIVE_DB, toSet, { by: url.searchParams.get("by") });
+        if (toClear.length > 0) await clearLiveKnobs(env.LIVE_DB, toClear);
+      } catch (err) {
+        console.error("live knob update failed", { message: err.message });
+        return jsonResponse({ error: "live knob update failed", message: err.message }, { status: 500 });
+      }
+      console.log("live knobs updated", { set: toSet, cleared: toClear, by: url.searchParams.get("by") });
+      return jsonResponse(await knobState());
     }
 
     // JSON API layer (plan.md Step 1), unauthenticated at this layer since

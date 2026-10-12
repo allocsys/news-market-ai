@@ -45,6 +45,7 @@ import { loadDrawdownBreakerOptions } from "./drawdown_breaker.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE, TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { withLlmLogContext, flushLlmCallBuffer } from "../storage/llm_calls.js";
 import { isEntryPriceStale, pendingEntryExpiresAt } from "../shared/entry_timing.js";
+import { serializeTrailKnobs } from "../storage/live_knobs.js";
 
 /**
  * Runs the full analyst -> debate -> trade -> risk -> portfolio pipeline for
@@ -318,6 +319,8 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
           entryPriceBarTs: priceBarTs,
           stopLossPct: state.riskDecision.stopLossPct ?? null,
           takeProfitPct: state.riskDecision.takeProfitPct ?? null,
+          // SNAPSHOT of the effective break-even/trailing knobs (config already carries any live override).
+          trailKnobs: serializeTrailKnobs(config),
           exitPrice: currentPrice,
           confidence: state.verdict.confidence,
           flipMinConfidence: config.flipMinConfidence,

@@ -11,6 +11,8 @@
 // FAIL OPEN: a missing binding or any D1 error reads as "nothing paused", with
 // a console.warn. A flaky read must never silently halt the system.
 
+import { parseLiveKnobRows } from "./live_knobs.js";
+
 export const PAUSE_KEYS = Object.freeze(["ingestion", "trading", "llm", "backtests"]);
 
 export const PAUSE_LABELS = Object.freeze({
@@ -28,11 +30,32 @@ function allClear() {
   return Object.fromEntries(PAUSE_KEYS.map((k) => [k, false]));
 }
 
-/** `{ flags: {ingestion, trading, llm, backtests}, meta: {key: {updatedAt, updatedBy}}, error }`. Never throws. */
-export async function getPauseFlags(db) {
-  if (!db) return { flags: allClear(), meta: {}, error: null };
+/**
+ * One statement reads every system_flags row: pause switches AND live knob rows (storage/live_knobs.js).
+ * If the `value` column is not there yet (migration 0011 not applied), retry once WITHOUT it so a missing
+ * migration can never drop the pause flags; knobs are then simply empty (config defaults).
+ */
+async function readFlagRows(db) {
   try {
+    const { results } = await db.prepare("SELECT key, paused, value, updated_at, updated_by FROM system_flags").all();
+    return results ?? [];
+  } catch (err) {
+    if (!/no such column|value/i.test(String(err?.message))) throw err;
+    console.warn("system_flags.value missing (migration 0011 pending) -- reading without live knobs", { message: err.message });
     const { results } = await db.prepare("SELECT key, paused, updated_at, updated_by FROM system_flags").all();
+    return results ?? [];
+  }
+}
+
+/**
+ * `{ flags: {ingestion, trading, llm, backtests}, meta: {key: {updatedAt, updatedBy}}, knobs: {values, meta}, error }`.
+ * Never throws. `knobs.values` holds only the live overrides that are set and valid ({} = use the config).
+ */
+export async function getPauseFlags(db) {
+  if (!db) return { flags: allClear(), meta: {}, knobs: { values: {}, meta: {} }, error: null };
+  try {
+    const rows = await readFlagRows(db);
+    const results = rows;
     const flags = allClear();
     const meta = {};
     for (const row of results ?? []) {
@@ -40,10 +63,10 @@ export async function getPauseFlags(db) {
       flags[row.key] = Number(row.paused) === 1;
       meta[row.key] = { updatedAt: row.updated_at ?? null, updatedBy: row.updated_by ?? null };
     }
-    return { flags, meta, error: null };
+    return { flags, meta, knobs: parseLiveKnobRows(rows), error: null };
   } catch (err) {
     console.warn("pause flags read failed -- failing open (nothing paused)", { message: err.message });
-    return { flags: allClear(), meta: {}, error: err.message };
+    return { flags: allClear(), meta: {}, knobs: { values: {}, meta: {} }, error: err.message };
   }
 }
 
