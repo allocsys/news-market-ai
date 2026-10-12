@@ -799,6 +799,12 @@ export function usePostBacktestRun() {
       enableMacro?: boolean;
       /** This run only: one merged judge call instead of bull + bear + judge (gateway maps it to mergedVerdict=1). */
       mergedVerdict?: boolean;
+      /** This run only: break-even / trailing knobs in R (0 or omitted = off). Never the live knobs; the backend records them in result.knobs. */
+      breakEvenTriggerR?: number;
+      trailActivationR?: number;
+      trailDistanceR?: number;
+      /** 1 = once the trail is binding, ignore the fixed take-profit. */
+      trailRemovesTarget?: number;
     }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backtest/run", {
         method: "POST",
