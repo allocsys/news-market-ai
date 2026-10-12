@@ -5,6 +5,7 @@
 
 import { callStructured } from "../utils/structured.js";
 import { MergedVerdict } from "../../schemas/index.js";
+import { INDEPENDENCE_NOTE } from "./evidence.js";
 
 export async function runMergedJudge(env, config, { ticker, asOf, opinions, priorLessons = "" }) {
   const prompt = `You are a research desk judge for ${ticker}. Using ONLY the analyst opinions below as evidence, \
@@ -17,6 +18,7 @@ Respond as JSON only, matching exactly:
 "bear": { "argument": string, "justification": string }, \
 "direction": "long"|"short"|"flat", "confidence": number (0-1), \
 "timeHorizon": "intraday"|"days"|"weeks"|"months", "justification": string }
+${config.independenceNote === false ? "" : INDEPENDENCE_NOTE}
 
 Analyst opinions:
 ${JSON.stringify(opinions, null, 2)}

@@ -8,6 +8,7 @@
 
 import { callStructured } from "../utils/structured.js";
 import { DebateVerdict } from "../../schemas/index.js";
+import { INDEPENDENCE_NOTE } from "./evidence.js";
 
 export async function runResearchManager(env, config, { ticker, asOf, bull, bear, priorLessons = "" }) {
   const prompt = `You are the research desk judge for ${ticker}. Weigh the bull and bear cases \
@@ -17,6 +18,8 @@ explains which side was more convincing and why -- never omit it.
 Respond as JSON only, matching exactly:
 { "direction": "long"|"short"|"flat", "confidence": number (0-1), \
 "timeHorizon": "intraday"|"days"|"weeks"|"months", "justification": string }
+
+${config.independenceNote === false ? "" : INDEPENDENCE_NOTE}
 
 Bull case: ${JSON.stringify(bull)}
 Bear case: ${JSON.stringify(bear)}

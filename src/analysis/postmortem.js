@@ -69,6 +69,7 @@ export function classifyPosition(p) {
     relevance: view.relevance,
     confidence,
     confidenceBucket: confidenceBucket(confidence),
+    technicalAlignment: d.debate?.evidence?.technicalAlignment ?? "unknown",
     stage: null,
     note: "",
   };
@@ -132,6 +133,7 @@ export function summarizePositions(positions) {
     byCloseReason: groupBy(scored, (t) => t.closeReason),
     byRelevance: groupBy(scored, (t) => t.relevance),
     byConfidence: groupBy(scored, (t) => t.confidenceBucket),
+    byTechnicalAlignment: groupBy(scored, (t) => t.technicalAlignment),
     // Every stage pointed the same way on every scored trade -> the debate added no independent signal on the trades that opened.
     stagesAlwaysAgreed: scored.length > 0 && scored.every((t) => t.analystDirection === t.debateDirection && t.debateDirection === t.thesisDirection),
   };

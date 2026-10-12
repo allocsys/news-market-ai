@@ -33,6 +33,8 @@ import { runBullResearcher } from "../agents/researchers/bull.js";
 import { runBearResearcher } from "../agents/researchers/bear.js";
 import { runResearchManager } from "../agents/managers/research_manager.js";
 import { runMergedJudge } from "../agents/managers/merged_judge.js";
+import { collectEvidence } from "../agents/managers/evidence.js";
+import { computeTechnicalSnapshot } from "../agents/analysts/technicalIndicators.js";
 import { runTrader } from "../agents/trader/trader.js";
 import { evaluateRisk } from "../agents/risk_mgmt/risk.js";
 import { evaluatePortfolio } from "../agents/managers/portfolio_manager.js";
@@ -124,6 +126,8 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     // undefined on resume, which evaluateRisk already treats as "fall back
     // to the flat thresholds" -- safe, not a crash.
     state.priceBars = priceBars;
+    // The snapshot the analysts saw (pure, same inputs): kept so the verdict's evidence record can be built after the debate.
+    state.technicalSnapshot = computeTechnicalSnapshot(priceBars, undefined, technicalCurrent);
     await checkpoint(store, { pipelineRunId, ticker, stage: "analyzed", state });
     stage = "debated"; // next-needed after "analyzed" is written, per resumeFrom's own convention
   }
@@ -157,6 +161,8 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     }
 
     state.verdict = verdict;
+    // Stored next to the verdict (decision.debate.evidence), NOT inside it: the trader prompt prints the verdict.
+    state.evidence = collectEvidence({ verdict, opinions: state.opinions, snapshot: state.technicalSnapshot });
     await checkpoint(store, { pipelineRunId, ticker, stage: "debated", state });
     stage = "traded"; // next-needed after "debated" is written
   }
@@ -225,7 +231,7 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
       portfolioDecision: state.portfolioDecision,
       createdAt: new Date().toISOString(),
       opinions: state.opinions,
-      debate: state.verdict,
+      debate: state.evidence ? { ...state.verdict, evidence: state.evidence } : state.verdict,
     };
 
     if (!state.portfolioDecision.approvedForExecution) {
