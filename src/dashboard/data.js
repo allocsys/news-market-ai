@@ -10,6 +10,7 @@ import { RunStore, readOnly } from "../storage/run_store.js";
 import { autoBatch } from "../storage/auto_batch.js";
 import { parseDashboardParams, BACKTEST_ID_RE, PRICE_CHART_TICKER_LIMIT, STALE_INGESTION_HOURS, PIPELINE_STALE_HOURS } from "./helpers.js";
 import { STAGES } from "../graph/checkpointer.js";
+import { summarizePositions, classifyMissed, summarizeMissed, compareDecisions, MISSED_DEFAULTS } from "../analysis/postmortem.js";
 
 // The last stage a checkpoint can ever reach -- once here, checkpointer.js's
 // nextStage() returns null and the run's row is never written again by
@@ -492,6 +493,119 @@ export async function getLlmCallData(env, id, envParam) {
   const { store, resolvedEnv, envError } = await resolveEnv(env, envParam);
   const result = await safe(() => store.getLlmCall(id));
   return { call: result.data, error: result.error, resolvedEnv, envError };
+}
+
+const POSTMORTEM_DECISION_LIMIT = 5000;
+const POSTMORTEM_BAR_LIMIT = 60000;
+const POSTMORTEM_MISSED_SAMPLE = 25;
+
+/**
+ * Post-mortem of ONE backtest run (GET /api/postmortem?runId=): every position tagged by where its outcome came from,
+ * grouped by tag / blamed stage / close reason / relevance / confidence bucket (analysis/postmortem.js), plus -- when
+ * `missed` -- a look AHEAD at the held/rejected decisions that carried a long/short thesis (would the price have paid?).
+ * Read-only and computed on read. `error`/`run: null` mean the same as in getBacktestRunDetailData; a failing
+ * decisions or bars read rides along as `decisionsError` / `missedError` so the position tags still load.
+ */
+export async function getPostmortemData(env, id, { missed = true, includeDecisions = false } = {}) {
+  const detail = await getBacktestRunDetailData(env, id);
+  if (detail.error || !detail.run) return { run: null, error: detail.error };
+  const summary = summarizePositions(detail.positions);
+
+  const db = readOnly(env.SIM_DB);
+  const decisionsResult = await safe(() =>
+    db
+      .prepare(`SELECT id, ticker, as_of, status, thesis, risk_decision, debate FROM trade_decisions WHERE run_id = ? ORDER BY as_of ASC LIMIT ?`)
+      .bind(id, POSTMORTEM_DECISION_LIMIT + 1)
+      .all()
+  );
+  const parse = (raw) => {
+    try {
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  };
+  const rows = decisionsResult.data?.results ?? [];
+  const decisionsTruncated = rows.length > POSTMORTEM_DECISION_LIMIT;
+  const decisions = rows.slice(0, POSTMORTEM_DECISION_LIMIT).map((r) => {
+    const thesis = parse(r.thesis);
+    const debate = parse(r.debate);
+    return {
+      id: r.id,
+      ticker: r.ticker,
+      asOf: r.as_of,
+      status: r.status,
+      thesis,
+      riskDecision: parse(r.risk_decision),
+      direction: debate?.direction ?? thesis?.direction ?? null,
+      confidence: debate?.confidence ?? null,
+    };
+  });
+  const statusCounts = {};
+  for (const d of decisions) statusCounts[d.status] = (statusCounts[d.status] ?? 0) + 1;
+
+  let missedOut = null;
+  let missedError = null;
+  if (missed && decisions.length > 0) {
+    const candidates = decisions.filter((d) => (d.status === "held" || d.status === "rejected") && (d.thesis?.direction === "long" || d.thesis?.direction === "short"));
+    const result = await safe(async () => {
+      const items = [];
+      let barsTruncated = false;
+      const tickers = [...new Set(candidates.map((d) => d.ticker))];
+      const inputs = readOnly(env.INPUTS_DB);
+      for (const ticker of tickers) {
+        const mine = candidates.filter((d) => d.ticker === ticker);
+        const times = mine.map((d) => Date.parse(d.asOf)).filter(Number.isFinite);
+        if (times.length === 0) continue;
+        const iso = (ms) => `${new Date(ms).toISOString().slice(0, 19)}Z`;
+        const { results } = await inputs
+          .prepare(`SELECT ts, open, high, low FROM price_bars_intraday WHERE ticker = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC LIMIT ?`)
+          .bind(ticker, iso(Math.min(...times)), iso(Math.max(...times) + MISSED_DEFAULTS.horizonMs), POSTMORTEM_BAR_LIMIT)
+          .all();
+        if (results.length >= POSTMORTEM_BAR_LIMIT) barsTruncated = true;
+        const bars = results.map((b) => ({ tsMs: Date.parse(b.ts), open: b.open, high: b.high, low: b.low })).filter((b) => Number.isFinite(b.tsMs));
+        for (const d of mine) items.push({ id: d.id, ticker, asOf: d.asOf, status: d.status, direction: d.thesis.direction, ...classifyMissed(d, bars) });
+      }
+      return { items, barsTruncated };
+    });
+    missedError = result.error;
+    if (result.data) {
+      const { items, barsTruncated } = result.data;
+      missedOut = {
+        ...summarizeMissed(items),
+        horizonHours: MISSED_DEFAULTS.horizonMs / 3600000,
+        barsTruncated,
+        missedWinners: items.filter((i) => i.outcome === "missed_winner").slice(0, POSTMORTEM_MISSED_SAMPLE),
+      };
+    }
+  }
+
+  return {
+    run: { id: detail.run.id, status: detail.run.status, tickers: detail.run.tickers, testStart: detail.run.testStart ?? detail.run.test_start, testEnd: detail.run.testEnd ?? detail.run.test_end, knobs: detail.run.result?.knobs ?? null },
+    summary,
+    statusCounts,
+    missed: missedOut,
+    missedError,
+    positionsError: detail.positionsError,
+    positionsTruncated: detail.truncated,
+    decisionsError: decisionsResult.error,
+    decisionsTruncated,
+    ...(includeDecisions ? { decisions } : {}),
+    error: null,
+  };
+}
+
+/** Post-mortem of two runs side by side (GET /api/postmortem?runId=A&compareTo=B): each run's summary plus how often they decided the same thing on the same decision ids. */
+export async function getPostmortemCompareData(env, aId, bId) {
+  const [a, b] = await Promise.all([getPostmortemData(env, aId, { missed: false, includeDecisions: true }), getPostmortemData(env, bId, { missed: false, includeDecisions: true })]);
+  if (a.error || !a.run) return { a, b: null, comparison: null, error: a.error ?? "run A not found", missingRun: "a" };
+  if (b.error || !b.run) return { a, b: null, comparison: null, error: b.error ?? "run B not found", missingRun: "b" };
+  const comparison = compareDecisions(a.decisions ?? [], b.decisions ?? []);
+  const strip = (x) => {
+    const { decisions, ...rest } = x;
+    return rest;
+  };
+  return { a: strip(a), b: strip(b), comparison, error: null };
 }
 
 export { parseDashboardParams };
