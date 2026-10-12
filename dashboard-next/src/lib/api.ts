@@ -262,6 +262,8 @@ export interface PostmortemMissed {
   byOutcome: Record<string, number>;
   horizonHours: number;
   barsTruncated: boolean;
+  /** Outcome of every held/rejected long/short decision, keyed by decision id. */
+  byDecision: Record<string, { outcome: PostmortemMissedItem["outcome"]; forwardMovePct: number | null; hoursToHit: number | null }>;
   missedWinners: PostmortemMissedItem[];
 }
 
