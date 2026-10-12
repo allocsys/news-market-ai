@@ -48,6 +48,8 @@ import { DEFAULT_FLIP_MIN_CONFIDENCE, TRADE_DECISION_STATUS } from "../shared/co
 import { withLlmLogContext, flushLlmCallBuffer } from "../storage/llm_calls.js";
 import { isEntryPriceStale, pendingEntryExpiresAt } from "../shared/entry_timing.js";
 import { serializeTrailKnobs } from "../storage/live_knobs.js";
+import { evaluateRangeLocation, rangeFilterParams } from "../agents/risk_mgmt/range_location.js";
+import { entryConfirmationParams, entryConfirmationExpiryMs, pendingConfirmationRecord } from "../shared/entry_confirmation.js";
 
 /**
  * Runs the full analyst -> debate -> trade -> risk -> portfolio pipeline for
@@ -222,7 +224,7 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     const finalCheckpoint = { pipelineRunId, ticker, stage: "portfolio_checked", state };
     let checkpointFolded = false;
 
-    const decision = {
+    let decision = {
       id: tradeThesisId,
       ticker,
       asOf,
@@ -232,6 +234,10 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
       createdAt: new Date().toISOString(),
       opinions: state.opinions,
       debate: state.evidence ? { ...state.verdict, evidence: state.evidence } : state.verdict,
+    };
+    // Rebuilds the row's portfolioDecision/debate after the range filter or entry confirmation changed state (evidence rides next to the verdict).
+    const rebuildDecision = () => {
+      decision = { ...decision, portfolioDecision: state.portfolioDecision, debate: state.evidence ? { ...state.verdict, evidence: state.evidence } : state.verdict };
     };
 
     if (!state.portfolioDecision.approvedForExecution) {
@@ -248,6 +254,21 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
       const { price: currentPrice, source: priceSource, bar: priceBar } = await resolveCurrentPrice(inputs, { ticker, asOf });
       // Entry provenance: the bar's identity (intraday ts, or daily date) -- see migration 0007.
       const priceBarTs = priceBar ? (priceBar.ts ?? priceBar.date ?? null) : null;
+
+      // RANGE-LOCATION FILTER (switch rangeLocationFilter, default OFF; agents/risk_mgmt/range_location.js): a LONG near the N-day high or a SHORT near
+      // the N-day low is blocked unless the price is already beyond that extreme. Reuses the price read above and state.priceBars (daily bars, the
+      // current session excluded), so it costs no D1 read. The gate's record goes to decision.debate.evidence.rangeFilter whether it blocked or not.
+      // A blocked entry takes the normal REJECTED path (no position; an opposite thesis therefore cannot flip an open position either).
+      let rangeBlocked = false;
+      if (currentPrice != null && config.rangeLocationFilter === true) {
+        const range = evaluateRangeLocation({ direction: state.thesis.direction, price: currentPrice, bars: state.priceBars, ...rangeFilterParams(config) });
+        state.evidence = { ...(state.evidence ?? {}), rangeFilter: range };
+        if (range.blocked) {
+          rangeBlocked = true;
+          state.portfolioDecision = { ...state.portfolioDecision, approvedForExecution: false, finalPositionSizePct: 0, reason: range.reason };
+        }
+        rebuildDecision();
+      }
 
       if (currentPrice == null) {
         // HONEST SCOPE: no price_bars data for this ticker as of `asOf`
@@ -270,6 +291,9 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
         console.error("pipeline: skipping position open/replace -- no price_bars data for ticker", { ticker, asOf });
         await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA, checkpoint: finalCheckpoint });
         checkpointFolded = true;
+      } else if (rangeBlocked) {
+        await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.REJECTED, checkpoint: finalCheckpoint });
+        checkpointFolded = true;
       } else if (isEntryPriceStale({ price: currentPrice, source: priceSource, bar: priceBar }, asOf)) {
         // Off-hours / holiday / ingestion gap: the only price is an old close, so no real order could
         // have got it. Do NOT open (and do not touch this ticker's existing position -- replace/flip/
@@ -282,6 +306,20 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
           ...decision,
           status: TRADE_DECISION_STATUS.PENDING_ENTRY,
           fillExpiresAt: pendingEntryExpiresAt(asOf),
+          checkpoint: finalCheckpoint,
+        });
+        checkpointFolded = true;
+      } else if (config.entryConfirmation === true) {
+        // ENTRY CONFIRMATION (switch entryConfirmation, default OFF; shared/entry_confirmation.js): a fresh-price entry does not open now. It waits as
+        // 'pending_entry' with this price as the reference and opens (graph/entry_fill.js) at the next bar's open after a bar CLOSES the required move
+        // in the trade direction, or expires as 'skipped_no_fill'. Nothing is replaced or flipped here: that is decided at fill time, like every pending entry.
+        const confirm = entryConfirmationParams(config);
+        state.evidence = { ...(state.evidence ?? {}), entryConfirmation: pendingConfirmationRecord({ refPrice: currentPrice, movePct: confirm.movePct, hours: confirm.hours }) };
+        rebuildDecision();
+        await store.insertTradeDecision({
+          ...decision,
+          status: TRADE_DECISION_STATUS.PENDING_ENTRY,
+          fillExpiresAt: pendingEntryExpiresAt(asOf, { expiryMs: entryConfirmationExpiryMs(confirm.hours) }),
           checkpoint: finalCheckpoint,
         });
         checkpointFolded = true;
