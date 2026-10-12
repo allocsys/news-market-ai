@@ -38,10 +38,15 @@ export function pendingConfirmationRecord({ refPrice, movePct, hours }) {
   return { status: "pending", refPrice, movePct, hours };
 }
 
-/** A pending decision's stored confirmation spec, or null when it has none (a plain stale-price pending entry). */
+/**
+ * A pending decision's stored confirmation spec, or null when it has none (a plain stale-price pending entry). The spec is
+ * recognised by its numbers, NOT by status: graph/entry_fill.js writes the outcome ('confirmed' / 'expired') into the same
+ * record BEFORE it commits or expires the row, and a crash in between must re-run the same confirming fill, not fall back to
+ * a plain first-bar fill.
+ */
 export function confirmationSpecOf(pending) {
   const spec = pending?.debate?.evidence?.entryConfirmation;
-  if (!spec || spec.status !== "pending") return null;
+  if (!spec || typeof spec !== "object") return null;
   if (!Number.isFinite(spec.refPrice) || !(spec.refPrice > 0) || !Number.isFinite(spec.movePct) || !(spec.movePct > 0)) return null;
   return spec;
 }
