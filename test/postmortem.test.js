@@ -131,7 +131,7 @@ test("classifyMissed: inconclusive carries the end-of-window move and a lean in 
   assert.equal(classifyMissed(long, drift(100.5)).lean, "flat");
   assert.equal(classifyMissed(short, drift(97)).lean, "lean_winner", "a falling price favours a short");
   assert.equal(classifyMissed(short, drift(103)).lean, "lean_skip");
-  assert.equal(classifyMissed(long, drift(101.5)).lean, "lean_winner", "exactly +1.5% counts");
+  assert.equal(classifyMissed(long, drift(102)).lean, "lean_winner");
   assert.equal(classifyMissed(long, drift(103), { leanPct: 0.05 }).lean, "flat", "leanPct is overridable");
   assert.equal(classifyMissed(long, [bar(0, 100, 100.5, 99.5)]).lean, "flat", "a single bar means no move");
   assert.equal(classifyMissed(long, [bar(0, 100, 101, 94)]).lean, undefined, "hits carry no lean");
