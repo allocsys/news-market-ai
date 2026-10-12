@@ -188,6 +188,114 @@ export interface BacktestRunDetailResponse {
   activeJob?: JobProgress | null;
 }
 
+// --- Post-mortem (GET /api/postmortem) ---
+export type PostmortemTag =
+  | "win"
+  | "loss_flip"
+  | "loss_stop_pre_empted"
+  | "loss_wrong_from_start"
+  | "loss_reversed"
+  | "loss_time_exit"
+  | "loss_other"
+  | "open"
+  | "no_return";
+export type PostmortemStage = "analyst" | "debate" | "trader" | "unknown";
+
+export interface PostmortemGroup {
+  key: string;
+  n: number;
+  wins: number;
+  winRate: number;
+  avgReturn: number;
+  sumReturn: number; // fraction
+}
+
+export interface PostmortemPosition {
+  id: string;
+  ticker: string;
+  direction: string | null;
+  openedAt: string;
+  closedAt: string | null;
+  closeReason: string | null;
+  ret: number | null; // fraction, net of the run's cost
+  analystDirection: string;
+  debateDirection: string | null;
+  thesisDirection: string | null;
+  relevance: string | null;
+  confidence: number | null;
+  confidenceBucket: string;
+  tag: PostmortemTag;
+  stage: PostmortemStage | null; // losses only
+  note: string;
+}
+
+export interface PostmortemSummary {
+  positions: PostmortemPosition[];
+  n: number;
+  open: number;
+  scored: number;
+  winRate: number | null;
+  sumReturn: number;
+  byTag: PostmortemGroup[];
+  byLossStage: PostmortemGroup[];
+  byCloseReason: PostmortemGroup[];
+  byRelevance: PostmortemGroup[];
+  byConfidence: PostmortemGroup[];
+  stagesAlwaysAgreed: boolean;
+}
+
+export interface PostmortemMissedItem {
+  id: string;
+  ticker: string;
+  asOf: string;
+  status: string;
+  direction: string;
+  outcome: "missed_winner" | "good_skip" | "inconclusive" | "no_data";
+  entry?: number;
+  forwardMovePct?: number;
+  hoursToHit?: number;
+}
+
+export interface PostmortemMissed {
+  total: number;
+  byStatus: Record<string, Record<string, number>>;
+  byOutcome: Record<string, number>;
+  horizonHours: number;
+  barsTruncated: boolean;
+  missedWinners: PostmortemMissedItem[];
+}
+
+export interface PostmortemResponse {
+  run: { id: string; status: string; tickers: string[]; testStart: string; testEnd: string; knobs: Record<string, unknown> | null } | null;
+  summary: PostmortemSummary;
+  statusCounts: Record<string, number>;
+  missed: PostmortemMissed | null;
+  missedError: string | null;
+  positionsError: string | null;
+  positionsTruncated: boolean;
+  decisionsError: string | null;
+  decisionsTruncated: boolean;
+  error: string | null;
+}
+
+export interface PostmortemComparison {
+  aDecisions: number;
+  bDecisions: number;
+  matched: number;
+  sameDirection: number;
+  sameStatus: number;
+  directionAgreement: number | null;
+  statusAgreement: number | null;
+  avgConfidenceDeltaBMinusA: number | null;
+}
+
+export interface PostmortemCompareResponse {
+  a: PostmortemResponse;
+  b: PostmortemResponse;
+  comparison: PostmortemComparison;
+  error: string | null;
+}
+
 export interface JobResponse {
   job: JobProgress | null;
   error?: string;
@@ -387,6 +495,28 @@ export function useBacktestRunDetail(id: string | null) {
     enabled: Boolean(id),
     // Poll while the run still has an in-flight job (progress bar), and once more after it ends so the final result replaces the bar.
     refetchInterval: (query) => (query.state.data?.activeJob ? 5_000 : false),
+    retry: 1,
+  });
+}
+
+// --- Post-mortem of one run (read-only, computed on read; the look-ahead for missed opportunities is included) ---
+export function usePostmortem(id: string | null) {
+  return useQuery({
+    queryKey: ["postmortem", id],
+    queryFn: () => apiFetch<PostmortemResponse>(`/api/postmortem?runId=${encodeURIComponent(id ?? "")}`),
+    enabled: Boolean(id),
+    staleTime: 60_000,
+    retry: 1,
+  });
+}
+
+// --- Post-mortem of two runs side by side ---
+export function usePostmortemCompare(id: string | null, compareTo: string | null) {
+  return useQuery({
+    queryKey: ["postmortem-compare", id, compareTo],
+    queryFn: () => apiFetch<PostmortemCompareResponse>(`/api/postmortem?runId=${encodeURIComponent(id ?? "")}&compareTo=${encodeURIComponent(compareTo ?? "")}`),
+    enabled: Boolean(id) && Boolean(compareTo),
+    staleTime: 60_000,
     retry: 1,
   });
 }
