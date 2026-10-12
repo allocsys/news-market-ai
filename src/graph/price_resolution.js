@@ -65,3 +65,21 @@ export async function resolveCurrentPrice(inputs, { ticker, asOf }) {
     ? { price: dailyBar.close, source: "daily", bar: dailyBar }
     : { price: null, source: null, bar: null };
 }
+
+/**
+ * The intraday price the TECHNICAL analyst sees alongside the daily bars (the daily bars end at the last completed
+ * session, up to ~a day behind the article). Same visibility rule and age bound as resolveCurrentPrice
+ * (getIntradayPriceAsOf: the bar must have fully closed by asOf), so a backtest sees only what was known then.
+ *
+ * Returns `{ price, ts, availableAt, ageMinutes }`, or null when no fresh intraday bar exists; the snapshot then
+ * uses the last completed daily close, as before. The fallback is logged (Pattern #11) but never invented.
+ */
+export async function resolveIntradayForTechnical(inputs, { ticker, asOf }) {
+  const bar = await getIntradayPriceAsOf(inputs, { ticker, asOf, maxAgeMs: INTRADAY_MAX_AGE_MS });
+  if (!bar) {
+    console.error("price_resolution: no fresh intraday bar for the technical snapshot -- using the last completed daily close", { ticker, asOf });
+    return null;
+  }
+  const ageMinutes = Math.max(0, Math.round((Date.parse(asOf) - Date.parse(bar.availableAt)) / 60000));
+  return { price: bar.close, ts: bar.ts, availableAt: bar.availableAt, ageMinutes };
+}

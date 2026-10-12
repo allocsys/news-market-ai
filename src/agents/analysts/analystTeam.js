@@ -26,8 +26,10 @@ import { computeTechnicalSnapshot } from "./technicalIndicators.js";
  * does its own `.filter(Boolean)`-equivalent internally so the caller doesn't
  * need to.
  */
-export async function runAnalystTeam(env, config, { ticker, newsItem, bars, macroContext = null }) {
-  const snapshot = computeTechnicalSnapshot(bars);
+export async function runAnalystTeam(env, config, { ticker, newsItem, bars, macroContext = null, currentPrice = null }) {
+  // `currentPrice` (graph/price_resolution.js#resolveIntradayForTechnical, or null) lifts the snapshot off the last
+  // completed daily close, which can be up to ~a day old at decision time.
+  const snapshot = computeTechnicalSnapshot(bars, undefined, currentPrice);
   const needsTechnical = snapshot.hasData;
 
   // Judges the effect on the PRICE of the ticker, which is not the same as the article's sentiment (a rate-hike
@@ -55,7 +57,7 @@ channel in a few words (for example "rates/yields", "dollar", "oil", "company ea
 given here -- describe the price/volume context. A null field means not enough bars yet for that \
 indicator -- say so rather than guessing.
 
-Technical snapshot:
+${snapshot.currentPrice != null ? "currentPrice is the latest intraday price at the time of the article; latestClose is the last COMPLETED daily close and can be hours old, so judge the setup against currentPrice.\n\n" : ""}Technical snapshot:
 ${JSON.stringify(snapshot, null, 2)}`
     : `
 

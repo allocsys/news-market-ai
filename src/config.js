@@ -184,6 +184,8 @@ export function loadConfig(env) {
     // SKIP_NO_PRICE_IMPACT="false" runs every item through the full pipeline as before. A config built elsewhere
     // (unit tests) has no key, and the gate treats that as on -- it only fires when the model returns a verdict.
     skipNoPriceImpact: env.SKIP_NO_PRICE_IMPACT !== "false",
+    // Technical analyst gets the intraday price visible at decision time (graph/pipeline.js). "false" restores the daily-close-only snapshot.
+    intradayTechnical: env.INTRADAY_TECHNICAL !== "false",
     // Time-based exit knob for graph/exit_check.js#checkOpenPositionExits --
     // a position still open this many days after opened_at closes
     // regardless of price, even if price_bars has no data for it (see that
