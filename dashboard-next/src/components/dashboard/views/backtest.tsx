@@ -383,6 +383,13 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   // Decision switches for this run only (default off; never the live switches).
   const [intradayTechnical, setIntradayTechnical] = useState(false);
   const [independenceNote, setIndependenceNote] = useState(false);
+  const [rangeLocationFilter, setRangeLocationFilter] = useState(false);
+  const [entryConfirmation, setEntryConfirmation] = useState(false);
+  // Optional numeric params of those two switches (blank = the default); the backend validates the bounds.
+  const [rangeFilterDays, setRangeFilterDays] = useState("");
+  const [rangeFilterEdgePct, setRangeFilterEdgePct] = useState("");
+  const [entryConfirmMovePct, setEntryConfirmMovePct] = useState("");
+  const [entryConfirmHours, setEntryConfirmHours] = useState("");
   // Exit knobs for this run only, in R (blank = default 0 = off). Never the live knobs.
   const [breakEvenTriggerR, setBreakEvenTriggerR] = useState("");
   const [trailActivationR, setTrailActivationR] = useState("");
@@ -402,6 +409,14 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
     setDisableGate(false);
     setEnableMacro(false);
     setMergedVerdict(false);
+    setIntradayTechnical(false);
+    setIndependenceNote(false);
+    setRangeLocationFilter(false);
+    setEntryConfirmation(false);
+    setRangeFilterDays("");
+    setRangeFilterEdgePct("");
+    setEntryConfirmMovePct("");
+    setEntryConfirmHours("");
     setBreakEvenTriggerR("");
     setTrailActivationR("");
     setTrailDistanceR("");
@@ -423,6 +438,13 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
     return n !== undefined && (!Number.isFinite(n) || n < 0 || n > 10);
   };
 
+  const paramFields: string[] = [rangeFilterDays, rangeFilterEdgePct, entryConfirmMovePct, entryConfirmHours];
+  // Blank = default; otherwise a positive number (the backend enforces the exact bounds and rejects the run if they are off).
+  const paramInvalid = (raw: string) => {
+    const n = knobNumber(raw);
+    return n !== undefined && (!Number.isFinite(n) || n <= 0);
+  };
+
   // ISO dates (YYYY-MM-DD) compare correctly as strings.
   const requestSubmit = () => {
     if (!testStart || !testEnd) {
@@ -435,6 +457,10 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
     }
     if (knobFields.some(([, raw]) => knobInvalid(raw))) {
       toast.error("Exit knobs must be numbers from 0 to 10 (or blank)");
+      return;
+    }
+    if (paramFields.some(paramInvalid)) {
+      toast.error("Range filter / entry confirmation values must be positive numbers (or blank)");
       return;
     }
     setConfirmOpen(true);
@@ -452,6 +478,12 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         mergedVerdict,
         intradayTechnical,
         independenceNote,
+        rangeLocationFilter,
+        entryConfirmation,
+        rangeFilterDays: knobNumber(rangeFilterDays),
+        rangeFilterEdgePct: knobNumber(rangeFilterEdgePct),
+        entryConfirmMovePct: knobNumber(entryConfirmMovePct),
+        entryConfirmHours: knobNumber(entryConfirmHours),
         breakEvenTriggerR: knobNumber(breakEvenTriggerR),
         trailActivationR: knobNumber(trailActivationR),
         trailDistanceR: knobNumber(trailDistanceR),
@@ -568,6 +600,47 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         <span className="text-xs">Evidence rule in judge prompts</span>
         <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off; ignores the live switch)</span>
       </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={rangeLocationFilter} onCheckedChange={(v) => v !== "indeterminate" && setRangeLocationFilter(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Range-location filter</span>
+        <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off; blocks longs near the N-day high / shorts near the N-day low unless breakout)</span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={entryConfirmation} onCheckedChange={(v) => v !== "indeterminate" && setEntryConfirmation(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Entry confirmation</span>
+        <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off; waits for a bar close in the trade direction before opening)</span>
+      </label>
+
+      <div>
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Filter / confirmation values (optional, this run only)</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {([
+            ["param-range-days", "Range days", rangeFilterDays, setRangeFilterDays, "10"],
+            ["param-range-edge", "Range edge (fraction)", rangeFilterEdgePct, setRangeFilterEdgePct, "0.2"],
+            ["param-confirm-move", "Confirm move (fraction)", entryConfirmMovePct, setEntryConfirmMovePct, "0.005"],
+            ["param-confirm-hours", "Confirm wait (hours)", entryConfirmHours, setEntryConfirmHours, "6"],
+          ] as const).map(([id, label, value, set, placeholder]) => (
+            <div key={id}>
+              <label htmlFor={id} className="mb-1 block text-[10px] text-muted-foreground">{label}</label>
+              <input
+                id={id}
+                type="text"
+                inputMode="decimal"
+                placeholder={`default ${placeholder}`}
+                value={value}
+                onChange={(e) => set(e.target.value)}
+                className={cn(
+                  "w-full rounded-md border bg-card px-2.5 py-1.5 text-sm font-mono",
+                  paramInvalid(value) ? "border-destructive" : "border-border",
+                )}
+              />
+            </div>
+          ))}
+        </div>
+        <p className="mt-1 text-[10px] text-muted-foreground">Blank = default. Only used when the matching box above is checked; the values used are recorded on the run.</p>
+      </div>
 
       <div>
         <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Exit knobs (this run only)</p>
