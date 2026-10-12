@@ -5,7 +5,7 @@
 // both analysts -- one implementation instead of four, so a fix (e.g.
 // better JSON-repair on malformed model output) only has to happen once.
 
-import { geminiGenerateText, stripJsonFence } from "../../llm/gemini/client.js";
+import { geminiGenerateText, parseModelJson } from "../../llm/gemini/client.js";
 import { recordLlmCall } from "../../storage/llm_calls.js";
 import { chargeLlmCall } from "../../llm/budget.js";
 import { markLlmOutputError } from "../../shared/errors.js";
@@ -44,7 +44,8 @@ async function generateText(env, config, prompt, { model, schema, extraFields, t
     if (trace) trace.modelUsed = "fake";
     return text;
   }
-  return geminiGenerateText(env, config, prompt, { model, trace });
+  // json: every caller of callStructured parses the reply as JSON, so ask Gemini for JSON output.
+  return geminiGenerateText(env, config, prompt, { model, trace, json: true });
 }
 
 /**
@@ -98,7 +99,7 @@ export async function callStructured(env, config, schema, prompt, { model, extra
 
   let result;
   try {
-    const parsed = JSON.parse(stripJsonFence(text));
+    const parsed = parseModelJson(text);
     result = schema.parse({ ...extraFields, ...parsed });
   } catch (err) {
     const stage = err?.name === "ZodError" ? "validation" : "parse";
