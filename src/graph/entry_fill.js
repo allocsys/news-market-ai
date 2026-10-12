@@ -27,6 +27,7 @@ import { DEFAULT_FLIP_MIN_CONFIDENCE } from "../shared/constants.js";
 import { recordExcursionBeforeClose, checkOpenPositionExits } from "./exit_check.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
+import { serializeTrailKnobs } from "../storage/live_knobs.js";
 
 function findFillForPending(inputs, pending, { asOf }) {
   // Window rule lives in bar_fill.js (shared with the read-only replay): the decision's asOf is the anchor.
@@ -93,6 +94,8 @@ export async function fillPendingEntries(env, config, { inputs, store }, { asOf 
       entryPriceBarTs: fill.barTs,
       stopLossPct: riskDecision.stopLossPct ?? null,
       takeProfitPct: riskDecision.takeProfitPct ?? null,
+      // SNAPSHOT of the effective break-even/trailing knobs (config already carries any live override).
+      trailKnobs: serializeTrailKnobs(config),
       asOf: fill.openedAt,
       exitPrice: fill.price,
       confidence,
