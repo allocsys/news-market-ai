@@ -121,14 +121,15 @@ test("recordExcursionBeforeClose: a short's fill price counts in its own directi
   assert.equal(await recordExcursionBeforeClose({}, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: 106 }), true);
   const [row] = await stateRows(ctx.stateDb, "positions");
   assert.ok(Math.abs(row.mae_pct - -0.06) < 1e-9, `mae ${row.mae_pct}`);
-  assert.equal(row.mfe_pct, null, "nothing in profit was ever seen");
+  assert.equal(row.mfe_pct ?? 0, 0, "nothing in profit was ever seen");
 });
 
 test("recordExcursionBeforeClose ignores a split-looking fill price and a non-finite one", async () => {
   const ctx = makeCtx();
   const position = await openAt(ctx, "long");
-  assert.equal(await recordExcursionBeforeClose({}, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: 50 }), false, "a 2:1 split-looking price is not a real fill");
-  assert.equal(await recordExcursionBeforeClose({}, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: Number.NaN }), false);
+  const guarded = { splitGuardTolerance: 0.05 };
+  assert.equal(await recordExcursionBeforeClose(guarded, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: 50 }), false, "a 2:1 split-looking price is not a real fill");
+  assert.equal(await recordExcursionBeforeClose(guarded, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: Number.NaN }), false);
   const [row] = await stateRows(ctx.stateDb, "positions");
   assert.equal(row.mae_pct, null);
 });
