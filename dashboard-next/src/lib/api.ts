@@ -681,7 +681,7 @@ export function useKnobs() {
 }
 
 // --- Live decision switches (0/1, default OFF): intraday price for the technical analyst; judge evidence rule ---
-export const SWITCH_NAMES = ["intradayTechnical", "independenceNote"] as const;
+export const SWITCH_NAMES = ["intradayTechnical", "independenceNote", "rangeLocationFilter", "entryConfirmation"] as const;
 export type SwitchName = (typeof SWITCH_NAMES)[number];
 export type SwitchValues = Record<SwitchName, 0 | 1>;
 export interface SwitchesResponse {
