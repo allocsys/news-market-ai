@@ -143,15 +143,28 @@ export function summarizePositions(positions) {
 // input to a run. Conservative: a bar touching both the stop and the target counts as stop-first.
 // ---------------------------------------------------------------------------------------------------------------------
 
-export const MISSED_DEFAULTS = Object.freeze({ horizonMs: 72 * 3600 * 1000, stopPct: 0.04, takeProfitMultiple: 2 });
+// leanPct: when neither level is reached, a signed move of at least this much (in the thesis direction) by the end of the window still counts as a lean.
+export const MISSED_DEFAULTS = Object.freeze({ horizonMs: 72 * 3600 * 1000, stopPct: 0.04, takeProfitMultiple: 2, leanPct: 0.015 });
+
+/** Edges (fractions) of the end-of-window move buckets; the move is signed in the thesis direction (+ = the thesis would have been right). */
+export const END_MOVE_EDGES = Object.freeze([-0.03, -0.015, 0.015, 0.03]);
+export const END_MOVE_LABELS = Object.freeze(["≤ -3%", "-3% to -1.5%", "within ±1.5%", "+1.5% to +3%", "≥ +3%"]);
+
+function endMoveBucket(x) {
+  let i = 0;
+  while (i < END_MOVE_EDGES.length && x >= END_MOVE_EDGES[i]) i += 1;
+  return i;
+}
 
 /**
  * @param decision `{ asOf, thesis:{direction}, riskDecision?:{stopLossPct,takeProfitPct} }`
  * @param bars ascending `[{ tsMs, open, high, low }]` for the decision's ticker
- * @returns `{ outcome: missed_winner|good_skip|inconclusive|no_data, entry, forwardMovePct, hoursToHit }`
+ * @returns `{ outcome: missed_winner|good_skip|inconclusive|no_data, entry, forwardMovePct, hoursToHit }`; an `inconclusive` result also carries
+ *   `endMovePct` (signed move in the thesis direction, measured at the open of the last bar inside the window) and `lean`
+ *   (`lean_winner` >= +leanPct, `lean_skip` <= -leanPct, else `flat`).
  */
 export function classifyMissed(decision, bars, opts = {}) {
-  const { horizonMs, stopPct: defStop, takeProfitMultiple } = { ...MISSED_DEFAULTS, ...opts };
+  const { horizonMs, stopPct: defStop, takeProfitMultiple, leanPct } = { ...MISSED_DEFAULTS, ...opts };
   const dir = decision.thesis?.direction;
   const asOfMs = Date.parse(decision.asOf);
   if ((dir !== "long" && dir !== "short") || !Number.isFinite(asOfMs)) return { outcome: "no_data" };
@@ -164,8 +177,10 @@ export function classifyMissed(decision, bars, opts = {}) {
   const stopPx = dir === "long" ? entry * (1 - stopPct) : entry * (1 + stopPct);
   const tpPx = dir === "long" ? entry * (1 + tpPct) : entry * (1 - tpPct);
   let best = 0;
+  let lastOpen = entry;
   for (; i < bars.length && bars[i].tsMs <= asOfMs + horizonMs; i++) {
     const b = bars[i];
+    if (Number.isFinite(b.open) && b.open > 0) lastOpen = b.open;
     const stopHit = dir === "long" ? b.low <= stopPx : b.high >= stopPx;
     const tpHit = dir === "long" ? b.high >= tpPx : b.low <= tpPx;
     const hours = (b.tsMs - asOfMs) / 3600000;
@@ -174,7 +189,9 @@ export function classifyMissed(decision, bars, opts = {}) {
     const fav = dir === "long" ? b.high / entry - 1 : 1 - b.low / entry;
     if (fav > best) best = fav;
   }
-  return { outcome: "inconclusive", entry, forwardMovePct: best };
+  const endMovePct = dir === "long" ? lastOpen / entry - 1 : 1 - lastOpen / entry;
+  const lean = endMovePct >= leanPct ? "lean_winner" : endMovePct <= -leanPct ? "lean_skip" : "flat";
+  return { outcome: "inconclusive", entry, forwardMovePct: best, endMovePct, lean };
 }
 
 function lowerBound(bars, tsMs) {
@@ -190,11 +207,17 @@ function lowerBound(bars, tsMs) {
 
 /** Tallies classifyMissed outcomes per decision status (held / rejected) and overall. */
 export function summarizeMissed(items) {
-  const out = { total: items.length, byStatus: {}, byOutcome: {} };
+  // byLean / endMoveBuckets cover the inconclusive items only (the ones with no stop/target hit): where did the price end up?
+  const out = { total: items.length, byStatus: {}, byOutcome: {}, byLean: {}, endMoveBuckets: END_MOVE_LABELS.map((label) => ({ label, n: 0 })) };
   for (const it of items) {
     out.byOutcome[it.outcome] = (out.byOutcome[it.outcome] ?? 0) + 1;
     const s = (out.byStatus[it.status] ??= {});
     s[it.outcome] = (s[it.outcome] ?? 0) + 1;
+    if (it.lean) {
+      out.byLean[it.lean] = (out.byLean[it.lean] ?? 0) + 1;
+      s[it.lean] = (s[it.lean] ?? 0) + 1;
+    }
+    if (it.outcome === "inconclusive" && Number.isFinite(it.endMovePct)) out.endMoveBuckets[endMoveBucket(it.endMovePct)].n += 1;
   }
   return out;
 }

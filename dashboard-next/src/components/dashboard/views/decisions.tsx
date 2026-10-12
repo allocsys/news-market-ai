@@ -232,7 +232,7 @@ function DecisionCard({
   onNavigateLlm,
 }: {
   decision: import("@/lib/types").TradeDecision;
-  missed?: { outcome: string; forwardMovePct: number | null; hoursToHit: number | null } | null;
+  missed?: { outcome: string; forwardMovePct: number | null; hoursToHit: number | null; lean?: string | null; endMovePct?: number | null } | null;
   onNavigateLlm: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -250,7 +250,7 @@ function DecisionCard({
           <div className="flex items-center gap-2">
             <span className="font-mono text-base font-semibold">{decision.ticker}</span>
             <StatusBadge variant={variant} label={decisionStatusLabel(decision.status)} />
-            {missed && <MissedOutcomePill outcome={missed.outcome} forwardMovePct={missed.forwardMovePct} hoursToHit={missed.hoursToHit} />}
+            {missed && <MissedOutcomePill outcome={missed.outcome} forwardMovePct={missed.forwardMovePct} hoursToHit={missed.hoursToHit} lean={missed.lean} endMovePct={missed.endMovePct} />}
           </div>
           <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
             {decision.thesis.rationale ?? "—"}

@@ -44,6 +44,9 @@ const OUTCOMES: Record<string, string> = {
   missed_winner: "Missed winner",
   good_skip: "Good skip",
   inconclusive: "Inconclusive",
+  lean_winner: "Lean win",
+  lean_skip: "Lean skip",
+  flat: "Flat",
   no_data: "No price data",
 };
 
@@ -72,12 +75,36 @@ const MISSED_PILL: Record<string, { label: string; tone: Tone; hint: string }> =
   inconclusive: { label: "Inconclusive", tone: "muted", hint: "Neither level was reached inside the look-ahead window." },
 };
 
+const LEAN_PILL: Record<string, { label: string; tone: Tone; hint: string }> = {
+  lean_winner: { label: "Leaned winner", tone: "rejected", hint: "Neither level was reached, but the price ended clearly in the thesis direction." },
+  lean_skip: { label: "Leaned skip", tone: "approved", hint: "Neither level was reached, but the price ended clearly against the thesis." },
+  flat: { label: "Flat", tone: "muted", hint: "Neither level was reached and the price ended close to where it started." },
+};
+
 /** Pill for a held/rejected decision's look-ahead outcome (post-hoc audit only). `no_data` renders nothing. */
-export function MissedOutcomePill({ outcome, forwardMovePct, hoursToHit }: { outcome: string; forwardMovePct?: number | null; hoursToHit?: number | null }) {
-  const m = MISSED_PILL[outcome];
+export function MissedOutcomePill({
+  outcome,
+  forwardMovePct,
+  hoursToHit,
+  lean,
+  endMovePct,
+}: {
+  outcome: string;
+  forwardMovePct?: number | null;
+  hoursToHit?: number | null;
+  lean?: string | null;
+  endMovePct?: number | null;
+}) {
+  const m = (outcome === "inconclusive" && lean ? LEAN_PILL[lean] : undefined) ?? MISSED_PILL[outcome];
   if (!m) return null;
   const detail = outcome === "missed_winner" && hoursToHit != null ? ` · ${hoursToHit.toFixed(0)}h` : "";
-  const hint = forwardMovePct != null ? `${m.hint} Best favourable move: ${signedPct(forwardMovePct, 1)}.` : m.hint;
+  const hint = [
+    m.hint,
+    forwardMovePct != null ? `Best favourable move: ${signedPct(forwardMovePct, 1)}.` : null,
+    endMovePct != null ? `Ended ${signedPct(endMovePct, 1)} (+ = thesis direction).` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <span title={hint}>
       <Pill tone={m.tone} size="sm">
@@ -130,7 +157,34 @@ function MissedBlock({ pm }: { pm: PostmortemResponse }) {
   if (m.total === 0) {
     return <p className="text-xs text-muted-foreground">No held or rejected decisions carried a long/short thesis.</p>;
   }
-  const outcomes = ["missed_winner", "good_skip", "inconclusive", "no_data"];
+  const hasLean = m.byLean != null && Object.values(m.byLean).some((n) => n > 0);
+  const outcomes = hasLean ? ["missed_winner", "good_skip", "lean_winner", "lean_skip", "flat", "no_data"] : ["missed_winner", "good_skip", "inconclusive", "no_data"];
+  const buckets = m.endMoveBuckets ?? [];
+  const bucketTotal = buckets.reduce((a, b) => a + b.n, 0);
+  const bucketMax = Math.max(1, ...buckets.map((b) => b.n));
+  const distribution =
+    bucketTotal > 0 ? (
+      <div className="mt-3 border-t border-border/60 pt-2">
+        <h4 className="text-[11px] font-semibold">Where the price ended when neither level was hit</h4>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          Move at the end of the window, signed so + means the thesis direction. Lean win / lean skip = at least 1.5% with / against it.
+        </p>
+        <ul className="mt-1.5 space-y-1">
+          {buckets.map((b, idx) => (
+            <li key={b.label} className="flex items-center gap-2 text-[11px]">
+              <span className="w-28 shrink-0 text-muted-foreground">{b.label}</span>
+              <span className="h-2 flex-1 rounded-sm bg-muted">
+                <span
+                  className={cn("block h-2 rounded-sm", idx > 2 ? "bg-[color:var(--long)]" : idx < 2 ? "bg-[color:var(--short)]" : "bg-muted-foreground/50")}
+                  style={{ width: `${(b.n / bucketMax) * 100}%` }}
+                />
+              </span>
+              <span className="w-6 text-right font-mono nums">{b.n}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ) : null;
   return (
     <div className="space-y-2">
       <div className="rounded-xl border border-border bg-card p-3">
@@ -163,6 +217,7 @@ function MissedBlock({ pm }: { pm: PostmortemResponse }) {
             ))}
           </tbody>
         </table>
+        {distribution}
         {m.barsTruncated && <p className="mt-2 text-[11px] text-[color:var(--paused)]">Price bars hit the read cap; later decisions may show &quot;No price data&quot;.</p>}
       </div>
       {m.missedWinners.length > 0 && (
@@ -247,6 +302,35 @@ function CompareBlock({ runId, otherId }: { runId: string; otherId: string }) {
   );
 }
 
+/** One-glance tally: mistakes = losing trades + missed winners, next to what went right (wins + good skips). */
+function MistakesSummary({ d }: { d: PostmortemResponse }) {
+  const m = d.missed;
+  if (d.summary.scored === 0 && !m) return null;
+  const losses = d.summary.byTag.filter((g) => g.key.startsWith("loss_"));
+  const lossN = losses.reduce((a, g) => a + g.n, 0);
+  const missedN = m?.byOutcome.missed_winner ?? 0;
+  const possibleN = m?.byLean?.lean_winner ?? 0;
+  const winsN = d.summary.byTag.find((g) => g.key === "win")?.n ?? 0;
+  const skipsN = m?.byOutcome.good_skip ?? 0;
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-card p-3">
+      <div className="flex items-baseline gap-2">
+        <span className="font-mono text-2xl font-semibold nums">{lossN + missedN}</span>
+        <span className="text-xs font-semibold">mistakes</span>
+      </div>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        {lossN} losing trades · {missedN} missed winners{possibleN > 0 ? ` · +${possibleN} possible misses (leaned winner)` : ""}
+      </p>
+      {losses.length > 0 && (
+        <p className="mt-0.5 text-[11px] text-muted-foreground">Losses: {losses.map((g) => `${g.n} ${tagLabel(g.key).toLowerCase()}`).join(" · ")}</p>
+      )}
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        vs {winsN} wins · {skipsN} good skips{d.missedError ? " (missed-opportunity check unavailable)" : ""}
+      </p>
+    </div>
+  );
+}
+
 export function PostmortemCard({ runId }: { runId: string }) {
   const pm = usePostmortem(runId);
   const runs = useBacktestRuns();
@@ -281,6 +365,7 @@ export function PostmortemCard({ runId }: { runId: string }) {
   return (
     <section>
       <SectionHeading title="Post-mortem" description="Where each position's outcome came from (computed on read; small samples are hints, not proof)" />
+      <MistakesSummary d={d} />
       {s.scored === 0 ? (
         <p className="mt-3 text-xs text-muted-foreground">No closed position with a return yet.</p>
       ) : (
