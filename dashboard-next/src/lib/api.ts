@@ -244,6 +244,8 @@ export interface PostmortemSummary {
   stagesAlwaysAgreed: boolean;
 }
 
+export type PostmortemLean = "lean_winner" | "lean_skip" | "flat";
+
 export interface PostmortemMissedItem {
   id: string;
   ticker: string;
@@ -254,16 +256,25 @@ export interface PostmortemMissedItem {
   entry?: number;
   forwardMovePct?: number;
   hoursToHit?: number;
+  /** Inconclusive only: signed move in the thesis direction at the end of the window, and the lean it implies. */
+  endMovePct?: number;
+  lean?: PostmortemLean;
 }
 
 export interface PostmortemMissed {
   total: number;
   byStatus: Record<string, Record<string, number>>;
   byOutcome: Record<string, number>;
+  /** Inconclusive decisions split by where the price ended up (older API responses lack this). */
+  byLean?: Record<string, number>;
+  endMoveBuckets?: { label: string; n: number }[];
   horizonHours: number;
   barsTruncated: boolean;
   /** Outcome of every held/rejected long/short decision, keyed by decision id. */
-  byDecision: Record<string, { outcome: PostmortemMissedItem["outcome"]; forwardMovePct: number | null; hoursToHit: number | null }>;
+  byDecision: Record<
+    string,
+    { outcome: PostmortemMissedItem["outcome"]; forwardMovePct: number | null; hoursToHit: number | null; lean?: PostmortemLean | null; endMovePct?: number | null }
+  >;
   missedWinners: PostmortemMissedItem[];
 }
 
