@@ -138,6 +138,10 @@ test("effective: reports every knob from the config", () => {
     skipNoPriceImpact: false,
     macroEnabled: false,
     mergedVerdict: false,
+    breakEvenTriggerR: null,
+    trailActivationR: null,
+    trailDistanceR: null,
+    trailRemovesTarget: null,
   });
 });
 
@@ -219,4 +223,31 @@ test("macro: effective is false by default (opposite of the gate) and follows th
   assert.equal(effectiveKnobs({}).macroEnabled, false);
   assert.equal(effectiveKnobs({ macroEnabled: false }).macroEnabled, false);
   assert.equal(effectiveKnobs(applyKnobOverrides({}, { macroEnabled: 1 })).macroEnabled, true);
+});
+
+// ---------------------------------------------------------------------------
+// break-even / trailing stop knobs (R units, 0 = off)
+// ---------------------------------------------------------------------------
+
+test("trail: parse accepts the four knobs as numbers, 0 is a real value", () => {
+  const r = parseKnobOverrides(from({ breakEvenTriggerR: "0.4", trailActivationR: "0.5", trailDistanceR: "0.25", trailRemovesTarget: "1" }));
+  assert.deepEqual(r, { overrides: { breakEvenTriggerR: 0.4, trailActivationR: 0.5, trailDistanceR: 0.25, trailRemovesTarget: 1 } });
+  assert.deepEqual(parseKnobOverrides(from({ trailDistanceR: "0" })), { overrides: { trailDistanceR: 0 } });
+});
+
+test("trail: out-of-range, negative and non-integer trailRemovesTarget are errors naming the param", () => {
+  assert.ok(parseKnobOverrides(from({ breakEvenTriggerR: "-0.1" })).error?.includes("breakEvenTriggerR"));
+  assert.ok(parseKnobOverrides(from({ trailActivationR: "10.5" })).error?.includes("trailActivationR"));
+  assert.ok(parseKnobOverrides(from({ trailRemovesTarget: "2" })).error?.includes("trailRemovesTarget"));
+  assert.ok(parseKnobOverrides(from({ trailRemovesTarget: "0.5" })).error);
+});
+
+test("trail: apply keeps the values as numbers (trailRemovesTarget is not a boolean) and effective reports them", () => {
+  const out = applyKnobOverrides({ tradeCostBps: 5 }, { breakEvenTriggerR: 0.4, trailActivationR: 0.5, trailDistanceR: 0.25, trailRemovesTarget: 1 });
+  assert.equal(out.breakEvenTriggerR, 0.4);
+  assert.equal(out.trailRemovesTarget, 1);
+  const knobs = effectiveKnobs(out);
+  assert.equal(knobs.trailActivationR, 0.5);
+  assert.equal(knobs.trailDistanceR, 0.25);
+  assert.equal(knobs.tradeCostBps, 5);
 });
