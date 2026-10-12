@@ -419,6 +419,27 @@ test("POST /backtest/run JSON: enableLlmLog true is forwarded as 1, false is NOT
   assert.equal(off.calls[0].url.searchParams.has("enableLlmLog"), false);
 });
 
+test("POST /backtest/run JSON forwards the break-even/trailing knobs (numbers, incl. an explicit 0) and the backend queues them as overrides", async () => {
+  const { response, backtestQueue } = await postBacktest("json", { breakEvenTriggerR: 0.4, trailActivationR: 0.5, trailDistanceR: 0.25, trailRemovesTarget: 1 });
+  assert.equal(response.status, 200);
+  assert.deepEqual(backtestQueue.sent[0].knobOverrides, { breakEvenTriggerR: 0.4, trailActivationR: 0.5, trailDistanceR: 0.25, trailRemovesTarget: 1 });
+
+  const zero = await postBacktest("json", { breakEvenTriggerR: 0 });
+  assert.equal(zero.response.status, 200);
+  assert.deepEqual(zero.backtestQueue.sent[0].knobOverrides, { breakEvenTriggerR: 0 });
+});
+
+test("POST /backtest/run form: blank knob fields send nothing; an out-of-bounds knob is rejected by the backend before queueing", async () => {
+  const blank = await postBacktest("form", { breakEvenTriggerR: "", trailActivationR: " " });
+  assert.equal(blank.response.status, 200);
+  assert.equal(blank.backtestQueue.sent[0].knobOverrides?.breakEvenTriggerR, undefined);
+  assert.equal(blank.backtestQueue.sent[0].knobOverrides?.trailActivationR, undefined);
+
+  const bad = await postBacktest("form", { trailDistanceR: "11" });
+  assert.equal(bad.response.status, 400);
+  assert.equal(bad.backtestQueue.sent.length, 0);
+});
+
 test("POST /backtest/run JSON without valid dates is a 400 and never reaches backend", async () => {
   const { response, calls } = await postJson("/backtest/run", { testStart: "2024-01-01" });
   assert.equal(response.status, 400);
