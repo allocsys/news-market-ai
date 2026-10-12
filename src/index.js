@@ -70,6 +70,7 @@ import {
   handleApiWatchlistRoute,
   handleApiBacktestRunsRoute,
   handleApiBacktestRunRoute,
+  handleApiPostmortemRoute,
   handleApiLlmCallsRoute,
   handleApiLlmCallRoute,
   handleApiJobRoute,
@@ -210,6 +211,7 @@ export default {
     if (pathname === "/api/tickers") return handleApiTickersRoute(request, env, config);
     if (pathname === "/api/watchlist") return handleApiWatchlistRoute(request, env, config);
     if (pathname === "/api/backtest-runs") return handleApiBacktestRunsRoute(request, env, config);
+  if (pathname === "/api/postmortem") return handleApiPostmortemRoute(request, env, config);
     if (pathname.startsWith("/api/backtest-runs/")) return handleApiBacktestRunRoute(request, env, config, pathname.slice("/api/backtest-runs/".length));
     // LLM call log (storage/llm_calls.js): list, then one call in full.
     if (pathname === "/api/llm-calls") return handleApiLlmCallsRoute(request, env, config);
