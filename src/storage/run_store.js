@@ -723,6 +723,23 @@ export class RunStore {
     return (res?.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Writes `outcome` (the entry-confirmation record: confirmed / expired, with the numbers) to
+   * debate.evidence.entryConfirmation of a decision that is still 'pending_entry'. Idempotent (same outcome, same write) and
+   * guarded on the status, so a row a concurrent run already filled or expired is left alone. commitThesis and
+   * expirePendingEntry only touch `status`, so this is the one place the outcome lands. Returns true if a row was updated.
+   */
+  async recordEntryConfirmation({ id, outcome }) {
+    const res = await this.db
+      .prepare(
+        `UPDATE trade_decisions SET debate = json_set(debate, '$.evidence.entryConfirmation', json(?))
+         WHERE run_id = ? AND id = ? AND status = ? AND debate IS NOT NULL AND json_type(debate, '$.evidence') = 'object'`
+      )
+      .bind(JSON.stringify(outcome), this.runId, id, TRADE_DECISION_STATUS.PENDING_ENTRY)
+      .run();
+    return (res?.meta?.changes ?? 0) > 0;
+  }
+
   // -------------------------------------------------------------------
   // Trade decisions / decision memory
   // -------------------------------------------------------------------
