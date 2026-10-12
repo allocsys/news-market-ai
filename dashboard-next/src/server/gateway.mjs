@@ -380,6 +380,11 @@ export async function handleGateway(request, env) {
         if (isChecked(searchParams.get("enableMacro")) || isChecked(fromBody("enableMacro"))) params.macroEnabled = "1";
         // "Merged verdict": this run only uses ONE merged call instead of bull + bear + judge (backend's mergedVerdict=1 knob override). Absent sends nothing, so the normal three-call debate applies.
         if (isChecked(searchParams.get("mergedVerdict")) || isChecked(fromBody("mergedVerdict"))) params.mergedVerdict = "1";
+        // Break-even / trailing knobs (R multiples; trailRemovesTarget 0/1): this run only, never the live knobs. Blank/absent sends nothing (default 0 = off); the backend validates values and bounds (src/backtest/knobOverrides.js) and records them in result.knobs.
+        for (const name of LIVE_KNOB_NAMES) {
+          const value = searchParams.get(name) ?? fromBody(name);
+          if (value !== null && value !== undefined && String(value).trim() !== "") params[name] = String(value).trim();
+        }
         return { params };
       },
     });
