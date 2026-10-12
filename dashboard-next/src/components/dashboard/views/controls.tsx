@@ -4,7 +4,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Pause, Play, ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { useControls, usePostControlsSet, useActiveTickers, usePostActiveTickers, useMacro, usePostMacro } from "@/lib/api";
+import { useControls, usePostControlsSet, useActiveTickers, usePostActiveTickers, useMacro, usePostMacro, useKnobs, usePostKnobs, type KnobName } from "@/lib/api";
 import { SectionHeading, Pill, ErrorState } from "../primitives";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -219,6 +219,7 @@ export function ControlsView({}: ViewProps) {
 
       <LiveTickers />
       <MacroSwitch />
+      <LiveKnobs />
     </div>
   );
 }
@@ -318,6 +319,190 @@ function MacroSwitch() {
         </div>
       </div>
     </section>
+  );
+}
+
+const R_KNOBS: { key: KnobName; label: string; hint: string }[] = [
+  { key: "breakEvenTriggerR", label: "Break-even trigger", hint: "Move the stop to entry once the trade is up this many R." },
+  { key: "trailActivationR", label: "Trail activation", hint: "Start trailing once the trade is up this many R." },
+  { key: "trailDistanceR", label: "Trail distance", hint: "How far behind the best price the trailing stop sits." },
+];
+
+/**
+ * Live break-even / trailing knobs. Reads GET /api/knobs, saves with POST /controls/knobs.
+ * R = the position's initial stop distance; 0 = off. SNAPSHOT semantics: a saved value only applies to
+ * positions opened afterwards; positions already open keep the knobs they opened with. `draft` holds
+ * unsaved edits as strings (null = show what the server has). Backtests ignore these.
+ */
+function LiveKnobs() {
+  const knobs = useKnobs();
+  const save = usePostKnobs();
+  const [draft, setDraft] = useState<Partial<Record<KnobName, string>> | null>(null);
+
+  if (knobs.isLoading) {
+    return (
+      <section className="flex items-center rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Loading exit knobs…
+      </section>
+    );
+  }
+  if (knobs.isError || !knobs.data) {
+    return <ErrorState message={knobs.error?.message ?? "Failed to load the exit knobs"} />;
+  }
+
+  const { effective, defaults, live, meta, error } = knobs.data;
+  const d = draft ?? {};
+  const text = (k: KnobName) => d[k] ?? String(effective[k]);
+  const badR = (k: KnobName) => {
+    const v = d[k];
+    if (v === undefined) return false;
+    const n = Number(v);
+    return v.trim() === "" || !Number.isFinite(n) || n < 0 || n > 10;
+  };
+  const changed = (Object.keys(d) as KnobName[]).filter((k) => d[k] !== undefined && Number(d[k]) !== effective[k]);
+  const invalid = R_KNOBS.some((m) => badR(m.key));
+  const liveNames = Object.keys(live);
+  const removesTarget = Number(text("trailRemovesTarget")) === 1;
+  const lastChange = Object.values(meta).find((m) => m?.updatedAt);
+
+  const edit = (k: KnobName, v: string) => setDraft((prev) => ({ ...(prev ?? {}), [k]: v }));
+
+  const onSave = () => {
+    const set: Partial<Record<KnobName, number>> = {};
+    for (const k of changed) set[k] = Number(d[k]);
+    save.mutate(
+      { set },
+      {
+        onSuccess: () => {
+          setDraft(null);
+          toast.success("Exit knobs saved (applies to new positions)");
+        },
+        onError: (e) => toast.error(`Failed: ${e.message}`),
+      },
+    );
+  };
+
+  const onResetLive = () => {
+    save.mutate(
+      { clear: "all" },
+      {
+        onSuccess: () => {
+          setDraft(null);
+          toast.success("Exit knobs back to defaults");
+        },
+        onError: (e) => toast.error(`Failed: ${e.message}`),
+      },
+    );
+  };
+
+  return (
+    <Collapsible defaultOpen={liveNames.length > 0}>
+      <section className="rounded-xl border border-border bg-card">
+        <CollapsibleTrigger asChild>
+          <button type="button" className="flex w-full items-center gap-2 px-4 py-3 text-left">
+            <span className="font-display text-base font-semibold">Exit knobs</span>
+            <Pill tone={effective.breakEvenTriggerR > 0 || effective.trailActivationR > 0 ? "long" : "muted"} size="sm">
+              {effective.breakEvenTriggerR > 0 || effective.trailActivationR > 0 ? "Active" : "Off"}
+            </Pill>
+            <ChevronDown className="ml-auto h-4 w-4 text-muted-foreground" />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="space-y-3 border-t border-border p-4">
+            {error && (
+              <p className="text-xs text-[color:var(--paused)]">
+                Could not read the live values ({error}); showing the defaults.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Break-even and trailing stop, in R (1R = the position's initial stop distance; 0 = off). Applies only to positions opened after you save; open positions keep the values they opened with. Backtests ignore these.
+            </p>
+            {R_KNOBS.map((m) => (
+              <label key={m.key} className="block">
+                <span className="flex items-center justify-between gap-2 text-sm font-medium">
+                  {m.label}
+                  <span className="text-[10px] font-normal text-muted-foreground">
+                    default {defaults[m.key]}{m.key in live ? " · overridden" : ""}
+                  </span>
+                </span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  max={10}
+                  step={0.05}
+                  value={text(m.key)}
+                  onChange={(e) => edit(m.key, e.target.value)}
+                  className={cn(
+                    "mt-1 w-full rounded-lg border bg-muted/40 px-3 py-2 font-mono text-sm outline-none focus:border-primary",
+                    badR(m.key) ? "border-[color:var(--paused)]" : "border-border",
+                  )}
+                />
+                <span className="mt-0.5 block text-[11px] text-muted-foreground">{m.hint}</span>
+              </label>
+            ))}
+            <label className="flex cursor-pointer items-start gap-2 text-sm">
+              <Checkbox
+                checked={removesTarget}
+                onCheckedChange={(v) => edit("trailRemovesTarget", v === true ? "1" : "0")}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>
+                Trailing removes the take-profit target
+                <span className="block text-[11px] text-muted-foreground">
+                  default {defaults.trailRemovesTarget === 1 ? "on" : "off"}{"trailRemovesTarget" in live ? " · overridden" : ""}
+                </span>
+              </span>
+            </label>
+            <p className="text-[10px] text-muted-foreground">
+              {liveNames.length > 0
+                ? `Overridden live: ${liveNames.join(", ")}.`
+                : "No live overrides; using the defaults."}{" "}
+              Last changed {lastChange?.updatedAt ? fmtRelative(lastChange.updatedAt) : "—"} by {lastChange?.updatedBy ?? "—"}.
+            </p>
+            <div className="flex justify-end gap-2">
+              {liveNames.length > 0 && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="outline" size="sm" type="button" disabled={save.isPending}>
+                      Reset to defaults
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Reset exit knobs?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Removes the live overrides, so new positions use the default values again. Open positions are not changed.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={onResetLive}>Reset</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
+              {draft && (
+                <Button variant="outline" size="sm" type="button" onClick={() => setDraft(null)}>
+                  Discard
+                </Button>
+              )}
+              <Button size="sm" type="button" onClick={onSave} disabled={changed.length === 0 || invalid || save.isPending}>
+                {save.isPending ? (
+                  <>
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save knobs"
+                )}
+              </Button>
+            </div>
+          </div>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
   );
 }
 

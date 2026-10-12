@@ -28,6 +28,8 @@ import { getSessionUsername, createSessionCookie } from "./session.mjs";
 
 export const PAUSE_KEYS = Object.freeze(["ingestion", "trading", "llm", "backtests"]);
 export const BACKTEST_ID_RE = /^backtest-\d+-[a-z0-9]+$/;
+// Copy of the backend's LIVE_KNOB_NAMES (src/storage/live_knobs.js). The backend validates the values and bounds.
+export const LIVE_KNOB_NAMES = Object.freeze(["breakEvenTriggerR", "trailActivationR", "trailDistanceR", "trailRemovesTarget"]);
 
 /** The auth-related settings, read from the Worker env (secrets) on every call. */
 export function loadAuthConfig(env) {
@@ -90,6 +92,7 @@ const NON_API_ROUTES = new Set([
   "/controls/set",
   "/controls/tickers",
   "/controls/macro",
+  "/controls/knobs",
 ]);
 const BACKTEST_ACTION_RE = /^\/backtest\/[^/]+\/(cancel|pause|resume)$/;
 
@@ -440,6 +443,27 @@ export async function handleGateway(request, env) {
         const enabled = searchParams.get("enabled") ?? fromBody("enabled");
         if (enabled !== "1" && enabled !== "0") return { error: "enabled must be 1 or 0 (or a boolean)" };
         const params = { enabled };
+        if (sessionUsername) params.by = sessionUsername;
+        return { params };
+      },
+    });
+  }
+
+  // POST /controls/knobs -- set and/or clear the live break-even / trailing knobs. Any of the four knob names as numbers, and/or `clear` (a comma list of knob names, or "all"). The backend enforces the bounds; only positions opened afterwards use the new values.
+  if (pathname === "/controls/knobs" && request.method === "POST") {
+    return handleTriggerRoute(request, env, {
+      backendPath: "/controls/knobs",
+      buildQuery: (searchParams, fromBody, sessionUsername) => {
+        const params = {};
+        for (const name of LIVE_KNOB_NAMES) {
+          const value = searchParams.get(name) ?? fromBody(name);
+          if (value !== null && value !== undefined && value !== "") params[name] = value;
+        }
+        const clear = searchParams.get("clear") ?? fromBody("clear");
+        if (clear) params.clear = clear;
+        if (Object.keys(params).length === 0) {
+          return { error: `pass at least one of: ${LIVE_KNOB_NAMES.join(", ")}, or clear` };
+        }
         if (sessionUsername) params.by = sessionUsername;
         return { params };
       },
