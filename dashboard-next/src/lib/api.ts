@@ -657,6 +657,29 @@ export function useMacro() {
   });
 }
 
+// --- Live break-even / trailing knobs (R = initial stop distance; 0 = off) ---
+export const KNOB_NAMES = ["breakEvenTriggerR", "trailActivationR", "trailDistanceR", "trailRemovesTarget"] as const;
+export type KnobName = (typeof KNOB_NAMES)[number];
+export type KnobValues = Record<KnobName, number>;
+export interface KnobsResponse {
+  /** env/config values used when nothing is overridden. */
+  defaults: KnobValues;
+  /** Only the knobs overridden live. */
+  live: Partial<KnobValues>;
+  meta: Record<string, { updatedAt?: string | null; updatedBy?: string | null }>;
+  /** What a position opening now would snapshot. */
+  effective: KnobValues;
+  error?: string | null;
+}
+export function useKnobs() {
+  return useQuery({
+    queryKey: ["knobs"],
+    queryFn: () => apiFetch<KnobsResponse>(`/api/knobs`),
+    refetchInterval: REFRESH_MS,
+    retry: 1,
+  });
+}
+
 // --- News replay: ingested news items for one ticker on one UTC day ---
 export interface ReplayNewsItem {
   id: string;
@@ -845,6 +868,19 @@ export function usePostMacro() {
       // Health reports macro as disabled vs stale, so it depends on this flag.
       qc.invalidateQueries({ queryKey: ["health"] });
     },
+  });
+}
+
+export function usePostKnobs() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { set?: Partial<KnobValues>; clear?: string }) => {
+      return apiFetch<KnobsResponse>("/api/controls/knobs", {
+        method: "POST",
+        body: JSON.stringify({ ...(vars.set ?? {}), ...(vars.clear ? { clear: vars.clear } : {}) }),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["knobs"] }),
   });
 }
 
