@@ -119,6 +119,39 @@ test("summarizeMissed tallies per status and overall", () => {
   assert.deepEqual(s.byStatus.held, { missed_winner: 1, good_skip: 1 });
 });
 
+test("classifyMissed: inconclusive carries the end-of-window move and a lean in the thesis direction", () => {
+  const long = { asOf: "2026-09-15T10:00:00.000Z", thesis: { direction: "long" }, riskDecision: { stopLossPct: 0.05, takeProfitPct: 0.1 } };
+  const short = { ...long, thesis: { direction: "short" } };
+  const drift = (end) => [bar(0, 100, 101, 99.5), bar(24, end, end + 0.5, end - 0.5)];
+  const up = classifyMissed(long, drift(103));
+  assert.equal(up.outcome, "inconclusive");
+  assert.equal(up.lean, "lean_winner");
+  assert.ok(Math.abs(up.endMovePct - 0.03) < 1e-12);
+  assert.equal(classifyMissed(long, drift(97)).lean, "lean_skip");
+  assert.equal(classifyMissed(long, drift(100.5)).lean, "flat");
+  assert.equal(classifyMissed(short, drift(97)).lean, "lean_winner", "a falling price favours a short");
+  assert.equal(classifyMissed(short, drift(103)).lean, "lean_skip");
+  assert.equal(classifyMissed(long, drift(101.5)).lean, "lean_winner", "exactly +1.5% counts");
+  assert.equal(classifyMissed(long, drift(103), { leanPct: 0.05 }).lean, "flat", "leanPct is overridable");
+  assert.equal(classifyMissed(long, [bar(0, 100, 100.5, 99.5)]).lean, "flat", "a single bar means no move");
+  assert.equal(classifyMissed(long, [bar(0, 100, 101, 94)]).lean, undefined, "hits carry no lean");
+});
+
+test("summarizeMissed: byLean and end-move buckets count inconclusive items only", () => {
+  const s = summarizeMissed([
+    { status: "held", outcome: "inconclusive", lean: "lean_winner", endMovePct: 0.02 },
+    { status: "held", outcome: "inconclusive", lean: "lean_winner", endMovePct: 0.04 },
+    { status: "rejected", outcome: "inconclusive", lean: "lean_skip", endMovePct: -0.02 },
+    { status: "rejected", outcome: "inconclusive", lean: "flat", endMovePct: 0 },
+    { status: "held", outcome: "missed_winner" },
+  ]);
+  assert.deepEqual(s.byLean, { lean_winner: 2, lean_skip: 1, flat: 1 });
+  assert.equal(s.byOutcome.inconclusive, 4);
+  assert.equal(s.byStatus.held.lean_winner, 2);
+  assert.deepEqual(s.endMoveBuckets.map((b) => b.n), [0, 1, 1, 1, 1]);
+  assert.equal(s.endMoveBuckets.reduce((a, b) => a + b.n, 0), 4);
+});
+
 test("compareDecisions matches on id and reports agreement + confidence delta", () => {
   const a = [{ id: "1", status: "opened", direction: "long", confidence: 0.8 }, { id: "2", status: "held", direction: "long", confidence: 0.6 }, { id: "3", status: "held", direction: null, confidence: null }];
   const b = [{ id: "1", status: "opened", direction: "long", confidence: 0.9 }, { id: "2", status: "rejected", direction: "short", confidence: 0.5 }, { id: "9", status: "held", direction: "long", confidence: 0.5 }];
