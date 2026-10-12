@@ -302,6 +302,35 @@ function CompareBlock({ runId, otherId }: { runId: string; otherId: string }) {
   );
 }
 
+/** One-glance tally: mistakes = losing trades + missed winners, next to what went right (wins + good skips). */
+function MistakesSummary({ d }: { d: PostmortemResponse }) {
+  const m = d.missed;
+  if (d.summary.scored === 0 && !m) return null;
+  const losses = d.summary.byTag.filter((g) => g.key.startsWith("loss_"));
+  const lossN = losses.reduce((a, g) => a + g.n, 0);
+  const missedN = m?.byOutcome.missed_winner ?? 0;
+  const possibleN = m?.byLean?.lean_winner ?? 0;
+  const winsN = d.summary.byTag.find((g) => g.key === "win")?.n ?? 0;
+  const skipsN = m?.byOutcome.good_skip ?? 0;
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-card p-3">
+      <div className="flex items-baseline gap-2">
+        <span className="font-mono text-2xl font-semibold nums">{lossN + missedN}</span>
+        <span className="text-xs font-semibold">mistakes</span>
+      </div>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        {lossN} losing trades · {missedN} missed winners{possibleN > 0 ? ` · +${possibleN} possible misses (leaned winner)` : ""}
+      </p>
+      {losses.length > 0 && (
+        <p className="mt-0.5 text-[11px] text-muted-foreground">Losses: {losses.map((g) => `${g.n} ${tagLabel(g.key).toLowerCase()}`).join(" · ")}</p>
+      )}
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        vs {winsN} wins · {skipsN} good skips{d.missedError ? " (missed-opportunity check unavailable)" : ""}
+      </p>
+    </div>
+  );
+}
+
 export function PostmortemCard({ runId }: { runId: string }) {
   const pm = usePostmortem(runId);
   const runs = useBacktestRuns();
@@ -336,6 +365,7 @@ export function PostmortemCard({ runId }: { runId: string }) {
   return (
     <section>
       <SectionHeading title="Post-mortem" description="Where each position's outcome came from (computed on read; small samples are hints, not proof)" />
+      <MistakesSummary d={d} />
       {s.scored === 0 ? (
         <p className="mt-3 text-xs text-muted-foreground">No closed position with a return yet.</p>
       ) : (
