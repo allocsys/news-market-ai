@@ -23,7 +23,7 @@ import { KNOB_OVERRIDES } from "../backtest/knobOverrides.js";
 export const LIVE_KNOB_NAMES = Object.freeze(["breakEvenTriggerR", "trailActivationR", "trailDistanceR", "trailRemovesTarget"]);
 // On/off decision switches (0/1), stored in the same `knob:<name>` rows but kept apart from the trail knobs: they are NOT
 // snapshotted onto positions and never show in the Exit knobs card. They apply to the next decision immediately.
-export const LIVE_SWITCH_NAMES = Object.freeze((["intradayTechnical", "independenceNote", "rangeLocationFilter", "entryConfirmation"]));
+export const LIVE_SWITCH_NAMES = Object.freeze(["intradayTechnical", "independenceNote", "rangeLocationFilter", "entryConfirmation"]);
 export const LIVE_KNOB_KEY_PREFIX = "knob:";
 
 export function liveKnobKey(name) {
