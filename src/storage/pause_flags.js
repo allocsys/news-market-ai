@@ -11,7 +11,7 @@
 // FAIL OPEN: a missing binding or any D1 error reads as "nothing paused", with
 // a console.warn. A flaky read must never silently halt the system.
 
-import { parseLiveKnobRows } from "./live_knobs.js";
+import { parseLiveKnobRows, parseLiveSwitchRows } from "./live_knobs.js";
 
 export const PAUSE_KEYS = Object.freeze(["ingestion", "trading", "llm", "backtests"]);
 
@@ -48,11 +48,11 @@ async function readFlagRows(db) {
 }
 
 /**
- * `{ flags: {ingestion, trading, llm, backtests}, meta: {key: {updatedAt, updatedBy}}, knobs: {values, meta}, error }`.
+ * `{ flags: {ingestion, trading, llm, backtests}, meta: {key: {updatedAt, updatedBy}}, knobs: {values, meta}, switches: {values, meta}, error }`.
  * Never throws. `knobs.values` holds only the live overrides that are set and valid ({} = use the config).
  */
 export async function getPauseFlags(db) {
-  if (!db) return { flags: allClear(), meta: {}, knobs: { values: {}, meta: {} }, error: null };
+  if (!db) return { flags: allClear(), meta: {}, knobs: { values: {}, meta: {} }, switches: { values: {}, meta: {} }, error: null };
   try {
     const rows = await readFlagRows(db);
     const results = rows;
@@ -63,10 +63,10 @@ export async function getPauseFlags(db) {
       flags[row.key] = Number(row.paused) === 1;
       meta[row.key] = { updatedAt: row.updated_at ?? null, updatedBy: row.updated_by ?? null };
     }
-    return { flags, meta, knobs: parseLiveKnobRows(rows), error: null };
+    return { flags, meta, knobs: parseLiveKnobRows(rows), switches: parseLiveSwitchRows(rows), error: null };
   } catch (err) {
     console.warn("pause flags read failed -- failing open (nothing paused)", { message: err.message });
-    return { flags: allClear(), meta: {}, knobs: { values: {}, meta: {} }, error: err.message };
+    return { flags: allClear(), meta: {}, knobs: { values: {}, meta: {} }, switches: { values: {}, meta: {} }, error: err.message };
   }
 }
 

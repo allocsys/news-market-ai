@@ -380,6 +380,9 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [disableGate, setDisableGate] = useState(false);
   const [enableMacro, setEnableMacro] = useState(false);
   const [mergedVerdict, setMergedVerdict] = useState(false);
+  // Decision switches for this run only (default off; never the live switches).
+  const [intradayTechnical, setIntradayTechnical] = useState(false);
+  const [independenceNote, setIndependenceNote] = useState(false);
   // Exit knobs for this run only, in R (blank = default 0 = off). Never the live knobs.
   const [breakEvenTriggerR, setBreakEvenTriggerR] = useState("");
   const [trailActivationR, setTrailActivationR] = useState("");
@@ -447,6 +450,8 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         disableGate,
         enableMacro,
         mergedVerdict,
+        intradayTechnical,
+        independenceNote,
         breakEvenTriggerR: knobNumber(breakEvenTriggerR),
         trailActivationR: knobNumber(trailActivationR),
         trailDistanceR: knobNumber(trailDistanceR),
@@ -550,6 +555,18 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         <Checkbox checked={mergedVerdict} onCheckedChange={(v) => v !== "indeterminate" && setMergedVerdict(!!v)} className="h-3.5 w-3.5" />
         <span className="text-xs">Merged verdict (1 call instead of 3)</span>
         <span className="text-[10px] text-muted-foreground">(this run only; one judge call replaces bull + bear + judge; run twice to compare)</span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={intradayTechnical} onCheckedChange={(v) => v !== "indeterminate" && setIntradayTechnical(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Intraday price for the technical analyst</span>
+        <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off; ignores the live switch)</span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={independenceNote} onCheckedChange={(v) => v !== "indeterminate" && setIndependenceNote(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Evidence rule in judge prompts</span>
+        <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off; ignores the live switch)</span>
       </label>
 
       <div>

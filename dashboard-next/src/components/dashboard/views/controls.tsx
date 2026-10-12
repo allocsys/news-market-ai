@@ -4,7 +4,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Pause, Play, ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { useControls, usePostControlsSet, useActiveTickers, usePostActiveTickers, useMacro, usePostMacro, useKnobs, usePostKnobs, type KnobName } from "@/lib/api";
+import { useControls, usePostControlsSet, useActiveTickers, usePostActiveTickers, useMacro, usePostMacro, useKnobs, usePostKnobs, useSwitches, usePostSwitches, SWITCH_NAMES, type KnobName, type SwitchName } from "@/lib/api";
 import { SectionHeading, Pill, ErrorState } from "../primitives";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -219,6 +219,7 @@ export function ControlsView({}: ViewProps) {
 
       <LiveTickers />
       <MacroSwitch />
+      <DecisionSwitches />
       <LiveKnobs />
     </div>
   );
@@ -317,6 +318,90 @@ function MacroSwitch() {
             </AlertDialog>
           )}
         </div>
+      </div>
+    </section>
+  );
+}
+
+const SWITCH_INFO: Record<SwitchName, { label: string; hint: string }> = {
+  intradayTechnical: { label: "Intraday price for the technical analyst", hint: "The technical read uses the latest price visible at decision time instead of only the last daily close." },
+  independenceNote: { label: "Evidence rule in judge prompts", hint: "Judge prompts remind the model that agreeing analysts count as one source, not several." },
+};
+
+/**
+ * Live decision switches (default OFF). Reads GET /api/switches, flips with POST /controls/switches.
+ * They apply to NEW decisions immediately (no position snapshot). Backtests have their own per-run
+ * checkboxes and ignore these.
+ */
+function DecisionSwitches() {
+  const sw = useSwitches();
+  const setSw = usePostSwitches();
+
+  if (sw.isLoading) {
+    return (
+      <section className="flex items-center rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Loading decision switches…
+      </section>
+    );
+  }
+  if (sw.isError || !sw.data) {
+    return <ErrorState message={sw.error?.message ?? "Failed to load the decision switches"} />;
+  }
+
+  const { effective, meta, error } = sw.data;
+  const set = (name: SwitchName, on: boolean) =>
+    setSw.mutate(
+      { set: { [name]: on ? 1 : 0 } },
+      {
+        onSuccess: () => toast.success(`${SWITCH_INFO[name].label} ${on ? "on" : "off"}`),
+        onError: (e) => toast.error(`Failed: ${e.message}`),
+      },
+    );
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-4 card-hairline">
+      <span className="font-display text-base font-semibold">Decision switches</span>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Off by default. Changes apply to the next live decision; backtests choose per run.
+      </p>
+      {error && (
+        <p className="mt-1 text-xs text-[color:var(--paused)]">Could not read the switches ({error}); treated as off.</p>
+      )}
+      <div className="mt-3 space-y-3">
+        {SWITCH_NAMES.map((name) => {
+          const on = effective[name] === 1;
+          const m = meta[name];
+          return (
+            <div key={name} className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{SWITCH_INFO[name].label}</span>
+                  <Pill tone={on ? "long" : "muted"} size="sm">
+                    {on ? "On" : "Off"}
+                  </Pill>
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">{SWITCH_INFO[name].hint}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                  Last changed {m?.updatedAt ? fmtRelative(m.updatedAt) : "—"} by {m?.updatedBy ?? "—"}
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => set(name, !on)} disabled={setSw.isPending} className="shrink-0">
+                {on ? (
+                  <>
+                    <Pause className="mr-1 h-3 w-3" />
+                    Turn off
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-1 h-3 w-3" />
+                    Turn on
+                  </>
+                )}
+              </Button>
+            </div>
+          );
+        })}
       </div>
     </section>
   );

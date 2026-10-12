@@ -47,7 +47,7 @@ async function run(configOver = {}) {
   const prompts = { judge: null, trader: null };
   const longModel = makeFakeLongModel();
   const config = {
-    geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10, ...configOver,
+    geminiQuickModel: "quick", geminiDeepModel: "deep", maxDebateRounds: 1, maxPositionHoldDays: 10, intradayTechnical: true, independenceNote: true, ...configOver,
     fakeModel: async (p, opts) => {
       if (opts.schema === DebateVerdict || opts.schema === MergedVerdict) prompts.judge = p;
       if (/^You are a trader/.test(p)) prompts.trader = p;
@@ -70,6 +70,8 @@ for (const [name, over] of [["debate judge", {}], ["merged judge", { mergedVerdi
     assert.ok(on.prompts.judge.includes("EVIDENCE RULE"));
     const off = await run({ ...over, independenceNote: false });
     assert.ok(!off.prompts.judge.includes("EVIDENCE RULE"));
+    const dflt = await run({ ...over, independenceNote: undefined });
+    assert.ok(!dflt.prompts.judge.includes("EVIDENCE RULE"), "OFF by default: a config without the flag carries no evidence rule");
   });
 }
 

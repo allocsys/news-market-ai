@@ -113,8 +113,8 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     // XAUUSD macro block: null (and NO D1 read) unless config.macroEnabled === true and the ticker is covered, so the
     // budget-paced backtest walks' hardcoded per-stage call counts are unchanged when the feature is off.
     const macroContext = await loadMacroContext(config, inputs, { ticker, asOf });
-    // Intraday price for the technical read (no D1 read when there are no daily bars, nor when config.intradayTechnical === false).
-    const technicalCurrent = priceBars.length > 0 && config.intradayTechnical !== false ? await resolveIntradayForTechnical(inputs, { ticker, asOf }) : null;
+    // Intraday price for the technical read (no D1 read when there are no daily bars, nor unless config.intradayTechnical === true).
+    const technicalCurrent = priceBars.length > 0 && config.intradayTechnical === true ? await resolveIntradayForTechnical(inputs, { ticker, asOf }) : null;
     state.opinions = await runAnalystTeam(env, config, { ticker, newsItem, bars: priceBars, macroContext, currentPrice: technicalCurrent });
     // Carried forward in `state` (not re-fetched later) so the risk_checked
     // stage's ATR sizing (risk_mgmt/risk.js) gets these same bars WITHOUT an

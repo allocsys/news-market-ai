@@ -556,3 +556,28 @@ test("a backend that throws on a POST trigger route is a 500 JSON error, not an 
   assert.equal(response.status, 500);
   assert.match((await response.json()).error, /request failed/);
 });
+
+test("POST /backtest/run: the decision switches are forwarded as overrides when checked and absent (default OFF) otherwise", async () => {
+  const on = await postBacktest("json", { intradayTechnical: true, independenceNote: true });
+  assert.equal(on.response.status, 200);
+  assert.deepEqual(on.backtestQueue.sent[0].knobOverrides, { intradayTechnical: 1, independenceNote: 1 });
+  const off = await postBacktest("json", { intradayTechnical: false, independenceNote: false });
+  assert.equal(off.response.status, 200);
+  assert.equal(off.backtestQueue.sent[0].knobOverrides?.intradayTechnical, undefined);
+  assert.equal(off.backtestQueue.sent[0].knobOverrides?.independenceNote, undefined);
+  const form = await postBacktest("form", {});
+  assert.equal(form.backtestQueue.sent[0].knobOverrides?.intradayTechnical, undefined);
+});
+
+test("POST /controls/switches forwards the switch values and clear to the backend; no params is a 400", async () => {
+  const set = await postJson("/controls/switches", { intradayTechnical: 1, independenceNote: 0 });
+  assert.equal(set.calls[0].url.pathname, "/controls/switches");
+  assert.equal(set.calls[0].url.searchParams.get("intradayTechnical"), "1");
+  assert.equal(set.calls[0].url.searchParams.get("independenceNote"), "0");
+  const clear = await postJson("/controls/switches", { clear: "all" });
+  assert.equal(clear.calls[0].url.searchParams.get("clear"), "all");
+  const empty = await postJson("/controls/switches", {});
+  assert.equal(empty.response.status, 400);
+  const anon = await postJson("/controls/switches", { intradayTechnical: 1 }, { cookie: false });
+  assert.notEqual(anon.response.status, 200);
+});

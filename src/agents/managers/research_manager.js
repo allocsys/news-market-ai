@@ -19,7 +19,7 @@ Respond as JSON only, matching exactly:
 { "direction": "long"|"short"|"flat", "confidence": number (0-1), \
 "timeHorizon": "intraday"|"days"|"weeks"|"months", "justification": string }
 
-${config.independenceNote === false ? "" : INDEPENDENCE_NOTE}
+${config.independenceNote === true ? INDEPENDENCE_NOTE : ""}
 
 Bull case: ${JSON.stringify(bull)}
 Bear case: ${JSON.stringify(bear)}
