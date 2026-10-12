@@ -79,21 +79,62 @@ export function computeATR(bars, window) {
  * including the LLM prompt itself, must treat a null indicator as "unknown",
  * never as zero.
  */
-export function computeTechnicalSnapshot(bars, { smaWindow = 5, momentumWindow = 5, volumeWindow = 5 } = {}) {
+export function computeTechnicalSnapshot(bars, { smaWindow = 5, momentumWindow = 5, volumeWindow = 5 } = {}, current = null) {
   if (!bars || bars.length === 0) {
     return { hasData: false };
   }
 
+  const live = usableCurrentPrice(current, bars);
+  if (!live) {
+    return {
+      hasData: true,
+      latestClose: bars[0].close,
+      latestDate: bars[0].date,
+      barsAvailable: bars.length,
+      sma: computeSMA(bars, smaWindow),
+      smaWindow,
+      priceChangePct: computePriceChangePct(bars, momentumWindow),
+      priceChangeWindow: momentumWindow,
+      volumeRatio: computeVolumeRatio(bars, volumeWindow),
+      volumeWindow,
+    };
+  }
+
+  // The daily bars end at the last COMPLETED session (up to ~a day old). With a visible intraday price, the
+  // SMA and the price change are taken from the current price plus the completed closes. Volume stays on the
+  // last completed daily bar: today's session volume is partial, so it is not comparable to a full-day average.
+  const series = [{ close: live.price }, ...bars];
+  const latestClose = bars[0].close;
   return {
     hasData: true,
-    latestClose: bars[0].close,
+    currentPrice: live.price,
+    currentPriceAt: live.availableAt ?? live.ts ?? null,
+    currentPriceAgeMinutes: Number.isFinite(live.ageMinutes) ? live.ageMinutes : null,
+    latestClose,
     latestDate: bars[0].date,
+    currentVsLatestClosePct: latestClose === 0 ? null : (live.price - latestClose) / latestClose,
     barsAvailable: bars.length,
-    sma: computeSMA(bars, smaWindow),
+    sma: computeSMA(series, smaWindow),
     smaWindow,
-    priceChangePct: computePriceChangePct(bars, momentumWindow),
+    smaBasis: `current price plus the prior ${smaWindow - 1} completed daily closes`,
+    priceChangePct: computePriceChangePct(series, momentumWindow),
     priceChangeWindow: momentumWindow,
+    priceChangeBasis: `current price vs the daily close ${momentumWindow} sessions back`,
     volumeRatio: computeVolumeRatio(bars, volumeWindow),
     volumeWindow,
+    volumeRatioBasis: "last completed daily bar vs the average of the bars before it (today's partial volume not included)",
   };
+}
+
+/**
+ * `current` = { price, ts, availableAt, ageMinutes } from graph/price_resolution.js#resolveIntradayForTechnical,
+ * a bar already gated to what was visible at asOf. Usable only when it belongs to a session AFTER the newest daily
+ * bar: an intraday bar from the same UTC day as that daily bar is the same session's price, and averaging both
+ * would count that session twice. Anything else falls back to the daily-only snapshot.
+ */
+function usableCurrentPrice(current, bars) {
+  if (!current || !Number.isFinite(current.price) || !(current.price > 0)) return null;
+  const sessionDate = typeof current.ts === "string" ? current.ts.slice(0, 10) : null;
+  if (!sessionDate || !(sessionDate > bars[0].date)) return null;
+  return current;
 }
