@@ -380,6 +380,11 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [disableGate, setDisableGate] = useState(false);
   const [enableMacro, setEnableMacro] = useState(false);
   const [mergedVerdict, setMergedVerdict] = useState(false);
+  // Exit knobs for this run only, in R (blank = default 0 = off). Never the live knobs.
+  const [breakEvenTriggerR, setBreakEvenTriggerR] = useState("");
+  const [trailActivationR, setTrailActivationR] = useState("");
+  const [trailDistanceR, setTrailDistanceR] = useState("");
+  const [trailRemovesTarget, setTrailRemovesTarget] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const toggleTicker = (t: string) => {
@@ -394,6 +399,25 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
     setDisableGate(false);
     setEnableMacro(false);
     setMergedVerdict(false);
+    setBreakEvenTriggerR("");
+    setTrailActivationR("");
+    setTrailDistanceR("");
+    setTrailRemovesTarget(false);
+  };
+
+  const knobFields: [string, string][] = [
+    ["Break-even trigger", breakEvenTriggerR],
+    ["Trail activation", trailActivationR],
+    ["Trail distance", trailDistanceR],
+  ];
+  // Blank = leave at default; otherwise a number from 0 to 10 (the backend enforces the same bounds).
+  const knobNumber = (raw: string) => {
+    const t = raw.trim();
+    return t === "" ? undefined : Number(t);
+  };
+  const knobInvalid = (raw: string) => {
+    const n = knobNumber(raw);
+    return n !== undefined && (!Number.isFinite(n) || n < 0 || n > 10);
   };
 
   // ISO dates (YYYY-MM-DD) compare correctly as strings.
@@ -406,12 +430,28 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
       toast.error("The start date must be before the end date");
       return;
     }
+    if (knobFields.some(([, raw]) => knobInvalid(raw))) {
+      toast.error("Exit knobs must be numbers from 0 to 10 (or blank)");
+      return;
+    }
     setConfirmOpen(true);
   };
 
   const submit = () => {
     mutation.mutate(
-      { testStart, testEnd, tickers, enableLlmLog, disableGate, enableMacro, mergedVerdict },
+      {
+        testStart,
+        testEnd,
+        tickers,
+        enableLlmLog,
+        disableGate,
+        enableMacro,
+        mergedVerdict,
+        breakEvenTriggerR: knobNumber(breakEvenTriggerR),
+        trailActivationR: knobNumber(trailActivationR),
+        trailDistanceR: knobNumber(trailDistanceR),
+        trailRemovesTarget: trailRemovesTarget ? 1 : undefined,
+      },
       {
         onSuccess: (data) => onSubmitted(data.id),
         onError: (e) => toast.error(`Failed: ${e.message}`),
@@ -511,6 +551,38 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         <span className="text-xs">Merged verdict (1 call instead of 3)</span>
         <span className="text-[10px] text-muted-foreground">(this run only; one judge call replaces bull + bear + judge; run twice to compare)</span>
       </label>
+
+      <div>
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Exit knobs (this run only)</p>
+        <div className="grid grid-cols-3 gap-3">
+          {knobFields.map(([label, value], i) => {
+            const set = [setBreakEvenTriggerR, setTrailActivationR, setTrailDistanceR][i];
+            const id = ["knob-be", "knob-trail-act", "knob-trail-dist"][i];
+            return (
+              <div key={id}>
+                <label htmlFor={id} className="mb-1 block text-[10px] text-muted-foreground">{label} (R)</label>
+                <input
+                  id={id}
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0 = off"
+                  value={value}
+                  onChange={(e) => set(e.target.value)}
+                  className={cn(
+                    "w-full rounded-md border bg-card px-2.5 py-1.5 text-sm font-mono",
+                    knobInvalid(value) ? "border-destructive" : "border-border",
+                  )}
+                />
+              </div>
+            );
+          })}
+        </div>
+        <label className="mt-2 flex cursor-pointer items-center gap-2">
+          <Checkbox checked={trailRemovesTarget} onCheckedChange={(v) => v !== "indeterminate" && setTrailRemovesTarget(!!v)} className="h-3.5 w-3.5" />
+          <span className="text-xs">Trailing removes take-profit target</span>
+        </label>
+        <p className="mt-1 text-[10px] text-muted-foreground">R = the position&apos;s initial stop distance. Blank = off. Ignores the live Exit knobs; the values used are recorded on the run.</p>
+      </div>
 
       <div className="flex items-start gap-2 rounded-lg border border-[color:var(--paused)]/25 bg-[color:var(--paused)]/8 px-3 py-2 text-xs">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[color:var(--paused)]" aria-hidden />
