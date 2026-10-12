@@ -168,12 +168,17 @@ async function resolveTimeExitFill(inputs, position, { asOf, dueAt, splitGuardTo
  * Returns the list of positions actually closed this run (empty if none
  * triggered) -- caller (src/index.js#scheduled) logs this rather than the
  * function doing its own logging, same separation as runScheduledIngestion.
+ *
+ * `ticker` (optional) limits the check to that ticker's open position. The pipeline's flip/replace path and
+ * the pending-entry fill use it to honor a stop/target that was already breached in the bars up to `asOf`
+ * BEFORE closing the position as 'flipped'/'replaced' at the latest price.
  */
-export async function checkOpenPositionExits(env, config, { inputs, store }, { asOf }) {
+export async function checkOpenPositionExits(env, config, { inputs, store }, { asOf, ticker = null }) {
   // The reflection at a position close is an LLM call; route its log row to
   // this store's environment (llm_calls.env_run_id), same as the pipeline does.
   config = withLlmLogContext(config, { store });
-  const openPositions = await store.getOpenPositionsAsOf({ asOf });
+  const allOpen = await store.getOpenPositionsAsOf({ asOf });
+  const openPositions = ticker == null ? allOpen : allOpen.filter((p) => p.ticker === ticker);
   const closed = [];
   // Break-even / trailing stop (config.breakEvenTriggerR / trailActivationR / trailDistanceR); null = off, and the
   // walk below is then exactly the static stop/target walk. recordExcursionBeforeClose deliberately walks WITHOUT it:

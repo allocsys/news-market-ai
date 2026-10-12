@@ -24,7 +24,7 @@
 import { findFirstBarOpenAtOrAfter } from "./bar_fill.js";
 import { isPendingEntryExpired } from "../shared/entry_timing.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE } from "../shared/constants.js";
-import { recordExcursionBeforeClose } from "./exit_check.js";
+import { recordExcursionBeforeClose, checkOpenPositionExits } from "./exit_check.js";
 import { settlePositionOutcome } from "./settle.js";
 import { withLlmLogContext } from "../storage/llm_calls.js";
 
@@ -72,7 +72,14 @@ export async function fillPendingEntries(env, config, { inputs, store }, { asOf 
       const heldByRule =
         existing.direction != null &&
         (existing.direction === thesis.direction || confidence < (config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE));
-      if (!heldByRule) await recordExcursionBeforeClose(config, { inputs, store }, existing, { asOf: fill.openedAt, exitPrice: fill.price });
+      if (!heldByRule) {
+        // Stops first (same rule as the pipeline's flip path): a stop/target already touched before the fill
+        // instant closes the position at its level; the new entry then opens with nothing to flip.
+        const exited = await checkOpenPositionExits(env, config, { inputs, store }, { asOf: fill.openedAt, ticker: pending.ticker });
+        if (!exited.some((p) => p.id === existing.id)) {
+          await recordExcursionBeforeClose(config, { inputs, store }, existing, { asOf: fill.openedAt, exitPrice: fill.price });
+        }
+      }
     }
 
     await store.commitThesis({

@@ -40,7 +40,7 @@ import { checkpoint, resumeFrom } from "./checkpointer.js";
 import { shouldContinueDebate } from "./conditional_logic.js";
 import { loadLessonsForDebate } from "./reflection.js";
 import { settlePositionOutcome } from "./settle.js";
-import { recordExcursionBeforeClose } from "./exit_check.js";
+import { recordExcursionBeforeClose, checkOpenPositionExits } from "./exit_check.js";
 import { loadDrawdownBreakerOptions } from "./drawdown_breaker.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE, TRADE_DECISION_STATUS } from "../shared/constants.js";
 import { withLlmLogContext, flushLlmCallBuffer } from "../storage/llm_calls.js";
@@ -188,6 +188,7 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
     // this thesis's OWN already-opened position, which is not a replacement.
     const tradeThesisId = state.riskDecision.tradeThesisId;
     const existingPosition = await store.getOpenPositionForTickerAsOf({ ticker, asOf });
+    let stoppedBeforeFlip = false;
     const { exposurePct: openPositionsRiskPct, stopRiskPct: openPositionsStopRiskPct, positions: openPositions } = await store.getOpenPositionsRiskAsOf({ asOf, excludeTicker: ticker });
     const breakerOptions = await loadDrawdownBreakerOptions(store, config, { asOf });
     state.portfolioDecision = evaluatePortfolio(state.riskDecision, {
@@ -294,7 +295,16 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
             (existingPosition.direction === state.thesis.direction ||
               state.verdict.confidence < (config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE));
           if (!heldByRule) {
-            await recordExcursionBeforeClose(config, { inputs, store }, existingPosition, { asOf, exitPrice: currentPrice });
+            // STOPS FIRST: if the position's stop/target was already touched in the bars up to asOf, it was
+            // exited there (live: the 15-min exit cron; backtest: the day-level check runs AFTER the day's news,
+            // so without this a flip closed it at the latest price, past its stop). Run this ticker's exit walk
+            // now; a position it closes at the level is settled as stop_loss/take_profit and the new thesis opens
+            // with nothing to flip. No breach -> unchanged (excursion + flip as before).
+            const exited = await checkOpenPositionExits(env, config, { inputs, store }, { asOf, ticker });
+            stoppedBeforeFlip = exited.some((p) => p.id === existingPosition.id);
+            if (!stoppedBeforeFlip) {
+              await recordExcursionBeforeClose(config, { inputs, store }, existingPosition, { asOf, exitPrice: currentPrice });
+            }
           }
         }
 
@@ -319,9 +329,9 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
           // replaced, so there is nothing to settle below. With an existing position (a possible replace, or this
           // thesis's own position on a retry) the marker stays AFTER the settle loop, so a crash in between re-runs
           // this stage and still settles the replaced position.
-          checkpoint: existingPosition === null ? finalCheckpoint : null,
+          checkpoint: existingPosition === null && !stoppedBeforeFlip ? finalCheckpoint : null,
         });
-        checkpointFolded = existingPosition === null;
+        checkpointFolded = existingPosition === null && !stoppedBeforeFlip;
 
         // Settle whatever the batch replaced (realized return + reflection).
         // Found by querying rather than by remembering `existingPosition`, so
