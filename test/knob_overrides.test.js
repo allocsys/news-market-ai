@@ -140,11 +140,32 @@ test("effective: reports every knob from the config", () => {
     mergedVerdict: false,
     intradayTechnical: false,
     independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: false,
+    rangeFilterDays: 10,
+    rangeFilterEdgePct: 0.2,
+    entryConfirmMovePct: 0.005,
+    entryConfirmHours: 6,
     breakEvenTriggerR: null,
     trailActivationR: null,
     trailDistanceR: null,
     trailRemovesTarget: null,
   });
+});
+
+test("range filter / entry confirmation: switches are 0/1 -> boolean, params are bounded numbers, defaults are recorded when unset", () => {
+  const { overrides } = parseKnobOverrides((n) => ({ rangeLocationFilter: "1", entryConfirmation: "1", rangeFilterDays: "14", rangeFilterEdgePct: "0.15", entryConfirmMovePct: "0.01", entryConfirmHours: "12" })[n]);
+  assert.deepEqual(overrides, { rangeLocationFilter: 1, entryConfirmation: 1, rangeFilterDays: 14, rangeFilterEdgePct: 0.15, entryConfirmMovePct: 0.01, entryConfirmHours: 12 });
+  const knobs = effectiveKnobs(applyKnobOverrides({}, overrides));
+  assert.equal(knobs.rangeLocationFilter, true);
+  assert.equal(knobs.entryConfirmation, true);
+  assert.equal(knobs.rangeFilterDays, 14);
+  assert.equal(knobs.entryConfirmHours, 12);
+  assert.equal(effectiveKnobs({}).rangeLocationFilter, false, "default OFF");
+  assert.equal(effectiveKnobs({}).entryConfirmation, false, "default OFF");
+  for (const bad of [{ rangeFilterDays: "1" }, { rangeFilterDays: "2.5" }, { rangeFilterEdgePct: "0.6" }, { rangeFilterEdgePct: "0" }, { entryConfirmMovePct: "0.5" }, { entryConfirmHours: "0" }, { entryConfirmHours: "100" }, { rangeLocationFilter: "2" }]) {
+    assert.ok(parseKnobOverrides((n) => bad[n]).error, `rejected: ${JSON.stringify(bad)}`);
+  }
 });
 
 test("effective: unset flipMinConfidence resolves to the constants.js default", () => {

@@ -569,6 +569,26 @@ test("POST /backtest/run: the decision switches are forwarded as overrides when 
   assert.equal(form.backtestQueue.sent[0].knobOverrides?.intradayTechnical, undefined);
 });
 
+test("POST /backtest/run: range filter / entry confirmation switches and numeric params are forwarded when set, absent otherwise", async () => {
+  const on = await postBacktest("json", { rangeLocationFilter: true, entryConfirmation: true, rangeFilterDays: 14, rangeFilterEdgePct: 0.15, entryConfirmMovePct: 0.01, entryConfirmHours: 12 });
+  assert.equal(on.response.status, 200);
+  assert.deepEqual(on.backtestQueue.sent[0].knobOverrides, {
+    rangeLocationFilter: 1,
+    entryConfirmation: 1,
+    rangeFilterDays: 14,
+    rangeFilterEdgePct: 0.15,
+    entryConfirmMovePct: 0.01,
+    entryConfirmHours: 12,
+  });
+  const blank = await postBacktest("json", { rangeLocationFilter: false, entryConfirmation: false, rangeFilterDays: "", entryConfirmHours: "  " });
+  assert.equal(blank.response.status, 200);
+  for (const name of ["rangeLocationFilter", "entryConfirmation", "rangeFilterDays", "rangeFilterEdgePct", "entryConfirmMovePct", "entryConfirmHours"]) {
+    assert.equal(blank.backtestQueue.sent[0].knobOverrides?.[name], undefined, `${name} absent`);
+  }
+  const bad = await postBacktest("json", { rangeFilterDays: 1 });
+  assert.notEqual(bad.response.status, 200, "the backend rejects an out-of-bounds value");
+});
+
 test("POST /controls/switches forwards the switch values and clear to the backend; no params is a 400", async () => {
   const set = await postJson("/controls/switches", { intradayTechnical: 1, independenceNote: 0 });
   assert.equal(set.calls[0].url.pathname, "/controls/switches");

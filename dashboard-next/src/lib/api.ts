@@ -681,7 +681,7 @@ export function useKnobs() {
 }
 
 // --- Live decision switches (0/1, default OFF): intraday price for the technical analyst; judge evidence rule ---
-export const SWITCH_NAMES = ["intradayTechnical", "independenceNote"] as const;
+export const SWITCH_NAMES = ["intradayTechnical", "independenceNote", "rangeLocationFilter", "entryConfirmation"] as const;
 export type SwitchName = (typeof SWITCH_NAMES)[number];
 export type SwitchValues = Record<SwitchName, 0 | 1>;
 export interface SwitchesResponse {
@@ -826,6 +826,15 @@ export function usePostBacktestRun() {
       intradayTechnical?: boolean;
       /** This run only: judge prompts carry the EVIDENCE RULE (backend independenceNote=1). Default off. */
       independenceNote?: boolean;
+      /** This run only: block longs near the N-day high / shorts near the N-day low unless breakout (backend rangeLocationFilter=1). Default off. */
+      rangeLocationFilter?: boolean;
+      /** This run only: an approved entry opens only after a bar closes the required move in its direction (backend entryConfirmation=1). Default off. */
+      entryConfirmation?: boolean;
+      /** This run only, optional (blank = constants.js default): range filter window in days / edge as a fraction of the range; confirmation move as a fraction / wait in hours. */
+      rangeFilterDays?: number;
+      rangeFilterEdgePct?: number;
+      entryConfirmMovePct?: number;
+      entryConfirmHours?: number;
       /** This run only: break-even / trailing knobs in R (0 or omitted = off). Never the live knobs; the backend records them in result.knobs. */
       breakEvenTriggerR?: number;
       trailActivationR?: number;

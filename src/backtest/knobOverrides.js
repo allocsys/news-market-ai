@@ -16,7 +16,13 @@
 // present-but-invalid value is an error, never silently dropped, because a
 // sweep run with the wrong knob would otherwise look like a real data point.
 
-import { DEFAULT_FLIP_MIN_CONFIDENCE } from "../shared/constants.js";
+import {
+  DEFAULT_FLIP_MIN_CONFIDENCE,
+  DEFAULT_RANGE_FILTER_DAYS,
+  DEFAULT_RANGE_FILTER_EDGE_PCT,
+  DEFAULT_ENTRY_CONFIRM_MOVE_PCT,
+  DEFAULT_ENTRY_CONFIRM_HOURS,
+} from "../shared/constants.js";
 
 /**
  * Overridable knobs: query param name === config key. `min`/`max` are inclusive
@@ -43,6 +49,15 @@ export const KNOB_OVERRIDES = Object.freeze({
   // knobs above; default OFF, and a backtest NEVER reads the live switch rows (storage/live_knobs.js): the run decides.
   intradayTechnical: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
   independenceNote: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  // Range-location filter (agents/risk_mgmt/range_location.js) and entry confirmation (shared/entry_confirmation.js): same 0/1 ->
+  // boolean handling, default OFF, a backtest NEVER reads the live switch rows. Their numeric params are per-run only (NOT live
+  // knobs); bounds match rangeFilterParams / entryConfirmationParams, which fall back to the constants.js default outside them.
+  rangeLocationFilter: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  entryConfirmation: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  rangeFilterDays: Object.freeze({ min: 2, max: 60, integer: true }),
+  rangeFilterEdgePct: Object.freeze({ min: 0.01, max: 0.5 }),
+  entryConfirmMovePct: Object.freeze({ min: 0.001, max: 0.2 }),
+  entryConfirmHours: Object.freeze({ min: 1, max: 72, integer: true }),
   // Break-even / trailing stop (agents/risk_mgmt/trailing.js), in R = the position's initial stop distance. 0 = off
   // (the default), so a run without them is the static stop/target walk. Bounds are sanity limits, not tuning advice.
   breakEvenTriggerR: Object.freeze({ min: 0, max: 10 }),
@@ -106,6 +121,13 @@ export function effectiveKnobs(config) {
   // Default OFF: a missing key means the old behavior, so the record shows false, not null.
   knobs.intradayTechnical = config.intradayTechnical === true;
   knobs.independenceNote = config.independenceNote === true;
+  knobs.rangeLocationFilter = config.rangeLocationFilter === true;
+  knobs.entryConfirmation = config.entryConfirmation === true;
+  // The numeric params resolve their constants.js default (like flipMinConfidence), so the record shows what a run used.
+  knobs.rangeFilterDays = config.rangeFilterDays ?? DEFAULT_RANGE_FILTER_DAYS;
+  knobs.rangeFilterEdgePct = config.rangeFilterEdgePct ?? DEFAULT_RANGE_FILTER_EDGE_PCT;
+  knobs.entryConfirmMovePct = config.entryConfirmMovePct ?? DEFAULT_ENTRY_CONFIRM_MOVE_PCT;
+  knobs.entryConfirmHours = config.entryConfirmHours ?? DEFAULT_ENTRY_CONFIRM_HOURS;
   knobs.flipMinConfidence = config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE;
   return knobs;
 }

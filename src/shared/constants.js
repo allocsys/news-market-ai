@@ -149,3 +149,17 @@ export const TRADE_DECISION_STATUS = Object.freeze({
   /** The analyst call judged the article has no plausible effect on this ticker's price, so the run ended before the debate (no debate, trader or position). */
   SKIPPED_IRRELEVANT: "skipped_irrelevant",
 });
+
+// Range-location filter (agents/risk_mgmt/range_location.js), decision switch `rangeLocationFilter`, default OFF.
+// A LONG within `edge` (fraction of the N-day high-low range) of the N-day high, or a SHORT within `edge` of the N-day
+// low, is blocked unless the price is already beyond that extreme (a breakout). Untuned starting points taken from the
+// BTCUSD 2026-09-11..10-11 backtests (see the Notion findings page), per-run overridable (rangeFilterDays / rangeFilterEdgePct).
+export const DEFAULT_RANGE_FILTER_DAYS = 10;
+export const DEFAULT_RANGE_FILTER_EDGE_PCT = 0.2;
+
+// Entry confirmation (shared/entry_confirmation.js), decision switch `entryConfirmation`, default OFF.
+// An approved entry waits as 'pending_entry' and opens only after a bar CLOSES at least `movePct` (a fraction) in the trade
+// direction from the decision price, within `hours` of the decision; otherwise it expires as 'skipped_no_fill'. Untuned
+// starting points, per-run overridable (entryConfirmMovePct / entryConfirmHours).
+export const DEFAULT_ENTRY_CONFIRM_MOVE_PCT = 0.005;
+export const DEFAULT_ENTRY_CONFIRM_HOURS = 6;

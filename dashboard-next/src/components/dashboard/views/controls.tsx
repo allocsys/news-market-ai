@@ -326,6 +326,8 @@ function MacroSwitch() {
 const SWITCH_INFO: Record<SwitchName, { label: string; hint: string }> = {
   intradayTechnical: { label: "Intraday price for the technical analyst", hint: "The technical read uses the latest price visible at decision time instead of only the last daily close." },
   independenceNote: { label: "Evidence rule in judge prompts", hint: "Judge prompts remind the model that agreeing analysts count as one source, not several." },
+  rangeLocationFilter: { label: "Range-location filter", hint: "Blocks longs near the recent high and shorts near the recent low, unless the price is already breaking out." },
+  entryConfirmation: { label: "Entry confirmation", hint: "An approved entry waits until a bar closes a small move in its direction; otherwise it expires without opening." },
 };
 
 /**

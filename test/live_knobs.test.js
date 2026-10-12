@@ -160,7 +160,12 @@ test("live switches: validated 0/1, parsed apart from the trail knobs, applied a
   const base = { intradayTechnical: false, independenceNote: true };
   assert.equal(applyLiveSwitches(base, {}), base, "nothing to apply = the same object");
   assert.deepEqual(applyLiveSwitches(base, { intradayTechnical: 1, independenceNote: 0 }), { intradayTechnical: true, independenceNote: false });
-  assert.deepEqual(snapshotSwitches({ intradayTechnical: true }), { intradayTechnical: 1, independenceNote: 0 });
+  assert.deepEqual(snapshotSwitches({ intradayTechnical: true }), { intradayTechnical: 1, independenceNote: 0, rangeLocationFilter: 0, entryConfirmation: 0 });
+  assert.deepEqual(snapshotSwitches({ rangeLocationFilter: true, entryConfirmation: true }), { intradayTechnical: 0, independenceNote: 0, rangeLocationFilter: 1, entryConfirmation: 1 });
+  assert.deepEqual(validateLiveKnob("rangeLocationFilter", "1"), { value: 1 });
+  assert.match(validateLiveKnob("entryConfirmation", "2").error, /between/);
+  assert.match(validateLiveKnob("rangeFilterDays", "10").error, /unknown knob/, "the numeric params are per-run only, never live");
+  assert.deepEqual(applyLiveSwitches({}, { rangeLocationFilter: 1, entryConfirmation: 0 }), { rangeLocationFilter: true, entryConfirmation: false });
 });
 
 test("getPauseFlags returns switches next to knobs; set/clear round-trip through the shared setters", async () => {
@@ -176,14 +181,14 @@ test("getPauseFlags returns switches next to knobs; set/clear round-trip through
 test("GET /api/switches and POST /controls/switches: default off, set, validate, clear; /controls/knobs does not touch them", async () => {
   const env = { WATCHLIST_TICKERS: "AAPL", LIVE_DB: createTestD1([STATE_DIR]) };
   let res = await call(env, "/api/switches");
-  assert.deepEqual(res.body.defaults, { intradayTechnical: 0, independenceNote: 0 });
+  assert.deepEqual(res.body.defaults, { intradayTechnical: 0, independenceNote: 0, rangeLocationFilter: 0, entryConfirmation: 0 });
   assert.deepEqual(res.body.live, {});
-  assert.deepEqual(res.body.effective, { intradayTechnical: 0, independenceNote: 0 });
+  assert.deepEqual(res.body.effective, { intradayTechnical: 0, independenceNote: 0, rangeLocationFilter: 0, entryConfirmation: 0 });
 
   res = await call(env, "/controls/switches?intradayTechnical=1&by=alice", "POST");
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.live, { intradayTechnical: 1 });
-  assert.deepEqual(res.body.effective, { intradayTechnical: 1, independenceNote: 0 });
+  assert.deepEqual(res.body.effective, { intradayTechnical: 1, independenceNote: 0, rangeLocationFilter: 0, entryConfirmation: 0 });
   assert.equal(res.body.meta.intradayTechnical.updatedBy, "alice");
 
   assert.equal((await call(env, "/controls/switches?independenceNote=2", "POST")).status, 400);
@@ -197,5 +202,12 @@ test("GET /api/switches and POST /controls/switches: default off, set, validate,
   assert.deepEqual(res.body.live, { intradayTechnical: 1, independenceNote: 1 });
   res = await call(env, "/controls/switches?clear=all", "POST");
   assert.deepEqual(res.body.live, {});
-  assert.deepEqual(res.body.effective, { intradayTechnical: 0, independenceNote: 0 });
+  assert.deepEqual(res.body.effective, { intradayTechnical: 0, independenceNote: 0, rangeLocationFilter: 0, entryConfirmation: 0 });
+
+  res = await call(env, "/controls/switches?rangeLocationFilter=1&entryConfirmation=1", "POST");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.live, { rangeLocationFilter: 1, entryConfirmation: 1 });
+  assert.deepEqual(res.body.effective, { intradayTechnical: 0, independenceNote: 0, rangeLocationFilter: 1, entryConfirmation: 1 });
+  res = await call(env, "/controls/switches?clear=all", "POST");
+  assert.deepEqual(res.body.live, {});
 });

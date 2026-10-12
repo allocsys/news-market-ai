@@ -18,10 +18,16 @@
 // Idempotent: commitThesis only upgrades a row that is still 'pending_entry', and ids are the
 // tradeThesisId, so a re-run after a crash (before or after settle) is a no-op or finishes the settle.
 //
+// ENTRY CONFIRMATION (decision switch `entryConfirmation`, shared/entry_confirmation.js): a pending decision that carries
+// debate.evidence.entryConfirmation (written by the pipeline at decision time, so a later switch change never alters rows already
+// waiting) is not filled at the first bar. It fills at the open of the first bar after a bar that CLOSED the required move in the
+// trade direction, or expires as 'skipped_no_fill'. The outcome (confirmed / expired) is written back into that evidence record.
+//
 // HONEST SCOPE: the drawdown-breaker / sizing in portfolioDecision was decided at signal time and is
 // not re-evaluated at fill; only the SQL risk ceiling is re-checked.
 
-import { findFirstBarOpenAtOrAfter } from "./bar_fill.js";
+import { findFirstBarOpenAtOrAfter, findConfirmedEntryFill } from "./bar_fill.js";
+import { confirmationSpecOf } from "../shared/entry_confirmation.js";
 import { isPendingEntryExpired } from "../shared/entry_timing.js";
 import { DEFAULT_FLIP_MIN_CONFIDENCE } from "../shared/constants.js";
 import { recordExcursionBeforeClose, checkOpenPositionExits } from "./exit_check.js";
@@ -32,6 +38,18 @@ import { serializeTrailKnobs } from "../storage/live_knobs.js";
 function findFillForPending(inputs, pending, { asOf }) {
   // Window rule lives in bar_fill.js (shared with the read-only replay): the decision's asOf is the anchor.
   return findFirstBarOpenAtOrAfter(inputs, { ticker: pending.ticker, from: pending.asOf, asOf });
+}
+
+function findConfirmedFillForPending(inputs, pending, spec, { asOf }) {
+  return findConfirmedEntryFill(inputs, {
+    ticker: pending.ticker,
+    from: pending.asOf,
+    asOf,
+    direction: pending.thesis?.direction,
+    refPrice: spec.refPrice,
+    movePct: spec.movePct,
+    expiresAt: pending.fillExpiresAt,
+  });
 }
 
 /**
@@ -48,13 +66,16 @@ export async function fillPendingEntries(env, config, { inputs, store }, { asOf 
   let waiting = 0;
 
   for (const pending of pendings) {
-    const fill = await findFillForPending(inputs, pending, { asOf });
+    const confirmation = confirmationSpecOf(pending);
+    const fill = confirmation ? await findConfirmedFillForPending(inputs, pending, confirmation, { asOf }) : await findFillForPending(inputs, pending, { asOf });
     const expiryMs = Date.parse(pending.fillExpiresAt);
     // A bar that opened after the deadline is too late, same as no bar at all.
     const fillInTime = fill != null && !Number.isNaN(expiryMs) && Date.parse(fill.openedAt) < expiryMs;
 
     if (!fillInTime) {
       if (isPendingEntryExpired(pending.fillExpiresAt, asOf)) {
+        // Outcome first (idempotent), then the status flip: a crash in between re-runs both on the next tick.
+        if (confirmation) await store.recordEntryConfirmation({ id: pending.id, outcome: { ...confirmation, status: "expired" } });
         if (await store.expirePendingEntry({ id: pending.id })) expired.push({ id: pending.id, ticker: pending.ticker });
       } else {
         waiting += 1;
@@ -63,6 +84,23 @@ export async function fillPendingEntries(env, config, { inputs, store }, { asOf 
     }
 
     const { thesis, riskDecision, portfolioDecision, debate } = pending;
+    if (confirmation) {
+      // Written BEFORE the commit (idempotent): a crash between the two re-runs this fill and rewrites the same outcome.
+      // fillVsRefPct = how much of the confirming move was already gone when the entry opened (direction-signed).
+      const sign = thesis.direction === "short" ? -1 : 1;
+      await store.recordEntryConfirmation({
+        id: pending.id,
+        outcome: {
+          ...confirmation,
+          status: "confirmed",
+          confirmedAt: fill.confirmedAt,
+          confirmMovePct: fill.confirmMovePct,
+          fillPrice: fill.price,
+          fillVsRefPct: (sign * (fill.price - confirmation.refPrice)) / confirmation.refPrice,
+          waitedMinutes: Math.round((Date.parse(fill.openedAt) - Date.parse(pending.asOf)) / 60000),
+        },
+      });
+    }
     const confidence = debate?.confidence ?? null;
     const tradeThesisId = riskDecision?.tradeThesisId ?? pending.id;
 
