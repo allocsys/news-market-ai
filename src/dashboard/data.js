@@ -575,6 +575,8 @@ export async function getPostmortemData(env, id, { missed = true, includeDecisio
         ...summarizeMissed(items),
         horizonHours: MISSED_DEFAULTS.horizonMs / 3600000,
         barsTruncated,
+        // Compact per-decision outcome, keyed by decision id, so the decision cards can show a tag (every candidate, not just the sampled winners).
+        byDecision: Object.fromEntries(items.map((i) => [i.id, { outcome: i.outcome, forwardMovePct: i.forwardMovePct ?? null, hoursToHit: i.hoursToHit ?? null }])),
         missedWinners: items.filter((i) => i.outcome === "missed_winner").slice(0, POSTMORTEM_MISSED_SAMPLE),
       };
     }
