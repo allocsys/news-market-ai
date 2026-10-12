@@ -190,6 +190,16 @@ export function loadConfig(env) {
     // Judge prompts carry the evidence rule (agents/managers/evidence.js#INDEPENDENCE_NOTE: analyst agreement is one source, not several).
     // OFF by default; INDEPENDENCE_NOTE="true" turns it on. Per-run backtest override and live switch exist too.
     independenceNote: env.INDEPENDENCE_NOTE === "true",
+    // Range-location filter (agents/risk_mgmt/range_location.js): block longs near the N-day high / shorts near the N-day low unless breakout.
+    // OFF by default; RANGE_LOCATION_FILTER="true" turns it on. N / edge unset -> undefined -> the constants.js defaults. Per-run backtest override and live switch exist too.
+    rangeLocationFilter: env.RANGE_LOCATION_FILTER === "true",
+    rangeFilterDays: env.RANGE_FILTER_DAYS ? Number(env.RANGE_FILTER_DAYS) : undefined,
+    rangeFilterEdgePct: env.RANGE_FILTER_EDGE_PCT ? Number(env.RANGE_FILTER_EDGE_PCT) : undefined,
+    // Entry confirmation (shared/entry_confirmation.js): an approved entry waits as pending_entry until a bar closes the required move. OFF by default;
+    // ENTRY_CONFIRMATION="true" turns it on. Move / hours unset -> the constants.js defaults. Per-run backtest override and live switch exist too.
+    entryConfirmation: env.ENTRY_CONFIRMATION === "true",
+    entryConfirmMovePct: env.ENTRY_CONFIRM_MOVE_PCT ? Number(env.ENTRY_CONFIRM_MOVE_PCT) : undefined,
+    entryConfirmHours: env.ENTRY_CONFIRM_HOURS ? Number(env.ENTRY_CONFIRM_HOURS) : undefined,
     // Time-based exit knob for graph/exit_check.js#checkOpenPositionExits --
     // a position still open this many days after opened_at closes
     // regardless of price, even if price_bars has no data for it (see that
