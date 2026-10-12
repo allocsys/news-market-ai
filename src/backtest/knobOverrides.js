@@ -39,6 +39,13 @@ export const KNOB_OVERRIDES = Object.freeze({
   // Merged verdict (graph/pipeline.js): ONE call replaces bull + bear + judge. Same 0/1 -> boolean handling; default OFF, so a
   // run without it is the normal three-call debate. Lets two runs on the same ticker/window be compared.
   mergedVerdict: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  // Break-even / trailing stop (agents/risk_mgmt/trailing.js), in R = the position's initial stop distance. 0 = off
+  // (the default), so a run without them is the static stop/target walk. Bounds are sanity limits, not tuning advice.
+  breakEvenTriggerR: Object.freeze({ min: 0, max: 10 }),
+  trailActivationR: Object.freeze({ min: 0, max: 10 }),
+  trailDistanceR: Object.freeze({ min: 0, max: 10 }),
+  // 1 = once the trail is binding, ignore the fixed take-profit. Stays a number (config reads Number(x) === 1).
+  trailRemovesTarget: Object.freeze({ min: 0, max: 1, integer: true }),
 });
 
 /**
