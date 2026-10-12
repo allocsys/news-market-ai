@@ -31,7 +31,9 @@ export const BACKTEST_ID_RE = /^backtest-\d+-[a-z0-9]+$/;
 // Copy of the backend's LIVE_KNOB_NAMES (src/storage/live_knobs.js). The backend validates the values and bounds.
 export const LIVE_KNOB_NAMES = Object.freeze(["breakEvenTriggerR", "trailActivationR", "trailDistanceR", "trailRemovesTarget"]);
 // Copy of the backend's LIVE_SWITCH_NAMES (src/storage/live_knobs.js): the on/off decision switches (0/1).
-export const LIVE_SWITCH_NAMES = Object.freeze(["intradayTechnical", "independenceNote"]);
+export const LIVE_SWITCH_NAMES = Object.freeze(["intradayTechnical", "independenceNote", "rangeLocationFilter", "entryConfirmation"]);
+// Per-run numeric params of those switches (backend KNOB_OVERRIDES, src/backtest/knobOverrides.js). NOT live knobs: only /backtest/run forwards them; the backend validates values and bounds.
+export const BACKTEST_SWITCH_PARAM_NAMES = Object.freeze(["rangeFilterDays", "rangeFilterEdgePct", "entryConfirmMovePct", "entryConfirmHours"]);
 
 /** The auth-related settings, read from the Worker env (secrets) on every call. */
 export function loadAuthConfig(env) {
@@ -386,6 +388,11 @@ export async function handleGateway(request, env) {
         // Decision switches (technical analyst sees the intraday price; judge EVIDENCE RULE): this run only, default OFF. Absent sends nothing (backend default off); a run never reads the live switches.
         for (const name of LIVE_SWITCH_NAMES) {
           if (isChecked(searchParams.get(name)) || isChecked(fromBody(name))) params[name] = "1";
+        }
+        // Numeric params of the range filter / entry confirmation: this run only. Blank/absent sends nothing (the constants.js defaults apply).
+        for (const name of BACKTEST_SWITCH_PARAM_NAMES) {
+          const value = searchParams.get(name) ?? fromBody(name);
+          if (value !== null && value !== undefined && String(value).trim() !== "") params[name] = String(value).trim();
         }
         // Break-even / trailing knobs (R multiples; trailRemovesTarget 0/1): this run only, never the live knobs. Blank/absent sends nothing (default 0 = off); the backend validates values and bounds (src/backtest/knobOverrides.js) and records them in result.knobs.
         for (const name of LIVE_KNOB_NAMES) {
