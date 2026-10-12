@@ -154,6 +154,7 @@ test("openPosition stores direction/entryPrice/stopLossPct/takeProfitPct, and ge
     maePct: null, // running excursion extremes: never sampled yet
     mfePct: null,
     peakPrice: null, // break-even/trailing high-water mark: none recorded yet
+    trailKnobs: null, // break-even/trailing knobs snapshot: none (opened without one) -> exit walk uses the config
   });
 });
 
