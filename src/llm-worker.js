@@ -50,6 +50,7 @@ import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { withLlmLogContext } from "./storage/llm_calls.js";
 import { getPauseFlags } from "./storage/pause_flags.js";
+import { applyLiveKnobs } from "./storage/live_knobs.js";
 import { getDisabledTickers } from "./storage/active_tickers.js";
 import { isMacroEnabled } from "./storage/macro_flag.js";
 import { MACRO_TICKERS } from "./agents/analysts/macroContext.js";
@@ -78,12 +79,16 @@ export default {
   // message's own `type`, not on which physical queue delivered the batch
   // -- same approach as backend's queue() before Step 6.
   async queue(batch, env) {
-    const config = loadConfig(env);
+    const baseConfig = loadConfig(env);
     // Operator pause switches (storage/pause_flags.js), read once per batch; fails open.
     // Trading or LLM calls paused: analyze and exit_check are acked without
     // running, so already-queued messages stop spending Gemini quota. (A skipped
     // analyze message is not retried; that news item is not analyzed later.)
-    const { flags } = await getPauseFlags(env.LIVE_DB);
+    // The SAME single system_flags read also carries the live break-even/trailing knobs (storage/live_knobs.js): they
+    // are laid over the env/config defaults here, once per batch, and only affect positions OPENED from now on (the
+    // knobs are snapshotted onto the row at open). Empty/failed read = the config defaults.
+    const { flags, knobs } = await getPauseFlags(env.LIVE_DB);
+    const config = applyLiveKnobs(baseConfig, knobs?.values);
     const llmBlocked = flags.trading || flags.llm;
     // Operator ticker selection (storage/active_tickers.js), read lazily (only analyze messages need it);
     // fails open. A dropped analyze message is not retried, same as under the pause switches.
