@@ -2,7 +2,8 @@
 
 import { ChevronLeft, Play, Pause, Square, TrendingUp, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { useBacktestRunDetail, usePostBacktestAction } from "@/lib/api";
+import { useBacktestRunDetail, usePostBacktestAction, usePostmortem } from "@/lib/api";
+import { PostmortemCard } from "../postmortem-card";
 import { JobProgressCard } from "../job-progress";
 import {
   AlertDialog,
@@ -28,6 +29,8 @@ export function BacktestDetailView({
 }: ViewProps & { backtestId: string | null; onClose: () => void }) {
   const run = useBacktestRunDetail(backtestId);
   const actionMutation = usePostBacktestAction();
+  // Same query the Post-mortem card uses (shared cache); only worth asking once the run has finished.
+  const pm = usePostmortem(run.data?.run?.status === "complete" ? backtestId : null);
 
   if (!backtestId) {
     return (
@@ -236,12 +239,17 @@ export function BacktestDetailView({
         </section>
       )}
 
+      {r.status === "complete" && <PostmortemCard runId={r.id} />}
+
       <section>
         <SectionHeading title="Positions" description={`${positions.length} positions in this run`} />
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {positions.map((p, i) => (
-            <OpenPositionCard key={i} position={p} />
-          ))}
+          {positions.map((p, i) => {
+            // Same query, same order as the post-mortem's positions; the ticker/openedAt check guards against a mismatch.
+            const tagged = pm.data?.summary.positions[i];
+            const match = tagged && tagged.ticker === p.ticker && tagged.openedAt === p.openedAt ? tagged : null;
+            return <OpenPositionCard key={i} position={p} postmortem={match} />;
+          })}
         </div>
       </section>
     </div>
