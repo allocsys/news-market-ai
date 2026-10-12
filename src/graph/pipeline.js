@@ -294,7 +294,7 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
             (existingPosition.direction === state.thesis.direction ||
               state.verdict.confidence < (config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE));
           if (!heldByRule) {
-            await recordExcursionBeforeClose(config, { inputs, store }, existingPosition, { asOf });
+            await recordExcursionBeforeClose(config, { inputs, store }, existingPosition, { asOf, exitPrice: currentPrice });
           }
         }
 

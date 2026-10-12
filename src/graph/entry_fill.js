@@ -72,7 +72,7 @@ export async function fillPendingEntries(env, config, { inputs, store }, { asOf 
       const heldByRule =
         existing.direction != null &&
         (existing.direction === thesis.direction || confidence < (config.flipMinConfidence ?? DEFAULT_FLIP_MIN_CONFIDENCE));
-      if (!heldByRule) await recordExcursionBeforeClose(config, { inputs, store }, existing, { asOf: fill.openedAt });
+      if (!heldByRule) await recordExcursionBeforeClose(config, { inputs, store }, existing, { asOf: fill.openedAt, exitPrice: fill.price });
     }
 
     await store.commitThesis({

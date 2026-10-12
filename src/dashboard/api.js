@@ -26,6 +26,8 @@ import {
   getTickersData,
   getBacktestRunsData,
   getBacktestRunDetailData,
+  getPostmortemData,
+  getPostmortemCompareData,
   getLlmCallsData,
   getLlmCallData,
   resolveEnv,
@@ -133,6 +135,31 @@ export async function handleApiBacktestRunRoute(request, env, config, id) {
   if (detail.error) return jsonResponse({ error: detail.error }, { status: 500 });
   if (!detail.run) return jsonResponse({ error: "backtest run not found" }, { status: 404 });
   return jsonResponse(detail);
+}
+
+/**
+ * GET /api/postmortem?runId=A[&compareTo=B][&missed=0] -- read-only post-mortem of a backtest run (data.js#getPostmortemData):
+ * every position tagged by where its outcome came from, plus (unless missed=0) the missed-opportunity look-ahead. With
+ * `compareTo`, both runs' summaries and how often they decided the same thing (data.js#getPostmortemCompareData).
+ * 400 for a missing/malformed id, 404 for a run that isn't in the registry, 500 if the registry read failed.
+ */
+export async function handleApiPostmortemRoute(request, env, config) {
+  const auth = await checkAuth(request, config);
+  if (auth.redirect) return unauthorized();
+  const sp = new URL(request.url).searchParams;
+  const runId = sp.get("runId");
+  const compareTo = sp.get("compareTo");
+  if (!runId || !BACKTEST_ID_RE.test(runId)) return jsonResponse({ error: "runId is missing or malformed" }, { status: 400 });
+  if (compareTo != null && compareTo !== "" && !BACKTEST_ID_RE.test(compareTo)) return jsonResponse({ error: "compareTo is malformed" }, { status: 400 });
+  if (compareTo) {
+    const out = await getPostmortemCompareData(env, runId, compareTo);
+    if (out.error) return jsonResponse({ error: out.error }, { status: out.missingRun ? 404 : 500 });
+    return jsonResponse(out);
+  }
+  const out = await getPostmortemData(env, runId, { missed: sp.get("missed") !== "0" });
+  if (out.error) return jsonResponse({ error: out.error }, { status: 500 });
+  if (!out.run) return jsonResponse({ error: "backtest run not found" }, { status: 404 });
+  return jsonResponse(out);
 }
 
 /** GET /api/llm-calls -- `{ calls, nextBeforeId, error }`, newest first, previews only. Filters: llmSource, llmStatus, llmTicker, llmJob, llmRun, llmLimit, llmBefore (helpers.js#parseLlmParams). */

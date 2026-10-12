@@ -86,6 +86,8 @@ export interface Thesis {
 }
 
 export interface TradeDecision {
+  /** `ticker|asOf`; the key the post-mortem uses. Absent on a backend that predates it. */
+  id?: string;
   ticker: string;
   status: TradeDecisionStatus;
   thesis: Thesis;

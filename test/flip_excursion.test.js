@@ -95,3 +95,41 @@ test("recordExcursionBeforeClose writes only the excursion: position stays open,
   assert.equal(row.last_checked_at, null);
   assert.ok(Math.abs(row.mae_pct - -0.02) < 1e-9 && Math.abs(row.mfe_pct - 0.02) < 1e-9, `${row.mae_pct} / ${row.mfe_pct}`);
 });
+
+async function openAt(ctx, direction) {
+  await ctx.store.openPosition({
+    id: "AAPL|t1", ticker: "AAPL", tradeThesisId: "AAPL|t1", positionSizePct: 0.03, direction,
+    entryPrice: 100, stopLossPct: 0.2, takeProfitPct: 0.3, openedAt: "2026-01-05T14:30:00Z",
+  });
+  return ctx.store.getOpenPositionForTickerAsOf({ ticker: "AAPL", asOf: "2026-01-05T16:00:00.000Z" });
+}
+
+test("recordExcursionBeforeClose counts the closing fill price: a flip filled past the sampled bars no longer leaves MAE smaller than the loss", async () => {
+  const ctx = makeCtx();
+  const position = await openAt(ctx, "long");
+  await seedIntradayBarOhlc(ctx.inputs, { ticker: "AAPL", ts: "2026-01-05T14:35:00Z", open: 100, high: 101, low: 97, close: 98 });
+  assert.equal(await recordExcursionBeforeClose({}, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: 93 }), true);
+  const [row] = await stateRows(ctx.stateDb, "positions");
+  assert.ok(Math.abs(row.mae_pct - -0.07) < 1e-9, `mae ${row.mae_pct} must reach the -7% fill, not stop at the bars' -3%`);
+  assert.ok(Math.abs(row.mfe_pct - 0.01) < 1e-9, `mfe ${row.mfe_pct} stays the bars' +1%`);
+});
+
+test("recordExcursionBeforeClose: a short's fill price counts in its own direction, and a fill with no bars still records", async () => {
+  const ctx = makeCtx();
+  const position = await openAt(ctx, "short");
+  // No bars at all: only the fill is known. Price rose 100 -> 106, which is -6% for a short.
+  assert.equal(await recordExcursionBeforeClose({}, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: 106 }), true);
+  const [row] = await stateRows(ctx.stateDb, "positions");
+  assert.ok(Math.abs(row.mae_pct - -0.06) < 1e-9, `mae ${row.mae_pct}`);
+  assert.equal(row.mfe_pct ?? 0, 0, "nothing in profit was ever seen");
+});
+
+test("recordExcursionBeforeClose ignores a split-looking fill price and a non-finite one", async () => {
+  const ctx = makeCtx();
+  const position = await openAt(ctx, "long");
+  const guarded = { splitGuardTolerance: 0.05 };
+  assert.equal(await recordExcursionBeforeClose(guarded, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: 50 }), false, "a 2:1 split-looking price is not a real fill");
+  assert.equal(await recordExcursionBeforeClose(guarded, ctx, position, { asOf: "2026-01-05T16:00:00.000Z", exitPrice: Number.NaN }), false);
+  const [row] = await stateRows(ctx.stateDb, "positions");
+  assert.equal(row.mae_pct, null);
+});

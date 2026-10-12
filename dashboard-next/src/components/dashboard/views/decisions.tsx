@@ -3,7 +3,8 @@
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Filter, ChevronRight, Loader2 } from "lucide-react";
-import { useDecisions } from "@/lib/api";
+import { useDecisions, usePostmortem } from "@/lib/api";
+import { MissedOutcomePill } from "../postmortem-card";
 import type { TradeDecisionStatus } from "@/lib/types";
 import { SectionHeading, EmptyState, Pill, StatusBadge, ErrorState } from "../primitives";
 import { VerdictCard } from "../verdict-card";
@@ -47,6 +48,9 @@ export function DecisionsView({ tickerFilter, onNavigate, env }: ViewProps & { t
     decisionStatus: status === "all" ? undefined : status,
     decisionLimit: limit,
   });
+  // Held/rejected decisions of a BACKTEST run get a look-ahead tag (same cached query the run page's Post-mortem card uses).
+  const pm = usePostmortem(typeof env === "string" && env.startsWith("backtest-") ? env : null);
+  const missedById = pm.data?.missed?.byDecision ?? null;
 
   const filtered = useMemo(() => {
     if (!decisions.data) return [];
@@ -208,7 +212,11 @@ export function DecisionsView({ tickerFilter, onNavigate, env }: ViewProps & { t
           <ul className="mt-3 space-y-3">
             {filtered.map((d, i) => (
               <li key={`${d.ticker}-${i}`} className="animate-fade-up" style={{ animationDelay: `${i * 30}ms` }}>
-                <DecisionCard decision={d} onNavigateLlm={() => onNavigate("llm", { ticker: d.ticker })} />
+                <DecisionCard
+                  decision={d}
+                  missed={d.id && missedById ? missedById[d.id] ?? null : null}
+                  onNavigateLlm={() => onNavigate("llm", { ticker: d.ticker })}
+                />
               </li>
             ))}
           </ul>
@@ -220,9 +228,11 @@ export function DecisionsView({ tickerFilter, onNavigate, env }: ViewProps & { t
 
 function DecisionCard({
   decision,
+  missed,
   onNavigateLlm,
 }: {
   decision: import("@/lib/types").TradeDecision;
+  missed?: { outcome: string; forwardMovePct: number | null; hoursToHit: number | null } | null;
   onNavigateLlm: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -240,6 +250,7 @@ function DecisionCard({
           <div className="flex items-center gap-2">
             <span className="font-mono text-base font-semibold">{decision.ticker}</span>
             <StatusBadge variant={variant} label={decisionStatusLabel(decision.status)} />
+            {missed && <MissedOutcomePill outcome={missed.outcome} forwardMovePct={missed.forwardMovePct} hoursToHit={missed.hoursToHit} />}
           </div>
           <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
             {decision.thesis.rationale ?? "—"}
