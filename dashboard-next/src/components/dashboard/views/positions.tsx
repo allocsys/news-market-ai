@@ -9,7 +9,7 @@ import { SectionHeading, MiniStat, Pill, EmptyState, ErrorState } from "../primi
 import { OpenPositionCard, ClosedPositionCard } from "../position-cards";
 import { Gauge } from "../charts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { fmtPct } from "@/lib/format";
+import { fmtPct, signedPct } from "@/lib/format";
 import type { ViewProps } from "./types";
 
 const POSITIONS_LIMIT_OPTIONS = [10, 25, 50, 100];
@@ -173,14 +173,15 @@ export function PositionsView({ env }: ViewProps) {
               <div>
                 <div className="flex items-center justify-between gap-4 mb-3">
                   <p className="text-xs font-medium text-muted-foreground">Close reasons (last 20)</p>
-                  <div className="flex gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">Open</span>
                     {open.length > 0 ? (
                       <>
                         <Pill tone="long" size="sm">{longCount} long</Pill>
                         <Pill tone="short" size="sm">{shortCount} short</Pill>
                       </>
                     ) : (
-                      <span className="text-xs text-muted-foreground">None open</span>
+                      <span className="text-xs text-muted-foreground">none</span>
                     )}
                   </div>
                 </div>
@@ -217,12 +218,12 @@ export function PositionsView({ env }: ViewProps) {
                     sub={`${returned.length} closed with return`}
                   />
                   <MiniStat
-                    value={avgWin !== null ? fmtPct(avgWin, 1) : "—"}
+                    value={avgWin !== null ? <span className="text-[color:var(--long)]">{signedPct(avgWin, 1)}</span> : "—"}
                     label="Avg win"
                     sub="mean realized"
                   />
                   <MiniStat
-                    value={avgLoss !== null ? fmtPct(avgLoss, 1) : "—"}
+                    value={avgLoss !== null ? <span className="text-[color:var(--short)]">{signedPct(avgLoss, 1)}</span> : "—"}
                     label="Avg loss"
                     sub="mean realized"
                   />
