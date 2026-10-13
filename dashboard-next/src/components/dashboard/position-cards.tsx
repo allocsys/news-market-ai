@@ -140,6 +140,18 @@ export function ClosedPositionCard({ position, onClick }: { position: Position; 
                 <CloseReasonPill reason={position.closeReason} />
               </dd>
             </div>
+            <ExcursionCell
+              label="MAE"
+              value={position.maePct}
+              tooltip="Worst gross return seen while open (negative = adverse)."
+              tone="auto"
+            />
+            <ExcursionCell
+              label="MFE"
+              value={position.mfePct}
+              tooltip="Best gross return seen while open."
+              tone="auto"
+            />
           </dl>
         </div>
       </div>
