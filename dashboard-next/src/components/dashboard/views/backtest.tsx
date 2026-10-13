@@ -45,6 +45,131 @@ import { toast } from "sonner";
 import { daysAgo, RANGE_PRESETS, presetRange } from "@/lib/date-range";
 import type { ViewProps } from "./types";
 
+// TEMPORARY presets for A/B testing - remove when done
+interface BacktestPresetState {
+  name: string;
+  intradayTechnical: boolean;
+  independenceNote: boolean;
+  rangeLocationFilter: boolean;
+  entryConfirmation: boolean;
+  rangeFilterDays: string;
+  rangeFilterEdgePct: string;
+  entryConfirmMovePct: string;
+  entryConfirmHours: string;
+  breakEvenTriggerR: string;
+  trailActivationR: string;
+  trailDistanceR: string;
+  trailRemovesTarget: boolean;
+}
+
+const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
+  {
+    name: "Baseline",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: false,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "",
+    entryConfirmHours: "",
+    breakEvenTriggerR: "",
+    trailActivationR: "",
+    trailDistanceR: "",
+    trailRemovesTarget: false,
+  },
+  {
+    name: "Trail",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: false,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "",
+    entryConfirmHours: "",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "Trail + Range",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: true,
+    entryConfirmation: false,
+    rangeFilterDays: "10",
+    rangeFilterEdgePct: "0.2",
+    entryConfirmMovePct: "",
+    entryConfirmHours: "",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "Trail + Confirm",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: true,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "0.5",
+    entryConfirmHours: "6",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "Trail + Both",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: true,
+    entryConfirmation: true,
+    rangeFilterDays: "10",
+    rangeFilterEdgePct: "0.2",
+    entryConfirmMovePct: "0.5",
+    entryConfirmHours: "6",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "Range only",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: true,
+    entryConfirmation: false,
+    rangeFilterDays: "10",
+    rangeFilterEdgePct: "0.2",
+    entryConfirmMovePct: "",
+    entryConfirmHours: "",
+    breakEvenTriggerR: "",
+    trailActivationR: "",
+    trailDistanceR: "",
+    trailRemovesTarget: false,
+  },
+  {
+    name: "Confirm only",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: true,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "0.5",
+    entryConfirmHours: "6",
+    breakEvenTriggerR: "",
+    trailActivationR: "",
+    trailDistanceR: "",
+    trailRemovesTarget: false,
+  },
+] as const;
+
 // Toast for the bulk-maintenance routes. Both are bounded per call and answer
 // with counts ({ scanned, totalDeleted, processed } / { scanned, purged, ... });
 // cleanup reports a failed candidate lookup as `error` inside a 200.
@@ -397,6 +522,68 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [trailRemovesTarget, setTrailRemovesTarget] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
+  // Compute active preset based on current form state
+  const currentState = {
+    intradayTechnical,
+    independenceNote,
+    rangeLocationFilter,
+    entryConfirmation,
+    rangeFilterDays,
+    rangeFilterEdgePct,
+    entryConfirmMovePct,
+    entryConfirmHours,
+    breakEvenTriggerR,
+    trailActivationR,
+    trailDistanceR,
+    trailRemovesTarget,
+  };
+
+  const activePreset = BACKTEST_PRESETS.find((p) => {
+    return (
+      p.intradayTechnical === currentState.intradayTechnical &&
+      p.independenceNote === currentState.independenceNote &&
+      p.rangeLocationFilter === currentState.rangeLocationFilter &&
+      p.entryConfirmation === currentState.entryConfirmation &&
+      p.rangeFilterDays === currentState.rangeFilterDays &&
+      p.rangeFilterEdgePct === currentState.rangeFilterEdgePct &&
+      p.entryConfirmMovePct === currentState.entryConfirmMovePct &&
+      p.entryConfirmHours === currentState.entryConfirmHours &&
+      p.breakEvenTriggerR === currentState.breakEvenTriggerR &&
+      p.trailActivationR === currentState.trailActivationR &&
+      p.trailDistanceR === currentState.trailDistanceR &&
+      p.trailRemovesTarget === currentState.trailRemovesTarget
+    );
+  });
+  const activePresetName = activePreset ? activePreset.name : "Custom";
+
+  // Summary builder for active settings
+  const summaryParts: string[] = [];
+  if (breakEvenTriggerR || trailActivationR || trailDistanceR) {
+    summaryParts.push(`trail ${breakEvenTriggerR || "0"}/${trailActivationR || "0"}/${trailDistanceR || "0"}`);
+  } else {
+    summaryParts.push("trail OFF");
+  }
+  summaryParts.push(`range ${rangeLocationFilter ? "ON" : "OFF"}`);
+  summaryParts.push(`confirm ${entryConfirmation ? "ON" : "OFF"}`);
+  if (intradayTechnical) summaryParts.push("intraday ON");
+  if (independenceNote) summaryParts.push("independence ON");
+  const activeSummary = summaryParts.join(" | ");
+
+  const applyPreset = (p: BacktestPresetState) => {
+    setIntradayTechnical(p.intradayTechnical);
+    setIndependenceNote(p.independenceNote);
+    setRangeLocationFilter(p.rangeLocationFilter);
+    setEntryConfirmation(p.entryConfirmation);
+    setRangeFilterDays(p.rangeFilterDays);
+    setRangeFilterEdgePct(p.rangeFilterEdgePct);
+    setEntryConfirmMovePct(p.entryConfirmMovePct);
+    setEntryConfirmHours(p.entryConfirmHours);
+    setBreakEvenTriggerR(p.breakEvenTriggerR);
+    setTrailActivationR(p.trailActivationR);
+    setTrailDistanceR(p.trailDistanceR);
+    setTrailRemovesTarget(p.trailRemovesTarget);
+  };
+
   const toggleTicker = (t: string) => {
     setTickers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   };
@@ -498,6 +685,36 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
 
   return (
     <div className="space-y-4">
+      {/* TEMPORARY Presets row */}
+      <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Presets:</span>
+            <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono text-xs font-medium text-primary">
+              {activePresetName}
+            </span>
+          </div>
+          <p className="font-mono text-[11px] text-muted-foreground">{activeSummary}</p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {BACKTEST_PRESETS.map((preset) => {
+            const isActive = activePresetName === preset.name;
+            return (
+              <Button
+                key={preset.name}
+                type="button"
+                variant={isActive ? "default" : "outline"}
+                size="sm"
+                onClick={() => applyPreset(preset)}
+                className="h-7 px-2.5 text-xs"
+              >
+                {preset.name}
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+
       <div>
         <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Tickers</p>
         <div className="flex flex-wrap gap-2">
