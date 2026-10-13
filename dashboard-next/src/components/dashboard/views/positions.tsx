@@ -7,7 +7,7 @@ import { usePositions } from "@/lib/api";
 import { resolveRiskLimits, exposureFraction, describeGroupCapOverrides } from "@/lib/risk";
 import { SectionHeading, MiniStat, Pill, EmptyState, ErrorState } from "../primitives";
 import { OpenPositionCard, ClosedPositionCard } from "../position-cards";
-import { DonutChart, Gauge } from "../charts";
+import { Gauge } from "../charts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { fmtPct } from "@/lib/format";
 import type { ViewProps } from "./types";
@@ -162,53 +162,77 @@ export function PositionsView({ env }: ViewProps) {
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="space-y-4 border-t border-border p-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">Open direction</p>
-                  <DonutChart
-                    segments={[
-                      { value: longCount, color: "var(--long)", label: "Long" },
-                      { value: shortCount, color: "var(--short)", label: "Short" },
-                    ]}
-                    centerValue={open.length}
-                    centerLabel="open"
-                    size={120}
-                  />
+            <div className="border-t border-border p-4 space-y-6">
+              {/* Close reasons */}
+              <div>
+                <div className="flex items-center justify-between gap-4 mb-3">
+                  <p className="text-xs font-medium text-muted-foreground">Close reasons (last 20)</p>
+                  <div className="flex gap-1.5">
+                    {open.length > 0 ? (
+                      <>
+                        <Pill tone="long" size="sm">{longCount} long</Pill>
+                        <Pill tone="short" size="sm">{shortCount} short</Pill>
+                      </>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">None open</span>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">Close reasons (last 20)</p>
-                  <DonutChart
-                    segments={[
-                      { value: closedTp, color: "var(--long)", label: "Take profit" },
-                      { value: closedSl, color: "var(--short)", label: "Stop loss" },
-                      { value: closedTrail, color: "var(--info)", label: "Trailing / break-even" },
-                      { value: closedTime, color: "var(--paused)", label: "Time exit" },
-                      { value: closedOther, color: "var(--muted-foreground)", label: "Other" },
-                    ]}
-                    centerValue={closed.length}
-                    centerLabel="closed"
-                    size={120}
-                  />
-                </div>
+
+                {closed.length > 0 ? (
+                  <>
+                    <div className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full mb-3">
+                      {closedTp > 0 && <div className="bg-[var(--long)]" style={{ flex: closedTp }} />}
+                      {closedSl > 0 && <div className="bg-[var(--short)]" style={{ flex: closedSl }} />}
+                      {closedTrail > 0 && <div className="bg-[var(--info)]" style={{ flex: closedTrail }} />}
+                      {closedTime > 0 && <div className="bg-[var(--paused)]" style={{ flex: closedTime }} />}
+                      {closedOther > 0 && <div className="bg-[var(--muted-foreground)]" style={{ flex: closedOther }} />}
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
+                      {closedTp > 0 && <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--long)]" />Take profit <span className="text-muted-foreground">{closedTp}</span></div>}
+                      {closedSl > 0 && <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--short)]" />Stop loss <span className="text-muted-foreground">{closedSl}</span></div>}
+                      {closedTrail > 0 && <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--info)]" />Trailing/BE <span className="text-muted-foreground">{closedTrail}</span></div>}
+                      {closedTime > 0 && <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--paused)]" />Time exit <span className="text-muted-foreground">{closedTime}</span></div>}
+                      {closedOther > 0 && <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--muted-foreground)]" />Other <span className="text-muted-foreground">{closedOther}</span></div>}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No closed positions yet</p>
+                )}
               </div>
 
+              {/* Exit quality */}
               <div>
-                <p className="mb-2 text-xs font-medium text-muted-foreground">Exit quality</p>
+                <p className="mb-3 text-xs font-medium text-muted-foreground">Exit quality</p>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <MiniStat value={closedTp} label="Take profit" sub="hit the target" />
-                  <MiniStat value={closedSl} label="Stop loss" sub="hit the stop" />
                   <MiniStat
-                    value={returned.length > 0 ? `${((wins / returned.length) * 100).toFixed(0)}%` : "—"}
+                    value={returned.length > 0 ? fmtPct(wins / returned.length, 0) : "—"}
                     label="Win rate"
-                    sub={`${returned.length} closed with a return`}
+                    sub={`${returned.length} closed with return`}
                   />
                   <MiniStat
-                    value={fmtPct(open.length + closed.length > 0 ? open.length / (open.length + closed.length) : 0, 0)}
-                    label="Still open"
-                    sub="of total"
+                    value={returned.length > 0 ? fmtPct(returned.filter(p => (p.realizedReturn as number) > 0).reduce((acc, p) => acc + (p.realizedReturn as number), 0) / wins || 0, 1) : "—"}
+                    label="Avg win"
+                    sub="mean realized"
+                  />
+                  <MiniStat
+                    value={returned.length > 0 ? fmtPct(returned.filter(p => (p.realizedReturn as number) <= 0).reduce((acc, p) => acc + Math.abs(p.realizedReturn as number), 0) / (returned.length - wins) || 0, 1) : "—"}
+                    label="Avg loss"
+                    sub="mean realized"
+                  />
+                  <MiniStat
+                    value={(() => {
+                      const avgW = wins > 0 ? returned.filter(p => (p.realizedReturn as number) > 0).reduce((acc, p) => acc + (p.realizedReturn as number), 0) / wins : 0;
+                      const avgL = (returned.length - wins) > 0 ? returned.filter(p => (p.realizedReturn as number) <= 0).reduce((acc, p) => acc + Math.abs(p.realizedReturn as number), 0) / (returned.length - wins) : 0;
+                      return (avgW > 0 && avgL > 0) ? (avgW / avgL).toFixed(2) : "—";
+                    })()}
+                    label="Payoff"
+                    sub="avg win ÷ avg loss"
                   />
                 </div>
+                {returned.length > 0 && returned.length < 10 && (
+                  <p className="mt-3 text-xs text-muted-foreground italic">Small sample, treat as noisy.</p>
+                )}
               </div>
             </div>
           </CollapsibleContent>
