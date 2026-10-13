@@ -1,7 +1,6 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { useMemo } from "react";
 
 // ============================================================
 // Sparkline — pure SVG line+area, color by direction
@@ -87,87 +86,6 @@ export function StackedBar({
           title={seg.label}
         />
       ))}
-    </div>
-  );
-}
-
-// ============================================================
-// Donut chart — with side legend
-// ============================================================
-export function DonutChart({
-  segments,
-  centerValue,
-  centerLabel,
-  size = 120,
-  thickness = 14,
-  className,
-}: {
-  segments: { value: number; color: string; label: string }[];
-  centerValue?: React.ReactNode;
-  centerLabel?: React.ReactNode;
-  size?: number;
-  thickness?: number;
-  className?: string;
-}) {
-  const total = segments.reduce((s, seg) => s + seg.value, 0) || 1;
-  const r = (size - thickness) / 2;
-  const c = 2 * Math.PI * r;
-  // Pre-compute each segment's dasharray and the cumulative dashoffset using a
-  // pure reduce (no outer-variable reassignment, which trips the immutability lint rule).
-  const segmentData = useMemo(() => {
-    return segments.reduce<
-      { dasharray: string; dashoffset: number; color: string }[]
-    >((acc, seg) => {
-      const len = (seg.value / total) * c;
-      const prevLen = acc.length === 0 ? 0 : parseFloat(acc[acc.length - 1].dasharray);
-      const dashoffset = acc.length === 0 ? 0 : acc[acc.length - 1].dashoffset - prevLen;
-      return [
-        ...acc,
-        { dasharray: `${len} ${c - len}`, dashoffset, color: seg.color },
-      ];
-    }, []);
-  }, [segments, total, c]);
-
-  return (
-    <div className={cn("flex items-center gap-4", className)}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
-        <g transform={`translate(${size / 2}, ${size / 2}) rotate(-90)`}>
-          <circle r={r} fill="none" stroke="var(--muted)" strokeWidth={thickness} opacity={0.4} />
-          {segmentData.map((data, i) => (
-            <circle
-              key={i}
-              r={r}
-              fill="none"
-              stroke={data.color}
-              strokeWidth={thickness}
-              strokeDasharray={data.dasharray}
-              strokeDashoffset={data.dashoffset}
-              strokeLinecap="butt"
-            />
-          ))}
-        </g>
-        {centerValue != null && (
-          <text x="50%" y="48%" textAnchor="middle" dominantBaseline="middle" className="fill-foreground font-mono text-base font-semibold nums">
-            {centerValue}
-          </text>
-        )}
-        {centerLabel && (
-          <text x="50%" y="62%" textAnchor="middle" dominantBaseline="middle" className="fill-muted-foreground text-[9px]">
-            {centerLabel}
-          </text>
-        )}
-      </svg>
-      <ul className="space-y-1 text-xs">
-        {segments.map((seg, i) => (
-          <li key={i} className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: seg.color }} aria-hidden />
-            <span className="text-muted-foreground">{seg.label}</span>
-            <span className="ml-auto font-mono nums">
-              {((seg.value / total) * 100).toFixed(0)}%
-            </span>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
