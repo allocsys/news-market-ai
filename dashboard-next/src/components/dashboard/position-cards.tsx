@@ -8,29 +8,6 @@ import { fmtUsd, signedPct, fmtRelative } from "@/lib/format";
 import type { PostmortemPosition } from "@/lib/api";
 import { PostmortemTagPill } from "./postmortem-card";
 
-function ExcursionCell({
-  label,
-  value,
-  tooltip,
-  tone,
-}: {
-  label: string;
-  value: number | null | undefined;
-  tooltip: string;
-  tone: "auto";
-}) {
-  const isPos = (value ?? 0) >= 0;
-  const cls = value == null ? "text-muted-foreground" : isPos ? "text-[color:var(--long)]" : "text-[color:var(--short)]";
-  return (
-    <div title={tooltip} className="min-w-0">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className={cn("font-mono text-xs font-medium nums", cls)}>
-        {value == null ? "—" : signedPct(value, 1)}
-      </div>
-    </div>
-  );
-}
-
 /**
  * Range bar for a closed trade: zero in the middle, worst drawdown (MAE) fills left in red,
  * best run-up (MFE) fills right in green, and the dot is where the trade actually closed.
@@ -114,8 +91,8 @@ export function OpenPositionCard({ position, onClick, postmortem }: { position: 
                 <DirectionPill direction={position.direction} size="sm" />
                 {postmortem && <PostmortemTagPill tag={postmortem.tag} stage={postmortem.stage} />}
               </div>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Opened {fmtRelative(position.openedAt)}
+              <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground nums">
+                Entry {fmtUsd(position.entryPrice)} · opened {fmtRelative(position.openedAt)}
               </p>
             </div>
             <div className="text-right">
@@ -125,24 +102,9 @@ export function OpenPositionCard({ position, onClick, postmortem }: { position: 
               <div className="text-[10px] text-muted-foreground">of book</div>
             </div>
           </div>
-          <dl className="mt-3 grid grid-cols-3 gap-2">
-            <div>
-              <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Entry</dt>
-              <dd className="font-mono text-xs font-medium nums">{fmtUsd(position.entryPrice)}</dd>
-            </div>
-            <ExcursionCell
-              label="MAE"
-              value={position.maePct}
-              tooltip="Worst gross return seen while open (negative = adverse)."
-              tone="auto"
-            />
-            <ExcursionCell
-              label="MFE"
-              value={position.mfePct}
-              tooltip="Best gross return seen while open."
-              tone="auto"
-            />
-          </dl>
+          {(position.maePct != null || position.mfePct != null) && (
+            <ExcursionBar mae={position.maePct} mfe={position.mfePct} realized={null} />
+          )}
         </div>
       </div>
     </button>
