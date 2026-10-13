@@ -48,6 +48,12 @@ export function PositionsView({ env }: ViewProps) {
   // Win rate from what each position actually returned (a stop can win and a target can lose after costs), over closes that have a return.
   const returned = closed.filter((p) => typeof p.realizedReturn === "number");
   const wins = returned.filter((p) => (p.realizedReturn as number) > 0).length;
+  // Average winner / loser as fractions (avgLoss is negative). null when that side has no trades, so the tile shows a dash instead of a fake 0%.
+  const winReturns = returned.map((p) => p.realizedReturn as number).filter((r) => r > 0);
+  const lossReturns = returned.map((p) => p.realizedReturn as number).filter((r) => r <= 0);
+  const avgWin = winReturns.length > 0 ? winReturns.reduce((a, r) => a + r, 0) / winReturns.length : null;
+  const avgLoss = lossReturns.length > 0 ? lossReturns.reduce((a, r) => a + r, 0) / lossReturns.length : null;
+  const payoff = avgWin !== null && avgLoss !== null && avgLoss < 0 ? avgWin / Math.abs(avgLoss) : null;
 
   const limits = resolveRiskLimits(d.riskLimits);
   // The API sends exposure in percent units; limits and fmtPct work in fractions.
@@ -211,21 +217,17 @@ export function PositionsView({ env }: ViewProps) {
                     sub={`${returned.length} closed with return`}
                   />
                   <MiniStat
-                    value={returned.length > 0 ? fmtPct(returned.filter(p => (p.realizedReturn as number) > 0).reduce((acc, p) => acc + (p.realizedReturn as number), 0) / wins || 0, 1) : "—"}
+                    value={avgWin !== null ? fmtPct(avgWin, 1) : "—"}
                     label="Avg win"
                     sub="mean realized"
                   />
                   <MiniStat
-                    value={returned.length > 0 ? fmtPct(returned.filter(p => (p.realizedReturn as number) <= 0).reduce((acc, p) => acc + Math.abs(p.realizedReturn as number), 0) / (returned.length - wins) || 0, 1) : "—"}
+                    value={avgLoss !== null ? fmtPct(avgLoss, 1) : "—"}
                     label="Avg loss"
                     sub="mean realized"
                   />
                   <MiniStat
-                    value={(() => {
-                      const avgW = wins > 0 ? returned.filter(p => (p.realizedReturn as number) > 0).reduce((acc, p) => acc + (p.realizedReturn as number), 0) / wins : 0;
-                      const avgL = (returned.length - wins) > 0 ? returned.filter(p => (p.realizedReturn as number) <= 0).reduce((acc, p) => acc + Math.abs(p.realizedReturn as number), 0) / (returned.length - wins) : 0;
-                      return (avgW > 0 && avgL > 0) ? (avgW / avgL).toFixed(2) : "—";
-                    })()}
+                    value={payoff !== null ? payoff.toFixed(2) : "—"}
                     label="Payoff"
                     sub="avg win ÷ avg loss"
                   />
