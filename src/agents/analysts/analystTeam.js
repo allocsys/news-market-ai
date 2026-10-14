@@ -17,8 +17,11 @@ import { computeTechnicalSnapshot } from "./technicalIndicators.js";
 
 /** A copy of a technical snapshot without the SMA fields (TEMPORARY hideSma knob). Everything else is untouched. */
 export function omitSmaFields(snapshot) {
-  const { sma, smaWindow, smaBasis, ...rest } = snapshot;
-  return rest;
+  const copy = { ...snapshot };
+  delete copy.sma;
+  delete copy.smaWindow;
+  delete copy.smaBasis;
+  return copy;
 }
 
 /**
