@@ -385,6 +385,8 @@ export async function handleGateway(request, env) {
         if (isChecked(searchParams.get("enableMacro")) || isChecked(fromBody("enableMacro"))) params.macroEnabled = "1";
         // "Merged verdict": this run only uses ONE merged call instead of bull + bear + judge (backend's mergedVerdict=1 knob override). Absent sends nothing, so the normal three-call debate applies.
         if (isChecked(searchParams.get("mergedVerdict")) || isChecked(fromBody("mergedVerdict"))) params.mergedVerdict = "1";
+        // TEMPORARY tuning aid "hide SMA": the technical analyst prompt omits the 5-day SMA fields (backend hideSma=1 knob override). Absent sends nothing (default off). Backtest only, never a live switch.
+        if (isChecked(searchParams.get("hideSma")) || isChecked(fromBody("hideSma"))) params.hideSma = "1";
         // Decision switches (technical analyst sees the intraday price; judge EVIDENCE RULE): this run only, default OFF. Absent sends nothing (backend default off); a run never reads the live switches.
         for (const name of LIVE_SWITCH_NAMES) {
           if (isChecked(searchParams.get(name)) || isChecked(fromBody(name))) params[name] = "1";
