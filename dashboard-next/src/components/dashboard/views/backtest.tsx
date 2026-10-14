@@ -52,6 +52,7 @@ interface BacktestPresetState {
   independenceNote: boolean;
   rangeLocationFilter: boolean;
   entryConfirmation: boolean;
+  hideSma: boolean;
   rangeFilterDays: string;
   rangeFilterEdgePct: string;
   entryConfirmMovePct: string;
@@ -69,6 +70,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "",
@@ -84,6 +86,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "",
@@ -99,6 +102,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: true,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "10",
     rangeFilterEdgePct: "0.2",
     entryConfirmMovePct: "",
@@ -114,6 +118,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.005",
@@ -129,6 +134,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.005",
@@ -144,6 +150,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: true,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "10",
     rangeFilterEdgePct: "0.2",
     entryConfirmMovePct: "0.005",
@@ -159,6 +166,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: true,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "10",
     rangeFilterEdgePct: "0.2",
     entryConfirmMovePct: "",
@@ -174,6 +182,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.005",
@@ -189,6 +198,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: true,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "14",
     rangeFilterEdgePct: "0.2",
     entryConfirmMovePct: "",
@@ -204,6 +214,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: true,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "10",
     rangeFilterEdgePct: "0.15",
     entryConfirmMovePct: "",
@@ -219,6 +230,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: true,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "10",
     rangeFilterEdgePct: "0.25",
     entryConfirmMovePct: "",
@@ -234,6 +246,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.005",
@@ -249,6 +262,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.005",
@@ -264,6 +278,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.003",
@@ -279,6 +294,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.008",
@@ -294,6 +310,7 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     independenceNote: false,
     rangeLocationFilter: false,
     entryConfirmation: false,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "",
@@ -301,6 +318,22 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     breakEvenTriggerR: "0.6",
     trailActivationR: "0.8",
     trailDistanceR: "0.4",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "No SMA + Trail + Confirm",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: true,
+    hideSma: true,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "0.005",
+    entryConfirmHours: "6",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
     trailRemovesTarget: true,
   },
 ] as const;
@@ -657,6 +690,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
   const [independenceNote, setIndependenceNote] = useState(false);
   const [rangeLocationFilter, setRangeLocationFilter] = useState(false);
   const [entryConfirmation, setEntryConfirmation] = useState(false);
+  const [hideSma, setHideSma] = useState(false);
   // Optional numeric params of those two switches (blank = the default); the backend validates the bounds.
   const [rangeFilterDays, setRangeFilterDays] = useState("");
   const [rangeFilterEdgePct, setRangeFilterEdgePct] = useState("");
@@ -690,6 +724,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     independenceNote,
     rangeLocationFilter,
     entryConfirmation,
+    hideSma,
     rangeFilterDays,
     rangeFilterEdgePct,
     entryConfirmMovePct,
@@ -706,6 +741,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
       p.independenceNote === currentState.independenceNote &&
       p.rangeLocationFilter === currentState.rangeLocationFilter &&
       p.entryConfirmation === currentState.entryConfirmation &&
+      p.hideSma === currentState.hideSma &&
       p.rangeFilterDays === currentState.rangeFilterDays &&
       p.rangeFilterEdgePct === currentState.rangeFilterEdgePct &&
       p.entryConfirmMovePct === currentState.entryConfirmMovePct &&
@@ -729,6 +765,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
   summaryParts.push(`confirm ${entryConfirmation ? `ON (${entryConfirmMovePct||"0.005"}/${entryConfirmHours||"6"}h)` : "OFF"}`);
   if (intradayTechnical) summaryParts.push("intraday ON");
   if (independenceNote) summaryParts.push("independence ON");
+  if (hideSma) summaryParts.push("hideSma ON");
   if (seedFromRunId) summaryParts.push(`seed ${seedFromRunId.slice(-6)}`);
   const activeSummary = summaryParts.join(" | ");
 
@@ -737,6 +774,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setIndependenceNote(p.independenceNote);
     setRangeLocationFilter(p.rangeLocationFilter);
     setEntryConfirmation(p.entryConfirmation);
+    setHideSma(p.hideSma);
     setRangeFilterDays(p.rangeFilterDays);
     setRangeFilterEdgePct(p.rangeFilterEdgePct);
     setEntryConfirmMovePct(p.entryConfirmMovePct);
@@ -763,6 +801,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setIndependenceNote(false);
     setRangeLocationFilter(false);
     setEntryConfirmation(false);
+    setHideSma(false);
     setRangeFilterDays("");
     setRangeFilterEdgePct("");
     setEntryConfirmMovePct("");
@@ -831,6 +870,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
         independenceNote,
         rangeLocationFilter,
         entryConfirmation,
+        hideSma: hideSma ? true : undefined,
         rangeFilterDays: knobNumber(rangeFilterDays),
         rangeFilterEdgePct: knobNumber(rangeFilterEdgePct),
         entryConfirmMovePct: knobNumber(entryConfirmMovePct),
@@ -1013,6 +1053,12 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
       </label>
 
       <label className="flex cursor-pointer items-center gap-2">
+        <Checkbox checked={hideSma} onCheckedChange={(v) => v !== "indeterminate" && setHideSma(!!v)} className="h-3.5 w-3.5" />
+        <span className="text-xs">Hide 5-day SMA from analyst prompt (TEMPORARY)</span>
+        <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off)</span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-2">
         <Checkbox checked={rangeLocationFilter} onCheckedChange={(v) => v !== "indeterminate" && setRangeLocationFilter(!!v)} className="h-3.5 w-3.5" />
         <span className="text-xs">Range-location filter</span>
         <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off; blocks longs near the N-day high / shorts near the N-day low unless breakout)</span>
@@ -1149,7 +1195,8 @@ function BacktestRunRow({
       { onError: (e) => toast.error(`Could not ${action} the run: ${e.message}`) },
     );
   // The mutation is shared by every row, so only this row's own in-flight action disables its buttons.
-  const busy = actionMutation.isPending && actionMutation.variables?.id === run.id;
+  const queryActionMutation = actionMutation;
+  const busy = queryActionMutation.isPending && queryActionMutation.variables?.id === run.id;
   const variant =
     run.status === "complete" ? "approved" :
     run.status === "failed" ? "rejected" :

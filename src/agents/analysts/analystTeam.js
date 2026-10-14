@@ -15,6 +15,15 @@ import { callStructured } from "../utils/structured.js";
 import { AnalystTeamOpinion, AnalystOpinion, SentimentBand } from "../../schemas/index.js";
 import { computeTechnicalSnapshot } from "./technicalIndicators.js";
 
+/** A copy of a technical snapshot without the SMA fields (TEMPORARY hideSma knob). Everything else is untouched. */
+export function omitSmaFields(snapshot) {
+  const copy = { ...snapshot };
+  delete copy.sma;
+  delete copy.smaWindow;
+  delete copy.smaBasis;
+  return copy;
+}
+
 /**
  * `bars` should come from storage/inputs_view.js#getPriceBarsAsOf
  * (most-recent-first order) for this ticker/asOf, same contract
@@ -31,6 +40,9 @@ export async function runAnalystTeam(env, config, { ticker, newsItem, bars, macr
   // completed daily close, which can be up to ~a day old at decision time.
   const snapshot = computeTechnicalSnapshot(bars, undefined, currentPrice);
   const needsTechnical = snapshot.hasData;
+  // TEMPORARY backtest knob hideSma: the prompt never shows the 5-day SMA (sma / smaWindow / smaBasis), so the model cannot cite it.
+  // Only the PROMPT copy is trimmed: the snapshot pipeline.js stores for the evidence record is computed separately and keeps the SMA.
+  const promptSnapshot = config?.hideSma === true ? omitSmaFields(snapshot) : snapshot;
 
   // Judges the effect on the PRICE of the ticker, which is not the same as the article's sentiment (a rate-hike
   // story can read positive as news and still be bearish for gold). 'none' ends the pipeline run early
@@ -58,7 +70,7 @@ given here -- describe the price/volume context. A null field means not enough b
 indicator -- say so rather than guessing.
 
 ${snapshot.currentPrice != null ? "currentPrice is the latest intraday price at the time of the article; latestClose is the last COMPLETED daily close and can be hours old, so judge the setup against currentPrice.\n\n" : ""}Technical snapshot:
-${JSON.stringify(snapshot, null, 2)}`
+${JSON.stringify(promptSnapshot, null, 2)}`
     : `
 
 There is no price-bar data for ${ticker} yet, so do NOT include a "technical" key in your response \

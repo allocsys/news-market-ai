@@ -25,7 +25,7 @@
 import { getBacktestRun } from "../storage/sim_registry.js";
 
 /** Knobs that change the LLM stages (or the price-impact skip): source and target must agree on every one. */
-export const SEED_MATCH_KNOBS = Object.freeze(["mergedVerdict", "macroEnabled", "intradayTechnical", "independenceNote", "skipNoPriceImpact"]);
+export const SEED_MATCH_KNOBS = Object.freeze(["mergedVerdict", "macroEnabled", "intradayTechnical", "independenceNote", "skipNoPriceImpact", "hideSma"]);
 
 /** A knob value as on/off. A missing skipNoPriceImpact means ON (the gate's default); every other missing knob means OFF. */
 function knobOn(name, value) {
