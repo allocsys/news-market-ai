@@ -15,6 +15,12 @@ import { callStructured } from "../utils/structured.js";
 import { AnalystTeamOpinion, AnalystOpinion, SentimentBand } from "../../schemas/index.js";
 import { computeTechnicalSnapshot } from "./technicalIndicators.js";
 
+/** A copy of a technical snapshot without the SMA fields (TEMPORARY hideSma knob). Everything else is untouched. */
+export function omitSmaFields(snapshot) {
+  const { sma, smaWindow, smaBasis, ...rest } = snapshot;
+  return rest;
+}
+
 /**
  * `bars` should come from storage/inputs_view.js#getPriceBarsAsOf
  * (most-recent-first order) for this ticker/asOf, same contract
