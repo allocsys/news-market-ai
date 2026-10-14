@@ -235,7 +235,7 @@ export default {
           // phase display -- a SEPARATE, finer-grained record from the
           // backtest_runs registry, which runManualBacktest itself writes
           // ('running' up front, 'complete'/'failed' once it resolves).
-          const reporter = createJobReporter(ctx.store, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, ...(job.knobOverrides ? { knobOverrides: job.knobOverrides } : {}) } });
+          const reporter = createJobReporter(ctx.store, { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, ...(job.knobOverrides ? { knobOverrides: job.knobOverrides } : {}), ...(job.seedFromRunId ? { seedFromRunId: job.seedFromRunId } : {}) } });
           // start() first (part 1 only -- a continuation's row already exists):
           // it upserts the row to 'running' whether or not backend's 'queued'
           // row exists (a redelivered message may find it already 'running').
