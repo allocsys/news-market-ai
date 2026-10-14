@@ -63,13 +63,14 @@ import { loadConfig } from "./config.js";
 import { RunStore, readOnly } from "./storage/run_store.js";
 import { createJobReporter } from "./storage/jobs.js";
 import { runManualBacktest } from "./backtest/runBacktest.js";
-import { applyKnobOverrides } from "./backtest/knobOverrides.js";
+import { applyKnobOverrides, effectiveKnobs } from "./backtest/knobOverrides.js";
+import { seedCheckpointsFromRun } from "./backtest/seedCheckpoints.js";
 import { replayNewsItems } from "./backtest/newsReplay.js";
 import { getNewsItemsByIds } from "./storage/inputs_view.js";
 import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
 import { SubrequestBudget, countedD1, countedKv } from "./backtest/subrequestBudget.js";
 import { cooldownMapKv } from "./shared/cooldown_map_kv.js";
-import { pauseBacktestRun } from "./storage/sim_registry.js";
+import { pauseBacktestRun, failBacktestRun } from "./storage/sim_registry.js";
 import { getQuotaUsage, mergeGeminiCounts, quotaUsageUpsertStatement, utcDay, nextUtcMidnightIso } from "./storage/quota_usage.js";
 import { dailyQuotaCooldownSeconds } from "./shared/cooldown.js";
 
@@ -239,6 +240,21 @@ export default {
           // it upserts the row to 'running' whether or not backend's 'queued'
           // row exists (a redelivered message may find it already 'running').
           if (part === 1) await unenf(() => reporter.start());
+          // TEMPORARY tuning aid (backtest/seedCheckpoints.js): start from another complete run's LLM-stage checkpoints. Part 1 only (a
+          // continuation's rows already exist), idempotent for a redelivered part 1. A refused seed (settings differ, source missing...)
+          // fails the run here, before any model call, with the same failed-run bookkeeping as runManualBacktest's failures.
+          if (part === 1 && job.seedFromRunId) {
+            const seed = await unenf(() => seedCheckpointsFromRun(runEnv.SIM_DB, { sourceId: job.seedFromRunId, targetId: id, testStart, tickers, knobs: effectiveKnobs(jobConfig) }));
+            if (seed.error) {
+              await unenf(() => failBacktestRun(runEnv.SIM_DB, { id, error: seed.error, finishedAt: new Date().toISOString() }));
+              await unenf(() => reporter.fail(seed.error));
+              const seedCleanup = await unenf(() => cleanupFailedRun(runEnv.SIM_DB, ctx.store, id));
+              console.log("backtest seed refused, run failed", { id, seedFromRunId: job.seedFromRunId, error: seed.error, cleanup: seedCleanup });
+              message.ack();
+              continue;
+            }
+            console.log("backtest seeded checkpoints", { id, seedFromRunId: job.seedFromRunId, seeded: seed.seeded });
+          }
           const outcome = await runManualBacktest(
             runEnv,
             jobConfig,
