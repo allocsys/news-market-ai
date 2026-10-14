@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   ChevronRight,
@@ -325,6 +325,8 @@ export function BacktestView({ onNavigate }: ViewProps) {
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [showReplay, setShowReplay] = useState(false);
   const [cleanupDays, setCleanupDays] = useState("30");
+  // TEMPORARY: a run picked via "Seed new run from this"; `n` re-triggers the form even for the same run.
+  const [seedRequest, setSeedRequest] = useState<{ run: BacktestRun; n: number } | null>(null);
 
   const runs = useBacktestRuns();
   const activeJob = useActiveJob("backtest");
@@ -401,6 +403,8 @@ export function BacktestView({ onNavigate }: ViewProps) {
           <CollapsibleContent>
             <div className="space-y-4 border-t border-border p-4">
               <BacktestForm
+                seedCandidates={completeRuns}
+                seedRequest={seedRequest}
                 onSubmitted={(id) => {
                   toast.success("Backtest started");
                   if (id) onNavigate("backtest", { backtestId: id });
@@ -490,6 +494,11 @@ export function BacktestView({ onNavigate }: ViewProps) {
                   run={r}
                   onNavigate={onNavigate}
                   actionMutation={actionMutation}
+                  onUseAsSeed={(run) => {
+                    setSeedRequest((prev) => ({ run, n: (prev?.n ?? 0) + 1 }));
+                    setShowNewRun(true);
+                    toast.success(`New run will be seeded from ${run.id.slice(-6)}`);
+                  }}
                 />
               ))}
             </ul>
@@ -613,9 +622,12 @@ export function BacktestView({ onNavigate }: ViewProps) {
 interface BacktestFormProps {
   onSubmitted: (id?: string) => void;
   mutation: ReturnType<typeof usePostBacktestRun>;
+  /** TEMPORARY: complete runs that can serve as a seed. */
+  seedCandidates: BacktestRun[];
+  seedRequest: { run: BacktestRun; n: number } | null;
 }
 
-function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
+function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: BacktestFormProps) {
   const watchlistQuery = useWatchlist();
   const watchlist = (watchlistQuery.data?.tickers ?? []).map((ticker) => ({ ticker }));
   const [tickers, setTickers] = useState<string[]>([]);
@@ -641,6 +653,18 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   const [trailDistanceR, setTrailDistanceR] = useState("");
   const [trailRemovesTarget, setTrailRemovesTarget] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // TEMPORARY tuning aid: reuse another complete run's LLM-stage output ("" = a normal, fresh run).
+  const [seedFromRunId, setSeedFromRunId] = useState("");
+
+  // The backend needs the same start date as the source and tickers it covered, so picking a seed fills both.
+  const applySeed = useCallback((run: BacktestRun) => {
+    setSeedFromRunId(run.id);
+    setTestStart(run.testStart.slice(0, 10));
+    setTickers(run.tickers);
+  }, []);
+  useEffect(() => {
+    if (seedRequest) applySeed(seedRequest.run);
+  }, [seedRequest, applySeed]);
 
   // Compute active preset based on current form state
   const currentState = {
@@ -687,6 +711,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
   summaryParts.push(`confirm ${entryConfirmation ? `ON (${entryConfirmMovePct||"0.005"}/${entryConfirmHours||"6"}h)` : "OFF"}`);
   if (intradayTechnical) summaryParts.push("intraday ON");
   if (independenceNote) summaryParts.push("independence ON");
+  if (seedFromRunId) summaryParts.push(`seed ${seedFromRunId.slice(-6)}`);
   const activeSummary = summaryParts.join(" | ");
 
   const applyPreset = (p: BacktestPresetState) => {
@@ -728,6 +753,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
     setTrailActivationR("");
     setTrailDistanceR("");
     setTrailRemovesTarget(false);
+    setSeedFromRunId("");
   };
 
   const knobFields: [string, string][] = [
@@ -795,6 +821,7 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
         trailActivationR: knobNumber(trailActivationR),
         trailDistanceR: knobNumber(trailDistanceR),
         trailRemovesTarget: trailRemovesTarget ? 1 : undefined,
+        seedFromRunId: seedFromRunId || undefined,
       },
       {
         onSuccess: (data) => onSubmitted(data.id),
@@ -900,6 +927,35 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* TEMPORARY seed picker */}
+      <div>
+        <label htmlFor="seed-from-run" className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Seed from run (temporary tuning aid)
+        </label>
+        <select
+          id="seed-from-run"
+          value={seedFromRunId}
+          onChange={(e) => {
+            const run = seedCandidates.find((r) => r.id === e.target.value);
+            if (run) applySeed(run);
+            else setSeedFromRunId("");
+          }}
+          className="w-full rounded-md border border-border bg-card px-2.5 py-1.5 text-sm font-mono"
+        >
+          <option value="">None: fresh LLM run</option>
+          {seedCandidates.map((r) => (
+            <option key={r.id} value={r.id}>
+              {`${r.id.slice(-6)} · ${r.tickers.join(",")} · ${fmtDate(r.testStart)} → ${fmtDate(r.testEnd)} · ${r.result?.gate?.n ?? 0} trades`}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          {seedFromRunId
+            ? "Reuses that run's analyst, debate and trader output, so only the filters, entry confirmation, fills and exits differ. Start date and tickers were set from the source. The LLM-stage boxes (price-impact gate, macro, merged verdict, intraday, evidence rule) must match the source or the backend refuses the run. Fixes one LLM draw: confirm a winner with fresh runs."
+            : "Optional. Pick a complete run to compare presets on identical LLM output (spends almost no Gemini quota)."}
+        </p>
       </div>
 
       <label className="flex cursor-pointer items-center gap-2">
@@ -1041,7 +1097,10 @@ function BacktestForm({ onSubmitted, mutation }: BacktestFormProps) {
             <AlertDialogTitle>Start this backtest?</AlertDialogTitle>
             <AlertDialogDescription>
               {tickers.length === 0 ? `All ${watchlist.length} watchlist tickers` : `${tickers.length} ticker${tickers.length === 1 ? "" : "s"} (${tickers.join(", ")})`}
-              {" "}from {testStart} to {testEnd}. This spends real Gemini quota.
+              {" "}from {testStart} to {testEnd}.{" "}
+              {seedFromRunId
+                ? `Seeded from ${seedFromRunId.slice(-6)}: only the post-LLM stages run again, plus one reflection call per closed position.`
+                : "This spends real Gemini quota."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1058,10 +1117,12 @@ function BacktestRunRow({
   run,
   onNavigate,
   actionMutation,
+  onUseAsSeed,
 }: {
   run: BacktestRun;
   onNavigate: ViewProps["onNavigate"];
   actionMutation: ReturnType<typeof usePostBacktestAction>;
+  onUseAsSeed: (run: BacktestRun) => void;
 }) {
   const [open, setOpen] = useState(false);
   const act = (action: "resume" | "pause" | "cancel") =>
@@ -1118,6 +1179,14 @@ function BacktestRunRow({
             >
               LLM calls →
             </button>
+            {run.status === "complete" && (
+              <>
+                <span className="text-muted-foreground">·</span>
+                <button type="button" onClick={() => onUseAsSeed(run)} className="text-primary hover:underline">
+                  Seed new run from this →
+                </button>
+              </>
+            )}
           </div>
 
           {run.error && (
