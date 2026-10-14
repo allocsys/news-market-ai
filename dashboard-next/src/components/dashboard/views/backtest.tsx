@@ -662,9 +662,12 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setTestStart(run.testStart.slice(0, 10));
     setTickers(run.tickers);
   }, []);
-  useEffect(() => {
+  // Apply each new seed request once, during render (setState in an effect trips the react-hooks lint).
+  const [handledSeed, setHandledSeed] = useState<typeof seedRequest>(undefined);
+  if (seedRequest !== handledSeed) {
+    setHandledSeed(seedRequest);
     if (seedRequest) applySeed(seedRequest.run);
-  }, [seedRequest, applySeed]);
+  }
 
   // Compute active preset based on current form state
   const currentState = {
