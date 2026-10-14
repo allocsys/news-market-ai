@@ -826,6 +826,8 @@ export function usePostBacktestRun() {
       intradayTechnical?: boolean;
       /** This run only: judge prompts carry the EVIDENCE RULE (backend independenceNote=1). Default off. */
       independenceNote?: boolean;
+      /** TEMPORARY tuning aid, this run only: the analyst prompt omits the 5-day SMA fields (backend hideSma=1). Backtest only, not a live switch. Default off. */
+      hideSma?: boolean;
       /** This run only: block longs near the N-day high / shorts near the N-day low unless breakout (backend rangeLocationFilter=1). Default off. */
       rangeLocationFilter?: boolean;
       /** This run only: an approved entry opens only after a bar closes the required move in its direction (backend entryConfirmation=1). Default off. */
