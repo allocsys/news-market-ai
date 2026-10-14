@@ -70,7 +70,7 @@ import { getNewsItemsByIds } from "./storage/inputs_view.js";
 import { cleanupFailedRun, cleanupCancelledRun } from "./backtest/cleanup.js";
 import { SubrequestBudget, countedD1, countedKv } from "./backtest/subrequestBudget.js";
 import { cooldownMapKv } from "./shared/cooldown_map_kv.js";
-import { pauseBacktestRun, failBacktestRun } from "./storage/sim_registry.js";
+import { pauseBacktestRun, failBacktestRun, insertBacktestRun } from "./storage/sim_registry.js";
 import { getQuotaUsage, mergeGeminiCounts, quotaUsageUpsertStatement, utcDay, nextUtcMidnightIso } from "./storage/quota_usage.js";
 import { dailyQuotaCooldownSeconds } from "./shared/cooldown.js";
 
@@ -246,6 +246,8 @@ export default {
           if (part === 1 && job.seedFromRunId) {
             const seed = await unenf(() => seedCheckpointsFromRun(runEnv.SIM_DB, { sourceId: job.seedFromRunId, targetId: id, testStart, tickers, knobs: effectiveKnobs(jobConfig) }));
             if (seed.error) {
+              // The registry row is normally written by POST /backtest/run, but failBacktestRun on a missing row is a silent no-op: make sure it exists (idempotent).
+              await unenf(() => insertBacktestRun(runEnv.SIM_DB, { id, tickers, testStart, testEnd, trainDays: 0, testDays: Math.round((Date.parse(testEnd) - Date.parse(testStart)) / 86400000), graceDays: job.graceDays ?? null, startedAt: new Date().toISOString() }));
               await unenf(() => failBacktestRun(runEnv.SIM_DB, { id, error: seed.error, finishedAt: new Date().toISOString() }));
               await unenf(() => reporter.fail(seed.error));
               const seedCleanup = await unenf(() => cleanupFailedRun(runEnv.SIM_DB, ctx.store, id));
