@@ -55,6 +55,7 @@ import { getMacroFlag, setMacroEnabled } from "./storage/macro_flag.js";
 import { LIVE_KNOB_NAMES, LIVE_SWITCH_NAMES, validateLiveKnob, setLiveKnobs, clearLiveKnobs, snapshotTrailKnobs, snapshotSwitches, applyLiveSwitches } from "./storage/live_knobs.js";
 import { SimClock } from "./backtest/simClock.js";
 import { parseKnobOverrides } from "./backtest/knobOverrides.js";
+import { checkSeedSource } from "./backtest/seedCheckpoints.js";
 import { cancelBacktestRun, failBacktestRun, getBacktestRun, insertBacktestRun, pauseBacktestRun, resumeBacktestRun } from "./storage/sim_registry.js";
 import { cleanupCancelledRun, cleanupOldRuns, purgeFailedAndCancelledRuns } from "./backtest/cleanup.js";
 import { BACKTEST_ID_RE } from "./dashboard/helpers.js";
@@ -542,12 +543,23 @@ export default {
         return jsonResponse({ error: `backtests are paused (${pause.flags.backtests ? "Backtests" : "LLM calls"} switch is on) -- resume it on /dashboard/controls` }, { status: 409 });
       }
 
+      // TEMPORARY tuning aid (backtest/seedCheckpoints.js): start from another COMPLETE run's LLM-stage checkpoints. Shape and
+      // source checks here (a 400 before any job row exists); the LLM-stage knob match needs the backtest Worker's own config, so
+      // the Worker verifies that one and fails the run before any model call if it differs.
+      const seedFromRunId = (url.searchParams.get("seedFromRunId") || "").trim();
+      if (seedFromRunId) {
+        if (!BACKTEST_ID_RE.test(seedFromRunId)) return jsonResponse({ error: "seedFromRunId is malformed" }, { status: 400 });
+        const seedSource = await getBacktestRun(env.SIM_DB, seedFromRunId).catch(() => null);
+        const seedError = checkSeedSource(seedSource, { sourceId: seedFromRunId, testStart: testStartIso, tickers });
+        if (seedError) return jsonResponse({ error: seedError }, { status: 400 });
+      }
+
       const id = newJobId("backtest");
       // 'queued' row written before the message is even sent -- best-effort
       // (createJobReporter swallows D1 failures, see storage/jobs.js), so a
       // progress-write hiccup here can never block the real enqueue below.
       // env_run_id/run_id = this backtest's own id, in SIM_DB.
-      await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}) } }).queued();
+      await createJobReporter(new RunStore(env.SIM_DB, id), { id, type: "backtest", params: { tickers, testStart, testEnd, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}), ...(seedFromRunId ? { seedFromRunId } : {}) } }).queued();
       // Registry row ('running') written HERE, before the id is returned, so the
       // dashboard's GET /api/backtest-runs/:id never 404s in the gap between this
       // ack and the queue consumer's own insert (runBacktest.js, which is
@@ -570,8 +582,8 @@ export default {
         console.warn("backtest registry insert failed (the queue consumer will retry it)", { id, message: err.message });
       }
       try {
-        await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}) });
-        return jsonResponse({ accepted: true, id, tickers, testStart, testEnd, ...(hasKnobOverrides ? { knobOverrides } : {}) });
+        await env.BACKTEST.send({ type: "backtest", id, tickers, testStart: testStartIso, testEnd: testEndIso, graceDays, enableLlmLog, ...(hasKnobOverrides ? { knobOverrides } : {}), ...(seedFromRunId ? { seedFromRunId } : {}) });
+        return jsonResponse({ accepted: true, id, tickers, testStart, testEnd, ...(hasKnobOverrides ? { knobOverrides } : {}), ...(seedFromRunId ? { seedFromRunId } : {}) });
       } catch (err) {
         console.error("backtest enqueue failed", { id, tickers, message: err.message });
         // Nothing will ever run this id: don't leave a 'running' row behind.

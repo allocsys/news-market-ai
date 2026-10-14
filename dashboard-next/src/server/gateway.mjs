@@ -389,6 +389,9 @@ export async function handleGateway(request, env) {
         for (const name of LIVE_SWITCH_NAMES) {
           if (isChecked(searchParams.get(name)) || isChecked(fromBody(name))) params[name] = "1";
         }
+        // TEMPORARY tuning aid: start this run from another complete run's LLM-stage checkpoints (backend src/backtest/seedCheckpoints.js validates it). Blank/absent sends nothing.
+        const seedFromRunId = String(searchParams.get("seedFromRunId") ?? fromBody("seedFromRunId") ?? "").trim();
+        if (seedFromRunId) params.seedFromRunId = seedFromRunId;
         // Numeric params of the range filter / entry confirmation: this run only. Blank/absent sends nothing (the constants.js defaults apply).
         for (const name of BACKTEST_SWITCH_PARAM_NAMES) {
           const value = searchParams.get(name) ?? fromBody(name);
