@@ -418,7 +418,7 @@ export async function getTickersData(env, params) {
 export async function getBacktestRunsData(env) {
   // The registry lives on SIM_DB (M3); the dashboard API never writes, so the handle is read-only.
   const [backtestRunsResult, replayJobsResult] = await Promise.all([
-    safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 10 })),
+    safe(getRecentBacktestRuns(readOnly(env.SIM_DB), { limit: 20 })),
     // Recent news-replay comparisons (backtest/newsReplay.js) -- a SEPARATE
     // query, not a registry row like backtest_runs: a replay job only ever
     // writes its own job_progress row (see backtest-worker.js's "replay"
