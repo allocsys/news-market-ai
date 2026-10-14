@@ -49,6 +49,9 @@ export const KNOB_OVERRIDES = Object.freeze({
   // knobs above; default OFF, and a backtest NEVER reads the live switch rows (storage/live_knobs.js): the run decides.
   intradayTechnical: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
   independenceNote: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  // TEMPORARY tuning aid (backtest only, never a live switch): the analyst-team prompt's technical snapshot drops sma / smaWindow /
+  // smaBasis, so the model cannot cite the 5-day SMA. 0/1 -> boolean, default OFF. Changes the LLM stage, so it is in SEED_MATCH_KNOBS.
+  hideSma: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
   // Range-location filter (agents/risk_mgmt/range_location.js) and entry confirmation (shared/entry_confirmation.js): same 0/1 ->
   // boolean handling, default OFF, a backtest NEVER reads the live switch rows. Their numeric params are per-run only (NOT live
   // knobs); bounds match rangeFilterParams / entryConfirmationParams, which fall back to the constants.js default outside them.
@@ -121,6 +124,7 @@ export function effectiveKnobs(config) {
   // Default OFF: a missing key means the old behavior, so the record shows false, not null.
   knobs.intradayTechnical = config.intradayTechnical === true;
   knobs.independenceNote = config.independenceNote === true;
+  knobs.hideSma = config.hideSma === true;
   knobs.rangeLocationFilter = config.rangeLocationFilter === true;
   knobs.entryConfirmation = config.entryConfirmation === true;
   // The numeric params resolve their constants.js default (like flipMinConfidence), so the record shows what a run used.
