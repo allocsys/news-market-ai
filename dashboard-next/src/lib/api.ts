@@ -841,6 +841,8 @@ export function usePostBacktestRun() {
       trailDistanceR?: number;
       /** 1 = once the trail is binding, ignore the fixed take-profit. */
       trailRemovesTarget?: number;
+      /** TEMPORARY tuning aid: start from another complete run's LLM-stage checkpoints (backend src/backtest/seedCheckpoints.js). Same start date, tickers a subset, same LLM-stage settings; otherwise the backend refuses the run. */
+      seedFromRunId?: string;
     }) => {
       return apiFetch<{ accepted: boolean; id: string }>("/api/backtest/run", {
         method: "POST",
