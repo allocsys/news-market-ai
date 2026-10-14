@@ -140,6 +140,7 @@ test("effective: reports every knob from the config", () => {
     mergedVerdict: false,
     intradayTechnical: false,
     independenceNote: false,
+    hideSma: false,
     rangeLocationFilter: false,
     entryConfirmation: false,
     rangeFilterDays: 10,
