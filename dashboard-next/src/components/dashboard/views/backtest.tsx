@@ -663,7 +663,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setTickers(run.tickers);
   }, []);
   // Apply each new seed request once, during render (setState in an effect trips the react-hooks lint).
-  const [handledSeed, setHandledSeed] = useState<typeof seedRequest>(undefined);
+  const [handledSeed, setHandledSeed] = useState<typeof seedRequest>(null);
   if (seedRequest !== handledSeed) {
     setHandledSeed(seedRequest);
     if (seedRequest) applySeed(seedRequest.run);
