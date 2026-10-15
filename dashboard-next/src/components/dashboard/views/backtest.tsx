@@ -55,6 +55,8 @@ interface BacktestPresetState {
   /** Optional: block entries whose technical alignment is 'against' / 'mixed' (absent = off). */
   trendFilterAgainst?: boolean;
   trendFilterMixed?: boolean;
+  /** Optional: trend window in daily bars as text ("" or absent = the stored 5-bar read). */
+  trendFilterWindow?: string;
   hideSma: boolean;
   rangeFilterDays: string;
   rangeFilterEdgePct: string;
@@ -365,6 +367,25 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     entryConfirmation: true,
     trendFilterAgainst: true,
     trendFilterMixed: true,
+    hideSma: false,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "0.005",
+    entryConfirmHours: "6",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "Trail + Confirm + Trend 20d",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: true,
+    trendFilterAgainst: true,
+    trendFilterMixed: false,
+    trendFilterWindow: "20",
     hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
@@ -732,6 +753,8 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
   // Trend filter (gate only, default off): block entries whose technical alignment is 'against' and/or 'mixed'.
   const [trendFilterAgainst, setTrendFilterAgainst] = useState(false);
   const [trendFilterMixed, setTrendFilterMixed] = useState(false);
+  // Trend window in daily bars for that gate (blank = the stored 5-bar read); the backend validates the bounds.
+  const [trendFilterWindow, setTrendFilterWindow] = useState("");
   const [hideSma, setHideSma] = useState(false);
   // Optional numeric params of those two switches (blank = the default); the backend validates the bounds.
   const [rangeFilterDays, setRangeFilterDays] = useState("");
@@ -768,6 +791,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     entryConfirmation,
     trendFilterAgainst,
     trendFilterMixed,
+    trendFilterWindow,
     hideSma,
     rangeFilterDays,
     rangeFilterEdgePct,
@@ -787,6 +811,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
       p.entryConfirmation === currentState.entryConfirmation &&
       !!p.trendFilterAgainst === currentState.trendFilterAgainst &&
       !!p.trendFilterMixed === currentState.trendFilterMixed &&
+      (p.trendFilterWindow ?? "") === currentState.trendFilterWindow &&
       p.hideSma === currentState.hideSma &&
       p.rangeFilterDays === currentState.rangeFilterDays &&
       p.rangeFilterEdgePct === currentState.rangeFilterEdgePct &&
@@ -809,7 +834,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
   }
   summaryParts.push(`range ${rangeLocationFilter ? `ON (${rangeFilterDays||"10"}d/${rangeFilterEdgePct||"0.2"})` : "OFF"}`);
   summaryParts.push(`confirm ${entryConfirmation ? `ON (${entryConfirmMovePct||"0.005"}/${entryConfirmHours||"6"}h)` : "OFF"}`);
-  summaryParts.push(`trend ${trendFilterAgainst || trendFilterMixed ? `blocks ${[trendFilterAgainst && "against", trendFilterMixed && "mixed"].filter(Boolean).join("+")}` : "OFF"}`);
+  summaryParts.push(`trend ${trendFilterAgainst || trendFilterMixed ? `blocks ${[trendFilterAgainst && "against", trendFilterMixed && "mixed"].filter(Boolean).join("+")} (${trendFilterWindow.trim() ? `${trendFilterWindow.trim()}d` : "5d"})` : "OFF"}`);
   if (intradayTechnical) summaryParts.push("intraday ON");
   if (independenceNote) summaryParts.push("independence ON");
   if (hideSma) summaryParts.push("hideSma ON");
@@ -823,6 +848,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setEntryConfirmation(p.entryConfirmation);
     setTrendFilterAgainst(!!p.trendFilterAgainst);
     setTrendFilterMixed(!!p.trendFilterMixed);
+    setTrendFilterWindow(p.trendFilterWindow ?? "");
     setHideSma(p.hideSma);
     setRangeFilterDays(p.rangeFilterDays);
     setRangeFilterEdgePct(p.rangeFilterEdgePct);
@@ -852,6 +878,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setEntryConfirmation(false);
     setTrendFilterAgainst(false);
     setTrendFilterMixed(false);
+    setTrendFilterWindow("");
     setHideSma(false);
     setRangeFilterDays("");
     setRangeFilterEdgePct("");
@@ -886,6 +913,12 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     return n !== undefined && (!Number.isFinite(n) || n <= 0);
   };
 
+  // Blank = the stored 5-bar read; otherwise a whole number from 2 to 100 (the backend enforces the same bounds).
+  const trendWindowInvalid = (raw: string) => {
+    const n = knobNumber(raw);
+    return n !== undefined && (!Number.isInteger(n) || n < 2 || n > 100);
+  };
+
   // ISO dates (YYYY-MM-DD) compare correctly as strings.
   const requestSubmit = () => {
     if (!testStart || !testEnd) {
@@ -898,6 +931,10 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     }
     if (knobFields.some(([, raw]) => knobInvalid(raw))) {
       toast.error("Exit knobs must be numbers from 0 to 10 (or blank)");
+      return;
+    }
+    if (trendWindowInvalid(trendFilterWindow)) {
+      toast.error("Trend window must be a whole number from 2 to 100 (or blank)");
       return;
     }
     if (paramFields.some(paramInvalid)) {
@@ -923,6 +960,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
         entryConfirmation,
         trendFilterAgainst: trendFilterAgainst ? true : undefined,
         trendFilterMixed: trendFilterMixed ? true : undefined,
+        trendFilterWindow: knobNumber(trendFilterWindow),
         hideSma: hideSma ? true : undefined,
         rangeFilterDays: knobNumber(rangeFilterDays),
         rangeFilterEdgePct: knobNumber(rangeFilterEdgePct),
@@ -1148,7 +1186,22 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
             </label>
           ))}
         </div>
-        <p className="mt-1 text-[10px] text-muted-foreground">Neither checked = off. Uses the trend read (price vs SMA and recent move) already shown on each decision. Gate only, so it also works on a seeded run.</p>
+        <div className="mt-2 w-40">
+          <label htmlFor="trend-window" className="mb-1 block text-[10px] text-muted-foreground">Trend window (daily bars)</label>
+          <input
+            id="trend-window"
+            type="text"
+            inputMode="numeric"
+            placeholder="default 5"
+            value={trendFilterWindow}
+            onChange={(e) => setTrendFilterWindow(e.target.value)}
+            className={cn(
+              "w-full rounded-md border bg-card px-2.5 py-1.5 text-sm font-mono",
+              trendWindowInvalid(trendFilterWindow) ? "border-destructive" : "border-border",
+            )}
+          />
+        </div>
+        <p className="mt-1 text-[10px] text-muted-foreground">Neither checked = off. Blank window = the trend read already shown on each decision (price vs the 5-day SMA and the 5-day move). A number from 2 to 100 judges the trend over that many daily bars instead (for example 20), so a short bounce inside a bigger downtrend counts as against a long. Gate only, so it also works on a seeded run.</p>
       </div>
 
       <div>

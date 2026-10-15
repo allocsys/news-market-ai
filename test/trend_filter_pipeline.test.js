@@ -18,10 +18,13 @@ const MARKETS = {
   with: { closes: [190, 180, 170, 160, 150, 140, 130, 120, 110, 100], price: 200 },
 };
 
+// 30 sessions newest first: a drop from 206 to 110, then a 5-session bounce to 120. Short read (5 bars): 'with' for a long. Over 20 bars: 'against'.
+MARKETS.bounce = { closes: [120, 118, 116, 114, 112, ...Array.from({ length: 25 }, (_, i) => 110 + i * 4)], price: 125 };
+
 async function run(market, extra = {}) {
   const ctx = makeCtx();
   const { closes, price } = MARKETS[market];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < closes.length; i++) {
     const date = new Date(Date.parse("2026-01-14T00:00:00Z") - i * 86400000).toISOString().slice(0, 10);
     await seedBarOhlc(ctx.inputs, { ticker: "AAPL", date, open: closes[i], high: closes[i] + 5, low: closes[i] - 5, close: closes[i] });
   }
@@ -94,4 +97,46 @@ test("both selected: 'against' and 'mixed' are REJECTED, 'with' opens", async ()
   assert.equal(withTrend.decision.approvedForExecution, true);
   assert.equal(withTrend.positions.length, 1);
   assert.equal(withTrend.debate.evidence.trendFilter.blocked, false);
+});
+
+test("trendFilterWindow: a bounce inside a downtrend passes on the stored 5-bar read and is REJECTED on 20 bars", async () => {
+  const short = await run("bounce", { trendFilterAgainst: true });
+  assert.equal(short.debate.evidence.technicalAlignment, "with");
+  assert.equal(short.decision.approvedForExecution, true, "no window: the 5-bar alignment says 'with'");
+  assert.equal(short.positions.length, 1);
+  assert.equal(short.debate.evidence.trendFilter.window, undefined, "no window, no window field");
+
+  const long = await run("bounce", { trendFilterAgainst: true, trendFilterWindow: 20 });
+  assert.equal(long.decision.approvedForExecution, false);
+  assert.equal(long.decision.finalPositionSizePct, 0);
+  assert.match(long.decision.reason, /^trend filter: entry is against the trend$/);
+  assert.equal(long.positions.length, 0);
+  assert.equal(long.row.status, TRADE_DECISION_STATUS.REJECTED);
+  const rec = long.debate.evidence.trendFilter;
+  assert.deepEqual([rec.applied, rec.blocked, rec.alignment, rec.window, rec.shortAlignment], [true, true, "against", 20, "with"]);
+});
+
+test("trendFilterWindow: with no alignment selected the window does nothing", async () => {
+  const out = await run("bounce", { trendFilterWindow: 20 });
+  assert.equal(out.decision.approvedForExecution, true);
+  assert.equal(out.positions.length, 1);
+  assert.equal(out.debate.evidence.trendFilter, undefined);
+});
+
+test("trendFilterWindow: not enough daily bars for the window is 'unknown' and never blocks", async () => {
+  // The 10-bar 'against' market has the 5-bar alignment 'against', but a 20-bar window cannot be read.
+  const out = await run("against", { trendFilterAgainst: true, trendFilterWindow: 20 });
+  assert.equal(out.debate.evidence.technicalAlignment, "against");
+  assert.equal(out.decision.approvedForExecution, true);
+  assert.equal(out.positions.length, 1);
+  const rec = out.debate.evidence.trendFilter;
+  assert.deepEqual([rec.applied, rec.blocked, rec.alignment, rec.shortAlignment, rec.window], [false, false, "unknown", "against", 20]);
+});
+
+test("trendFilterWindow: a window that agrees with the trade lets it open and records both reads", async () => {
+  const out = await run("with", { trendFilterAgainst: true, trendFilterWindow: 5 });
+  assert.equal(out.decision.approvedForExecution, true);
+  assert.equal(out.positions.length, 1);
+  const rec = out.debate.evidence.trendFilter;
+  assert.deepEqual([rec.applied, rec.blocked, rec.alignment, rec.shortAlignment, rec.window], [true, false, "with", "with", 5]);
 });

@@ -36,6 +36,8 @@ export const LIVE_SWITCH_NAMES = Object.freeze(["intradayTechnical", "independen
 export const BACKTEST_SWITCH_PARAM_NAMES = Object.freeze(["rangeFilterDays", "rangeFilterEdgePct", "entryConfirmMovePct", "entryConfirmHours"]);
 // Per-run on/off trend-filter switches (backend KNOB_OVERRIDES): block entries whose technicalAlignment is 'against' / 'mixed'. NOT live switches: only /backtest/run forwards them.
 export const BACKTEST_TREND_FILTER_NAMES = Object.freeze(["trendFilterAgainst", "trendFilterMixed"]);
+// Per-run numeric param of that gate (backend KNOB_OVERRIDES): the trend window in daily bars (0 / blank = the stored 5-bar read). The backend validates the bounds.
+export const BACKTEST_TREND_PARAM_NAMES = Object.freeze(["trendFilterWindow"]);
 
 /** The auth-related settings, read from the Worker env (secrets) on every call. */
 export function loadAuthConfig(env) {
@@ -396,6 +398,11 @@ export async function handleGateway(request, env) {
         // Trend filter (gate only, default OFF): this run only. Absent sends nothing; a run never reads a live switch for it.
         for (const name of BACKTEST_TREND_FILTER_NAMES) {
           if (isChecked(searchParams.get(name)) || isChecked(fromBody(name))) params[name] = "1";
+        }
+        // Trend window (daily bars) for that gate: this run only. Blank/absent sends nothing (the stored 5-bar read applies).
+        for (const name of BACKTEST_TREND_PARAM_NAMES) {
+          const value = searchParams.get(name) ?? fromBody(name);
+          if (value !== null && value !== undefined && String(value).trim() !== "") params[name] = String(value).trim();
         }
         // TEMPORARY tuning aid: start this run from another complete run's LLM-stage checkpoints (backend src/backtest/seedCheckpoints.js validates it). Blank/absent sends nothing.
         const seedFromRunId = String(searchParams.get("seedFromRunId") ?? fromBody("seedFromRunId") ?? "").trim();
