@@ -835,7 +835,8 @@ export function usePostBacktestRun() {
       /** This run only: block entries whose technical alignment (price vs SMA and recent move) is 'against' the trade direction (backend trendFilterAgainst=1). Gate only. Default off. */
       trendFilterAgainst?: boolean;
       /** This run only: also block entries whose technical alignment is 'mixed' (backend trendFilterMixed=1). Gate only. Default off. */
-      trendFilterMixed?: boolean;: range filter window in days / edge as a fraction of the range; confirmation move as a fraction / wait in hours. */
+      trendFilterMixed?: boolean;
+      /** This run only, optional (blank = constants.js default): range filter window in days / edge as a fraction of the range; confirmation move as a fraction / wait in hours. */
       rangeFilterDays?: number;
       rangeFilterEdgePct?: number;
       entryConfirmMovePct?: number;
