@@ -34,6 +34,8 @@ export const LIVE_KNOB_NAMES = Object.freeze(["breakEvenTriggerR", "trailActivat
 export const LIVE_SWITCH_NAMES = Object.freeze(["intradayTechnical", "independenceNote", "rangeLocationFilter", "entryConfirmation"]);
 // Per-run numeric params of those switches (backend KNOB_OVERRIDES, src/backtest/knobOverrides.js). NOT live knobs: only /backtest/run forwards them; the backend validates values and bounds.
 export const BACKTEST_SWITCH_PARAM_NAMES = Object.freeze(["rangeFilterDays", "rangeFilterEdgePct", "entryConfirmMovePct", "entryConfirmHours"]);
+// Per-run on/off trend-filter switches (backend KNOB_OVERRIDES): block entries whose technicalAlignment is 'against' / 'mixed'. NOT live switches: only /backtest/run forwards them.
+export const BACKTEST_TREND_FILTER_NAMES = Object.freeze(["trendFilterAgainst", "trendFilterMixed"]);
 
 /** The auth-related settings, read from the Worker env (secrets) on every call. */
 export function loadAuthConfig(env) {
@@ -389,6 +391,10 @@ export async function handleGateway(request, env) {
         if (isChecked(searchParams.get("hideSma")) || isChecked(fromBody("hideSma"))) params.hideSma = "1";
         // Decision switches (technical analyst sees the intraday price; judge EVIDENCE RULE): this run only, default OFF. Absent sends nothing (backend default off); a run never reads the live switches.
         for (const name of LIVE_SWITCH_NAMES) {
+          if (isChecked(searchParams.get(name)) || isChecked(fromBody(name))) params[name] = "1";
+        }
+        // Trend filter (gate only, default OFF): this run only. Absent sends nothing; a run never reads a live switch for it.
+        for (const name of BACKTEST_TREND_FILTER_NAMES) {
           if (isChecked(searchParams.get(name)) || isChecked(fromBody(name))) params[name] = "1";
         }
         // TEMPORARY tuning aid: start this run from another complete run's LLM-stage checkpoints (backend src/backtest/seedCheckpoints.js validates it). Blank/absent sends nothing.
