@@ -70,7 +70,7 @@ test("an intrabar low that recovered before the check still triggers the stop, a
   assert.equal(r.close_reason, "stop_loss");
   near(r.exit_price, 97, "fills at the stop level, not the recovered close");
   assert.equal(r.closed_at, "2026-01-05T14:40:00.000Z"); // the 14:35 bar closes at 14:40, well before asOf 15:00
-  near(r.mae_pct, -0.04, "MAE from the triggering bar's low");
+  near(r.mae_pct, -0.03, "MAE is capped at the stop fill (97): the triggering bar's low of 96 came after the exit");
   near(r.mfe_pct, 0.01, "MFE stops at the triggering bar (the 14:40 high of 105 is not counted)");
 });
 
@@ -122,7 +122,7 @@ test("cursor: advances to the last walked bar's close when nothing fires; the ne
   assert.deepEqual(closed, [{ id: "AAPL|t1", ticker: "AAPL", reason: "stop_loss" }]);
   r = await posRow(ctx);
   assert.equal(r.closed_at, "2026-01-05T14:55:00.000Z");
-  near(r.mae_pct, -0.04);
+  near(r.mae_pct, -0.03);
   // Exit found: the cursor is deliberately NOT advanced (a crash between "exit found" and closePosition re-finds it).
   assert.equal(r.last_checked_at, "2026-01-05T14:45:00Z");
 });

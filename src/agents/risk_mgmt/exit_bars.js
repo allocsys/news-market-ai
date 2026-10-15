@@ -38,7 +38,12 @@
 // MAE / MFE
 //   Gross, direction-aware extremes over the walked bars, from bar lows/highs
 //   (long: adverse = low, favorable = high; short: the reverse). The triggering
-//   bar is counted. Bars past a detected split are not.
+//   bar is counted, but CAPPED AT THE FILL: a bar's range says nothing about the order inside it, and
+//   whatever the price did after the exit filled is not an excursion of the position. So on a stop
+//   exit MAE is no worse than the fill (a stop filled at -6.2% never reports -10% because the daily low
+//   went further), and on a take-profit exit MFE is no better than the fill. The opposite extreme of
+//   the triggering bar (MFE on a stop, MAE on a target) stays the bar's, as before. Bars past a
+//   detected split are not counted.
 //
 // SPLIT GUARD
 //   Bars are raw/unadjusted. If a bar's open or close matches a split ratio
@@ -166,6 +171,9 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trail
       };
     }
 
+    // Extremes BEFORE this bar: an exit on this bar caps its own contribution at the fill (see MAE / MFE above).
+    const prevMae = maePct;
+    const prevMfe = mfePct;
     const adversePrice = isLong ? bar.low : bar.high;
     const favorablePrice = isLong ? bar.high : bar.low;
     const adverse = computeGrossReturn({ direction, entryPrice, exitPrice: adversePrice });
@@ -194,6 +202,9 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trail
     if (stopHit) {
       const gapped = isLong ? bar.open < stop : bar.open > stop;
       const exitPrice = isLong ? Math.min(bar.open, stop) : Math.max(bar.open, stop);
+      // The bar's low/high may lie beyond the fill (after the stop was hit): MAE is the fill at worst.
+      const atFill = computeGrossReturn({ direction, entryPrice, exitPrice });
+      if (atFill != null) maePct = Math.min(prevMae ?? 0, atFill);
       return {
         exit: { reason: stopReason, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs, ...(ambiguous ? { ambiguous: true } : {}) },
         maePct,
@@ -210,6 +221,9 @@ export function walkBarsForExit(position, bars, { splitGuardTolerance = 0, trail
     if (targetHit) {
       const gapped = isLong ? bar.open > target : bar.open < target;
       const exitPrice = isLong ? Math.max(bar.open, target) : Math.min(bar.open, target);
+      // The bar's high/low may lie beyond the fill (after the target was hit): MFE is the fill at best.
+      const atFill = computeGrossReturn({ direction, entryPrice, exitPrice });
+      if (atFill != null) mfePct = Math.max(prevMfe ?? 0, atFill);
       return {
         exit: { reason: CLOSE_REASON.TAKE_PROFIT, exitPrice, closedAt: bar.availableAt, gapped, barKind: bar.kind, barOpenMs: bar.openMs, ...(ambiguous ? { ambiguous: true } : {}) },
         maePct,

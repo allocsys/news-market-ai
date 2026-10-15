@@ -72,7 +72,7 @@ test("long: an intrabar LOW through the stop is a stop-loss filled at the stop l
   assert.equal(r.exit.barOpenMs, b1.openMs);
   assert.equal(r.barsWalked, 2);
   assert.equal(r.lastBarAvailableAt, b1.availableAt);
-  near(r.maePct, -0.06); // (94 - 100) / 100, the triggering bar counts
+  near(r.maePct, -0.05); // capped at the stop fill (95): the bar's low of 94 came after the exit
   near(r.mfePct, 0.01); // best high seen was 101
 });
 
@@ -84,8 +84,8 @@ test("long: an intrabar HIGH through the target is a take-profit filled at the t
   near(r.exit.exitPrice, 110);
   assert.equal(r.exit.closedAt, b0.availableAt);
   assert.equal(r.exit.gapped, false);
-  near(r.mfePct, 0.11);
-  near(r.maePct, -0.005);
+  near(r.mfePct, 0.10); // capped at the target fill (110): the bar's high of 111 came after the exit
+
 });
 
 test("short: an intrabar HIGH through the stop and an intrabar LOW through the target", () => {
@@ -93,15 +93,38 @@ test("short: an intrabar HIGH through the stop and an intrabar LOW through the t
   const stop = walkBarsForExit(SHORT, [stopBar]);
   assert.equal(stop.exit.reason, "stop_loss");
   near(stop.exit.exitPrice, 105);
-  near(stop.maePct, -0.06); // adverse for a short = the high: (100 - 106) / 100
+  near(stop.maePct, -0.05); // adverse for a short = the high, capped at the stop fill 105: (100 - 105) / 100
   near(stop.mfePct, 0.01); // favorable = the low: (100 - 99) / 100
 
   const targetBar = bar(0, 100, 101, 89, 95);
   const target = walkBarsForExit(SHORT, [targetBar]);
   assert.equal(target.exit.reason, "take_profit");
   near(target.exit.exitPrice, 90);
-  near(target.mfePct, 0.11);
+  near(target.mfePct, 0.10); // capped at the target fill 90
   near(target.maePct, -0.01);
+});
+
+test("MAE/MFE are capped at the fill on the triggering bar: price beyond the fill came after the exit", () => {
+  // Long stop 95: the (daily) low of 90 is far beyond the fill. MAE is the fill (-5%), not the bar's low (-10%).
+  const stop = walkBarsForExit(LONG, [bar(0, 100, 101, 90, 92)]);
+  assert.equal(stop.exit.reason, "stop_loss");
+  near(stop.exit.exitPrice, 95);
+  near(stop.maePct, -0.05);
+  near(stop.mfePct, 0.01); // the other side of the triggering bar is unchanged
+
+  // Short target 90: the low of 85 is beyond the fill. MFE is the fill (+10%).
+  const target = walkBarsForExit(SHORT, [bar(0, 100, 101, 85, 88)]);
+  assert.equal(target.exit.reason, "take_profit");
+  near(target.exit.exitPrice, 90);
+  near(target.mfePct, 0.1);
+  near(target.maePct, -0.01);
+});
+
+test("a gapped stop caps MAE at the gapped fill (the open), not at the bar's low", () => {
+  const r = walkBarsForExit(LONG, [bar(0, 92, 93, 90, 91)]); // opens at 92, below the stop 95; low 90
+  assert.equal(r.exit.gapped, true);
+  near(r.exit.exitPrice, 92);
+  near(r.maePct, -0.08);
 });
 
 test("a bar that touches BOTH levels resolves as the stop (long and short)", () => {
