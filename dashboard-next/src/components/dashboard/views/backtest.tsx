@@ -52,6 +52,9 @@ interface BacktestPresetState {
   independenceNote: boolean;
   rangeLocationFilter: boolean;
   entryConfirmation: boolean;
+  /** Optional: block entries whose technical alignment is 'against' / 'mixed' (absent = off). */
+  trendFilterAgainst?: boolean;
+  trendFilterMixed?: boolean;
   hideSma: boolean;
   rangeFilterDays: string;
   rangeFilterEdgePct: string;
@@ -327,6 +330,42 @@ const BACKTEST_PRESETS: readonly BacktestPresetState[] = [
     rangeLocationFilter: false,
     entryConfirmation: true,
     hideSma: true,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "0.005",
+    entryConfirmHours: "6",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "Trail + Confirm + Trend",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: true,
+    trendFilterAgainst: true,
+    trendFilterMixed: false,
+    hideSma: false,
+    rangeFilterDays: "",
+    rangeFilterEdgePct: "",
+    entryConfirmMovePct: "0.005",
+    entryConfirmHours: "6",
+    breakEvenTriggerR: "0.4",
+    trailActivationR: "0.5",
+    trailDistanceR: "0.25",
+    trailRemovesTarget: true,
+  },
+  {
+    name: "Trail + Confirm + Trend strict",
+    intradayTechnical: false,
+    independenceNote: false,
+    rangeLocationFilter: false,
+    entryConfirmation: true,
+    trendFilterAgainst: true,
+    trendFilterMixed: true,
+    hideSma: false,
     rangeFilterDays: "",
     rangeFilterEdgePct: "",
     entryConfirmMovePct: "0.005",
@@ -690,6 +729,9 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
   const [independenceNote, setIndependenceNote] = useState(false);
   const [rangeLocationFilter, setRangeLocationFilter] = useState(false);
   const [entryConfirmation, setEntryConfirmation] = useState(false);
+  // Trend filter (gate only, default off): block entries whose technical alignment is 'against' and/or 'mixed'.
+  const [trendFilterAgainst, setTrendFilterAgainst] = useState(false);
+  const [trendFilterMixed, setTrendFilterMixed] = useState(false);
   const [hideSma, setHideSma] = useState(false);
   // Optional numeric params of those two switches (blank = the default); the backend validates the bounds.
   const [rangeFilterDays, setRangeFilterDays] = useState("");
@@ -724,6 +766,8 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     independenceNote,
     rangeLocationFilter,
     entryConfirmation,
+    trendFilterAgainst,
+    trendFilterMixed,
     hideSma,
     rangeFilterDays,
     rangeFilterEdgePct,
@@ -741,6 +785,8 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
       p.independenceNote === currentState.independenceNote &&
       p.rangeLocationFilter === currentState.rangeLocationFilter &&
       p.entryConfirmation === currentState.entryConfirmation &&
+      !!p.trendFilterAgainst === currentState.trendFilterAgainst &&
+      !!p.trendFilterMixed === currentState.trendFilterMixed &&
       p.hideSma === currentState.hideSma &&
       p.rangeFilterDays === currentState.rangeFilterDays &&
       p.rangeFilterEdgePct === currentState.rangeFilterEdgePct &&
@@ -763,6 +809,7 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
   }
   summaryParts.push(`range ${rangeLocationFilter ? `ON (${rangeFilterDays||"10"}d/${rangeFilterEdgePct||"0.2"})` : "OFF"}`);
   summaryParts.push(`confirm ${entryConfirmation ? `ON (${entryConfirmMovePct||"0.005"}/${entryConfirmHours||"6"}h)` : "OFF"}`);
+  summaryParts.push(`trend ${trendFilterAgainst || trendFilterMixed ? `blocks ${[trendFilterAgainst && "against", trendFilterMixed && "mixed"].filter(Boolean).join("+")}` : "OFF"}`);
   if (intradayTechnical) summaryParts.push("intraday ON");
   if (independenceNote) summaryParts.push("independence ON");
   if (hideSma) summaryParts.push("hideSma ON");
@@ -774,6 +821,8 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setIndependenceNote(p.independenceNote);
     setRangeLocationFilter(p.rangeLocationFilter);
     setEntryConfirmation(p.entryConfirmation);
+    setTrendFilterAgainst(!!p.trendFilterAgainst);
+    setTrendFilterMixed(!!p.trendFilterMixed);
     setHideSma(p.hideSma);
     setRangeFilterDays(p.rangeFilterDays);
     setRangeFilterEdgePct(p.rangeFilterEdgePct);
@@ -801,6 +850,8 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
     setIndependenceNote(false);
     setRangeLocationFilter(false);
     setEntryConfirmation(false);
+    setTrendFilterAgainst(false);
+    setTrendFilterMixed(false);
     setHideSma(false);
     setRangeFilterDays("");
     setRangeFilterEdgePct("");
@@ -870,6 +921,8 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
         independenceNote,
         rangeLocationFilter,
         entryConfirmation,
+        trendFilterAgainst: trendFilterAgainst ? true : undefined,
+        trendFilterMixed: trendFilterMixed ? true : undefined,
         hideSma: hideSma ? true : undefined,
         rangeFilterDays: knobNumber(rangeFilterDays),
         rangeFilterEdgePct: knobNumber(rangeFilterEdgePct),
@@ -1069,6 +1122,34 @@ function BacktestForm({ onSubmitted, mutation, seedCandidates, seedRequest }: Ba
         <span className="text-xs">Entry confirmation</span>
         <span className="text-[10px] text-muted-foreground">(this run only, unchecked = off; waits for a bar close in the trade direction before opening)</span>
       </label>
+
+      <div>
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Trend filter: block entries when the trend is… (this run only)</p>
+        <div className="flex flex-wrap gap-2">
+          {([
+            ["against", "Against the trade", trendFilterAgainst, setTrendFilterAgainst],
+            ["mixed", "Mixed", trendFilterMixed, setTrendFilterMixed],
+          ] as const).map(([key, label, checked, set]) => (
+            <label
+              key={key}
+              className={cn(
+                "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                checked
+                  ? "border-primary bg-primary/15 text-primary"
+                  : "border-border bg-muted/40 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Checkbox
+                checked={checked}
+                onCheckedChange={(v) => v !== "indeterminate" && set(!!v)}
+                className="h-3.5 w-3.5"
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+        </div>
+        <p className="mt-1 text-[10px] text-muted-foreground">Neither checked = off. Uses the trend read (price vs SMA and recent move) already shown on each decision. Gate only, so it also works on a seeded run.</p>
+      </div>
 
       <div>
         <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Filter / confirmation values (optional, this run only)</p>

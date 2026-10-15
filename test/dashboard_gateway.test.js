@@ -589,6 +589,20 @@ test("POST /backtest/run: range filter / entry confirmation switches and numeric
   assert.notEqual(bad.response.status, 200, "the backend rejects an out-of-bounds value");
 });
 
+test("POST /backtest/run: the trend filter switches are forwarded as overrides when checked and absent (default OFF) otherwise", async () => {
+  const both = await postBacktest("json", { trendFilterAgainst: true, trendFilterMixed: true });
+  assert.equal(both.response.status, 200);
+  assert.deepEqual(both.backtestQueue.sent[0].knobOverrides, { trendFilterAgainst: 1, trendFilterMixed: 1 });
+  const againstOnly = await postBacktest("json", { trendFilterAgainst: true, trendFilterMixed: false });
+  assert.deepEqual(againstOnly.backtestQueue.sent[0].knobOverrides, { trendFilterAgainst: 1 });
+  const off = await postBacktest("json", { trendFilterAgainst: false, trendFilterMixed: false });
+  assert.equal(off.response.status, 200);
+  assert.equal(off.backtestQueue.sent[0].knobOverrides?.trendFilterAgainst, undefined);
+  assert.equal(off.backtestQueue.sent[0].knobOverrides?.trendFilterMixed, undefined);
+  const form = await postBacktest("form", {});
+  assert.equal(form.backtestQueue.sent[0].knobOverrides?.trendFilterAgainst, undefined);
+});
+
 test("POST /controls/switches forwards the switch values and clear to the backend; no params is a 400", async () => {
   const set = await postJson("/controls/switches", { intradayTechnical: 1, independenceNote: 0 });
   assert.equal(set.calls[0].url.pathname, "/controls/switches");

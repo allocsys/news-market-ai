@@ -195,6 +195,10 @@ export function loadConfig(env) {
     rangeLocationFilter: env.RANGE_LOCATION_FILTER === "true",
     rangeFilterDays: env.RANGE_FILTER_DAYS ? Number(env.RANGE_FILTER_DAYS) : undefined,
     rangeFilterEdgePct: env.RANGE_FILTER_EDGE_PCT ? Number(env.RANGE_FILTER_EDGE_PCT) : undefined,
+    // Trend filter (agents/risk_mgmt/trend_filter.js): block decisions whose technicalAlignment is 'against' and/or 'mixed'. Both OFF by default; backtest per-run knobs
+    // only (NOT live switches), so TREND_FILTER_AGAINST / TREND_FILTER_MIXED="true" exist only for local experiments.
+    trendFilterAgainst: env.TREND_FILTER_AGAINST === "true",
+    trendFilterMixed: env.TREND_FILTER_MIXED === "true",
     // Entry confirmation (shared/entry_confirmation.js): an approved entry waits as pending_entry until a bar closes the required move. OFF by default;
     // ENTRY_CONFIRMATION="true" turns it on. Move / hours unset -> the constants.js defaults. Per-run backtest override and live switch exist too.
     entryConfirmation: env.ENTRY_CONFIRMATION === "true",

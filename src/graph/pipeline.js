@@ -49,6 +49,7 @@ import { withLlmLogContext, flushLlmCallBuffer } from "../storage/llm_calls.js";
 import { isEntryPriceStale, pendingEntryExpiresAt } from "../shared/entry_timing.js";
 import { serializeTrailKnobs } from "../storage/live_knobs.js";
 import { evaluateRangeLocation, rangeFilterParams } from "../agents/risk_mgmt/range_location.js";
+import { evaluateTrendFilter, trendFilterParams, trendFilterActive } from "../agents/risk_mgmt/trend_filter.js";
 import { entryConfirmationParams, entryConfirmationExpiryMs, pendingConfirmationRecord } from "../shared/entry_confirmation.js";
 
 /**
@@ -270,6 +271,21 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
         rebuildDecision();
       }
 
+      // TREND FILTER (knobs trendFilterAgainst / trendFilterMixed, default OFF, backtest per-run; agents/risk_mgmt/trend_filter.js): blocks a decision whose
+      // technicalAlignment (evidence.js: price vs SMA and recent change, set when the verdict was built) is 'against' and/or 'mixed'. Skipped when the range
+      // filter already blocked. The record goes to decision.debate.evidence.trendFilter whether it blocked or not; a block takes the same REJECTED path.
+      let trendBlocked = false;
+      if (currentPrice != null && !rangeBlocked && trendFilterActive(config)) {
+        const { against, mixed } = trendFilterParams(config);
+        const trend = evaluateTrendFilter({ alignment: state.evidence?.technicalAlignment, blockAgainst: against, blockMixed: mixed });
+        state.evidence = { ...(state.evidence ?? {}), trendFilter: trend };
+        if (trend.blocked) {
+          trendBlocked = true;
+          state.portfolioDecision = { ...state.portfolioDecision, approvedForExecution: false, finalPositionSizePct: 0, reason: trend.reason };
+        }
+        rebuildDecision();
+      }
+
       if (currentPrice == null) {
         // HONEST SCOPE: no price_bars data for this ticker as of `asOf`
         // (yfinance ingestion gap -- see plan.md). Opening a position with
@@ -291,7 +307,7 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
         console.error("pipeline: skipping position open/replace -- no price_bars data for ticker", { ticker, asOf });
         await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.SKIPPED_NO_PRICE_DATA, checkpoint: finalCheckpoint });
         checkpointFolded = true;
-      } else if (rangeBlocked) {
+      } else if (rangeBlocked || trendBlocked) {
         await store.insertTradeDecision({ ...decision, status: TRADE_DECISION_STATUS.REJECTED, checkpoint: finalCheckpoint });
         checkpointFolded = true;
       } else if (isEntryPriceStale({ price: currentPrice, source: priceSource, bar: priceBar }, asOf)) {

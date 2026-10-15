@@ -143,6 +143,8 @@ test("effective: reports every knob from the config", () => {
     hideSma: false,
     rangeLocationFilter: false,
     entryConfirmation: false,
+    trendFilterAgainst: false,
+    trendFilterMixed: false,
     rangeFilterDays: 10,
     rangeFilterEdgePct: 0.2,
     entryConfirmMovePct: 0.005,
@@ -165,6 +167,19 @@ test("range filter / entry confirmation: switches are 0/1 -> boolean, params are
   assert.equal(effectiveKnobs({}).rangeLocationFilter, false, "default OFF");
   assert.equal(effectiveKnobs({}).entryConfirmation, false, "default OFF");
   for (const bad of [{ rangeFilterDays: "1" }, { rangeFilterDays: "2.5" }, { rangeFilterEdgePct: "0.6" }, { rangeFilterEdgePct: "0" }, { entryConfirmMovePct: "0.5" }, { entryConfirmHours: "0" }, { entryConfirmHours: "100" }, { rangeLocationFilter: "2" }]) {
+    assert.ok(parseKnobOverrides((n) => bad[n]).error, `rejected: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("trend filter: against / mixed are 0/1 -> boolean per-run knobs, default OFF, bad values rejected", () => {
+  const { overrides } = parseKnobOverrides((n) => ({ trendFilterAgainst: "1", trendFilterMixed: "0" })[n]);
+  assert.deepEqual(overrides, { trendFilterAgainst: 1, trendFilterMixed: 0 });
+  const knobs = effectiveKnobs(applyKnobOverrides({}, overrides));
+  assert.equal(knobs.trendFilterAgainst, true);
+  assert.equal(knobs.trendFilterMixed, false);
+  assert.equal(effectiveKnobs({}).trendFilterAgainst, false, "default OFF");
+  assert.equal(effectiveKnobs({}).trendFilterMixed, false, "default OFF");
+  for (const bad of [{ trendFilterAgainst: "2" }, { trendFilterMixed: "-1" }, { trendFilterMixed: "0.5" }, { trendFilterAgainst: "x" }]) {
     assert.ok(parseKnobOverrides((n) => bad[n]).error, `rejected: ${JSON.stringify(bad)}`);
   }
 });

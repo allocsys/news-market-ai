@@ -61,6 +61,10 @@ export const KNOB_OVERRIDES = Object.freeze({
   rangeFilterEdgePct: Object.freeze({ min: 0.01, max: 0.5 }),
   entryConfirmMovePct: Object.freeze({ min: 0.001, max: 0.2 }),
   entryConfirmHours: Object.freeze({ min: 1, max: 72, integer: true }),
+  // Trend filter (agents/risk_mgmt/trend_filter.js): block entries whose technicalAlignment is 'against' / 'mixed'. 0/1 -> boolean, default OFF,
+  // per-run only (NOT live switches). Gate-only: it does not change the LLM stage, so it is not in SEED_MATCH_KNOBS.
+  trendFilterAgainst: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  trendFilterMixed: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
   // Break-even / trailing stop (agents/risk_mgmt/trailing.js), in R = the position's initial stop distance. 0 = off
   // (the default), so a run without them is the static stop/target walk. Bounds are sanity limits, not tuning advice.
   breakEvenTriggerR: Object.freeze({ min: 0, max: 10 }),
@@ -127,6 +131,8 @@ export function effectiveKnobs(config) {
   knobs.hideSma = config.hideSma === true;
   knobs.rangeLocationFilter = config.rangeLocationFilter === true;
   knobs.entryConfirmation = config.entryConfirmation === true;
+  knobs.trendFilterAgainst = config.trendFilterAgainst === true;
+  knobs.trendFilterMixed = config.trendFilterMixed === true;
   // The numeric params resolve their constants.js default (like flipMinConfidence), so the record shows what a run used.
   knobs.rangeFilterDays = config.rangeFilterDays ?? DEFAULT_RANGE_FILTER_DAYS;
   knobs.rangeFilterEdgePct = config.rangeFilterEdgePct ?? DEFAULT_RANGE_FILTER_EDGE_PCT;
