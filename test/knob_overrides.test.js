@@ -145,6 +145,7 @@ test("effective: reports every knob from the config", () => {
     entryConfirmation: false,
     trendFilterAgainst: false,
     trendFilterMixed: false,
+    trendFilterWindow: 0,
     rangeFilterDays: 10,
     rangeFilterEdgePct: 0.2,
     entryConfirmMovePct: 0.005,
@@ -180,6 +181,17 @@ test("trend filter: against / mixed are 0/1 -> boolean per-run knobs, default OF
   assert.equal(effectiveKnobs({}).trendFilterAgainst, false, "default OFF");
   assert.equal(effectiveKnobs({}).trendFilterMixed, false, "default OFF");
   for (const bad of [{ trendFilterAgainst: "2" }, { trendFilterMixed: "-1" }, { trendFilterMixed: "0.5" }, { trendFilterAgainst: "x" }]) {
+    assert.ok(parseKnobOverrides((n) => bad[n]).error, `rejected: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("trend filter window: a whole number 0..100 per-run knob, default 0 (off), bad values rejected", () => {
+  const { overrides } = parseKnobOverrides((n) => ({ trendFilterWindow: "20" })[n]);
+  assert.deepEqual(overrides, { trendFilterWindow: 20 });
+  assert.equal(effectiveKnobs(applyKnobOverrides({}, overrides)).trendFilterWindow, 20);
+  assert.equal(effectiveKnobs({}).trendFilterWindow, 0, "default off");
+  assert.deepEqual(parseKnobOverrides((n) => ({ trendFilterWindow: "0" })[n]).overrides, { trendFilterWindow: 0 }, "0 is a valid 'off'");
+  for (const bad of [{ trendFilterWindow: "-1" }, { trendFilterWindow: "101" }, { trendFilterWindow: "2.5" }, { trendFilterWindow: "x" }]) {
     assert.ok(parseKnobOverrides((n) => bad[n]).error, `rejected: ${JSON.stringify(bad)}`);
   }
 });

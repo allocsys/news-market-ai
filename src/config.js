@@ -199,6 +199,8 @@ export function loadConfig(env) {
     // only (NOT live switches), so TREND_FILTER_AGAINST / TREND_FILTER_MIXED="true" exist only for local experiments.
     trendFilterAgainst: env.TREND_FILTER_AGAINST === "true",
     trendFilterMixed: env.TREND_FILTER_MIXED === "true",
+    // Trend window for that gate, in daily bars: 0 / unset = the stored 5-bar alignment; N >= 2 = recompute over N bars. Per-run backtest knob only.
+    trendFilterWindow: env.TREND_FILTER_WINDOW ? Number(env.TREND_FILTER_WINDOW) : 0,
     // Entry confirmation (shared/entry_confirmation.js): an approved entry waits as pending_entry until a bar closes the required move. OFF by default;
     // ENTRY_CONFIRMATION="true" turns it on. Move / hours unset -> the constants.js defaults. Per-run backtest override and live switch exist too.
     entryConfirmation: env.ENTRY_CONFIRMATION === "true",

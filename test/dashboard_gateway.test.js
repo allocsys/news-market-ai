@@ -603,6 +603,19 @@ test("POST /backtest/run: the trend filter switches are forwarded as overrides w
   assert.equal(form.backtestQueue.sent[0].knobOverrides?.trendFilterAgainst, undefined);
 });
 
+test("POST /backtest/run: the trend window is forwarded when set, absent when blank, and an out-of-bounds value is rejected by the backend", async () => {
+  const on = await postBacktest("json", { trendFilterAgainst: true, trendFilterWindow: 20 });
+  assert.equal(on.response.status, 200);
+  assert.deepEqual(on.backtestQueue.sent[0].knobOverrides, { trendFilterAgainst: 1, trendFilterWindow: 20 });
+  const blank = await postBacktest("json", { trendFilterAgainst: true, trendFilterWindow: "  " });
+  assert.equal(blank.response.status, 200);
+  assert.equal(blank.backtestQueue.sent[0].knobOverrides?.trendFilterWindow, undefined);
+  const absent = await postBacktest("form", {});
+  assert.equal(absent.backtestQueue.sent[0].knobOverrides?.trendFilterWindow, undefined);
+  const bad = await postBacktest("json", { trendFilterAgainst: true, trendFilterWindow: 500 });
+  assert.notEqual(bad.response.status, 200, "the backend rejects an out-of-bounds window");
+});
+
 test("POST /controls/switches forwards the switch values and clear to the backend; no params is a 400", async () => {
   const set = await postJson("/controls/switches", { intradayTechnical: 1, independenceNote: 0 });
   assert.equal(set.calls[0].url.pathname, "/controls/switches");

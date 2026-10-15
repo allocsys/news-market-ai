@@ -65,6 +65,9 @@ export const KNOB_OVERRIDES = Object.freeze({
   // per-run only (NOT live switches). Gate-only: it does not change the LLM stage, so it is not in SEED_MATCH_KNOBS.
   trendFilterAgainst: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
   trendFilterMixed: Object.freeze({ min: 0, max: 1, integer: true, boolean: true }),
+  // Trend window in daily bars for that gate: 0 (default) = the stored 5-bar alignment; N >= 2 = recompute it over N bars (price vs the N-bar
+  // SMA and the N-bar change). A value of 1 is treated as off. Only matters while against and/or mixed is on. Gate only, so not in SEED_MATCH_KNOBS.
+  trendFilterWindow: Object.freeze({ min: 0, max: 100, integer: true }),
   // Break-even / trailing stop (agents/risk_mgmt/trailing.js), in R = the position's initial stop distance. 0 = off
   // (the default), so a run without them is the static stop/target walk. Bounds are sanity limits, not tuning advice.
   breakEvenTriggerR: Object.freeze({ min: 0, max: 10 }),
@@ -133,6 +136,8 @@ export function effectiveKnobs(config) {
   knobs.entryConfirmation = config.entryConfirmation === true;
   knobs.trendFilterAgainst = config.trendFilterAgainst === true;
   knobs.trendFilterMixed = config.trendFilterMixed === true;
+  // Default 0 = the stored 5-bar alignment, so the record shows 0, not null.
+  knobs.trendFilterWindow = config.trendFilterWindow ?? 0;
   // The numeric params resolve their constants.js default (like flipMinConfidence), so the record shows what a run used.
   knobs.rangeFilterDays = config.rangeFilterDays ?? DEFAULT_RANGE_FILTER_DAYS;
   knobs.rangeFilterEdgePct = config.rangeFilterEdgePct ?? DEFAULT_RANGE_FILTER_EDGE_PCT;

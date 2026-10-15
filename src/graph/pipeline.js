@@ -49,7 +49,7 @@ import { withLlmLogContext, flushLlmCallBuffer } from "../storage/llm_calls.js";
 import { isEntryPriceStale, pendingEntryExpiresAt } from "../shared/entry_timing.js";
 import { serializeTrailKnobs } from "../storage/live_knobs.js";
 import { evaluateRangeLocation, rangeFilterParams } from "../agents/risk_mgmt/range_location.js";
-import { evaluateTrendFilter, trendFilterParams, trendFilterActive } from "../agents/risk_mgmt/trend_filter.js";
+import { evaluateTrendFilter, longTrendAlignment, trendFilterParams, trendFilterActive, trendFilterWindow } from "../agents/risk_mgmt/trend_filter.js";
 import { entryConfirmationParams, entryConfirmationExpiryMs, pendingConfirmationRecord } from "../shared/entry_confirmation.js";
 
 /**
@@ -274,10 +274,15 @@ async function runPipelineStages(env, config, { inputs, store }, { pipelineRunId
       // TREND FILTER (knobs trendFilterAgainst / trendFilterMixed, default OFF, backtest per-run; agents/risk_mgmt/trend_filter.js): blocks a decision whose
       // technicalAlignment (evidence.js: price vs SMA and recent change, set when the verdict was built) is 'against' and/or 'mixed'. Skipped when the range
       // filter already blocked. The record goes to decision.debate.evidence.trendFilter whether it blocked or not; a block takes the same REJECTED path.
+      // With trendFilterWindow N >= 2 the alignment is recomputed over N daily bars from state.priceBars and the entry price read above (no extra D1 read),
+      // and the stored 5-bar one is kept in the record as shortAlignment. A checkpoint without state.priceBars gives 'unknown', which is never blocked.
       let trendBlocked = false;
       if (currentPrice != null && !rangeBlocked && trendFilterActive(config)) {
         const { against, mixed } = trendFilterParams(config);
-        const trend = evaluateTrendFilter({ alignment: state.evidence?.technicalAlignment, blockAgainst: against, blockMixed: mixed });
+        const window = trendFilterWindow(config);
+        const shortAlignment = state.evidence?.technicalAlignment;
+        const alignment = window > 0 ? longTrendAlignment({ bars: state.priceBars, direction: state.thesis.direction, window, price: currentPrice, priceDate: priceBarTs }).alignment : shortAlignment;
+        const trend = evaluateTrendFilter({ alignment, blockAgainst: against, blockMixed: mixed, window, shortAlignment });
         state.evidence = { ...(state.evidence ?? {}), trendFilter: trend };
         if (trend.blocked) {
           trendBlocked = true;
