@@ -1,8 +1,8 @@
 // Wiring checks for the single-Worker dashboard: the Next.js app
 // (dashboard-next/) is the Worker `news-market-ai-dashboard`, it reaches the
 // private backend over a BACKEND service binding, and CI deploys it from the
-// `deploy-dashboard` job in deploy.yml (the 8th job, after the backend `deploy`
-// job). The old gateway Worker (src/dashboard-worker.js + wrangler.dashboard.toml)
+// `deploy-dashboard` job in deploy.yml (the 8th job; it waits on `test`/`migrate`,
+// not on the backend `deploy` job). The old gateway Worker (src/dashboard-worker.js + wrangler.dashboard.toml)
 // must stay gone: a leftover deploy of it would push the retired gateway over the
 // live app on the next push to main.
 //
@@ -64,13 +64,17 @@ test("deploy.yml gates the dashboard like the other Workers: output, per-target 
   assert.ok(!/src\/\*\*|'\*\*'/.test(filter[1].replace(/dashboard-next\/\*\*/g, "")), "it does not watch the backend's src/ (the app bundles nothing from it)");
 });
 
-test("deploy-dashboard: after the backend deploy, push/dispatch only, builds dashboard-next, sets the login secrets AFTER the deploy", () => {
+test("deploy-dashboard: after test/migrate (not the backend deploy), push/dispatch only, builds dashboard-next, sets the login secrets AFTER the deploy", () => {
   const job = jobBlock("deploy-dashboard");
-  assert.match(job, /needs: \[changes, deploy\]\n/, "waits for the backend `deploy` job (the BACKEND service binding needs news-market-ai to exist); `deploy` waits on `test`, which holds the dashboard checks");
+  assert.match(job, /needs: \[changes, test, migrate\]\n/, "waits for `test` (which holds the dashboard checks) and `migrate`");
+  assert.ok(!/needs:[^\n]*\bdeploy\b/.test(job), "does NOT wait for the backend `deploy` job: a dashboard-only change must not queue behind the backend's npm ci + queue checks (the BACKEND service binding only needs the backend Worker to already exist)");
+  assert.ok(job.includes("needs.test.result == 'success'"), "only deploys when `test` passed");
   assert.ok(job.includes("needs.changes.outputs.dashboard == 'true'"), "gated by the dashboard filter");
   assert.ok(job.includes("github.event_name == 'push' || github.event_name == 'workflow_dispatch'"), "never on a pull_request");
   assert.ok(job.includes("group: deploy-news-market-ai-dashboard-${{ github.ref }}"), "its own concurrency group");
-  assert.ok(!/run: npm ci\b/.test(job), "dashboard-next is its own npm project: no root `npm ci` step");
+  assert.ok(!/run: npm ci\n/.test(job), "dashboard-next is its own npm project: no bare root `npm ci` step");
+  assert.ok(/name: Install dependencies\n        working-directory: dashboard-next\n        run: npm ci --no-audit --no-fund\n/.test(job), "its install is `npm ci`, run inside dashboard-next/ (it has its own lockfile)");
+  assert.ok(job.includes("path: dashboard-next/.next/cache"), "restores/saves the Next.js build cache");
 
   const deployStep = job.indexOf("run: npm run deploy\n");
   assert.ok(deployStep > 0, "runs npm run deploy (opennextjs-cloudflare build && deploy)");
@@ -94,7 +98,9 @@ test("dashboard CI runs in the root `test` job (deploy waits on it): lints, type
   assert.ok(job.includes("run: npm test"), "the root npm test is still there");
   assert.ok(job.includes("needs.changes.outputs.dashboard == 'true'"), "dashboard steps only run when the dashboard filter matched");
   assert.ok((job.match(/working-directory: dashboard-next/g) || []).length >= 4, "install, lint, typecheck and build all run inside dashboard-next/");
-  for (const cmd of ["npm install --no-audit --no-fund", "npm run lint", "npx tsc --noEmit", "npx opennextjs-cloudflare build"]) {
+  assert.ok(job.includes("path: dashboard-next/.next/cache"), "caches the Next.js build cache");
+  assert.ok(existsSync(path.join(ROOT, "dashboard-next/package-lock.json")), "dashboard-next has its own committed lockfile (npm ci needs it)");
+  for (const cmd of ["npm ci --no-audit --no-fund", "npm run lint", "npx tsc --noEmit", "npx opennextjs-cloudflare build"]) {
     assert.ok(job.includes(`run: ${cmd}`), `runs ${cmd}`);
   }
   assert.ok(!/secrets\./.test(job), "needs no secrets");
