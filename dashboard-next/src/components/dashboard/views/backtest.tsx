@@ -554,8 +554,12 @@ export function BacktestView({ onNavigate }: ViewProps) {
                       </button>
                       <p className="text-[10px] text-muted-foreground">{fmtDate(r.testStart)} → {fmtDate(r.testEnd)}</p>
                     </td>
-                    <td className="px-3 py-2 text-right font-mono nums text-[color:var(--long)]">
-                      {r.result ? fmtPct(r.result.overall.on.cumulativeReturn, 2) : "—"}
+                    <td className="px-3 py-2 text-right font-mono nums">
+                      {r.result ? (
+                        <span className={r.result.overall.on.cumulativeReturn >= 0 ? "text-[color:var(--long)]" : "text-[color:var(--short)]"}>
+                          {fmtPct(r.result.overall.on.cumulativeReturn, 2)}
+                        </span>
+                      ) : "—"}
                     </td>
                     <td className="px-3 py-2 text-right font-mono nums text-muted-foreground">
                       {r.result ? fmtPct(r.result.overall.off.cumulativeReturn, 2) : "—"}
