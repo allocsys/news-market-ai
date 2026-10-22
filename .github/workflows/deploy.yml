@@ -98,7 +98,7 @@ jobs:
       backtest: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (steps.base.outputs.backtest == '' || steps.f_backtest.outputs.backtest == 'true')) }}
       dashboard: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && steps.pr.outputs.dashboard == 'true') || (github.event_name == 'push' && (steps.base.outputs.dashboard == '' || steps.f_dashboard.outputs.dashboard == 'true')) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: github.event_name != 'workflow_dispatch'
         with:
           # Full history: baselines can be many commits back.
@@ -137,7 +137,7 @@ jobs:
           done
 
       # pull_request: default base, unchanged behavior.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: pr
         if: github.event_name == 'pull_request'
         with:
@@ -146,37 +146,37 @@ jobs:
       # push: one evaluation per target, each against its own baseline. Only
       # run when a baseline resolved; otherwise the output expression above
       # fails open to true.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: f_code
         if: github.event_name == 'push' && steps.base.outputs.code != ''
         with:
           base: ${{ steps.base.outputs.code }}
           filters: .github/path-filters.yml
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: f_migrations
         if: github.event_name == 'push' && steps.base.outputs.migrations != ''
         with:
           base: ${{ steps.base.outputs.migrations }}
           filters: .github/path-filters.yml
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: f_ingest
         if: github.event_name == 'push' && steps.base.outputs.ingest != ''
         with:
           base: ${{ steps.base.outputs.ingest }}
           filters: .github/path-filters.yml
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: f_llm
         if: github.event_name == 'push' && steps.base.outputs.llm != ''
         with:
           base: ${{ steps.base.outputs.llm }}
           filters: .github/path-filters.yml
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: f_backtest
         if: github.event_name == 'push' && steps.base.outputs.backtest != ''
         with:
           base: ${{ steps.base.outputs.backtest }}
           filters: .github/path-filters.yml
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: f_dashboard
         if: github.event_name == 'push' && steps.base.outputs.dashboard != ''
         with:
@@ -190,8 +190,8 @@ jobs:
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'npm'
@@ -225,7 +225,7 @@ jobs:
       # compile every file from scratch.
       - name: Dashboard - cache Next.js build cache
         if: ${{ !cancelled() && needs.changes.outputs.dashboard == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: dashboard-next/.next/cache
           key: nextjs-${{ runner.os }}-${{ hashFiles('dashboard-next/package-lock.json') }}-${{ hashFiles('dashboard-next/src/**', 'dashboard-next/public/**', 'dashboard-next/*.ts', 'dashboard-next/*.mjs', 'dashboard-next/*.json', 'dashboard-next/*.jsonc') }}
@@ -249,8 +249,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.changes.outputs.migrations == 'true')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'npm'
@@ -291,8 +291,8 @@ jobs:
     if: always() && needs.test.result == 'success' && (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'npm'
@@ -436,8 +436,8 @@ jobs:
     env:
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'npm'
@@ -456,7 +456,7 @@ jobs:
       # Same key as the `test` job's cache step, so this build starts from the
       # cache `test` just saved on this commit.
       - name: Cache Next.js build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: dashboard-next/.next/cache
           key: nextjs-${{ runner.os }}-${{ hashFiles('dashboard-next/package-lock.json') }}-${{ hashFiles('dashboard-next/src/**', 'dashboard-next/public/**', 'dashboard-next/*.ts', 'dashboard-next/*.mjs', 'dashboard-next/*.json', 'dashboard-next/*.jsonc') }}
@@ -513,8 +513,8 @@ jobs:
       group: deploy-news-market-ai-ingest-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'npm'
@@ -635,8 +635,8 @@ jobs:
       group: deploy-news-market-ai-llm-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'npm'
@@ -699,8 +699,8 @@ jobs:
       group: deploy-news-market-ai-backtest-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'npm'
