@@ -195,9 +195,14 @@ jobs:
         with:
           node-version: 22
           cache: 'npm'
+          # Two lockfiles: the root one and dashboard-next/'s own. Both feed the
+          # cache key, so ~/.npm is reused for either install.
+          cache-dependency-path: |
+            package-lock.json
+            dashboard-next/package-lock.json
       - run: npm ci
       - run: npm test
-      # dashboard-next/ is its own npm project (no workspaces, no lockfile yet), so
+      # dashboard-next/ is its own npm project (no workspaces; own lockfile), so
       # its lint / typecheck / OpenNext build run here with their own install, and
       # only when the `dashboard` filter matched (this includes pull_request). Each
       # step runs even if an earlier one failed, so one CI run shows every problem.
@@ -206,7 +211,7 @@ jobs:
       - name: Dashboard - install dependencies
         if: ${{ !cancelled() && needs.changes.outputs.dashboard == 'true' }}
         working-directory: dashboard-next
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Dashboard - lint
         if: ${{ !cancelled() && needs.changes.outputs.dashboard == 'true' }}
         working-directory: dashboard-next
@@ -215,6 +220,17 @@ jobs:
         if: ${{ !cancelled() && needs.changes.outputs.dashboard == 'true' }}
         working-directory: dashboard-next
         run: npx tsc --noEmit
+      # Restores/saves Next.js's incremental build cache, so the OpenNext build
+      # below (and the identical one in deploy-dashboard, same key) doesn't
+      # compile every file from scratch.
+      - name: Dashboard - cache Next.js build cache
+        if: ${{ !cancelled() && needs.changes.outputs.dashboard == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: dashboard-next/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('dashboard-next/package-lock.json') }}-${{ hashFiles('dashboard-next/src/**', 'dashboard-next/public/**', 'dashboard-next/*.ts', 'dashboard-next/*.mjs', 'dashboard-next/*.json', 'dashboard-next/*.jsonc') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('dashboard-next/package-lock.json') }}-
       - name: Dashboard - build Worker bundle (OpenNext)
         if: ${{ !cancelled() && needs.changes.outputs.dashboard == 'true' }}
         working-directory: dashboard-next
@@ -394,20 +410,24 @@ jobs:
   # `dashboard` Worker: news-market-ai-dashboard, the Next.js app in
   # dashboard-next/ built by OpenNext (one Worker: UI + login + the session-gated
   # API in front of the private backend). Own path-filtered job and concurrency
-  # group, like every other Worker here. Depends on backend's `deploy` job because
-  # dashboard-next/wrangler.jsonc binds BACKEND -> news-market-ai (a service
-  # binding needs that Worker to exist; same-account workers.dev fetches are
-  # blocked, so there is no URL fallback).
+  # group, like every other Worker here. Waits on `test` (and `migrate`, when it
+  # runs) but deliberately NOT on backend's `deploy` job, so a dashboard-only
+  # change no longer sits behind the backend's root `npm ci` + queue checks.
+  # Trade-off: dashboard-next/wrangler.jsonc binds BACKEND -> news-market-ai (a
+  # service binding needs that Worker to exist; same-account workers.dev fetches
+  # are blocked, so there is no URL fallback). The backend Worker already exists,
+  # so this only matters in a brand-new account: there, if this job fails on the
+  # binding, re-run it once `deploy` has finished.
   #
   # Leaner than the backend jobs on purpose: dashboard-next/ is its own npm
   # project, so the root `npm ci` is skipped, and lint/tsc are not repeated here
-  # (the root `test` job runs them first and gates this job via `deploy`, and the OpenNext build compiles the
+  # (the root `test` job runs them first and gates this job via `needs`, and the OpenNext build compiles the
   # app again anyway). The gateway tests (test/dashboard_gateway*.test.js) run in
   # the root `test` job this job already waits on. Keeps the Worker name, so the
   # workers.dev URL and secrets already stored on it survive.
   deploy-dashboard:
-    needs: [changes, deploy]
-    if: always() && needs.deploy.result == 'success' && needs.changes.outputs.dashboard == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [changes, test, migrate]
+    if: always() && needs.test.result == 'success' && (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') && needs.changes.outputs.dashboard == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -420,17 +440,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
+          cache-dependency-path: dashboard-next/package-lock.json
       - name: Check required secrets present
         run: |
           if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
             echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID repo secret(s) -- aborting before attempting to deploy."
             exit 1
           fi
-      # No lockfile is committed in dashboard-next/ yet, so `npm install` (not
-      # `npm ci`) and no setup-node cache.
+      # dashboard-next/package-lock.json is committed, so `npm ci` plus the
+      # setup-node npm cache above.
       - name: Install dependencies
         working-directory: dashboard-next
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+      # Same key as the `test` job's cache step, so this build starts from the
+      # cache `test` just saved on this commit.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: dashboard-next/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('dashboard-next/package-lock.json') }}-${{ hashFiles('dashboard-next/src/**', 'dashboard-next/public/**', 'dashboard-next/*.ts', 'dashboard-next/*.mjs', 'dashboard-next/*.json', 'dashboard-next/*.jsonc') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('dashboard-next/package-lock.json') }}-
       - name: Build and deploy dashboard Worker
         working-directory: dashboard-next
         env:
