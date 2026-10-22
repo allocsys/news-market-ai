@@ -1,0 +1,41 @@
+# Dependabot: weekly update PRs for the three dependency sets in this repo.
+# Updates are grouped (one PR per ecosystem per week, minor+patch together) so
+# the PR list stays small; majors come as their own PRs. Every PR runs the
+# normal Deploy workflow as a CI gate (test, lint, typecheck, OpenNext build);
+# nothing here merges itself.
+version: 2
+updates:
+  # Root Worker project (package.json / package-lock.json).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      root-minor-patch:
+        update-types: [minor, patch]
+
+  # Next.js dashboard (its own npm project, dashboard-next/package-lock.json).
+  - package-ecosystem: npm
+    directory: /dashboard-next
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      dashboard-minor-patch:
+        update-types: [minor, patch]
+
+  # Actions used by the workflow and by the composite actions in .github/actions/.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/ensure-kv-namespace
+      - /.github/actions/ensure-queue
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
